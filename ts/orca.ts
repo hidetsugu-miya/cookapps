@@ -58,6 +58,8 @@ let here: OrcaLocal | null = null;
 // When this machine's lists were last read by the clock while the target is streamed (`loadHere`); the read of `orca_overview` sets it too, as the first read of a target does.
 let hereTry = 0;
 let hereLoading = false;
+// The latest read of this machine's lists is the one used (as `loadSeq` is for `load`).
+let hereSeq = 0;
 // The lists the screen draws: the target's (`view`) and this machine's (`here`) in one (A-33). Every item says where it is (`environment`), so a row of a saved environment is the one with a name.
 interface Lists {
   rows: OrcaRow[];
@@ -404,7 +406,7 @@ type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions" | "en
 
 // Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A project opens when work appears in it that the last read did not have (a working session, or the project's own work with no such session), also when the user closed it; work that went on leaves it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing. A project the list no longer holds is forgotten by `opened`.
 function trackWorking() {
-  if (view === null || view.state !== "ready" || switching) return;
+  if (view === null || switching || (view.state !== "ready" && here?.state !== "ready")) return;
   if (view.target !== workingTarget) {
     workingTarget = view.target;
     workingOrder = [];
@@ -653,7 +655,7 @@ function drawFiles(tabs: Tab[]) {
   const worktree = filesWorktree(tabs);
   const target = worktree?.environment ?? null;
   // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
-  const listed = worktree === null ? undefined : mix.worktrees.find((w) => w.path === worktree.path);
+  const listed = worktree === null ? undefined : mix.worktrees.find((w) => w.path === worktree.path && placeOf(w) === target);
   const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
   syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch, host: worktree.host }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
@@ -738,9 +740,9 @@ function remix() {
 // What a read of the lists leaves to do: a terminal that left Orca's list leaves the tabs with its screen (in each place that was read well), the order of tabs gone is dropped, and a start that waits is looked for.
 function settle() {
   if (view === null) return;
-  if (view.state === "ready") {
+  const read = [...(view.state === "ready" ? [view.target] : []), ...(here?.state === "ready" ? [null] : [])];
+  if (read.length > 0) {
     const held = liveHandles();
-    const read = [view.target, ...(here?.state === "ready" ? [null] : [])];
     pruneTerminals((handle, source) => !read.includes(source.environment) || held.has(handle));
     forgetGone();
   }
@@ -758,14 +760,19 @@ function claimStarted() {
     started = null;
     return;
   }
-  if (view === null || view.state !== "ready") return;
-  // The target's list, or this machine's beside it that was read well (A-33).
-  const same = wait.target === view.target || (wait.target === null && here?.state === "ready");
-  const row = same && wait.kind === "claude" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
-  const terminal = same && wait.kind === "terminal" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
+  if (view === null) return;
+  // The list of the place the start was made in: the target's, or this machine's beside it (A-33). Another target, or no read of this machine yet, ends the wait; a list that failed (or is not read yet) keeps it till its 30 seconds are over.
+  const place = wait.target === view.target ? view : wait.target === null ? here : null;
+  if (place === null) {
+    started = null;
+    return;
+  }
+  if (place.state !== "ready") return;
+  const row = wait.kind === "claude" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
+  const terminal = wait.kind === "terminal" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
   if (row?.paneKey) pickRow(row);
   if (terminal) pickTerminal(terminal);
-  if (row || terminal || !same) started = null;
+  if (row || terminal) started = null;
 }
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
@@ -834,6 +841,8 @@ async function load(scope: Scope, force = false) {
   const seq = ++loadSeq;
   loading = true;
   lastTry = Date.now();
+  // A read of the lists reads this machine's beside a saved environment's, so the clock's read of it (`loadHere`) waits one period.
+  if (scope !== "badge" && view?.target != null) hereTry = Date.now();
   let next: OrcaOverview;
   try {
     next = await invoke("orca_overview", { scope, target: view?.target ?? null });
@@ -855,14 +864,16 @@ async function load(scope: Scope, force = false) {
   draw();
 }
 
-// Reads this machine's lists while a saved environment is the target and streamed (A-33): the stream gives the target's, and `orca_overview` is not read by the clock then. It is the read of the pane of A-9 for this machine (`orca_destination`),
+// Reads this machine's lists while a saved environment is the target and streamed (A-33): the stream gives the target's, and `orca_overview` is not read by the clock then. `force` starts a read although another is on its way (after a start or a close), and the return of the older one is dropped. It is the read of the pane of A-9 for this machine (`orca_destination`),
 // which changes nothing else of the screen. A read of a target that changed meanwhile is dropped, and one that failed keeps the lists of the last good one (`adoptHere`).
-async function loadHere() {
+async function loadHere(force = false) {
   const target = view?.target ?? null;
-  if (hereLoading || target === null || !streaming()) return;
+  if ((hereLoading && !force) || target === null || !streaming()) return;
+  const seq = ++hereSeq;
   hereLoading = true;
   hereTry = Date.now();
   const read = await readDestination(null, false);
+  if (seq !== hereSeq) return;
   hereLoading = false;
   hereTry = Date.now();
   if (view?.target !== target || !streaming()) return;
@@ -874,7 +885,7 @@ async function loadHere() {
 // Reads the list again after an operation in `place` (a start, a close): `orca_overview` reads both places, and a streamed target says its own change by itself, so only this machine's is read then.
 function reread(place: string | null) {
   if (!streaming()) load(clockScope(), true);
-  else if (place === null) void loadHere();
+  else if (place === null) void loadHere(true);
 }
 
 // Reads again, without a word, the files and the differences that the panes show now (the clock, and a branch of the worktree that changed).
