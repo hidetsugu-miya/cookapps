@@ -1,4 +1,4 @@
-// The work pane of the database screen (D-3, D-4): the tables of the database that was pressed last, with their estimated rows, size and engine, or, when a table was pressed in the tree, the tabs of that table.
+// The work pane of the database screen (D-3, D-4): the tables of the database that was pressed last, with their estimated rows, size and engine (a row opens its table), or, when a table was pressed in the tree, the tabs of that table.
 // Drawing only. The tabs are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here.
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
@@ -54,6 +54,8 @@ export interface WorkActions {
   sqlText: (text: string) => void;
   // Runs the text of the SQL tab.
   runSql: () => void;
+  // Opens the table of a row of the table list, as a press on its row in the tree does.
+  openTable: (table: string) => void;
 }
 
 // The tabs of a table, in order. The body of the selected one is drawn in `drawDatabaseWork`, where the body of a tab that is added goes.
@@ -67,7 +69,7 @@ const STRUCTURE_COLUMNS = ["名前", "型", "NULL", "キー", "既定値", "注�
 
 let drawn = "";
 
-function tableNode(state: WorkState) {
+function tableNode(state: WorkState, actions: WorkActions) {
   const table = tag("table", "database-tables");
   const head = tag("tr");
   for (const [label, numeric] of [["名前", false], ["行数（概算）", true], ["サイズ", true], ["エンジン", false]] as const) {
@@ -79,6 +81,14 @@ function tableNode(state: WorkState) {
   const body = tag("tbody");
   for (const t of state.tables) {
     const tr = tag("tr");
+    tr.tabIndex = 0;
+    tr.dataset.key = `table-${t.name}`;
+    tr.onclick = () => actions.openTable(t.name);
+    tr.onkeydown = (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      actions.openTable(t.name);
+    };
     tr.append(tag("td", "", t.name), tag("td", "num", t.rows), tag("td", "num", t.size), tag("td", "", t.engine));
     body.append(tr);
   }
@@ -241,6 +251,6 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   const nodes: Node[] = [tag("h3", "database-work-title", state.database)];
   if (state.loading) nodes.push(note("読み込み中…", false));
   else if (state.error !== null) nodes.push(note(state.error, true));
-  else if (state.tables.length > 0) nodes.push(tableNode(state));
+  else if (state.tables.length > 0) nodes.push(tableNode(state, actions));
   box.replaceChildren(...nodes);
 }

@@ -342,6 +342,11 @@ const workActions: WorkActions = {
     if (view) view.text = text;
   },
   runSql,
+  // The table list shows the tables of the selected database: a press on a row is the press on that table's row in the tree.
+  openTable: (table) => {
+    const profile = profiles.find((p) => p.id === selected?.id);
+    if (profile && selected?.database != null) actions.pressTable(profile, selected.database, table);
+  },
 };
 
 const actions: SideActions = {

@@ -668,6 +668,37 @@ describe("database: tree", () => {
       await expect($("#database-work h3")).toHaveText("shop.users");
     });
 
+    it("opens the records on a press on a row of the table list, as the row of the tree does", async () => {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
+      const command = await mock("database_records", page0);
+      await $('#database-work [data-key="table-users"]').click();
+      expect(await waitForCalls(command)).toEqual([read(0)]);
+      await expect($("#database-work h3")).toHaveText("shop.users");
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
+      await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "false");
+      expect(await count("#database-work table.database-tables")).toBe(0);
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
+    });
+
+    it("opens the records on Enter on a row of the table list, a row that takes the focus", async () => {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
+      const command = await mock("database_records", page0);
+      const focused = await browser.execute(() => {
+        const tr = document.querySelector<HTMLElement>('#database-work [data-key="table-orders"]')!;
+        tr.focus();
+        return [document.activeElement === tr, getComputedStyle(tr).cursor];
+      });
+      expect(focused).toEqual([true, "pointer"]);
+      await browser.keys("Enter");
+      expect(await waitForCalls(command)).toEqual([{ ...read(0), table: "orders" }]);
+      await expect($("#database-work h3")).toHaveText("shop.orders");
+      await expect(row("p1/d/shop/t/orders")).toHaveAttribute("aria-pressed", "true");
+    });
+
     it("draws the tab レコード, selected, in place of the table list", async () => {
       await openTable();
       expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
