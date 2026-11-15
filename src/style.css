@@ -596,16 +596,17 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .name:hover, #todo-draft .name:hover { background: var(--hover); }
 #todo-detail .name:focus, #todo-draft .name:focus { outline: 2px solid var(--accent); background: var(--surface); }
 .chip-input { box-sizing: border-box; height: 28px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 14px; font: inherit; font-size: calc(12px * var(--fs)); }
-.due-pop { gap: 8px; padding: 8px; width: 232px; }
-.due-pop .chip-input { width: 100%; }
-.dp-head { display: flex; align-items: center; justify-content: space-between; font-weight: bold; }
-.due-pop button.dp-nav { width: 28px; height: 28px; padding: 0; justify-content: center; }
-.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: calc(12px * var(--fs)); }
-.dp-wd { line-height: 28px; color: #888; }
-.due-pop button.dp-day { height: 28px; padding: 0; justify-content: center; border-radius: 50%; }
+.due-pop { gap: 8px; padding: 10px; width: 280px; }
+.due-pop .chip-input { width: 100%; height: 34px; border-radius: 17px; font-size: calc(14px * var(--fs)); }
+.dp-head { display: flex; align-items: center; justify-content: space-between; font-weight: bold; font-size: calc(14px * var(--fs)); }
+.due-pop button.dp-nav { width: 34px; height: 34px; padding: 0; justify-content: center; }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: calc(14px * var(--fs)); }
+.dp-wd { line-height: 34px; color: #888; }
+.due-pop button.dp-day { width: 34px; height: 34px; margin: 0 auto; padding: 0; justify-content: center; border-radius: 50%; }
 .dp-day.other { color: #aaa; }
-.dp-day.today { color: var(--accent); font-weight: bold; }
+.dp-day.today { color: var(--accent); font-weight: bold; box-shadow: inset 0 0 0 2px var(--accent); }
 .due-pop button.dp-day.current { background: var(--accent); color: var(--on-accent); }
+.due-pop button.dp-day.today.current { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px var(--on-accent); }
 .chip-input:focus { outline: none; }
 /* The description: Markdown shown in full, or a textarea that grows with its text. */
 #todo-detail .desc-wrap { position: relative; width: calc(100% - 66px); margin: 8px 16px 0 46px; }
