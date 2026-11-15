@@ -48,6 +48,16 @@
     </header>
     <header id="inbox-header" data-tauri-drag-region="deep" hidden>
       <h1>受信トレイ</h1>
+      <button id="mail-compose" class="icon-btn" aria-label="作成">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
+      </button>
+    </header>
+    <header id="new-mail-header" data-tauri-drag-region="deep" hidden>
+      <button id="new-mail-back" class="icon-btn" aria-label="戻る">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+      </button>
+      <h1>新規メッセージ</h1>
+      <button id="new-mail-discard" class="text-btn" type="button">破棄</button>
     </header>
     <p id="error" hidden></p>
     <div id="mail-area" class="split-main">
@@ -108,6 +118,34 @@
               <button id="reply-discard" class="text-btn" type="button">破棄</button>
             </div>
           </div>
+        </div>
+      </section>
+      <section id="new-mail" hidden>
+        <div class="reply-row">
+          <span class="reply-key">差出人</span>
+          <label class="reply-mode"><select id="new-mail-from-select" aria-label="差出人" hidden></select></label>
+          <span id="new-mail-from-text"></span>
+        </div>
+        <div class="reply-row">
+          <span class="reply-key">宛先</span>
+          <div id="new-mail-to-field" class="reply-field"><input id="new-mail-to-input" class="reply-input" aria-label="宛先を追加" autocomplete="off" spellcheck="false"></div>
+          <span class="reply-more"><button id="new-mail-cc-open" class="reply-link" type="button">Cc</button><button id="new-mail-bcc-open" class="reply-link" type="button">Bcc</button></span>
+        </div>
+        <div id="new-mail-cc-row" class="reply-row" hidden>
+          <span class="reply-key">Cc</span>
+          <div id="new-mail-cc-field" class="reply-field"><input id="new-mail-cc-input" class="reply-input" aria-label="Cc を追加" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div id="new-mail-bcc-row" class="reply-row" hidden>
+          <span class="reply-key">Bcc</span>
+          <div id="new-mail-bcc-field" class="reply-field"><input id="new-mail-bcc-input" class="reply-input" aria-label="Bcc を追加" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="reply-row">
+          <span class="reply-key">件名</span>
+          <input id="new-mail-subject" aria-label="件名" autocomplete="off">
+        </div>
+        <textarea id="new-mail-body" aria-label="本文"></textarea>
+        <div id="new-mail-foot">
+          <button id="new-mail-send" class="text-btn primary" type="button" disabled>送信</button>
         </div>
       </section>
     </main>

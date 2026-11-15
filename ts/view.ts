@@ -14,7 +14,7 @@ export function setClaudeReady(ready: boolean) {
 }
 
 // "slack" is the compose screen of a mail; "slack-list", "slack-channel" and "slack-thread" are the Slack screen's list, the history of a channel and the detail of a message.
-export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings" | "prompt" | "slack" | "slack-list" | "slack-channel" | "slack-thread" | "orca";
+export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings" | "prompt" | "slack" | "slack-list" | "slack-channel" | "slack-thread" | "orca" | "new-mail";
 
 // #main scrolls both the list and the thread, so each view keeps its own position.
 let listScroll = 0;
@@ -40,6 +40,9 @@ export function show(view: View) {
   $("mail-header").hidden = view !== "thread";
   // The inbox has its own header (the unread operation); the login screen has none.
   $("inbox-header").hidden = view !== "list";
+  // The screen that writes a new mail (M-11) has a header of its own, and takes the place of the thread in #main.
+  $("new-mail-header").hidden = view !== "new-mail";
+  $("new-mail").hidden = view !== "new-mail";
   $("main").hidden = own;
   $("mail-area").hidden = own;
   $("login").hidden = view !== "login";

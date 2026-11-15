@@ -59,3 +59,20 @@ Who a reply goes to is worked out by Rust (`reply_choices` in `mail_address.rs`;
 "送信" calls `send_mail` (M-5: the account that received the thread is the sender) with the chips' addresses as To, Cc and Bcc, the thread's subject, the text, and the thread's ID as `replyThreadId` (Rust adds "Re: " and the threading headers). When it succeeds, the field is emptied (the text, Cc and Bcc, and the recipients of "返信") and the thread is read again (`thread`) and drawn with the sent mail in it. When it fails, the error is shown where the mail screen shows its errors (`#error`) and the text and the recipients stay as they were. When the answer says the account must log in again, the list is shown at the next load as for any command (M-2) and the text stays. "破棄" empties the field in the same way, with no call.
 
 Why. The owner chose the layout with the field fixed at the bottom (issue #486, option B) so that the thread can be read while the reply is written, and the row of operations above the subject (issue #488). Attaching files and the Claude pane are other requirements.
+
+## M-11 New mail
+
+The header of the inbox (`#inbox-header`) has "作成" (`#mail-compose`, an icon button with a pencil). Pressing it opens the screen that writes a new mail in the area of the detail view (M-2): `#new-mail` takes the place of the thread in `#main`, and it is not a dialog. The header of the list gives way to a header of its own (`#new-mail-header`, a band like `#mail-header`, A-23) with "戻る" (`#new-mail-back`), the title "新規メッセージ" and "破棄" (`#new-mail-discard`) at the right. The screen is empty each time it is opened. It holds, from the top:
+
+- "差出人": the account the mail goes from (M-5). With one account it is only shown (`#new-mail-from-text`); with several it is a select (`#new-mail-from-select`) of them, the first being chosen when the screen opens.
+- "宛先", with the words "Cc" and "Bcc" at the right, and the rows of Cc and Bcc that they open (`#new-mail-cc-row`, `#new-mail-bcc-row`): the recipients as chips, made and opened as those of the reply field (M-10) are, by the same code (`ts/mail-recipients.ts`): an address typed in the field becomes a chip with Enter, a comma or by leaving the field, × takes a chip off, and Rust checks the addresses when the mail is sent. The chips start empty.
+- "件名" (`#new-mail-subject`), and the text (`#new-mail-body`, plain text) under the rows, which takes the height that is left.
+- "送信" (`#new-mail-send`) in a band fixed at the bottom of the area (as `#reply` is, M-10). It cannot be pressed while the text is blank or while a mail is going out.
+
+The screen shows no placeholder and no line that explains a field.
+
+"送信" calls `send_mail` (M-10) with the chosen account, the chips' addresses as To, Cc and Bcc, the subject and the text, and no `replyThreadId`. When it succeeds, the notice "送信しました" is shown and the inbox is shown again. When it fails, the error is shown where the mail screen shows its errors (`#error`) and what was written stays. When the answer says the account must log in again, the list is shown at the next load as for any command (M-2) and what was written stays. A mail that goes out after the screen was left (by the sidebar, say) shows the notice and changes nothing else.
+
+"戻る" and "破棄" show the inbox again and drop what was written, with no call. While the screen is shown, a load or a sync of the list does not draw the list over it (the sidebar still shows the inbox).
+
+Why. The owner chose the layout of issue #486, option B (the "send" in a band fixed at the bottom, as the reply field). Attaching files and the Claude pane are other requirements.

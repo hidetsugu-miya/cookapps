@@ -14,9 +14,9 @@ import { show } from "./view.js";
 
 export type Screen = "mail" | "calendar" | "todo" | "slack" | "orca" | "settings";
 
-// Which screen the sidebar selected, or "compose" while the Slack compose screen is open (the sidebar then still shows the inbox).
-// Background work reads it; only the sidebar and the compose screen's open and close change it.
-let screen: Screen | "compose" = "mail";
+// Which screen the sidebar selected, or "compose" while the Slack compose screen is open, or "new-mail" while the screen that writes a new mail is (the sidebar then still shows the inbox).
+// Background work reads it; only the sidebar and those screens' open and close change it.
+let screen: Screen | "compose" | "new-mail" = "mail";
 export const currentScreen = () => screen;
 
 function markNav(name: Screen) {
@@ -31,7 +31,7 @@ function markNav(name: Screen) {
 // A popup of one of them closes with the screen.
 function syncTrays() {
   closePopup();
-  $("account-list").hidden = !(screen === "mail" || screen === "compose" || screen === "calendar");
+  $("account-list").hidden = !(screen === "mail" || screen === "compose" || screen === "new-mail" || screen === "calendar");
   $("slack-workspace-list").hidden = screen !== "slack";
 }
 
@@ -53,6 +53,16 @@ export function showComposeScreen() {
   closeHint();
   $("error").hidden = true;
   show("slack");
+}
+
+// The screen that writes a new mail (M-11), opened from the header of the list. The sidebar stays on the inbox, but `currentScreen()` is not "mail", so a list load or a sync does not draw the list over it. It is left with `setScreen("mail")`.
+export function showNewMailScreen() {
+  screen = "new-mail";
+  markNav("mail");
+  syncTrays();
+  closeHint();
+  $("error").hidden = true;
+  show("new-mail");
 }
 
 // Back from the Slack compose screen to the open thread, which was left as it was (nothing is fetched again).

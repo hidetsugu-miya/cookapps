@@ -6,7 +6,7 @@ html, body { height: 100%; }
 /* A-23: the header band at the top of every screen is one height at the default font (--header-h, a minimum: a larger font stretches it), and the icon buttons in it one size (--header-btn, with --header-ic for the icon); no screen sets its own. */
 :root { --header-h: 44px; --header-btn: 28px; --header-ic: 17px; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
-#mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#mail-header, #inbox-header, #new-mail-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -61,8 +61,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #error { color: #b00020; padding: 8px 32px; margin: 0; white-space: pre-wrap; }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
@@ -141,7 +141,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .reply-card { display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
 .reply-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .reply-mode { position: relative; flex: none; display: inline-flex; align-items: center; color: var(--ink-soft); }
-#reply-mode { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
+#reply-mode, #new-mail-from-select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
 .reply-mode::after { content: ""; position: absolute; right: 2px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .reply-key { flex: none; min-width: 2.6em; padding: 2px 0; color: var(--ink-soft); }
 .reply-field { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
@@ -157,6 +157,18 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .reply-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
 .reply-foot #reply-discard { margin-left: auto; }
 .reply-foot .text-btn:disabled { opacity: .4; cursor: default; }
+/* M-11: the screen that writes a new mail takes the place of the thread. The header is a band like the thread's (it holds "戻る", the title and "破棄"); the rows are those of the reply field without its card, and "送信" is in a band fixed at the bottom of the area, as the reply field is. */
+#new-mail-header { box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#new-mail-header .icon-btn { color: #444746; border-radius: 50%; }
+#new-mail-header #new-mail-discard { flex: none; height: var(--header-btn); padding: 0 12px; }
+#main:has(> #new-mail:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
+#main > #new-mail:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; padding-top: 8px; }
+#new-mail .reply-row { padding: 8px 0; }
+#new-mail .reply-key { min-width: 3.4em; }
+#new-mail-subject { flex: 1; min-width: 0; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
+#new-mail-body { flex: 1; display: block; box-sizing: border-box; width: 100%; min-height: 200px; padding: 12px 0; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: none; }
+#new-mail-foot { position: sticky; bottom: 0; z-index: 2; flex: none; display: flex; align-items: center; gap: 8px; margin: auto -24px 0 -32px; padding: 10px 32px; background: var(--bar); border-top: 1px solid var(--line); }
+#new-mail-foot .text-btn:disabled { opacity: .4; cursor: default; }
 #thread-head { margin: 16px 0 20px 56px; font-size: calc(22px * var(--fs)); line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: calc(11px * var(--fs)); vertical-align: middle; }
