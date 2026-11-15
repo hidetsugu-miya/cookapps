@@ -2029,7 +2029,11 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await openSkills();
     await waitForCount("#skill-list .skill-row", 2);
     await row(1).click();
-    await $("#skill-new").click();
+    // The page's own press: the driver's click focuses the button after the page's handler ran, which no real press does.
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      document.getElementById("skill-new")!.click();
+    }, onceId());
     await expect($("#skill-form")).toBeDisplayed();
     await expect($("#skill-new")).toHaveAttribute("aria-pressed", "true");
     await expect(row(1)).toHaveAttribute("aria-current", "false");
@@ -2057,7 +2061,8 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await $("#skill-description").setValue("説明");
     await $("#skill-instructions").setValue("指示");
     await $("#skill-save").click();
-    expect(await waitForCalls(save)).toEqual([{ skill: { name: "gamma", displayName: "ガンマ", screens: ["slack-thread", "slack-paste"], description: "説明", instructions: "指示" } }]);
+    // The screens go in the order of the check boxes, not of the presses.
+    expect(await waitForCalls(save)).toEqual([{ skill: { name: "gamma", displayName: "ガンマ", screens: ["slack-paste", "slack-thread"], description: "説明", instructions: "指示" }, create: true }]);
     await waitForCount("#skill-list .skill-row", 2);
     expect(await rows()).toEqual(["Skill alphaalpha", "ガンマgamma"]);
     await expect(row(2)).toHaveAttribute("aria-current", "true");
@@ -2076,7 +2081,7 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await $("#skill-display-name").setValue("新しい表示名");
     await $("#skill-instructions").setValue("  Trimmed.  ");
     await $("#skill-save").click();
-    expect(await waitForCalls(save)).toEqual([{ skill: { name: "alpha", displayName: "新しい表示名", screens: [], description: "About alpha", instructions: "  Trimmed.  " } }]);
+    expect(await waitForCalls(save)).toEqual([{ skill: { name: "alpha", displayName: "新しい表示名", screens: [], description: "About alpha", instructions: "  Trimmed.  " }, create: false }]);
     await waitForText("#skill-list .skill-row", "新しい表示名");
     await expect($("#skill-instructions")).toHaveValue("Trimmed.");
   });
@@ -2093,6 +2098,20 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await expect($("#error")).toHaveText("スキル「alpha」はもうあります");
     await browser.pause(300);
     expect(await callsOf(save)).toEqual([]);
+    await expect($("#skill-display-name")).toHaveValue("Again");
+  });
+
+  it("sends a new skill with create even when the list was not read, and shows the refusal of Rust", async () => {
+    await openSkills([], { skill_list: rejects("スキルを読めません") });
+    await expect($("#error")).toHaveText("スキルを読めません");
+    const save = await mock("skill_save", rejects("スキル「alpha」はもうあります"));
+    await $("#skill-new").click();
+    await $("#skill-name").setValue("alpha");
+    await $("#skill-display-name").setValue("Again");
+    await $("#skill-instructions").setValue("Do.");
+    await $("#skill-save").click();
+    expect(await waitForCalls(save)).toEqual([{ skill: { name: "alpha", displayName: "Again", screens: [], description: "", instructions: "Do." }, create: true }]);
+    await expect($("#error")).toHaveText("スキル「alpha」はもうあります");
     await expect($("#skill-display-name")).toHaveValue("Again");
   });
 

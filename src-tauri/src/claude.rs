@@ -22,6 +22,7 @@ use crate::{
         API_BASE,
     },
     gmail::log_failure,
+    skills::SkillScreen,
 };
 
 /// A summary is one model call, about 4 seconds when measured; this only stops a hung process.
@@ -722,6 +723,7 @@ fn mail_prompt(today: &str, boundary: &str) -> String {
 
 /// The arguments of a summary call. No tools and no MCP servers are given to the model, so a message cannot make it act,
 /// and no settings are read (an empty `--setting-sources`), so no hook of the user's or the project's sees the message.
+/// A call of a skill adds a plugin folder (`skill_call`), which `skills::plugin_for` makes for that call from the one skill's name, description and text only: it holds no hook, no MCP server and no other skill, so the same holds.
 fn claude_args(system_prompt: &str, schema: &str, settings: ModelSettings) -> Vec<String> {
     [
         "-p",
@@ -1199,7 +1201,7 @@ fn check_request(instruction: &str, skill: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// The call of a skill (S-4, S-7): `args` with the plugin folder of the skill (`--plugin-dir`), and `input` led by the command `/cookapps:{name}`, so that Claude Code runs the skill with the input as its arguments.
+/// The call of a skill (S-4, S-7): `args` with the plugin folder of the call (`--plugin-dir`, from `skills::plugin_for`), and `input` led by the command `/cookapps:{name}`, so that Claude Code runs the skill with the input as its arguments.
 /// The input is the enclosed one the screen's call makes, unchanged. The tools, the MCP servers and the settings stay as `args` has them. With no skill (`None`), `args` and `input` come back as they were.
 /// `name` has passed `skills::plugin_for` (`validate_name`: a to z, 0 to 9 and `-`), so it holds nothing that could end the command.
 fn skill_call(
@@ -2667,7 +2669,7 @@ pub async fn claude_proofread_slack(
         &dir,
         command,
         ModelPurpose::Proofread,
-        skill.as_deref(),
+        skill.as_deref().map(|name| (name, SkillScreen::SlackPaste)),
         proofread_args,
         |boundary| {
             check_request(&instruction, skill.as_deref())?;
@@ -2731,7 +2733,9 @@ pub async fn claude_chat_thread(
         &dir,
         command,
         ("返信欄の文章", thread_chat_args, ModelPurpose::SlackReply),
-        skill.as_deref(),
+        skill
+            .as_deref()
+            .map(|name| (name, SkillScreen::SlackThread)),
         thread.as_deref(),
         text,
         history,
@@ -2777,20 +2781,23 @@ pub async fn claude_edit_todo_draft(
 type ArgsFor = fn(&str, ModelSettings) -> Vec<String>;
 
 /// The call behind the conversations, up to the model's answer: the settings of `purpose`, a random boundary, the input `input` makes from that boundary, and `args` with its system prompt.
-/// With a `skill` (a saved one, `skills::plugin_for`; any other name is the call's error, before anything is sent), the call is the skill's (`skill_call`). Returns what `claude` printed; the answer is read by the caller.
+/// With a `skill` (its name and the screen of the call; a name that is not a saved skill of that screen, `skills::plugin_for`, is the call's error, before anything is sent), the call is the skill's (`skill_call`) with a plugin folder made for it, which is deleted when the call is over, failed or not.
+/// Returns what `claude` printed; the answer is read by the caller.
 async fn chat_ask(
     dir: &Path,
     command: &str,
     purpose: ModelPurpose,
-    skill: Option<&str>,
+    skill: Option<(&str, SkillScreen)>,
     args: impl FnOnce(&str, ModelSettings) -> Vec<String>,
     input: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let dir = dir.to_path_buf();
-    let skill = skill.map(str::to_owned);
-    let (settings, connection, skill) = tokio::task::spawn_blocking(move || {
+    let skill = skill.map(|(name, screen)| (name.to_owned(), screen));
+    let (settings, connection, plugin) = tokio::task::spawn_blocking(move || {
         let plugin = skill
-            .map(|name| crate::skills::plugin_for(&dir, &name).map(|plugin| (plugin, name)))
+            .map(|(name, screen)| {
+                crate::skills::plugin_for(&dir, &name, screen).map(|plugin| (plugin, name))
+            })
             .transpose()?;
         Ok::<_, String>((
             load_settings(&dir).for_purpose(purpose),
@@ -2806,10 +2813,11 @@ async fn chat_ask(
     let (args, input) = skill_call(
         args(&boundary, settings),
         input,
-        skill
+        plugin
             .as_ref()
-            .map(|(plugin, name)| (plugin.as_path(), name.as_str())),
+            .map(|(plugin, name)| (plugin.path(), name.as_str())),
     );
+    // `plugin` lives until here: its folder is deleted when `claude` has ended, and when the call is dropped.
     ask(args, input, settings.timeout(EDIT_TIMEOUT), connection)
         .await
         .map_err(|e| log_failure(command, "-", e))
@@ -2821,7 +2829,7 @@ async fn chat_edit(
     dir: &Path,
     command: &str,
     target: (&str, ArgsFor, ModelPurpose),
-    skill: Option<&str>,
+    skill: Option<(&str, SkillScreen)>,
     thread: Option<&str>,
     body: String,
     history: Vec<ChatTurn>,
@@ -2829,7 +2837,7 @@ async fn chat_edit(
 ) -> Result<PromptEdit, String> {
     let (noun, args, purpose) = target;
     let out = chat_ask(dir, command, purpose, skill, args, |boundary| {
-        check_request(&instruction, skill)?;
+        check_request(&instruction, skill.map(|(name, _)| name))?;
         edit_input(noun, thread, &body, &history, &instruction, boundary)
     })
     .await?;

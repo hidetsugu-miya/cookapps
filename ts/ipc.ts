@@ -379,7 +379,7 @@ export interface Commands {
   // One skill by its name; an error when there is none or the name is not a valid one.
   skill_get: { args: { name: string }; result: Skill };
   // Saves a skill (a new one, or the one of that name replaced) and answers it as saved: trimmed, the screens in a fixed order. A name or text that cannot be saved is an error in Japanese.
-  skill_save: { args: { skill: Skill }; result: Skill };
+  skill_save: { args: { skill: Skill; create: boolean }; result: Skill };
   // Deletes a skill; an error when there is none or the name is not a valid one. Answers null.
   skill_delete: { args: { name: string }; result: null };
   // A-28: adds a line to the app's log (`app-log.jsonl` in the config folder): the weight, the place and a few words of what happened, never a token, a mail, a message, what a terminal printed or what was typed. The text is cut to 500 characters and a word shaped like a token is masked. An empty text is an error in Japanese. Answers null.

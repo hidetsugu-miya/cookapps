@@ -79,12 +79,13 @@ async function saveSkill() {
     instructions: $<HTMLTextAreaElement>("skill-instructions").value,
   };
   $("error").hidden = true;
-  // A save of an existing name replaces that skill, so a new skill with a taken name is stopped here.
-  if (shown === "" && skills.some((s) => s.name === skill.name)) return showError(`スキル「${skill.name}」はもうあります`);
+  // A save of an existing name replaces that skill, so a new skill with a taken name is stopped here too (Rust refuses it by `create` when this list was not read).
+  const create = shown === "";
+  if (create && skills.some((s) => s.name === skill.name)) return showError(`スキル「${skill.name}」はもうあります`);
   busy = true;
   let saved: Skill;
   try {
-    saved = await invoke("skill_save", { skill });
+    saved = await invoke("skill_save", { skill, create });
   } catch (e) {
     return showError(e);
   } finally {
