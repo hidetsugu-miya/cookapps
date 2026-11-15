@@ -253,14 +253,14 @@ async function openDatabase(profile: DatabaseProfileView, c: ConnectionState, na
   draw();
 }
 
-// Reads the page `page` of the records of a table (D-4). The page that was shown stays until the new one comes; an error drops it.
-async function readRecords(id: string, database: string, table: string, page: number) {
+// Reads the page `page` of the records of a table (D-4), or, when `typed` is given, the page that this text of the page field names (`page` is then the page that is shown). The page that was shown stays until the new one comes; an error drops it.
+async function readRecords(id: string, database: string, table: string, page: number, typed?: string) {
   const same = records?.id === id && records.database === database && records.table === table;
   const mine: RecordsView = { id, database, table, page, loading: true, error: null, data: same ? (records?.data ?? null) : null };
   records = mine;
   draw();
   try {
-    mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null });
+    mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null, ...(typed === undefined ? {} : { typed }) });
     mine.page = mine.data.page;
   } catch (e) {
     mine.data = null;
@@ -328,6 +328,9 @@ async function runSql() {
 const workActions: WorkActions = {
   page: (page) => {
     if (records) readRecords(records.id, records.database, records.table, page);
+  },
+  pageInput: (text) => {
+    if (records) readRecords(records.id, records.database, records.table, records.page, text);
   },
   // The table stays: only the tab changes. The records are kept as they are, and the structure is read at every press of its tab.
   tab: (id) => {

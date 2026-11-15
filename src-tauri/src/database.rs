@@ -602,7 +602,9 @@ pub async fn database_tables(
 
 /// One page of the records of `table` in `database` on the open connection `id` (D-4): `page` counts from 0, and each value is already text.
 /// The estimated rows are read with the page 0, or when `estimate` is none; `estimate` is the one the screen holds from it, which a later page answers again.
+/// `typed` is the text of the page field: when it is given, it names the page (`records::page_of_input`) and `page` is not used.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn database_records(
     sessions: tauri::State<'_, session::Sessions>,
     tunnels: tauri::State<'_, ssm::Tunnels>,
@@ -611,7 +613,9 @@ pub async fn database_records(
     table: String,
     page: u32,
     estimate: Option<u64>,
+    typed: Option<String>,
 ) -> Result<records::DatabaseRecords, String> {
+    let page = typed.as_deref().map_or(page, records::page_of_input);
     sessions
         .records(&tunnels, &id, &database, &table, page, estimate)
         .await

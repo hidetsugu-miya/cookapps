@@ -8,4 +8,12 @@ export type DatabaseRecords = { columns: Array<string>, rows: Array<Array<Databa
 /**
  * The estimated rows of the table (none for a view). Read with the page 0 only; a later page is given the one the screen holds (`read`'s `known`) and answers it again.
  */
-estimate: number | null, summary: string, };
+estimate: number | null, summary: string, 
+/**
+ * The last page (from 0) that the estimate gives; none for a view, a stale estimate and a page with no row (`last_page`).
+ */
+lastPage: number | null, 
+/**
+ * The number of pages worded for the footer, "/ 約 12" (`format_pages`); empty when `last_page` is none.
+ */
+pages: string, };

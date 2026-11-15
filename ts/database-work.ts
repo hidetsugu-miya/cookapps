@@ -5,7 +5,8 @@ import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { gridNode } from "./database-grid.js";
-import { $, tag } from "./dom.js";
+import { $, onEnter, tag } from "./dom.js";
+import { CHEVRON_LEFT_SVG, CHEVRON_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
 
 // The page of records that was asked for last. `data` stays while the next page is read, and is none after an error.
 export interface RecordsState {
@@ -48,6 +49,8 @@ export interface WorkState {
 export interface WorkActions {
   // Reads the page `page` of the records of the table (the reload is the page that is shown).
   page: (page: number) => void;
+  // Reads the page that the text of the page field names; Rust checks the text.
+  pageInput: (text: string) => void;
   // Selects the tab `id`; the table stays.
   tab: (id: string) => void;
   // Keeps the text of the SQL tab as it is typed; nothing is drawn.
@@ -127,7 +130,18 @@ function pagerButton(key: string, label: string, disabled: boolean, onclick: () 
   return button;
 }
 
-// The records tab: the page as a grid, and under it the range with the estimated rows, the previous and next page, and the reload.
+function iconButton(key: string, label: string, svg: string, disabled: boolean, onclick: () => void) {
+  const button = tag("button", "icon-btn", "");
+  button.type = "button";
+  button.dataset.key = key;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = svg;
+  button.disabled = disabled;
+  button.onclick = onclick;
+  return button;
+}
+
+// The records tab: the page as a grid, and under it the reload and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page.
 function recordsNode(records: RecordsState, actions: WorkActions, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
@@ -139,12 +153,29 @@ function recordsNode(records: RecordsState, actions: WorkActions, sizes: string)
   const pager = tag("div", "database-pager");
   const range = tag("span", "database-range", records.loading ? "読み込み中…" : (records.data?.summary ?? ""));
   range.setAttribute("role", "status");
-  pager.append(
-    range,
-    pagerButton("prev", "前へ", records.loading || records.page === 0, () => actions.page(records.page - 1)),
-    pagerButton("next", "次へ", records.loading || !records.data?.hasMore, () => actions.page(records.page + 1)),
-    pagerButton("reload", "再読み込み", records.loading, () => actions.page(records.page)),
+  const { loading, page } = records;
+  const lastPage = records.data?.lastPage ?? null;
+  const input = tag("input", "database-page-input");
+  input.type = "text";
+  input.inputMode = "numeric";
+  input.value = String(page + 1);
+  input.readOnly = loading;
+  input.spellcheck = false;
+  input.dataset.key = "page";
+  input.setAttribute("aria-label", "ページ番号");
+  onEnter(input, () => {
+    if (!loading) actions.pageInput(input.value);
+  });
+  const nav = tag("div", "database-pager-nav");
+  nav.append(
+    iconButton("first", "最初のページ", PAGE_FIRST_SVG, loading || page === 0, () => actions.page(0)),
+    iconButton("prev", "前のページ", CHEVRON_LEFT_SVG, loading || page === 0, () => actions.page(page - 1)),
+    input,
+    tag("span", "database-pages", records.data?.pages ?? ""),
+    iconButton("next", "次のページ", CHEVRON_SVG, loading || !records.data?.hasMore, () => actions.page(page + 1)),
+    iconButton("last", "最後のページ", PAGE_LAST_SVG, loading || lastPage === null || page >= lastPage, () => actions.page(lastPage ?? page)),
   );
+  pager.append(iconButton("reload", "再読み込み", RELOAD_SVG, loading, () => actions.page(page)), range, nav);
   box.append(scroll, pager);
   return box;
 }

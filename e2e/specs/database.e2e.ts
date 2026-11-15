@@ -634,18 +634,26 @@ describe("database: tree", () => {
         [num("1"), databaseCell("Alice"), databaseCell(long), bin("バイナリ 16 B"), databaseNull, num("12.50")],
         [num("2"), databaseCell("Bob"), databaseCell("注文メモ"), databaseNull, databaseCell("2024-01-02 03:04:05"), num("0.00")],
       ],
-      { hasMore: true, estimate: 1200, summary: "1–2 行目 / 約 1,200 行" },
+      { hasMore: true, estimate: 1200, summary: "1–2 行目 / 約 1,200 行", lastPage: 11, pages: "/ 約 12" },
     );
     const page1 = databaseRecords(columns, [[num("3"), databaseCell("Carol"), databaseCell(""), bin("バイナリ 1.5 KB"), databaseNull, num("1.00")]], {
       page: 1,
       estimate: 1200,
       summary: "3–3 行目 / 約 1,200 行",
+      lastPage: 11,
+      pages: "/ 約 12",
     });
     // `estimate` is the one of the page that is shown (none before a first page): Rust reads it with the page 0 only.
     const read = (page: number, estimate: number | null = null) => ({ id: "p1", database: "shop", table: "users", page, estimate });
     const grid = () =>
       browser.execute(() => [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
     const button = (key: string) => $(`#database-work [data-key="${key}"]`);
+    const pageInput = () => $("#database-work .database-pager input");
+    // Types `text` in the page field and presses Enter.
+    async function typePage(text: string) {
+      await pageInput().setValue(text);
+      await browser.keys("Enter");
+    }
 
     // The app with the table users of the database shop pressed, and its first page drawn.
     async function openTable(first = page0) {
@@ -784,13 +792,110 @@ describe("database: tree", () => {
       expect(await columnWidths(3)).toEqual([sized[0], sized[0], sized[0]]);
     });
 
-    it("has the range and the estimated rows under the table, with 前へ off on the first page and 次へ on", async () => {
+    it("has the range and the estimated rows under the table, with the first and the previous page off on the first page and the next and the last on", async () => {
       await openTable();
       await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
-      expect(await textsOf("#database-work .database-pager button")).toEqual(["前へ", "次へ", "再読み込み"]);
+      const labels = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager button")].map((b) => [b.getAttribute("aria-label"), b.textContent]));
+      expect(labels).toEqual([
+        ["再読み込み", ""],
+        ["最初のページ", ""],
+        ["前のページ", ""],
+        ["次のページ", ""],
+        ["最後のページ", ""],
+      ]);
+      await expect(button("first")).toBeDisabled();
       await expect(button("prev")).toBeDisabled();
       await expect(button("next")).toBeEnabled();
+      await expect(button("last")).toBeEnabled();
       await expect(button("reload")).toBeEnabled();
+    });
+
+    it("puts the reload and the range at the left of the footer and the page buttons, the number and the pages at the right, the reload having an icon", async () => {
+      await openTable();
+      const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *, #database-work .database-pager-nav > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
+      expect(order).toEqual(["reload", "database-range", "database-pager-nav", "first", "prev", "page", "database-pages", "next", "last"]);
+      const places = await browser.execute(() => {
+        const left = (key: string) => document.querySelector(`#database-work [data-key="${key}"]`)!.getBoundingClientRect().left;
+        const range = document.querySelector("#database-work .database-range")!.getBoundingClientRect();
+        return { reload: left("reload") < range.left, first: left("first") > range.right, svg: document.querySelectorAll('#database-work [data-key="reload"] svg').length };
+      });
+      expect(places).toEqual({ reload: true, first: true, svg: 1 });
+    });
+
+    it("has the page number and the pages from the estimate beside the number", async () => {
+      await openTable();
+      await expect(pageInput()).toHaveValue("1");
+      await expect($("#database-work .database-pages")).toHaveText("/ 約 12");
+      await mock("database_records", page1);
+      await button("next").click();
+      await expect(pageInput()).toHaveValue("2");
+      await expect($("#database-work .database-pages")).toHaveText("/ 約 12");
+    });
+
+    it("draws no pages and has the last page off for a table with no estimate", async () => {
+      await openTable(databaseRecords(columns, [[num("1"), databaseCell("A"), databaseCell(""), bin("バイナリ 1 B"), databaseNull, num("1")]], { hasMore: true }));
+      await expect($("#database-work .database-pages")).toHaveText("");
+      await expect(button("last")).toBeDisabled();
+      await expect(button("next")).toBeEnabled();
+    });
+
+    it("reads the first page with the first-page button and the last page that Rust gave with the last-page button", async () => {
+      await openTable();
+      const last = await mock("database_records", { ...page1, page: 11, summary: "1,101–1,101 行目 / 約 1,200 行" });
+      await button("last").click();
+      expect(await waitForCalls(last)).toEqual([read(11, 1200)]);
+      await expect($("#database-work .database-range")).toHaveText("1,101–1,101 行目 / 約 1,200 行");
+      await expect(pageInput()).toHaveValue("12");
+      await expect(button("last")).toBeDisabled();
+      await expect(button("first")).toBeEnabled();
+      const first = await mock("database_records", page0);
+      await button("first").click();
+      expect(await waitForCalls(first)).toEqual([read(0, 1200)]);
+      await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
+      await expect(pageInput()).toHaveValue("1");
+    });
+
+    it("sends the text typed in the page field on Enter, for Rust to name the page, with the estimate the page holds", async () => {
+      await openTable();
+      const typed = await mock("database_records", page1);
+      await typePage("2");
+      expect(await waitForCalls(typed)).toEqual([{ ...read(0, 1200), typed: "2" }]);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      await expect(pageInput()).toHaveValue("2");
+    });
+
+    it("sends a text that is not a page number as it is, and draws the page Rust answers", async () => {
+      await openTable();
+      await mock("database_records", page1);
+      await button("next").click();
+      await expect(pageInput()).toHaveValue("2");
+      const typed = await mock("database_records", page0);
+      await typePage("abc");
+      expect(await waitForCalls(typed)).toEqual([{ ...read(1, 1200), typed: "abc" }]);
+      await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
+      await expect(pageInput()).toHaveValue("1");
+    });
+
+    it("sends nothing before Enter is pressed in the page field", async () => {
+      await openTable();
+      const typed = await mock("database_records", page1);
+      await pageInput().setValue("2");
+      expect(await callsOf(typed)).toEqual([]);
+    });
+
+    it("keeps the page field read only while a page is read, and sends nothing on Enter then", async () => {
+      await openTable();
+      const wait = await mock("database_records", holds);
+      await typePage("2");
+      await waitForCalls(wait);
+      await expect($("#database-work .database-range")).toHaveText("読み込み中…");
+      await expect(pageInput()).toHaveAttribute("readonly");
+      for (const key of ["first", "prev", "next", "last", "reload"]) await expect(button(key)).toBeDisabled();
+      await browser.keys("Enter");
+      expect(await callsOf(wait)).toHaveLength(1);
+      await release("database_records", page1);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      await expect(pageInput()).not.toHaveAttribute("readonly");
     });
 
     it("reads the next page with 次へ and the page before with 前へ", async () => {
@@ -841,7 +946,7 @@ describe("database: tree", () => {
       await button("next").click();
       await waitForCalls(wait);
       await expect($("#database-work .database-range")).toHaveText("読み込み中…");
-      for (const key of ["prev", "next", "reload"]) await expect(button(key)).toBeDisabled();
+      for (const key of ["first", "prev", "next", "last", "reload"]) await expect(button(key)).toBeDisabled();
       expect(await count("#database-work .database-grid tbody tr")).toBe(2);
       await release("database_records", page1);
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
@@ -870,6 +975,7 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-grid")).toBe(0);
       await expect(button("prev")).toBeDisabled();
       await expect(button("next")).toBeDisabled();
+      await expect(button("last")).toBeDisabled();
       await expect(button("reload")).toBeEnabled();
     });
 
@@ -884,6 +990,7 @@ describe("database: tree", () => {
       await expect($("#database-work .database-note")).toHaveElementClass("danger");
       expect(await count("#database-work .database-grid")).toBe(0);
       await expect(button("next")).toBeDisabled();
+      await expect(button("last")).toBeDisabled();
       await expect(button("reload")).toBeEnabled();
       await expect(dot("p1")).toHaveAttribute("data-state", "connected");
       const again = await mock("database_records", page1);
@@ -905,12 +1012,14 @@ describe("database: tree", () => {
       expect(await count("#database-work > *")).toBe(0);
     });
 
-    it("has no control to add, edit or delete a row: only the tabs and the three buttons", async () => {
+    it("has no control to add, edit or delete a row: only the tabs, the five page buttons and the page field", async () => {
       await openTable();
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "前へ", "次へ", "再読み込み"]);
-      expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", ""]);
+      expect(await count("#database-work input")).toBe(1);
+      expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
       await $("#database-work .database-grid tbody td:nth-child(2)").doubleClick();
-      expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
+      expect(await count("#database-work input")).toBe(1);
+      expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
     });
 
     it("goes back to the table list on a press on the database, and the next press on a table opens the records again", async () => {

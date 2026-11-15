@@ -1650,6 +1650,12 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-range { margin-right: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .database-pager .text-btn:disabled { opacity: .4; cursor: default; }
 .database-pager .text-btn:disabled:hover { background: var(--surface); }
+.database-pager .icon-btn { flex: none; width: 28px; height: 28px; color: var(--ink-soft); }
+.database-pager .icon-btn svg { width: 16px; height: 16px; }
+.database-pager-nav { flex: none; display: flex; align-items: center; gap: 4px; }
+.database-page-input { box-sizing: border-box; width: 64px; height: 28px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: inherit; font: inherit; text-align: center; font-variant-numeric: tabular-nums; }
+.database-page-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-pages { min-width: 4.5em; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .database-grid { border-collapse: collapse; }
 .database-grid th, .database-grid td { padding: 6px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
 .database-grid th + th, .database-grid td + td { border-left: 1px solid var(--line); }

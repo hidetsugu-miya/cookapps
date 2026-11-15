@@ -561,6 +561,8 @@ export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra
   hasMore: false,
   estimate: null,
   summary: rows.length === 0 ? "0 行" : `1–${rows.length} 行目`,
+  lastPage: null,
+  pages: "",
   ...extra,
 });
 

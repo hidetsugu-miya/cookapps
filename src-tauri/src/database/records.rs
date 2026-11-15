@@ -62,6 +62,10 @@ pub struct DatabaseRecords {
     #[cfg_attr(test, ts(type = "number | null"))]
     pub estimate: Option<u64>,
     pub summary: String,
+    /// The last page (from 0) that the estimate gives; none for a view, a stale estimate and a page with no row (`last_page`).
+    pub last_page: Option<u32>,
+    /// The number of pages worded for the footer, "/ 約 12" (`format_pages`); empty when `last_page` is none.
+    pub pages: String,
 }
 
 /// A name of the database or of a table or column, quoted for the SQL text: between backticks, a backtick inside doubled.
@@ -269,6 +273,31 @@ pub fn format_summary(offset: u64, shown: usize, estimate: Option<u64>) -> Strin
     text
 }
 
+/// The page (from 0) that the text typed in the page field names: the number counted from 1.
+/// A text that is not made of digits only (empty, a sign, a separator, a letter) and a number below 1 are the first page; a number past what a page number holds is the last page that `u32` holds, which shows no row.
+pub fn page_of_input(text: &str) -> u32 {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return 0;
+    }
+    let number = text.parse::<u64>().unwrap_or(u64::MAX);
+    u32::try_from(number.saturating_sub(1)).unwrap_or(u32::MAX)
+}
+
+/// The last page (from 0) that the estimate gives, for the page that starts at `offset` and shows `shown` rows.
+/// The estimate is left out as `format_summary` leaves it out (below the last row shown), and so is a page with no row.
+pub fn last_page(offset: u64, shown: usize, estimate: Option<u64>) -> Option<u32> {
+    let total = estimate.filter(|total| shown > 0 && *total >= offset + shown as u64)?;
+    Some(u32::try_from(total.div_ceil(PAGE_SIZE) - 1).unwrap_or(u32::MAX))
+}
+
+/// The text beside the page field: "/ 約 {pages}", with thousands separators; empty when there is no last page.
+pub fn format_pages(last_page: Option<u32>) -> String {
+    last_page.map_or_else(String::new, |last| {
+        format!("/ 約 {}", format_rows(Some(u64::from(last) + 1)))
+    })
+}
+
 pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
     row.columns()
         .iter()
@@ -318,9 +347,12 @@ pub async fn read(
     } else {
         known
     };
+    let last_page = last_page(offset, rows.len(), estimate);
     Ok(DatabaseRecords {
         columns: columns.unwrap_or_default(),
         summary: format_summary(offset, rows.len(), estimate),
+        pages: format_pages(last_page),
+        last_page,
         rows,
         page,
         has_more,
@@ -613,5 +645,46 @@ mod tests {
         assert_eq!(format_summary(100, 50, Some(149)), "101–150 行目");
         assert_eq!(format_summary(0, 0, Some(1200)), "0 行");
         assert_eq!(format_summary(300, 0, None), "0 行");
+    }
+
+    #[test]
+    fn a_typed_number_is_the_page_counted_from_one_and_anything_else_is_the_first_page() {
+        assert_eq!(page_of_input("1"), 0);
+        assert_eq!(page_of_input("2"), 1);
+        assert_eq!(page_of_input("15062"), 15061);
+        assert_eq!(page_of_input("  7 "), 6);
+        // below 1, not a number, empty, a sign, a separator, a fraction, other digits
+        for text in [
+            "0", "00", "", "   ", "-3", "+5", "abc", "1a", "1,000", "2.5", "１２", "٣",
+        ] {
+            assert_eq!(page_of_input(text), 0, "{text:?}");
+        }
+        // a number past every page is read as it is (it shows no row), and one past u32 is the last page u32 has
+        assert_eq!(page_of_input("4294967296"), u32::MAX);
+        assert_eq!(page_of_input("99999999999999999999999999"), u32::MAX);
+    }
+
+    #[test]
+    fn the_last_page_is_the_estimate_in_pages_and_none_when_it_is_stale_or_unknown() {
+        assert_eq!(last_page(0, 100, Some(1200)), Some(11));
+        assert_eq!(last_page(0, 100, Some(1201)), Some(12));
+        assert_eq!(last_page(1100, 100, Some(1200)), Some(11));
+        assert_eq!(last_page(0, 7, Some(7)), Some(0));
+        assert_eq!(last_page(0, 1, Some(100)), Some(0));
+        assert_eq!(last_page(0, 1, Some(101)), Some(1));
+        // none for a view, an estimate below the last row shown (as the summary leaves it out), and a page with no row
+        assert_eq!(last_page(0, 7, None), None);
+        assert_eq!(last_page(0, 100, Some(0)), None);
+        assert_eq!(last_page(100, 50, Some(149)), None);
+        assert_eq!(last_page(0, 0, Some(1200)), None);
+        assert_eq!(last_page(300, 0, None), None);
+    }
+
+    #[test]
+    fn the_pages_are_worded_with_the_estimate_and_thousands_separators() {
+        assert_eq!(format_pages(Some(11)), "/ 約 12");
+        assert_eq!(format_pages(Some(15061)), "/ 約 15,062");
+        assert_eq!(format_pages(Some(0)), "/ 約 1");
+        assert_eq!(format_pages(None), "");
     }
 }
