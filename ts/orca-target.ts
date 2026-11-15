@@ -1,10 +1,10 @@
 // The card of the target in the Orca tab of the settings screen (A-6): "このマシン" and the saved environments, the one in use marked, and a pick saves it and reads again.
-// The Orca screen holds the environments and the target (`heldOrca`), and picks through `chooseTarget`, as the menu at the bottom of its list pane does; nothing is asked of Rust here.
+// The Orca screen holds the environments and the target (`heldOrca`), and picks through `chooseTarget`; nothing is asked of Rust here.
 import { $, tag } from "./dom.js";
 import { code, hintPopup, toggleHint } from "./hint.js";
 import { chooseTarget, heldOrca, readOrcaTargets, THIS_MACHINE } from "./orca.js";
 
-// "このマシン" and each environment the Orca screen holds (as its menu lists them), a label on the target and a button on the others.
+// "このマシン" and each environment the Orca screen holds, a label on the target and a button on the others.
 function draw() {
   const v = heldOrca();
   const rows = [null, ...(v?.environments ?? [])].map((name) => {

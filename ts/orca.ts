@@ -118,15 +118,13 @@ const START_WAIT_MS = 30_000;
 // The saved environment whose list is streamed (null: none is, and the list is read by the clock), and the channel of the stream: an event of another channel is not taken.
 let streamTarget: string | null = null;
 let streamChannel: { onmessage: (event: OrcaStreamEvent) => void } | null = null;
-// What the feed, the tabs, the header and the notice show now; they are drawn again only when this changes.
+// What the feed, the tabs and the notice show now; they are drawn again only when this changes.
 let feedKey = "";
-let headerKey = "";
 let noticeKey = "";
 
 const feed = () => $("orca-feed");
 const shown = () => currentScreen() === "orca";
 
-const targetName = (v: OrcaOverview) => v.target ?? THIS_MACHINE;
 export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
 // How long ago `ms` was: running and waiting agents show the time since their state began ("2 分"), a done one how long ago it ended ("18 分前").
@@ -283,23 +281,6 @@ function drawBadge() {
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
   nav.setAttribute("aria-label", parts.length === 0 ? "Orca" : `Orca（${parts.join("、")}）`);
-}
-
-// The status label sits at the bottom of the list pane; with an environment saved it is the menu of the targets.
-function drawHeader() {
-  const v = view;
-  const [cls, label] = !v || switching ? ["off", "確認中"] : v.state === "missing" ? ["off", "未インストール"] : v.state === "failed" ? ["warn", `${targetName(v)} に接続できません`] : ["ok", `${targetName(v)} に接続中`];
-  // The label is a menu of the targets once an environment is saved (or a saved one is the target, listed or not), plain text before.
-  const menu = !!v && (v.environments.length > 0 || v.target !== null);
-  const key = JSON.stringify([cls, label, menu]);
-  if (key === headerKey) return;
-  headerKey = key;
-  for (const id of ["orca-status", "orca-target"]) {
-    $(id).className = `status ${cls}`;
-    $(id).textContent = label;
-  }
-  $("orca-status").hidden = menu;
-  $("orca-target").hidden = !menu;
 }
 
 // What a read that did not work says (the Orca screen and the side pane show it alike), else null.
@@ -783,7 +764,6 @@ function forgetGone() {
 function draw() {
   drawBadge();
   if (!shown()) return;
-  drawHeader();
   drawNotice();
   drawSearch();
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
@@ -964,13 +944,13 @@ export function openInOrca(paneKey: string | null) {
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
 export function showOrca() {
   show("orca");
-  headerKey = noticeKey = feedKey = "";
+  noticeKey = feedKey = "";
   draw();
   // The environments are read when the screen is shown, whatever read is on its way.
   load("full", true);
 }
 
-// Saves `environment` as the target (null: this machine) and reads again; the menu at the bottom of the list pane and the card of the Orca tab of the settings (`ts/orca-target.ts`) both pick through it.
+// Saves `environment` as the target (null: this machine) and reads again; the card of the Orca tab of the settings (`ts/orca-target.ts`) picks through it.
 export async function chooseTarget(environment: string | null) {
   if (view === null || environment === view.target) return;
   loadSeq++;
@@ -994,12 +974,6 @@ export async function chooseTarget(environment: string | null) {
   syncStream();
   draw();
   load("full", true);
-}
-
-function openTargetMenu(anchor: Element) {
-  if (view === null) return;
-  const items = [null, ...view.environments].map((name) => ({ label: name ?? THIS_MACHINE, color: "var(--accent)", current: name === view!.target, pick: () => chooseTarget(name) }));
-  openMenu(anchor, items);
 }
 
 // The dialog of the worktrees, narrowed by a filter on `{repo} ・ {branch}`, under the plus of the work pane and under the chip of the side pane of A-9. A pick closes it.
@@ -1364,7 +1338,6 @@ export function initOrca() {
   toggle.id = "orca-list-toggle";
   drawListToggle(toggle, listOpen);
   $("orca-header").prepend(toggle);
-  $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
   initPaneTree($("orca-panes"), {
     plus: (anchor, pane) => {
       focusPane(pane);

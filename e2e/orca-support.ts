@@ -64,6 +64,27 @@ export async function showAgain() {
   await expect($("#orca")).toBeDisplayed();
 }
 
+// The settings screen on its Orca tab, where the target is chosen (A-6): the Orca screen has no label or menu of it.
+export async function openTargetCard() {
+  await $("#nav-settings").click();
+  await $("#settings-tab-orca").click();
+  await expect($("#settings-panel-orca")).toBeDisplayed();
+}
+
+// Picks `target` (null: this machine) in the card, waits until the mark is on its row (the pick is saved and the read for it is on its way), and shows the Orca screen again.
+export async function pickInCard(target: string | null) {
+  await $(`#orca-target-items button[aria-label="${target ?? "このマシン"}を選ぶ"]`).click();
+  await expect($(`#orca-target-items .item[data-target="${target ?? ""}"] .status`)).toBeDisplayed();
+  await $("#nav-orca").click();
+  await expect($("#orca")).toBeDisplayed();
+}
+
+// `openTargetCard` and `pickInCard` in one.
+export async function pickTarget(target: string | null) {
+  await openTargetCard();
+  await pickInCard(target);
+}
+
 export const selectedTab = () => $('.orca-tabs [role="tab"][aria-selected="true"]');
 export const tabTitles = () => textsOf(".orca-tabs .orca-tab-title");
 export const tabOf = (id: string) => $(`.orca-tabs [data-tab="${id}"]`);

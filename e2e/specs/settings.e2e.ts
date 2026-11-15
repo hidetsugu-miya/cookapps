@@ -1261,7 +1261,7 @@ describe("settings: the target of the Orca screen (the Orca tab, A-6)", () => {
     expect(await marked()).toEqual(["Studio"]);
   });
 
-  it("saves the environment picked, reads again for it and moves the mark, as the menu of the Orca screen does", async () => {
+  it("saves the environment picked, reads again for it and moves the mark", async () => {
     await openOrcaTab();
     const save = await mock("orca_set_target", null);
     const overview = await mock("orca_overview", orcaOverview([], [], { target: "Studio", environments: ["Studio", "Lab"] }));
@@ -1273,7 +1273,8 @@ describe("settings: the target of the Orca screen (the Orca tab, A-6)", () => {
     // The Orca screen holds the new target.
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
-    await expect($("#orca-target")).toHaveText("Studio に接続中");
+    // Studio is listed, so its list is streamed.
+    await waitForCalls("orca_stream_open");
   });
 
   it("saves this machine when it is picked", async () => {
