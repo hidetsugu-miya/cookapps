@@ -7,6 +7,12 @@ import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
+import type { DatabaseProfile } from "./bindings/DatabaseProfile";
+import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
+import type { DatabaseRecords } from "./bindings/DatabaseRecords";
+import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
+import type { DatabaseStructure } from "./bindings/DatabaseStructure";
+import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
@@ -405,6 +411,27 @@ export interface Commands {
   restart_app: { args: undefined; result: null };
   // `count`: what is due or unread now. `upcoming`: the due moments (epoch milliseconds) of open tasks still ahead, which Rust adds once the clock passes them.
   set_badge: { args: { count: number; upcoming: number[] }; result: null };
+  // The connections of the database screen (D-1), in the order they were made, each with whether its password is saved.
+  database_profiles: { args: undefined; result: DatabaseProfileView[] };
+  // Saves a connection (a new one with an empty `id`); an empty `password` leaves the saved one as it is. Answers it as saved.
+  database_profile_save: { args: { profile: DatabaseProfile; password: string }; result: DatabaseProfileView };
+  database_profile_delete: { args: { id: string }; result: null };
+  // Tries the connection as typed (D-2): opens the tunnel when it uses SSM, logs in read only, reads `SELECT VERSION()`, closes the tunnel. An empty `password` is the saved one of `profile.id`. Answers the version.
+  database_test: { args: { profile: DatabaseProfile; password: string }; result: string };
+  // D-3: opens the connection `id` when it is not open (the tunnel, then a read only session) and answers the names of its databases. Called at every opening of its row: an open connection is reused.
+  database_connect: { args: { id: string }; result: string[] };
+  // D-3: the tables of a database of the open connection `id`, each with its estimated rows, size and engine as text.
+  database_tables: { args: { id: string; database: string }; result: DatabaseTable[] };
+  // D-5: the columns of a table of the open connection `id` (name, type, NULL, key, default and comment as text), and the summary of the number of columns, the engine and the character set.
+  database_structure: { args: { id: string; database: string; table: string }; result: DatabaseStructure };
+  // D-4: a page of the records of a table of the open connection `id` (`page` counts from 0), each value already text; one more row is read to tell whether a next page exists. The estimated rows are read with the page 0 only; `estimate` is the one that the page shown holds (null for none), which a later page answers again.
+  database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null }; result: DatabaseRecords };
+  // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is MySQL's error (the session is read only).
+  database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
+  // D-3: closes the connection `id` and its tunnel.
+  database_disconnect: { args: { id: string }; result: null };
+  // D-3: the ids of the connections that are open now.
+  database_connections: { args: undefined; result: string[] };
 }
 
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).

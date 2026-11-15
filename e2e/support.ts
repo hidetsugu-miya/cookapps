@@ -8,6 +8,13 @@ import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
+import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
+import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
+import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
+import type { DatabaseRecords } from "../ts/bindings/DatabaseRecords";
+import type { DatabaseSqlResult } from "../ts/bindings/DatabaseSqlResult";
+import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
+import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
@@ -524,6 +531,48 @@ export const checked = (missingScopes: string[] | null, missingOptional: string[
 // A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
 // "Ago" counts from the second this module was loaded, read once: the same arguments give the same timestamp at every call, so a message made twice in a spec is one message (the timestamp is part of its key).
 const slackNow = Math.floor(Date.now() / 1000);
+// A saved connection of the database screen (D-1) that goes straight to its host.
+export const databaseProfile = (id: string, name: string, extra: Partial<DatabaseProfileView> = {}): DatabaseProfileView => ({
+  id,
+  name,
+  username: "reader",
+  useSsm: false,
+  awsProfile: "",
+  region: "",
+  bastionName: "",
+  dbHost: "db.example.com",
+  dbPort: 3306,
+  passwordSaved: false,
+  ...extra,
+});
+
+// A table of a database as `database_tables` answers it (D-3): the row count, the size and the engine as Rust words them.
+export const databaseTable = (name: string, extra: Partial<DatabaseTable> = {}): DatabaseTable => ({ name, engine: "InnoDB", rows: "1,200", size: "1.5 MB", ...extra });
+
+// A value as `database_records` answers it (D-4): Rust has made the text and told how to draw it.
+export const databaseCell = (text: string, kind: DatabaseCell["kind"] = "text"): DatabaseCell => ({ kind, text });
+export const databaseNull = databaseCell("NULL", "null");
+
+// A page of records as `database_records` answers it.
+export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra: Partial<DatabaseRecords> = {}): DatabaseRecords => ({
+  columns,
+  rows,
+  page: 0,
+  hasMore: false,
+  estimate: null,
+  summary: rows.length === 0 ? "0 行" : `1–${rows.length} 行目`,
+  ...extra,
+});
+
+// A column of a table as `database_structure` answers it (D-5): the default and the comment are text, empty for none.
+export const databaseColumn = (name: string, columnType: string, extra: Partial<DatabaseColumn> = {}): DatabaseColumn => ({ name, columnType, nullable: false, key: "", default: "", comment: "", ...extra });
+
+// The structure of a table as `database_structure` answers it.
+export const databaseStructure = (columns: DatabaseColumn[], summary = `${columns.length} 列 / InnoDB / utf8mb4`): DatabaseStructure => ({ columns, summary });
+
+// The result of a statement as `database_sql` answers it (D-6): the cells as D-4's, and the line under the table.
+export const databaseSqlResult = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`): DatabaseSqlResult => ({ columns, rows, summary });
+
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 
 // The permalink of the message with `ts` in the channel `C0123ABCD` of `workspace`.
