@@ -6,7 +6,8 @@ import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm } from "./database-form.js";
-import { drawDatabaseWork, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
+import { initDatabaseTerminal } from "./database-terminal.js";
+import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
@@ -57,6 +58,8 @@ let structure: StructureView | null = null;
 let sql: SqlView | null = null;
 // The selected tab of the table that is pressed. The table press selects the records.
 let tab = "records";
+// The selected tab of the database while no table is open. A press on another database, or on a table's database from its tabs, selects the tables.
+let databaseTab = "tables";
 let selected: Selected | null = null;
 const connections = new Map<string, ConnectionState>();
 // The connections whose disconnect is on its way: a press on them waits, so that an opening cannot meet the closing.
@@ -65,7 +68,9 @@ const closing = new Set<string>();
 let loadSeq = 0;
 
 const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
-const emptySql: SqlState = { text: "", loading: false, error: null, data: null };
+const emptySql: SqlState = { view: 0, text: "", loading: false, error: null, data: null };
+// The number of the last SQL view made: a new query makes a new view, which is drawn again whatever was typed in the one before.
+let sqlViews = 0;
 const databaseOf = (c: ConnectionState, name: string) => {
   let d = c.byName.get(name);
   if (!d) {
@@ -98,13 +103,13 @@ function sideState(): SideState {
 // The SQL tab of the selected connection and database: the view that belongs to them, or an empty one.
 function sqlState(): SqlState {
   if (sql === null || sql.id !== selected?.id || sql.database !== selected.database) return emptySql;
-  return { text: sql.text, loading: sql.loading, error: sql.error, data: sql.data };
+  return { view: sql.view, text: sql.text, loading: sql.loading, error: sql.error, data: sql.data };
 }
 
 // The view of the SQL tab of the selected connection and database, made when none belongs to them; none when no database is selected.
 function sqlView(): SqlView | null {
   if (selected?.database == null) return null;
-  if (sql?.id !== selected.id || sql.database !== selected.database) sql = { id: selected.id, database: selected.database, ...emptySql };
+  if (sql?.id !== selected.id || sql.database !== selected.database) sql = { id: selected.id, database: selected.database, ...emptySql, view: ++sqlViews };
   return sql;
 }
 
@@ -115,14 +120,16 @@ function workState(): WorkState | null {
   if (!d) return null;
   const mine = selected.table !== null && records?.id === selected.id && records.database === selected.database && records.table === selected.table;
   return {
+    connection: selected.id,
     database: selected.database,
     loading: d.loading,
     error: d.error,
     tables: d.tables,
+    databaseTab,
     table: mine ? selected.table : null,
     tab,
     records: mine && records ? { page: records.page, loading: records.loading, error: records.error, data: records.data } : null,
-    sql: mine ? sqlState() : null,
+    sql: sqlState(),
     structure: mine && structure?.id === selected.id && structure.database === selected.database && structure.table === selected.table ? { loading: structure.loading, error: structure.error, data: structure.data } : null,
   };
 }
@@ -252,14 +259,14 @@ async function openDatabase(profile: DatabaseProfileView, c: ConnectionState, na
   draw();
 }
 
-// Reads the page `page` of the records of a table (D-4). The page that was shown stays until the new one comes; an error drops it.
-async function readRecords(id: string, database: string, table: string, page: number) {
+// Reads the page `page` of the records of a table (D-4), or, when `typed` is given, the page that this text of the page field names (`page` is then the page that is shown). The page that was shown stays until the new one comes; an error drops it.
+async function readRecords(id: string, database: string, table: string, page: number, typed?: string) {
   const same = records?.id === id && records.database === database && records.table === table;
   const mine: RecordsView = { id, database, table, page, loading: true, error: null, data: same ? (records?.data ?? null) : null };
   records = mine;
   draw();
   try {
-    mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null });
+    mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null, ...(typed === undefined ? {} : { typed }) });
     mine.page = mine.data.page;
   } catch (e) {
     mine.data = null;
@@ -328,6 +335,9 @@ const workActions: WorkActions = {
   page: (page) => {
     if (records) readRecords(records.id, records.database, records.table, page);
   },
+  pageInput: (text) => {
+    if (records) readRecords(records.id, records.database, records.table, records.page, text);
+  },
   // The table stays: only the tab changes. The records are kept as they are, and the structure is read at every press of its tab.
   tab: (id) => {
     if (id === tab || selected?.table == null) return;
@@ -335,12 +345,22 @@ const workActions: WorkActions = {
     if (id === "structure") readStructure(selected.id, selected.database ?? "", selected.table);
     else draw();
   },
+  databaseTab: (id) => {
+    if (id === databaseTab) return;
+    databaseTab = id;
+    draw();
+  },
   // The field draws nothing while it is typed in: the text is only kept.
   sqlText: (text) => {
     const view = sqlView();
     if (view) view.text = text;
   },
   runSql,
+  // The table list shows the tables of the selected database: a press on a row is the press on that table's row in the tree.
+  openTable: (table) => {
+    const profile = profiles.find((p) => p.id === selected?.id);
+    if (profile && selected?.database != null) actions.pressTable(profile, selected.database, table);
+  },
 };
 
 const actions: SideActions = {
@@ -356,6 +376,8 @@ const actions: SideActions = {
     openConnection(profile);
   },
   pressDatabase: (profile, name) => {
+    // A press on the database that its pane already shows keeps the tab; from anywhere else the pane shows its tables.
+    if (selected?.id !== profile.id || selected.database !== name || selected.table !== null) databaseTab = "tables";
     selected = { id: profile.id, database: name, table: null };
     const c = connections.get(profile.id);
     if (!c) return draw();
@@ -373,6 +395,21 @@ const actions: SideActions = {
     tab = "records";
     structure = null;
     readRecords(profile.id, database, table, 0);
+  },
+  // The SQL tab of the database with an empty field and no result, and the caret in the field.
+  newQuery: (profile, database) => {
+    selected = { id: profile.id, database, table: null };
+    databaseTab = "sql";
+    sql = { id: profile.id, database, ...emptySql, view: ++sqlViews };
+    draw();
+    focusSqlField();
+  },
+  // The tree of the database closes and the connection stays; the pane that showed the database empties.
+  closeDatabase: (profile, database) => {
+    const d = connections.get(profile.id)?.byName.get(database);
+    if (d) d.expanded = false;
+    if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
+    draw();
   },
   edit: (profile) => openDatabaseForm(profile, save, test),
   disconnect: async (profile) => {
@@ -401,4 +438,5 @@ export function initDatabase() {
   add.innerHTML = PLUS_SVG;
   add.onclick = () => openDatabaseForm(null, save, test);
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
+  initDatabaseTerminal();
 }

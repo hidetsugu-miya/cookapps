@@ -9,6 +9,8 @@ use sqlx::mysql::MySqlConnection;
 #[cfg(test)]
 use ts_rs::TS;
 
+use super::records::tsv;
+
 /// The columns of the table bound to the two `?` (its schema and its name), in the order of the table.
 const COLUMNS: &str = "SELECT CAST(COLUMN_NAME AS CHAR), CAST(COLUMN_TYPE AS CHAR), CAST(IS_NULLABLE AS CHAR), CAST(COLUMN_KEY AS CHAR), CAST(COLUMN_DEFAULT AS CHAR), CAST(COLUMN_COMMENT AS CHAR) \
 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION";
@@ -38,6 +40,8 @@ pub struct DatabaseColumn {
 pub struct DatabaseStructure {
     pub columns: Vec<DatabaseColumn>,
     pub summary: String,
+    /// The columns as the copy button copies them (`columns_tsv`, #668).
+    pub tsv: String,
 }
 
 /// The default of a column as text. A column with no default (the server answers none) is empty, except one that may be NULL, whose default is NULL; an empty text is `''`.
@@ -65,6 +69,30 @@ pub fn format_summary(columns: usize, engine: Option<&str>, collation: Option<&s
         parts.push(charset_of(collation).to_owned());
     }
     parts.join(" / ")
+}
+
+/// The header of the grid of the structure, which the copy has too.
+const HEADER: [&str; 6] = ["名前", "型", "NULL", "キー", "既定値", "注釈"];
+
+/// The text that the copy button puts in the clipboard (`records::tsv`): the header of the grid and a line for each column, with "YES" or "NO" for NULL as the grid shows. No column is no text.
+pub fn columns_tsv(columns: &[DatabaseColumn]) -> String {
+    if columns.is_empty() {
+        return String::new();
+    }
+    let rows: Vec<Vec<&str>> = columns
+        .iter()
+        .map(|c| {
+            vec![
+                c.name.as_str(),
+                c.column_type.as_str(),
+                if c.nullable { "YES" } else { "NO" },
+                c.key.as_str(),
+                c.default.as_str(),
+                c.comment.as_str(),
+            ]
+        })
+        .collect();
+    tsv(&HEADER, &rows)
 }
 
 fn to_column((name, column_type, nullable, key, default, comment): ColumnRow) -> DatabaseColumn {
@@ -96,9 +124,11 @@ pub async fn read(
         .fetch_optional(&mut *connection)
         .await?
         .unwrap_or((None, None));
+    let columns: Vec<DatabaseColumn> = rows.into_iter().map(to_column).collect();
     Ok(DatabaseStructure {
-        summary: format_summary(rows.len(), engine.as_deref(), collation.as_deref()),
-        columns: rows.into_iter().map(to_column).collect(),
+        summary: format_summary(columns.len(), engine.as_deref(), collation.as_deref()),
+        tsv: columns_tsv(&columns),
+        columns,
     })
 }
 
@@ -158,6 +188,32 @@ mod tests {
         );
         assert_eq!(format_summary(4, None, None), "4 列");
         assert_eq!(format_summary(0, Some(""), Some("")), "0 列");
+    }
+
+    #[test]
+    fn the_copy_has_the_header_of_the_grid_and_a_line_for_each_column() {
+        let id = to_column((
+            "id".to_owned(),
+            "bigint unsigned".to_owned(),
+            "NO".to_owned(),
+            "PRI".to_owned(),
+            None,
+            "注文の\tID".to_owned(),
+        ));
+        let note = to_column((
+            "note".to_owned(),
+            "varchar(255)".to_owned(),
+            "YES".to_owned(),
+            String::new(),
+            None,
+            String::new(),
+        ));
+        assert_eq!(
+            columns_tsv(&[id, note]),
+            "名前\t型\tNULL\tキー\t既定値\t注釈\nid\tbigint unsigned\tNO\tPRI\t\t\"注文の\tID\"\nnote\tvarchar(255)\tYES\t\tNULL\t"
+        );
+        // a table with no column has nothing to copy
+        assert_eq!(columns_tsv(&[]), "");
     }
 
     #[test]

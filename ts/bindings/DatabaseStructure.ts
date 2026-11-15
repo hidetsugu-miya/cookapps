@@ -4,4 +4,8 @@ import type { DatabaseColumn } from "./DatabaseColumn";
 /**
  * The structure of a table: its columns, and `summary` (the number of columns, the engine and the character set), worded for the footer.
  */
-export type DatabaseStructure = { columns: Array<DatabaseColumn>, summary: string, };
+export type DatabaseStructure = { columns: Array<DatabaseColumn>, summary: string, 
+/**
+ * The columns as the copy button copies them (`columns_tsv`, #668).
+ */
+tsv: string, };

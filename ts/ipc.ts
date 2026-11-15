@@ -425,7 +425,7 @@ export interface Commands {
   // D-5: the columns of a table of the open connection `id` (name, type, NULL, key, default and comment as text), and the summary of the number of columns, the engine and the character set.
   database_structure: { args: { id: string; database: string; table: string }; result: DatabaseStructure };
   // D-4: a page of the records of a table of the open connection `id` (`page` counts from 0), each value already text; one more row is read to tell whether a next page exists. The estimated rows are read with the page 0 only; `estimate` is the one that the page shown holds (null for none), which a later page answers again.
-  database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null }; result: DatabaseRecords };
+  database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null; typed?: string }; result: DatabaseRecords };
   // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is MySQL's error (the session is read only).
   database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
   // D-3: closes the connection `id` and its tunnel.

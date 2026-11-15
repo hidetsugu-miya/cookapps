@@ -1,8 +1,8 @@
-// The side menu of the database screen (D-1, D-3): the connections by name, each with a menu that a right press opens (edit, disconnect, delete), and under an open connection its databases and under an open database its tables.
+// The side menu of the database screen (D-1, D-3): the connections by name, each with a menu that a right press opens (edit, disconnect, delete), and under an open connection its databases, each with a menu of its own (new query, close the database), and under an open database its tables.
 // Drawing only: what is held and what each press does belong to database.ts. It is drawn again only when what it shows changes, and the focus stays.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { $, tag } from "./dom.js";
-import { CHEVRON_SVG, CLOSE_SVG, DATABASE_SVG, DELETE_SVG, EDIT_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLOSE_SVG, CODE_SVG, DATABASE_SVG, DELETE_SVG, EDIT_SVG } from "./icons.js";
 import { openMenu } from "./menu.js";
 
 export interface DatabaseNode {
@@ -40,6 +40,10 @@ export interface SideActions {
   pressConnection: (profile: DatabaseProfileView) => void;
   pressDatabase: (profile: DatabaseProfileView, database: string) => void;
   pressTable: (profile: DatabaseProfileView, database: string, table: string) => void;
+  // Selects the database and opens its SQL tab with an empty field.
+  newQuery: (profile: DatabaseProfileView, database: string) => void;
+  // Closes the tree of the database; the connection stays open.
+  closeDatabase: (profile: DatabaseProfileView, database: string) => void;
   edit: (profile: DatabaseProfileView) => void;
   disconnect: (profile: DatabaseProfileView) => void;
   // `anchor` is the name of the row, which the confirmation opens under.
@@ -85,7 +89,21 @@ function databaseNodes(node: ConnectionNode, selected: Selected | null, actions:
   const id = node.profile.id;
   return node.databases.flatMap((db) => {
     const here = selected?.id === id && selected.database === db.name;
-    const out: Node[] = [row(`${id}/d/${db.name}`, 1, here && selected?.table === null, db.expanded, null, db.name, () => actions.pressDatabase(node.profile, db.name))];
+    const button = row(`${id}/d/${db.name}`, 1, here && selected?.table === null, db.expanded, null, db.name, () => actions.pressDatabase(node.profile, db.name));
+    // The menu is anchored on the name, as the connection's is.
+    const name = button.querySelector(".database-name")!;
+    button.oncontextmenu = (e) => {
+      e.preventDefault();
+      openMenu(
+        name,
+        [
+          { label: "新規クエリ", color: "", icon: CODE_SVG, current: false, pick: () => actions.newQuery(node.profile, db.name) },
+          { label: "データベースを閉じる", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.closeDatabase(node.profile, db.name) },
+        ],
+        { at: { x: e.clientX, y: e.clientY } },
+      );
+    };
+    const out: Node[] = [button];
     if (db.expanded) {
       if (db.loading) out.push(note("読み込み中…", 2, false));
       if (db.error !== null) out.push(note(db.error, 2, true));

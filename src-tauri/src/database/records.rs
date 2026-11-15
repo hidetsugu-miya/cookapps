@@ -6,6 +6,8 @@
 //! A NULL is the text "NULL", a binary value is its length only, and a text longer than `TEXT_MAX` characters is cut with "…" (the rest is kept nowhere).
 //! The SQL tab (#635) draws its result with the same cells.
 
+use std::borrow::Cow;
+
 use futures_util::TryStreamExt;
 use serde::Serialize;
 use sqlx::{
@@ -62,6 +64,12 @@ pub struct DatabaseRecords {
     #[cfg_attr(test, ts(type = "number | null"))]
     pub estimate: Option<u64>,
     pub summary: String,
+    /// The last page (from 0) that the estimate gives; none for a view, a stale estimate and a page with no row (`last_page`).
+    pub last_page: Option<u32>,
+    /// The number of pages worded for the footer, "/ 約 12" (`format_pages`); empty when `last_page` is none.
+    pub pages: String,
+    /// The page as the copy button copies it (`cells_tsv`, #668).
+    pub tsv: String,
 }
 
 /// A name of the database or of a table or column, quoted for the SQL text: between backticks, a backtick inside doubled.
@@ -269,6 +277,65 @@ pub fn format_summary(offset: u64, shown: usize, estimate: Option<u64>) -> Strin
     text
 }
 
+/// The page (from 0) that the text typed in the page field names: the number counted from 1.
+/// A text that is not made of digits only (empty, a sign, a separator, a letter) and a number below 1 are the first page; a number past what a page number holds is the last page that `u32` holds, which shows no row.
+pub fn page_of_input(text: &str) -> u32 {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return 0;
+    }
+    let number = text.parse::<u64>().unwrap_or(u64::MAX);
+    u32::try_from(number.saturating_sub(1)).unwrap_or(u32::MAX)
+}
+
+/// The last page (from 0) that the estimate gives, for the page that starts at `offset` and shows `shown` rows.
+/// The estimate is left out as `format_summary` leaves it out (below the last row shown), and so is a page with no row.
+pub fn last_page(offset: u64, shown: usize, estimate: Option<u64>) -> Option<u32> {
+    let total = estimate.filter(|total| shown > 0 && *total >= offset + shown as u64)?;
+    Some(u32::try_from(total.div_ceil(PAGE_SIZE) - 1).unwrap_or(u32::MAX))
+}
+
+/// The text beside the page field: "/ 約 {pages}", with thousands separators; empty when there is no last page.
+pub fn format_pages(last_page: Option<u32>) -> String {
+    last_page.map_or_else(String::new, |last| {
+        format!("/ 約 {}", format_rows(Some(u64::from(last) + 1)))
+    })
+}
+
+/// A field of a copied text: as it is, or, when it holds a tab, a line break or a quote, between quotes with each quote doubled, which is how a spreadsheet reads a field that holds them.
+fn tsv_field(text: &str) -> Cow<'_, str> {
+    if text.contains(['\t', '\n', '\r', '"']) {
+        Cow::Owned(format!("\"{}\"", text.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// The text that the copy button puts in the clipboard (#668): the header and the rows as lines of tab separated fields, with no line break after the last (`tsv_field` quotes what would break a line or a field). No column is no text.
+pub fn tsv<H: AsRef<str>, C: AsRef<str>>(header: &[H], rows: &[Vec<C>]) -> String {
+    if header.is_empty() {
+        return String::new();
+    }
+    let line = |fields: &mut dyn Iterator<Item = &str>| {
+        fields.map(tsv_field).collect::<Vec<_>>().join("\t")
+    };
+    let mut lines = vec![line(&mut header.iter().map(AsRef::as_ref))];
+    lines.extend(
+        rows.iter()
+            .map(|row| line(&mut row.iter().map(AsRef::as_ref))),
+    );
+    lines.join("\n")
+}
+
+/// `tsv` of the columns and the cells of a page or of a result, with the text of each cell as the screen shows it.
+pub fn cells_tsv(columns: &[String], rows: &[Vec<DatabaseCell>]) -> String {
+    let texts: Vec<Vec<&str>> = rows
+        .iter()
+        .map(|row| row.iter().map(|c| c.text.as_str()).collect())
+        .collect();
+    tsv(columns, &texts)
+}
+
 pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
     row.columns()
         .iter()
@@ -318,9 +385,14 @@ pub async fn read(
     } else {
         known
     };
+    let last_page = last_page(offset, rows.len(), estimate);
+    let columns = columns.unwrap_or_default();
     Ok(DatabaseRecords {
-        columns: columns.unwrap_or_default(),
+        tsv: cells_tsv(&columns, &rows),
+        columns,
         summary: format_summary(offset, rows.len(), estimate),
+        pages: format_pages(last_page),
+        last_page,
         rows,
         page,
         has_more,
@@ -613,5 +685,90 @@ mod tests {
         assert_eq!(format_summary(100, 50, Some(149)), "101–150 行目");
         assert_eq!(format_summary(0, 0, Some(1200)), "0 行");
         assert_eq!(format_summary(300, 0, None), "0 行");
+    }
+
+    #[test]
+    fn a_typed_number_is_the_page_counted_from_one_and_anything_else_is_the_first_page() {
+        assert_eq!(page_of_input("1"), 0);
+        assert_eq!(page_of_input("2"), 1);
+        assert_eq!(page_of_input("15062"), 15061);
+        assert_eq!(page_of_input("  7 "), 6);
+        // below 1, not a number, empty, a sign, a separator, a fraction, other digits
+        for text in [
+            "0", "00", "", "   ", "-3", "+5", "abc", "1a", "1,000", "2.5", "１２", "٣",
+        ] {
+            assert_eq!(page_of_input(text), 0, "{text:?}");
+        }
+        // a number past every page is read as it is (it shows no row), and one past u32 is the last page u32 has
+        assert_eq!(page_of_input("4294967296"), u32::MAX);
+        assert_eq!(page_of_input("99999999999999999999999999"), u32::MAX);
+    }
+
+    #[test]
+    fn the_last_page_is_the_estimate_in_pages_and_none_when_it_is_stale_or_unknown() {
+        assert_eq!(last_page(0, 100, Some(1200)), Some(11));
+        assert_eq!(last_page(0, 100, Some(1201)), Some(12));
+        assert_eq!(last_page(1100, 100, Some(1200)), Some(11));
+        assert_eq!(last_page(0, 7, Some(7)), Some(0));
+        assert_eq!(last_page(0, 1, Some(100)), Some(0));
+        assert_eq!(last_page(0, 1, Some(101)), Some(1));
+        // none for a view, an estimate below the last row shown (as the summary leaves it out), and a page with no row
+        assert_eq!(last_page(0, 7, None), None);
+        assert_eq!(last_page(0, 100, Some(0)), None);
+        assert_eq!(last_page(100, 50, Some(149)), None);
+        assert_eq!(last_page(0, 0, Some(1200)), None);
+        assert_eq!(last_page(300, 0, None), None);
+    }
+
+    fn cells(texts: &[&str]) -> Vec<DatabaseCell> {
+        texts
+            .iter()
+            .map(|t| cell(DatabaseCellKind::Text, (*t).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn the_copy_is_the_header_and_the_rows_as_tab_separated_lines() {
+        let columns = vec!["id".to_owned(), "name".to_owned()];
+        let rows = vec![cells(&["1", "Alice"]), cells(&["2", ""])];
+        assert_eq!(cells_tsv(&columns, &rows), "id\tname\n1\tAlice\n2\t");
+        // NULL and a binary value are copied as the screen shows them
+        let shown = vec![vec![
+            cell(DatabaseCellKind::Null, "NULL".to_owned()),
+            binary_cell(16),
+        ]];
+        assert_eq!(cells_tsv(&columns, &shown), "id\tname\nNULL\tバイナリ 16 B");
+        // no row is the header alone, and no column is nothing at all
+        assert_eq!(cells_tsv(&columns, &[]), "id\tname");
+        assert_eq!(cells_tsv(&[], &[]), "");
+    }
+
+    #[test]
+    fn a_value_with_a_tab_a_line_break_or_a_quote_is_quoted_as_a_spreadsheet_reads_it() {
+        let columns = vec!["a\tb".to_owned(), "c".to_owned()];
+        let rows = vec![
+            cells(&["x\ty", "line1\nline2"]),
+            cells(&["say \"hi\"", "cr\rlf"]),
+        ];
+        assert_eq!(
+            cells_tsv(&columns, &rows),
+            "\"a\tb\"\tc\n\"x\ty\"\t\"line1\nline2\"\n\"say \"\"hi\"\"\"\t\"cr\rlf\""
+        );
+        // a quote alone, and other whitespace or Japanese, are left as they are
+        assert_eq!(tsv(&["q"], &[vec!["\""]]), "q\n\"\"\"\"");
+        assert_eq!(
+            tsv(&["q"], &[vec![" 日本語 \u{3000}"]]),
+            "q\n 日本語 \u{3000}"
+        );
+        // a field is quoted once, not again when it is copied
+        assert_eq!(tsv(&["q"], &[vec!["a\tb"]]), "q\n\"a\tb\"");
+    }
+
+    #[test]
+    fn the_pages_are_worded_with_the_estimate_and_thousands_separators() {
+        assert_eq!(format_pages(Some(11)), "/ 約 12");
+        assert_eq!(format_pages(Some(15061)), "/ 約 15,062");
+        assert_eq!(format_pages(Some(0)), "/ 約 1");
+        assert_eq!(format_pages(None), "");
     }
 }
