@@ -1775,3 +1775,100 @@ describe("database: tree", () => {
     expect(await keys()).toEqual(["p2"]);
   });
 });
+
+describe("database: terminal pane", () => {
+  const toggle = () => $("#database-terminal-toggle");
+  // The share of #database that `id` takes, and the pane's place against the work pane and the divider.
+  const share = (id: string) => browser.execute((i) => document.getElementById(i)!.getBoundingClientRect().width / document.getElementById("database")!.getBoundingClientRect().width, id);
+  const press = (key: string) => browser.execute((k) => document.getElementById("database-terminal-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), key);
+  // A drag of the divider (pointer events, as the divider listens for them) that ends with the pointer at `fraction` of #database's width from its left edge.
+  const drag = (fraction: number) =>
+    browser.execute((f) => {
+      const box = document.getElementById("database")!.getBoundingClientRect();
+      const at = (x: number): PointerEventInit => ({ bubbles: true, cancelable: true, pointerId: 7, button: 0, clientX: box.left + box.width * x, clientY: box.top + 80 });
+      document.getElementById("database-terminal-split")!.dispatchEvent(new PointerEvent("pointerdown", at(0.6)));
+      document.dispatchEvent(new PointerEvent("pointermove", at(f)));
+      document.dispatchEvent(new PointerEvent("pointerup", at(f)));
+    }, fraction);
+
+  it("has an icon button with no text at the right end of the header of the work pane, and the pane and its divider closed", async () => {
+    await openDatabase();
+    await expect(toggle()).toHaveAttribute("aria-label", "ターミナル");
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect((await toggle().getText()).trim()).toBe("");
+    await expect(toggle().$("svg")).toExist();
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    await expect($("#database-terminal-split")).not.toBeDisplayed();
+    const atEnd = await browser.execute(() => {
+      const header = document.getElementById("database-header")!.getBoundingClientRect();
+      const button = document.getElementById("database-terminal-toggle")!.getBoundingClientRect();
+      return { inside: button.top >= header.top && button.bottom <= header.bottom, gap: Math.round(header.right - button.right) };
+    });
+    expect(atEnd.inside).toBe(true);
+    expect(atEnd.gap).toBeLessThanOrEqual(32);
+  });
+
+  it("opens the pane at the right of the work pane with the divider between them, and closes it with a second press, calling nothing", async () => {
+    await openDatabase();
+    const before = await callsOf("database_profiles");
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await expect($("#database-terminal")).toBeDisplayed();
+    await expect($("#database-terminal-split")).toBeDisplayed();
+    await expect($("#database-terminal")).toHaveAttribute("aria-label", "ターミナル");
+    const order = await browser.execute(() => {
+      const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
+      return left("database-pane") < left("database-terminal-split") && left("database-terminal-split") < left("database-terminal");
+    });
+    expect(order).toBe(true);
+    expect(await count("#database-terminal-body > *")).toBe(0);
+    expect((await $("#database-terminal-body").getText()).trim()).toBe("");
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    await expect($("#database-terminal-split")).not.toBeDisplayed();
+    expect(await callsOf("database_profiles")).toEqual(before);
+  });
+
+  it("makes the head of the pane as high as the header of the work pane", async () => {
+    await openDatabase();
+    await toggle().click();
+    const heights = await browser.execute(() => [document.getElementById("database-header")!.getBoundingClientRect().height, document.getElementById("database-terminal-head")!.getBoundingClientRect().height]);
+    expect(heights[1]).toBeCloseTo(heights[0], 0);
+    await expect($("#database-terminal-head")).toHaveAttribute("data-tauri-drag-region");
+  });
+
+  it("starts the pane at 35% of the screen and keeps it between 25% and 50% with the arrow keys", async () => {
+    await openDatabase();
+    await toggle().click();
+    const split = $("#database-terminal-split");
+    await expect(split).toHaveAttribute("aria-label", "ターミナルの幅");
+    await expect(split).toHaveAttribute("aria-valuemin", "25");
+    await expect(split).toHaveAttribute("aria-valuemax", "50");
+    await expect(split).toHaveAttribute("aria-valuenow", "35");
+    expect(await share("database-terminal")).toBeCloseTo(0.35, 2);
+    for (let i = 0; i < 10; i++) await press("ArrowLeft");
+    await expect(split).toHaveAttribute("aria-valuenow", "50");
+    expect(await share("database-terminal")).toBeCloseTo(0.5, 2);
+    for (let i = 0; i < 20; i++) await press("ArrowRight");
+    await expect(split).toHaveAttribute("aria-valuenow", "25");
+    expect(await share("database-terminal")).toBeCloseTo(0.25, 2);
+  });
+
+  it("changes the width with a drag of the divider, held to the range, and keeps it over a close and an opening", async () => {
+    await openDatabase();
+    await toggle().click();
+    await drag(0.6);
+    expect(await share("database-terminal")).toBeCloseTo(0.4, 1);
+    await drag(0.1);
+    await expect($("#database-terminal-split")).toHaveAttribute("aria-valuenow", "50");
+    await drag(0.9);
+    await expect($("#database-terminal-split")).toHaveAttribute("aria-valuenow", "25");
+    await drag(0.7);
+    const kept = (await $("#database-terminal-split").getAttribute("aria-valuenow")) ?? "";
+    await toggle().click();
+    await toggle().click();
+    await expect($("#database-terminal-split")).toHaveAttribute("aria-valuenow", kept);
+    expect(await share("database-terminal")).toBeCloseTo(Number(kept) / 100, 1);
+  });
+});

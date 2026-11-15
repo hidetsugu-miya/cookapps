@@ -590,9 +590,15 @@
       <div id="database-pane">
         <header id="database-header" data-tauri-drag-region="deep">
           <h1>データベース</h1>
+          <button id="database-terminal-toggle" class="icon-btn" type="button" aria-label="ターミナル" aria-pressed="false"></button>
         </header>
         <div id="database-work"></div>
       </div>
+      <div id="database-terminal-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="ターミナルの幅" aria-valuemin="25" aria-valuemax="50" aria-valuenow="35" tabindex="0" hidden><span></span></div>
+      <aside id="database-terminal" aria-label="ターミナル" hidden>
+        <header id="database-terminal-head" data-tauri-drag-region></header>
+        <div id="database-terminal-body"></div>
+      </aside>
     </section>
     <section id="orca" class="split-main" hidden>
       <aside id="orca-list" aria-label="プロジェクト">
