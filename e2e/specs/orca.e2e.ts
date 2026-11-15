@@ -1295,6 +1295,26 @@ describe("orca: projects", () => {
       expect(left.title).toBeGreaterThan(left.name);
     });
 
+    it("draws a session row as its title and the last answer after it, \"{title} - {reply}\", a row with no answer as its title alone, and the tab as the title alone", async () => {
+      const read = (reply: string | null) => orcaOverview([orcaRow("example-app", "feat/a", "Gmail返信エディター", { reply }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      await openOrca(read("返信欄を直しました"));
+      await project("example-api").click();
+      expect(await sessionTitles()).toEqual(["Gmail返信エディター - 返信欄を直しました", "Fix the parser"]);
+      expect(await textsOf("#orca-feed .orca-session .orca-session-reply")).toEqual(["- 返信欄を直しました"]);
+      await sessionOf(claudeTab("example-app")).click();
+      expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
+      // A read with another answer draws the row again (as text, so a tag that stays is shown as the characters it is), and one with none leaves the title alone.
+      await mock("orca_overview", read("<b>次の返信</b>"));
+      await showAgain();
+      await browser.waitUntil(async () => (await sessionTitles())[0] === "Gmail返信エディター - <b>次の返信</b>", { timeoutMsg: "the row did not draw the new answer" });
+      expect(await count("#orca-feed .orca-session-reply b")).toBe(0);
+      await mock("orca_overview", read(null));
+      await showAgain();
+      await browser.waitUntil(async () => (await sessionTitles())[0] === "Gmail返信エディター", { timeoutMsg: "the row did not drop the answer" });
+      expect(await count("#orca-feed .orca-session-reply")).toBe(0);
+      expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
+    });
+
     it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
       await openOrca(withTerminals());
       await mock("orca_terminal_read", ["$ ls"]);

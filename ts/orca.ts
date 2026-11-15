@@ -182,6 +182,8 @@ interface Tab {
   status: OrcaStatus;
   label: string;
   title: string;
+  // The first line of a Claude session's last answer, which its row in the list shows after the title (the tab shows the title alone); null for the rest.
+  reply: string | null;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
   // The worktree it runs in (a file's: where the file is).
@@ -218,22 +220,22 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of view?.rows ?? []) {
     if (r.projectKey !== key || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", reply: r.reply, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
   for (const t of view?.terminals ?? []) {
     if (t.projectKey !== key) continue;
     const repo = view?.worktrees.find((w) => w.path === t.path)?.repo ?? view?.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", reply: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     // A scratchpad file of an SSH host (A-30) is in no worktree.
     const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), reply: null, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? view?.worktrees.find((w) => w.path === d.path);
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, reply: null, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -310,7 +312,10 @@ function sessionNode(t: Tab, key: string) {
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(key === projectKey && t.id === selectedTab()));
-  row.append(statusIcon(t.status, t.label), tag("span", "orca-session-title", t.title));
+  const title = tag("span", "orca-session-title", t.title);
+  // "{title} - {reply}", as Orca's own list draws a row: the reply is the quieter part.
+  if (t.reply !== null) title.append(tag("span", "orca-session-reply", ` - ${t.reply}`));
+  row.append(statusIcon(t.status, t.label), title);
   row.onclick = () => selectSession(key, t.id);
   return row;
 }
@@ -446,7 +451,7 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => !isDocument(t))]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.reply])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
@@ -526,7 +531,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine, node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
+    key: JSON.stringify([mine.map(({ reply, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
