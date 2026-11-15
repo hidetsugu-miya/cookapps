@@ -6,7 +6,8 @@ import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { gridNode } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
-import { CHEVRON_LEFT_SVG, CHEVRON_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
+import { CHEVRON_LEFT_SVG, CHEVRON_SVG, COPY_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
+import { copyText } from "./view.js";
 
 // The page of records that was asked for last. `data` stays while the next page is read, and is none after an error.
 export interface RecordsState {
@@ -141,7 +142,14 @@ function iconButton(key: string, label: string, svg: string, disabled: boolean, 
   return button;
 }
 
-// The records tab: the page as a grid, and under it the reload and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page.
+// The button at the left of the footer that copies the list that is shown, as Rust made its text (`tsv`, #668): off while it is read and when there is no column. The write is made straight from the press, as `copyText` needs.
+function copyButton(data: { columns: unknown[]; tsv: string } | null, loading: boolean) {
+  return iconButton("copy", "一覧をコピー", COPY_SVG, loading || data === null || data.columns.length === 0, () => {
+    if (data) void copyText(data.tsv, "一覧をコピーしました");
+  });
+}
+
+// The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page.
 function recordsNode(records: RecordsState, actions: WorkActions, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
@@ -175,12 +183,12 @@ function recordsNode(records: RecordsState, actions: WorkActions, sizes: string)
     iconButton("next", "次のページ", CHEVRON_SVG, loading || !records.data?.hasMore, () => actions.page(page + 1)),
     iconButton("last", "最後のページ", PAGE_LAST_SVG, loading || lastPage === null || page >= lastPage, () => actions.page(lastPage ?? page)),
   );
-  pager.append(iconButton("reload", "再読み込み", RELOAD_SVG, loading, () => actions.page(page)), range, nav);
+  pager.append(iconButton("reload", "再読み込み", RELOAD_SVG, loading, () => actions.page(page)), copyButton(records.data, loading), range, nav);
   box.append(scroll, pager);
   return box;
 }
 
-// The structure tab: the columns as a grid, and under it the number of columns, the engine and the character set as Rust worded them.
+// The structure tab: the columns as a grid, and under it the copy and the number of columns, the engine and the character set as Rust worded them.
 function structureNode(structure: StructureState, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
@@ -199,12 +207,12 @@ function structureNode(structure: StructureState, sizes: string) {
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", structure.loading ? "読み込み中…" : (structure.data?.summary ?? ""));
   summary.setAttribute("role", "status");
-  footer.append(summary);
+  footer.append(copyButton(structure.data, structure.loading), summary);
   box.append(scroll, footer);
   return box;
 }
 
-// The SQL tab: the text field and the run button above, the result as a grid under them, and under the grid the rows and the time as Rust worded them.
+// The SQL tab: the text field and the run button above, the result as a grid under them, and under the grid the copy, and the rows and the time as Rust worded them.
 function sqlNode(sql: SqlState, actions: WorkActions, sizes: string) {
   const box = tag("div", "database-records database-sql");
   const input = tag("textarea", "database-sql-text");
@@ -225,7 +233,7 @@ function sqlNode(sql: SqlState, actions: WorkActions, sizes: string) {
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", sql.loading ? "実行中…" : (sql.data?.summary ?? ""));
   summary.setAttribute("role", "status");
-  footer.append(summary);
+  footer.append(copyButton(sql.data, sql.loading), summary);
   box.append(input, bar, scroll, footer);
   return box;
 }

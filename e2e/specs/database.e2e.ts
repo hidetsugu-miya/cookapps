@@ -1,4 +1,4 @@
-import { boot, callsOf, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -634,7 +634,7 @@ describe("database: tree", () => {
         [num("1"), databaseCell("Alice"), databaseCell(long), bin("バイナリ 16 B"), databaseNull, num("12.50")],
         [num("2"), databaseCell("Bob"), databaseCell("注文メモ"), databaseNull, databaseCell("2024-01-02 03:04:05"), num("0.00")],
       ],
-      { hasMore: true, estimate: 1200, summary: "1–2 行目 / 約 1,200 行", lastPage: 11, pages: "/ 約 12" },
+      { hasMore: true, estimate: 1200, summary: "1–2 行目 / 約 1,200 行", lastPage: 11, pages: "/ 約 12", tsv: "id\tname\n1\tAlice\n2\tBob" },
     );
     const page1 = databaseRecords(columns, [[num("3"), databaseCell("Carol"), databaseCell(""), bin("バイナリ 1.5 KB"), databaseNull, num("1.00")]], {
       page: 1,
@@ -642,6 +642,7 @@ describe("database: tree", () => {
       summary: "3–3 行目 / 約 1,200 行",
       lastPage: 11,
       pages: "/ 約 12",
+      tsv: "id\tname\n3\tCarol",
     });
     // `estimate` is the one of the page that is shown (none before a first page): Rust reads it with the page 0 only.
     const read = (page: number, estimate: number | null = null) => ({ id: "p1", database: "shop", table: "users", page, estimate });
@@ -798,6 +799,7 @@ describe("database: tree", () => {
       const labels = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager button")].map((b) => [b.getAttribute("aria-label"), b.textContent]));
       expect(labels).toEqual([
         ["再読み込み", ""],
+        ["一覧をコピー", ""],
         ["最初のページ", ""],
         ["前のページ", ""],
         ["次のページ", ""],
@@ -810,16 +812,17 @@ describe("database: tree", () => {
       await expect(button("reload")).toBeEnabled();
     });
 
-    it("puts the reload and the range at the left of the footer and the page buttons, the number and the pages at the right, the reload having an icon", async () => {
+    it("puts the reload, the copy and the range at the left of the footer and the page buttons, the number and the pages at the right, the buttons having an icon", async () => {
       await openTable();
       const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *, #database-work .database-pager-nav > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
-      expect(order).toEqual(["reload", "database-range", "database-pager-nav", "first", "prev", "page", "database-pages", "next", "last"]);
+      expect(order).toEqual(["reload", "copy", "database-range", "database-pager-nav", "first", "prev", "page", "database-pages", "next", "last"]);
       const places = await browser.execute(() => {
         const left = (key: string) => document.querySelector(`#database-work [data-key="${key}"]`)!.getBoundingClientRect().left;
         const range = document.querySelector("#database-work .database-range")!.getBoundingClientRect();
-        return { reload: left("reload") < range.left, first: left("first") > range.right, svg: document.querySelectorAll('#database-work [data-key="reload"] svg').length };
+        const svgs = (key: string) => document.querySelectorAll(`#database-work [data-key="${key}"] svg`).length;
+        return { reload: left("reload") < left("copy"), copy: left("copy") < range.left, first: left("first") > range.right, svg: [svgs("reload"), svgs("copy")] };
       });
-      expect(places).toEqual({ reload: true, first: true, svg: 1 });
+      expect(places).toEqual({ reload: true, copy: true, first: true, svg: [1, 1] });
     });
 
     it("has the page number and the pages from the estimate beside the number", async () => {
@@ -946,7 +949,7 @@ describe("database: tree", () => {
       await button("next").click();
       await waitForCalls(wait);
       await expect($("#database-work .database-range")).toHaveText("読み込み中…");
-      for (const key of ["first", "prev", "next", "last", "reload"]) await expect(button(key)).toBeDisabled();
+      for (const key of ["first", "prev", "next", "last", "reload", "copy"]) await expect(button(key)).toBeDisabled();
       expect(await count("#database-work .database-grid tbody tr")).toBe(2);
       await release("database_records", page1);
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
@@ -977,6 +980,7 @@ describe("database: tree", () => {
       await expect(button("next")).toBeDisabled();
       await expect(button("last")).toBeDisabled();
       await expect(button("reload")).toBeEnabled();
+      await expect(button("copy")).toBeDisabled();
     });
 
     it("shows the error of a read under the tab, drops the page, and 再読み込み reads it again", async () => {
@@ -992,6 +996,7 @@ describe("database: tree", () => {
       await expect(button("next")).toBeDisabled();
       await expect(button("last")).toBeDisabled();
       await expect(button("reload")).toBeEnabled();
+      await expect(button("copy")).toBeDisabled();
       await expect(dot("p1")).toHaveAttribute("data-state", "connected");
       const again = await mock("database_records", page1);
       await button("reload").click();
@@ -1012,9 +1017,37 @@ describe("database: tree", () => {
       expect(await count("#database-work > *")).toBe(0);
     });
 
-    it("has no control to add, edit or delete a row: only the tabs, the five page buttons and the page field", async () => {
+    it("copies the page that is shown as Rust made it, and says so, and copies the next page when it is shown", async () => {
       await openTable();
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", ""]);
+      await stubClipboard();
+      await expect(button("copy")).toBeEnabled();
+      await button("copy").click();
+      await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+      expect(await copiedTexts()).toEqual([page0.tsv]);
+      await expect($(".toast")).toHaveText(expect.stringContaining("一覧をコピーしました"));
+      await mock("database_records", page1);
+      await button("next").click();
+      await expect($("#database-work .database-range")).toHaveText(page1.summary);
+      await button("copy").click();
+      await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the clipboard was never written" });
+      expect(await copiedTexts()).toEqual([page0.tsv, page1.tsv]);
+    });
+
+    it("calls no command to copy, and shows the error of a clipboard that refuses", async () => {
+      await openTable();
+      const command = await mock("database_records", page0);
+      await browser.execute(() => {
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
+      });
+      await button("copy").click();
+      await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+      await expect($(".toast")).not.toBeDisplayed();
+      expect(await callsOf(command)).toEqual([]);
+    });
+
+    it("has no control to add, edit or delete a row: only the tabs, the reload, the copy, the four page buttons and the page field", async () => {
+      await openTable();
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", "", ""]);
       expect(await count("#database-work input")).toBe(1);
       expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
       await $("#database-work .database-grid tbody td:nth-child(2)").doubleClick();
@@ -1178,6 +1211,25 @@ describe("database: tree", () => {
       await tab("structure").click();
       await expect($("#database-work .database-range")).toHaveText("0 列");
       expect(await count("#database-work .database-structure")).toBe(0);
+      await expect($('#database-work [data-key="copy"]')).toBeDisabled();
+    });
+
+    it("puts the copy at the left of the footer, off while the structure is read, and copies the text Rust made", async () => {
+      await openTable();
+      await stubClipboard();
+      const text = "名前\t型\nid\tbigint unsigned";
+      const command = await mock("database_structure", holds);
+      await tab("structure").click();
+      await waitForCalls(command);
+      await expect($('#database-work [data-key="copy"]')).toBeDisabled();
+      await release("database_structure", databaseStructure([databaseColumn("id", "bigint unsigned")], "1 列 / InnoDB / utf8mb4", text));
+      await expect($("#database-work .database-range")).toHaveText("1 列 / InnoDB / utf8mb4");
+      const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
+      expect(order).toEqual(["copy", "database-range"]);
+      await expect($('#database-work [data-key="copy"]')).toHaveAttribute("aria-label", "一覧をコピー");
+      await $('#database-work [data-key="copy"]').click();
+      await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+      expect(await copiedTexts()).toEqual([text]);
     });
 
     it("shows the error of a read in the danger color with the connection kept, and a press on the tab again reads it", async () => {
@@ -1190,6 +1242,7 @@ describe("database: tree", () => {
       await expect($("#database-work .database-note")).toHaveText(message);
       await expect($("#database-work .database-note")).toHaveElementClass("danger");
       expect(await count("#database-work .database-structure")).toBe(0);
+      await expect($('#database-work [data-key="copy"]')).toBeDisabled();
       await expect(dot("p1")).toHaveAttribute("data-state", "connected");
       await tab("records").click();
       const again = await mock("database_structure", structure);
@@ -1211,12 +1264,12 @@ describe("database: tree", () => {
       expect(await count("#database-work > *")).toBe(0);
     });
 
-    it("has no control on the structure but the three tabs, and no input", async () => {
+    it("has no control on the structure but the three tabs and the copy, and no input", async () => {
       await openTable();
       await mock("database_structure", structure);
       await tab("structure").click();
       await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL"]);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", ""]);
       expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
     });
   });
@@ -1283,7 +1336,7 @@ describe("database: tree", () => {
       expect(await callsOf("database_structure")).toEqual([]);
       await expect(input()).toHaveAttribute("aria-label", "SQL");
       await expect(input()).toHaveValue("");
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "実行"]);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "実行", ""]);
       expect(await count("#database-work [placeholder]")).toBe(0);
       expect(await count("#database-work .database-grid")).toBe(0);
       await expect(range()).toHaveText("");
@@ -1321,6 +1374,30 @@ describe("database: tree", () => {
       await expect(range()).toHaveText("1 行 / 5 ms");
       expect(await grid()).toEqual([["7"]]);
       await expect(run()).toBeEnabled();
+    });
+
+    it("puts the copy at the left of the footer, off before a run and while one runs, and copies the result as Rust made it", async () => {
+      await openSql();
+      await stubClipboard();
+      const copy = $('#database-work [data-key="copy"]');
+      await expect(copy).toBeDisabled();
+      const text = "id\tname\tdeleted_at\n1\tAlice\tNULL";
+      await mock("database_sql", { ...result, tsv: text });
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
+      expect(order).toEqual(["copy", "database-range"]);
+      await expect(copy).toBeEnabled();
+      await copy.click();
+      await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+      expect(await copiedTexts()).toEqual([text]);
+      const wait = await mock("database_sql", holds);
+      await run().click();
+      await waitForCalls(wait);
+      await expect(copy).toBeDisabled();
+      await release("database_sql", databaseSqlResult([], [], "0 行 / 2 ms"));
+      await expect(range()).toHaveText("0 行 / 2 ms");
+      await expect(copy).toBeDisabled();
     });
 
     it("says under the table that the rows were cut, as Rust worded it", async () => {
@@ -1425,9 +1502,9 @@ describe("database: tree", () => {
       await expect($("#database-work .database-note")).toHaveText("SQL を入力してください");
     });
 
-    it("has no other control on the tab than the tabs and 実行, and the field is the only input", async () => {
+    it("has no other control on the tab than the tabs, 実行 and the copy, and the field is the only input", async () => {
       await openSql();
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "実行"]);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "実行", ""]);
       expect(await count("#database-work input, #database-work [contenteditable]")).toBe(0);
       expect(await count("#database-work textarea")).toBe(1);
     });

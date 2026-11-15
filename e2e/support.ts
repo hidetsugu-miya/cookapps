@@ -563,17 +563,18 @@ export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra
   summary: rows.length === 0 ? "0 行" : `1–${rows.length} 行目`,
   lastPage: null,
   pages: "",
+  tsv: "",
   ...extra,
 });
 
 // A column of a table as `database_structure` answers it (D-5): the default and the comment are text, empty for none.
 export const databaseColumn = (name: string, columnType: string, extra: Partial<DatabaseColumn> = {}): DatabaseColumn => ({ name, columnType, nullable: false, key: "", default: "", comment: "", ...extra });
 
-// The structure of a table as `database_structure` answers it.
-export const databaseStructure = (columns: DatabaseColumn[], summary = `${columns.length} 列 / InnoDB / utf8mb4`): DatabaseStructure => ({ columns, summary });
+// The structure of a table as `database_structure` answers it; `tsv` is the text Rust made for the copy button (#668), which a spec that copies gives.
+export const databaseStructure = (columns: DatabaseColumn[], summary = `${columns.length} 列 / InnoDB / utf8mb4`, tsv = ""): DatabaseStructure => ({ columns, summary, tsv });
 
 // The result of a statement as `database_sql` answers it (D-6): the cells as D-4's, and the line under the table.
-export const databaseSqlResult = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`): DatabaseSqlResult => ({ columns, rows, summary });
+export const databaseSqlResult = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`, tsv = ""): DatabaseSqlResult => ({ columns, rows, summary, tsv });
 
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 

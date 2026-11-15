@@ -6,6 +6,8 @@
 //! A NULL is the text "NULL", a binary value is its length only, and a text longer than `TEXT_MAX` characters is cut with "…" (the rest is kept nowhere).
 //! The SQL tab (#635) draws its result with the same cells.
 
+use std::borrow::Cow;
+
 use futures_util::TryStreamExt;
 use serde::Serialize;
 use sqlx::{
@@ -66,6 +68,8 @@ pub struct DatabaseRecords {
     pub last_page: Option<u32>,
     /// The number of pages worded for the footer, "/ 約 12" (`format_pages`); empty when `last_page` is none.
     pub pages: String,
+    /// The page as the copy button copies it (`cells_tsv`, #668).
+    pub tsv: String,
 }
 
 /// A name of the database or of a table or column, quoted for the SQL text: between backticks, a backtick inside doubled.
@@ -298,6 +302,40 @@ pub fn format_pages(last_page: Option<u32>) -> String {
     })
 }
 
+/// A field of a copied text: as it is, or, when it holds a tab, a line break or a quote, between quotes with each quote doubled, which is how a spreadsheet reads a field that holds them.
+fn tsv_field(text: &str) -> Cow<'_, str> {
+    if text.contains(['\t', '\n', '\r', '"']) {
+        Cow::Owned(format!("\"{}\"", text.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// The text that the copy button puts in the clipboard (#668): the header and the rows as lines of tab separated fields, with no line break after the last (`tsv_field` quotes what would break a line or a field). No column is no text.
+pub fn tsv<H: AsRef<str>, C: AsRef<str>>(header: &[H], rows: &[Vec<C>]) -> String {
+    if header.is_empty() {
+        return String::new();
+    }
+    let line = |fields: &mut dyn Iterator<Item = &str>| {
+        fields.map(tsv_field).collect::<Vec<_>>().join("\t")
+    };
+    let mut lines = vec![line(&mut header.iter().map(AsRef::as_ref))];
+    lines.extend(
+        rows.iter()
+            .map(|row| line(&mut row.iter().map(AsRef::as_ref))),
+    );
+    lines.join("\n")
+}
+
+/// `tsv` of the columns and the cells of a page or of a result, with the text of each cell as the screen shows it.
+pub fn cells_tsv(columns: &[String], rows: &[Vec<DatabaseCell>]) -> String {
+    let texts: Vec<Vec<&str>> = rows
+        .iter()
+        .map(|row| row.iter().map(|c| c.text.as_str()).collect())
+        .collect();
+    tsv(columns, &texts)
+}
+
 pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
     row.columns()
         .iter()
@@ -348,8 +386,10 @@ pub async fn read(
         known
     };
     let last_page = last_page(offset, rows.len(), estimate);
+    let columns = columns.unwrap_or_default();
     Ok(DatabaseRecords {
-        columns: columns.unwrap_or_default(),
+        tsv: cells_tsv(&columns, &rows),
+        columns,
         summary: format_summary(offset, rows.len(), estimate),
         pages: format_pages(last_page),
         last_page,
@@ -678,6 +718,50 @@ mod tests {
         assert_eq!(last_page(100, 50, Some(149)), None);
         assert_eq!(last_page(0, 0, Some(1200)), None);
         assert_eq!(last_page(300, 0, None), None);
+    }
+
+    fn cells(texts: &[&str]) -> Vec<DatabaseCell> {
+        texts
+            .iter()
+            .map(|t| cell(DatabaseCellKind::Text, (*t).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn the_copy_is_the_header_and_the_rows_as_tab_separated_lines() {
+        let columns = vec!["id".to_owned(), "name".to_owned()];
+        let rows = vec![cells(&["1", "Alice"]), cells(&["2", ""])];
+        assert_eq!(cells_tsv(&columns, &rows), "id\tname\n1\tAlice\n2\t");
+        // NULL and a binary value are copied as the screen shows them
+        let shown = vec![vec![
+            cell(DatabaseCellKind::Null, "NULL".to_owned()),
+            binary_cell(16),
+        ]];
+        assert_eq!(cells_tsv(&columns, &shown), "id\tname\nNULL\tバイナリ 16 B");
+        // no row is the header alone, and no column is nothing at all
+        assert_eq!(cells_tsv(&columns, &[]), "id\tname");
+        assert_eq!(cells_tsv(&[], &[]), "");
+    }
+
+    #[test]
+    fn a_value_with_a_tab_a_line_break_or_a_quote_is_quoted_as_a_spreadsheet_reads_it() {
+        let columns = vec!["a\tb".to_owned(), "c".to_owned()];
+        let rows = vec![
+            cells(&["x\ty", "line1\nline2"]),
+            cells(&["say \"hi\"", "cr\rlf"]),
+        ];
+        assert_eq!(
+            cells_tsv(&columns, &rows),
+            "\"a\tb\"\tc\n\"x\ty\"\t\"line1\nline2\"\n\"say \"\"hi\"\"\"\t\"cr\rlf\""
+        );
+        // a quote alone, and other whitespace or Japanese, are left as they are
+        assert_eq!(tsv(&["q"], &[vec!["\""]]), "q\n\"\"\"\"");
+        assert_eq!(
+            tsv(&["q"], &[vec![" 日本語 \u{3000}"]]),
+            "q\n 日本語 \u{3000}"
+        );
+        // a field is quoted once, not again when it is copied
+        assert_eq!(tsv(&["q"], &[vec!["a\tb"]]), "q\n\"a\tb\"");
     }
 
     #[test]

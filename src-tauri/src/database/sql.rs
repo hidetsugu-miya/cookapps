@@ -20,7 +20,7 @@ use ts_rs::TS;
 
 use super::{
     mysql::{query_failure, QueryFailure, READ_ONLY},
-    records::{cells_of, quote_identifier, DatabaseCell},
+    records::{cells_of, cells_tsv, quote_identifier, DatabaseCell},
     session::format_rows,
     ssm::shorten,
 };
@@ -44,6 +44,8 @@ pub struct DatabaseSqlResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<DatabaseCell>>,
     pub summary: String,
+    /// The result as the copy button copies it (`records::cells_tsv`, #668).
+    pub tsv: String,
 }
 
 /// The text to run: `sql` without the whitespace around it and the semicolons at its end (a prepared statement is one statement, and `;` is how one is ended by hand), or the reason there is nothing to run.
@@ -189,6 +191,7 @@ pub async fn run(
     let (columns, rows, truncated) = read?;
     restored?;
     Ok(DatabaseSqlResult {
+        tsv: cells_tsv(&columns, &rows),
         columns,
         summary: format_summary(rows.len(), truncated, elapsed),
         rows,

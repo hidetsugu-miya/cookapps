@@ -16,4 +16,8 @@ lastPage: number | null,
 /**
  * The number of pages worded for the footer, "/ 約 12" (`format_pages`); empty when `last_page` is none.
  */
-pages: string, };
+pages: string, 
+/**
+ * The page as the copy button copies it (`cells_tsv`, #668).
+ */
+tsv: string, };

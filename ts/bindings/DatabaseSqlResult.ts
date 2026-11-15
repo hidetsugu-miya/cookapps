@@ -4,4 +4,8 @@ import type { DatabaseCell } from "./DatabaseCell";
 /**
  * The result of a run: the columns and the rows as D-4's cells, and the line under the table. A statement that gives no row has no column.
  */
-export type DatabaseSqlResult = { columns: Array<string>, rows: Array<Array<DatabaseCell>>, summary: string, };
+export type DatabaseSqlResult = { columns: Array<string>, rows: Array<Array<DatabaseCell>>, summary: string, 
+/**
+ * The result as the copy button copies it (`records::cells_tsv`, #668).
+ */
+tsv: string, };
