@@ -1,5 +1,5 @@
 import {
-  account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText,
+  account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText,
 } from "../support";
 import type { HeldThread } from "../../ts/bindings/HeldThread";
 import type { ThreadRefresh } from "../../ts/bindings/ThreadRefresh";
@@ -704,6 +704,26 @@ describe("thread reply field", () => {
       select.value = v;
       select.dispatchEvent(new Event("change"));
     }, value);
+  // The editable part of the rich field (Milkdown's ProseMirror) and a toolbar button by name (M-10).
+  const field = () => $("#mail-reply-body-input .ProseMirror");
+  const tool = (name: string) => $(`#mail-reply-body-tools [aria-label="${name}"]`);
+  const editable = () => field().getAttribute("contenteditable");
+  // Types `text` in the field, once Milkdown has made it editable.
+  const write = async (text: string) => {
+    await browser.waitUntil(async () => (await editable()) === "true");
+    await field().click();
+    await browser.keys(text.split(""));
+  };
+  const fieldText = () => browser.execute(() => (document.querySelector("#mail-reply-body-input .ProseMirror") as HTMLElement).innerText.trim());
+  const fieldIs = (text: string) => browser.waitUntil(async () => (await fieldText()) === text, { timeoutMsg: `the field never held "${text}"` });
+  // Cmd+Enter (Ctrl+Enter off macOS) in the field, sent as the key event the app listens for.
+  const pressSend = () =>
+    browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      const isMac = /Mac/.test(navigator.platform);
+      document.querySelector("#mail-reply-body-input .ProseMirror")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
+    }, onceId());
+  const milkdownRead = () => browser.execute("return typeof CookappsMilkdown !== 'undefined'");
   const edges = () =>
     browser.execute(() => {
       const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
@@ -756,7 +776,8 @@ describe("thread reply field", () => {
     expect(place).toEqual({ inLatest: true, afterDate: true, sameRow: true });
     await $("#mail-reply-open").click();
     await expect($("#mail-reply")).toBeDisplayed();
-    expect(await browser.execute(() => document.activeElement?.id)).toBe("mail-reply-body");
+    await browser.waitUntil(async () => (await editable()) === "true");
+    expect(await browser.execute(() => document.activeElement === document.querySelector("#mail-reply-body-input .ProseMirror"))).toBe(true);
     await expect($("#messages article")).not.toHaveElementClass("folded");
   });
 
@@ -771,7 +792,7 @@ describe("thread reply field", () => {
     await expect($("#mail-reply-cc-open")).toBeDisplayed();
     await expect($("#mail-reply-bcc-open")).toBeDisplayed();
     await expect($("#mail-reply-send")).toBeDisabled();
-    await expect($("#mail-reply-body")).toHaveValue("");
+    await fieldIs("");
     const { replyBottom, mainBottom, replyTop, actionsBottom, replyHeight, mainHeight, bodyBottom, footTop } = await edges();
     expect(replyBottom).toBe(mainBottom);
     expect(replyTop).toBeGreaterThan(actionsBottom);
@@ -841,7 +862,7 @@ describe("thread reply field", () => {
     await expect($("#mail-reply-cc-input")).toHaveValue("");
     await $("#mail-reply-bcc-open").click();
     await $("#mail-reply-bcc-input").setValue("eve@example.com");
-    await $("#mail-reply-body").click();
+    await field().click();
     expect(await chips("bcc")).toEqual(["eve@example.com"]);
     await $('[aria-label="dan@example.com を外す"]').click();
     expect(await chips("cc")).toEqual(["fay@example.com"]);
@@ -856,7 +877,7 @@ describe("thread reply field", () => {
     await pickMode("all");
     await $("#mail-reply-bcc-open").click();
     await $("#mail-reply-bcc-input").setValue("eve@example.com");
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await expect($("#mail-reply-send")).toBeEnabled();
     await $("#mail-reply-send").click();
     expect(await waitForCalls(send)).toEqual([
@@ -867,7 +888,8 @@ describe("thread reply field", () => {
           cc: ["carol@example.com"],
           bcc: ["eve@example.com"],
           subject: "First unread",
-          body: "Thanks",
+          body: "Thanks\n",
+          markdown: true,
           replyThreadId: "t1",
         },
       },
@@ -875,7 +897,7 @@ describe("thread reply field", () => {
     await waitForCount("#messages article", 2);
     expect(await callsOf(open_)).toHaveLength(1);
     await expect($("#mail-reply")).not.toBeDisplayed();
-    await expect($("#mail-reply-body")).toHaveValue("");
+    await fieldIs("");
     await expect($("#mail-reply-send")).toBeDisabled();
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("bcc")).toEqual([]);
@@ -886,18 +908,64 @@ describe("thread reply field", () => {
   it("cannot be sent twice while the mail goes out", async () => {
     await open();
     const send = await mock("send_mail", holds);
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#mail-reply-send").click();
     await waitForCalls(send);
     await expect($("#mail-reply-send")).toBeDisabled();
+    expect(await editable()).toBe("false");
+    await expect(tool("太字")).toBeDisabled();
+    await pressSend();
+    expect(await callsOf(send)).toHaveLength(1);
     await release(send, true);
-    await expect($("#mail-reply-body")).toHaveValue("");
+    await fieldIs("");
+  });
+
+  it("sends what the toolbar made as Markdown with markdown true", async () => {
+    await open();
+    const send = await mock("send_mail", true);
+    await mock("thread", twoMessages());
+    await write("Hello");
+    await browser.keys(["Meta", "a"]);
+    await tool("太字").click();
+    await expect($("#mail-reply-body-input strong")).toHaveText("Hello");
+    await $("#mail-reply-send").click();
+    expect(await waitForCalls(send)).toEqual([
+      { account, mail: { to: [alice], cc: [], bcc: [], subject: "First unread", body: "**Hello**\n", markdown: true, replyThreadId: "t1" } },
+    ]);
+  });
+
+  it("sends with Cmd+Enter (Ctrl+Enter off macOS), and not while the text is blank", async () => {
+    await open();
+    const send = await mock("send_mail", true);
+    await mock("thread", twoMessages());
+    await expect($("#mail-reply-send")).toBeDisabled();
+    await write("  ");
+    await expect($("#mail-reply-send")).toBeDisabled();
+    await pressSend();
+    await browser.pause(300);
+    expect(await callsOf(send)).toHaveLength(0);
+    await browser.keys(["Meta", "a"]);
+    await browser.keys(["G", "o"]);
+    await expect($("#mail-reply-send")).toBeEnabled();
+    await pressSend();
+    expect(await waitForCalls(send)).toEqual([
+      { account, mail: { to: [alice], cc: [], bcc: [], subject: "First unread", body: "Go\n", markdown: true, replyThreadId: "t1" } },
+    ]);
+  });
+
+  it("reads Milkdown when the reply field is first opened, and not before", async () => {
+    await open(threadDetail("First unread", "Hello from Alice", false), "First unread", false);
+    expect(await milkdownRead()).toBe(false);
+    await $("#mail-reply-open").click();
+    await browser.waitUntil(milkdownRead);
+    await browser.waitUntil(async () => (await editable()) === "true");
+    await expect($("#error")).not.toBeDisplayed();
   });
 
   it("does not read the thread again, nor draw it, when the thread was left while the reply went out", async () => {
     const open_ = await open();
     const send = await mock("send_mail", holds);
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#mail-reply-send").click();
     await waitForCalls(send);
     await $("#back").click();
@@ -912,7 +980,7 @@ describe("thread reply field", () => {
   it("keeps what was written on the same thread opened again while the reply went out, and does not read the thread again", async () => {
     await open();
     const send = await mock("send_mail", holds);
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#mail-reply-send").click();
     await waitForCalls(send);
     await $("#back").click();
@@ -920,11 +988,11 @@ describe("thread reply field", () => {
     const again = await open();
     await $("#mail-reply-cc-open").click();
     await $("#mail-reply-cc-input").setValue("dan@example.com,");
-    await $("#mail-reply-body").setValue("Again");
+    await write("Again");
     await release(send, true);
     await browser.pause(300);
     expect(await callsOf(again)).toHaveLength(1);
-    await expect($("#mail-reply-body")).toHaveValue("Again");
+    await fieldIs("Again");
     expect(await chips("cc")).toEqual(["dan@example.com"]);
     await expect($("#mail-reply-send")).toBeEnabled();
     await expect($("#error")).not.toBeDisplayed();
@@ -942,10 +1010,10 @@ describe("thread reply field", () => {
     await mock("send_mail", rejects("宛先の形式が正しくありません: x"));
     await $("#mail-reply-cc-open").click();
     await $("#mail-reply-cc-input").setValue("x");
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#mail-reply-send").click();
     await expect($("#error")).toHaveText("宛先の形式が正しくありません: x");
-    await expect($("#mail-reply-body")).toHaveValue("Thanks");
+    await fieldIs("Thanks");
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("cc")).toEqual(["x"]);
     await expect($("#mail-reply-send")).toBeEnabled();
@@ -955,11 +1023,11 @@ describe("thread reply field", () => {
   it("keeps the text when the account must log in again", async () => {
     await open();
     const send = await mock("send_mail", null);
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#mail-reply-send").click();
     await waitForCalls(send);
     await expect($("#mail-reply-send")).toBeEnabled();
-    await expect($("#mail-reply-body")).toHaveValue("Thanks");
+    await fieldIs("Thanks");
   });
 
   it("empties the field with 破棄: the text, Cc and Bcc, and the recipients of a reply", async () => {
@@ -967,10 +1035,10 @@ describe("thread reply field", () => {
     await pickMode("all");
     await $("#mail-reply-bcc-open").click();
     await $("#mail-reply-bcc-input").setValue("eve@example.com");
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#mail-reply-discard").click();
     await expect($("#mail-reply")).not.toBeDisplayed();
-    await expect($("#mail-reply-body")).toHaveValue("");
+    await fieldIs("");
     expect(await browser.execute(() => (document.getElementById("mail-reply-mode") as HTMLSelectElement).value)).toBe("one");
     expect(await chips("to")).toEqual(["Alice"]);
     await expect($("#mail-reply-cc-row")).not.toBeDisplayed();
@@ -981,10 +1049,10 @@ describe("thread reply field", () => {
 
   it("starts empty on the thread opened after another", async () => {
     await open();
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $("#back").click();
     await open(threadDetail("Second unread", "Second body", false), "Second unread");
-    await expect($("#mail-reply-body")).toHaveValue("");
+    await fieldIs("");
     expect(await chips("to")).toEqual(["Alice"]);
   });
 
@@ -997,12 +1065,12 @@ describe("thread reply field", () => {
     await expect($("#mail-reply")).not.toBeDisplayed();
     await $("#mail-reply-open").click();
     await expect($("#mail-reply")).toBeDisplayed();
-    await $("#mail-reply-body").setValue("Thanks");
+    await write("Thanks");
     await $('[aria-label="Alice を外す"]').click();
     await release(refresh, { unread: false, thread: threadDetail("First unread", "A new reply", false) } satisfies ThreadRefresh);
     await expect($("#messages .plain")).toHaveText("A new reply");
     await expect($("#mail-reply")).toBeDisplayed();
-    await expect($("#mail-reply-body")).toHaveValue("Thanks");
+    await fieldIs("Thanks");
     expect(await chips("to")).toEqual([]);
   });
 });
