@@ -3436,4 +3436,93 @@ describe("todo projects", () => {
     await browser.waitUntil(async () => JSON.stringify(await projectLines()) === JSON.stringify([["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "0px"]]), { timeoutMsg: "the list did not come back" });
     await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
   });
+
+  // T-8: dragging a project of the side list. The press is on the project's button (it has no grip), and the pointer moves over each of `over` before the release.
+  const heading = () => $("#projects h3");
+  async function dragProject(id: string, ...over: ChainablePromiseElement[]) {
+    const drag = async () => {
+      let action = browser.action("pointer").move({ origin: projectOf(id) }).down();
+      for (const target of over) action = action.move({ origin: target });
+      await action.up().perform();
+    };
+    try {
+      await drag();
+    } catch (error) {
+      // The timed refresh can redraw the list after the row was found: start again on the new row.
+      if (!String(error).includes("no longer attached")) throw error;
+      await browser.execute(() => document.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 1 })));
+      await drag();
+    }
+  }
+  const ORIGINAL = [["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "0px"]];
+
+  it("moves a project dropped on another project with todoist_move_project, marking that project on the way, and does not open the dropped project", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    await watchDrops();
+    await dragProject("p3", projectOf("p4"));
+    expect(await waitForCalls(move)).toEqual([{ id: "p3", parentId: "p4" }]);
+    expect(await dropsSeen()).toEqual(["p4"]);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Design", "16px"], ["Home", "0px"], ["Sketch", "16px"]]);
+    await expect($(".dragging, .drop")).not.toExist();
+    // The click that ends the drag does not open the project it was dropped on, nor the one dragged.
+    await expect($("#todo-title")).toHaveText("今日");
+  });
+
+  it("moves a project dropped on the heading プロジェクト to the end of the top level with parentId null, with its sub-projects", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    await watchDrops();
+    await dragProject("p2", heading());
+    expect(await waitForCalls(move)).toEqual([{ id: "p2", parentId: null }]);
+    // The heading has no ID, so the mark is recorded with an empty one.
+    expect(await dropsSeen()).toEqual([""]);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Home", "0px"], ["Design", "0px"], ["Sketch", "16px"]]);
+    await expect($(".dragging, .drop")).not.toExist();
+  });
+
+  it("marks no row it cannot be dropped on: itself, its sub-projects, the inbox and 今日, and calls nothing when it is released there", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await watchDrops();
+    // Work is at the top already, so the heading is not a place either.
+    await dragProject("p1", projectOf("p1"), projectOf("p2"), projectOf("p3"), heading(), projectOf("inbox"), projectOf("today"));
+    expect(await dropsSeen()).toEqual([]);
+    // Sketch: itself, its parent (Design), the inbox and 今日.
+    await dragProject("p3", projectOf("p3"), projectOf("p2"), projectOf("inbox"), projectOf("today"));
+    expect(await dropsSeen()).toEqual([]);
+    expect(await callsOf(move)).toEqual([]);
+    expect(await projectLines()).toEqual(ORIGINAL);
+    await expect($(".dragging, .drop")).not.toExist();
+  });
+
+  it("marks the heading only for a project that is not at the top level", async () => {
+    await openTodo();
+    await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    await watchDrops();
+    await dragProject("p4", heading(), projectOf("p4"));
+    expect(await dropsSeen()).toEqual([]);
+    await dragProject("p3", heading());
+    expect(await dropsSeen()).toEqual([""]);
+  });
+
+  it("opens the project on a press that does not move, and calls nothing", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await press(projectOf("p4"));
+    await expect($("#todo-title")).toHaveText("Home");
+    expect(await callsOf(move)).toEqual([]);
+  });
+
+  it("puts the project back and shows the error when the dropped move fails", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", rejects("Todoist に接続できません"));
+    await dragProject("p3", projectOf("p4"));
+    await waitForCalls(move);
+    await browser.waitUntil(async () => JSON.stringify(await projectLines()) === JSON.stringify(ORIGINAL), { timeoutMsg: "the list did not come back" });
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+  });
 });

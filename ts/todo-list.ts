@@ -1,4 +1,4 @@
-// The Todo screen's side list of projects and the task list: rows, the grip that moves a task to a project or under another task, and the name edited in place.
+// The Todo screen's side list of projects and the task list: rows, the grip that moves a task to a project or under another task, the drag of a project, and the name edited in place.
 import type { MailRef } from "./bindings/MailRef";
 import type { ProjectItem } from "./bindings/ProjectItem";
 import type { TaskItem } from "./bindings/TaskItem";
@@ -90,6 +90,7 @@ export function renderProjects() {
     line.style.paddingLeft = `${p.depth * 16}px`;
     const button = projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0);
     button.oncontextmenu = (e) => openProjectActions(button, p, e);
+    projectDrag(button, line, p);
     line.append(button);
     if (parents.has(p.id)) {
       line.classList.add("parent");
@@ -294,8 +295,65 @@ function dropTarget(el: Element | null | undefined, t: TaskItem) {
   return row && canMoveUnder(t, row.dataset.id!) ? row : null;
 }
 
+// A drag that the press `e` on `anchor` may become, by pointer events, not HTML5 drag and drop, which clashes with the window's file drop (T-2, T-8).
+// `row` is the row dragged (it gets `dragging`), `find` says what a drop may land on at an element (it gets `drop` while the pointer is over it), and `drop` runs once when the drag ends: with the element the pointer was released over, or null.
+// A press that hardly moves is not a drag: `drop` does not run, and the click goes on as it was.
+function pressDrag(e: PointerEvent, anchor: HTMLElement, label: string, row: HTMLElement, find: (el: Element | null | undefined) => HTMLElement | null, drop: (target: HTMLElement | null) => void) {
+  const pointer = e.pointerId;
+  // Keeps the events coming outside the window; if a redraw takes the anchor out, they still reach the document.
+  anchor.setPointerCapture(pointer);
+  const [x0, y0] = [e.clientX, e.clientY];
+  let ghost: HTMLElement | null = null;
+  let over: HTMLElement | null = null;
+  // On the document, not the anchor: a redraw during the drag takes the anchor out, and its events would stop.
+  const mine = (f: (e: PointerEvent) => void) => (e: PointerEvent) => e.pointerId === pointer && f(e);
+  const move = mine((e) => {
+    if (!ghost) {
+      // A press that hardly moves is not a drag.
+      if (Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+      todoState.dragging = true;
+      ghost = tag("div", "drag-ghost", label);
+      document.body.append(ghost);
+      row.classList.add("dragging");
+      document.body.classList.add("dragging-task");
+    }
+    // Read before the ghost moves, so the move does not force a style recalculation each time.
+    const next = find(document.elementFromPoint(e.clientX, e.clientY));
+    ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
+    if (next === over) return;
+    over?.classList.remove("drop");
+    next?.classList.add("drop");
+    over = next;
+  });
+  const up = mine(() => end(true));
+  const cancel = mine(() => end(false));
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && end(false);
+  const end = (release: boolean) => {
+    document.removeEventListener("pointermove", move, true);
+    document.removeEventListener("pointerup", up, true);
+    document.removeEventListener("pointercancel", cancel, true);
+    document.removeEventListener("keydown", onKey);
+    if (!ghost) return;
+    const target = release ? (over as HTMLElement | null) : null;
+    (ghost as HTMLElement).remove();
+    ghost = null;
+    (over as HTMLElement | null)?.classList.remove("drop");
+    row.classList.remove("dragging");
+    document.body.classList.remove("dragging-task");
+    todoState.dragging = false;
+    // The click that ends a drag may go to what is under the pointer (a project button); it must not act.
+    const swallow = (e: Event) => e.stopPropagation();
+    document.addEventListener("click", swallow, true);
+    setTimeout(() => document.removeEventListener("click", swallow, true));
+    drop(target);
+  };
+  document.addEventListener("pointermove", move, true);
+  document.addEventListener("pointerup", up, true);
+  document.addEventListener("pointercancel", cancel, true);
+  document.addEventListener("keydown", onKey);
+}
+
 // The grip at a row's left edge: drag it onto a project in the side list to move the task there, or onto another task's row to make it that task's subtask.
-// Pointer events, not HTML5 drag and drop, which clashes with the window's file drop.
 export function gripOf(li: HTMLElement, t: TaskItem) {
   const grip = tag("span", "grip");
   grip.setAttribute("role", "img");
@@ -306,66 +364,40 @@ export function gripOf(li: HTMLElement, t: TaskItem) {
   grip.onpointerdown = (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    const pointer = e.pointerId;
-    // Keeps the events coming outside the window; if a redraw takes the grip out, they still reach the document.
-    grip.setPointerCapture(pointer);
-    const [x0, y0] = [e.clientX, e.clientY];
-    let ghost: HTMLElement | null = null;
-    let over: HTMLElement | null = null;
-    // On the document, not the grip: a redraw during the drag takes the grip out, and its events would stop.
-    const mine = (f: (e: PointerEvent) => void) => (e: PointerEvent) => e.pointerId === pointer && f(e);
-    const move = mine((e) => {
-      if (!ghost) {
-        // A press that hardly moves is not a drag.
-        if (Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
-        todoState.dragging = true;
-        ghost = tag("div", "drag-ghost", t.content);
-        document.body.append(ghost);
-        li.classList.add("dragging");
-        document.body.classList.add("dragging-task");
-      }
-      // Read before the ghost moves, so the move does not force a style recalculation each time.
-      const next = dropTarget(document.elementFromPoint(e.clientX, e.clientY), t);
-      ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
-      if (next === over) return;
-      over?.classList.remove("drop");
-      next?.classList.add("drop");
-      over = next;
-    });
-    const up = mine(() => end(true));
-    const cancel = mine(() => end(false));
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && end(false);
-    const end = (drop: boolean) => {
-      document.removeEventListener("pointermove", move, true);
-      document.removeEventListener("pointerup", up, true);
-      document.removeEventListener("pointercancel", cancel, true);
-      document.removeEventListener("keydown", onKey);
-      if (!ghost) return;
+    pressDrag(e, grip, t.content, li, (el) => dropTarget(el, t), (target) => {
       // A project of the side list has a `data-view`, a task's row a `data-id`.
-      const target = drop ? (over as HTMLElement | null) : null;
       const projectId = target?.dataset.view && viewProjectId(target.dataset.view);
       const parentId = target?.dataset.id;
-      (ghost as HTMLElement).remove();
-      ghost = null;
-      (over as HTMLElement | null)?.classList.remove("drop");
-      li.classList.remove("dragging");
-      document.body.classList.remove("dragging-task");
-      todoState.dragging = false;
-      // The click that ends a drag may go to what is under the pointer (a project button); it must not act.
-      const swallow = (e: Event) => e.stopPropagation();
-      document.addEventListener("click", swallow, true);
-      setTimeout(() => document.removeEventListener("click", swallow, true));
       if (projectId) moveTask(t.id, projectId);
       else if (parentId) moveUnder(t.id, parentId);
       // Only a redraw held back during the drag; the next refresh fetches.
       else if (todoState.undrawn) renderTodo();
-    };
-    document.addEventListener("pointermove", move, true);
-    document.addEventListener("pointerup", up, true);
-    document.addEventListener("pointercancel", cancel, true);
-    document.addEventListener("keydown", onKey);
+    });
   };
   return grip;
+}
+
+// What the project `p` may be dropped on at `el` (T-8): a project of `places` (the IDs `moveTargets` leaves, as in the "移動" menu), or the heading "プロジェクト" for the top level (not for a project that is there already).
+function projectDropTarget(el: Element | null | undefined, p: ProjectItem, places: Set<string>) {
+  const proj = el?.closest<HTMLElement>("#projects .proj");
+  if (proj) return places.has(proj.dataset.view!) ? proj : null;
+  return p.parentId === null ? null : (el?.closest<HTMLElement>("#projects h3") ?? null);
+}
+
+// Makes the button of the project `p` the handle of a drag (T-8): drop it on a project to make it that project's last sub-project, or on the heading "プロジェクト" for the last of the top level.
+// The whole button is the handle, with no grip: the row has no room for one beside the name, the count and the toggle, and a press that moves less than 4px stays the click that opens the project.
+// The press is not cancelled (no preventDefault), so the focus and that click are as before; the right press is not taken, and opens the menu as before.
+function projectDrag(button: HTMLElement, line: HTMLElement, p: ProjectItem) {
+  button.onpointerdown = (e) => {
+    if (e.button !== 0) return;
+    const places = new Set(moveTargets(p).map((x) => x.id));
+    pressDrag(e, button, p.name, line, (el) => projectDropTarget(el, p, places), (target) => {
+      // A project button's `data-view` is its ID; the heading has none.
+      if (target) void moveProject(p.id, target.dataset.view ?? null);
+      // Only a redraw held back during the drag; the next refresh fetches.
+      else if (todoState.undrawn) renderTodo();
+    });
+  };
 }
 
 // Turns a row's name into a text field: Enter or leaving the field saves, Escape puts the name back.
