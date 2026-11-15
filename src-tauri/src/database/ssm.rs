@@ -149,7 +149,7 @@ struct Node {
     online: bool,
 }
 
-/// The first node that is Online. The filter of the call asks for Online too; this keeps a node that is not from being taken when the service ignores a filter.
+/// The first node that is Online. The call cannot filter by `PingStatus` (a tag filter stands alone, `bastion_filters`), so this is what keeps a node that is not Online from being taken.
 fn choose_instance(nodes: &[Node]) -> Option<&str> {
     nodes
         .iter()
@@ -322,19 +322,21 @@ async fn with_timeout<T>(
     with_limit(API_TIMEOUT, call).await
 }
 
+/// The filters of the call that finds the bastion: the `Name` tag alone. A tag filter cannot be combined with a filter of another type (the reference of `DescribeInstanceInformation`, `Filters`), so `PingStatus` is not asked for here; `choose_instance` reads it from the nodes.
+fn bastion_filters(name: &str) -> Vec<(&'static str, String)> {
+    vec![("tag:Name", name.to_owned())]
+}
+
 async fn find_bastion(client: &Client, name: &str) -> Result<String, Failure> {
-    let filter = |key: &str, value: &str| {
-        InstanceInformationStringFilter::builder()
+    let mut request = client.describe_instance_information().max_results(50);
+    for (key, value) in bastion_filters(name) {
+        let filter = InstanceInformationStringFilter::builder()
             .key(key)
             .values(value)
             .build()
-            .map_err(|e| Failure::Aws(e.to_string()))
-    };
-    let request = client
-        .describe_instance_information()
-        .filters(filter("tag:Name", name)?)
-        .filters(filter("PingStatus", "Online")?)
-        .max_results(50);
+            .map_err(|e| Failure::Aws(e.to_string()))?;
+        request = request.filters(filter);
+    }
     let answer = with_timeout(async { request.send().await.map_err(|e| aws_failure(&e)) }).await?;
     let nodes: Vec<Node> = answer
         .instance_information_list()
@@ -590,6 +592,15 @@ mod tests {
         assert_eq!(
             response["StreamUrl"],
             "wss://ssmmessages.ap-northeast-1.amazonaws.com/v1/data-channel/s-1"
+        );
+    }
+
+    #[test]
+    fn asks_for_the_bastion_by_the_name_tag_alone() {
+        // A tag filter cannot be combined with another filter type (the reference of DescribeInstanceInformation, Filters), so PingStatus is not one of them.
+        assert_eq!(
+            bastion_filters("bastion"),
+            [("tag:Name", "bastion".to_owned())]
         );
     }
 
