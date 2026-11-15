@@ -24,8 +24,9 @@ export interface StructureState {
   data: DatabaseStructure | null;
 }
 
-// The SQL tab of the connection and database that the tree has selected: the text as typed, and the result of the run asked for last. `data` is none before a run and after an error.
+// The SQL tab of the connection and database that the tree has selected: the text as typed, and the result of the run asked for last. `data` is none before a run and after an error. `view` numbers the SQL view (a new query makes a new one): it is in the key of a draw, so a new query is drawn again even when the text typed and not run was the only difference.
 export interface SqlState {
+  view: number;
   text: string;
   loading: boolean;
   error: string | null;
@@ -284,6 +285,8 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
   const nodes: Node[] = [];
+  // The one SQL result of a connection and a database is shared by the tab of the database and the tab SQL of each of its tables, so its column widths are named by the three alone (D-4).
+  const sqlSizes = [state.connection, state.database, "sql"].join("\0");
   if (state.table !== null && state.records !== null) {
     const sizes = (tab: string) => [state.connection, state.database, state.table, tab].join("\0");
     nodes.push(
@@ -292,12 +295,12 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
       state.tab === "structure" && state.structure !== null
         ? structureNode(state.structure, sizes("structure"))
         : state.tab === "sql"
-          ? sqlNode(state.sql, actions, sizes("sql"))
+          ? sqlNode(state.sql, actions, sqlSizes)
           : recordsNode(state.records, actions, sizes("records")),
     );
   } else {
     nodes.push(tag("h3", "database-work-title", state.database), tabsNode(DATABASE_TABS, state.databaseTab, actions.databaseTab));
-    if (state.databaseTab === "sql") nodes.push(sqlNode(state.sql, actions, [state.connection, state.database, "", "sql"].join("\0")));
+    if (state.databaseTab === "sql") nodes.push(sqlNode(state.sql, actions, sqlSizes));
     else if (state.loading) nodes.push(note("読み込み中…", false));
     else if (state.error !== null) nodes.push(note(state.error, true));
     else if (state.tables.length > 0) nodes.push(tableNode(state, actions));

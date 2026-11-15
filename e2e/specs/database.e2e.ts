@@ -455,11 +455,11 @@ describe("database: tree", () => {
       .move({ origin: "pointer", x: dx, y: 0 })
       .up()
       .perform();
-  // The left border of a header and a cell of each column: the first has none, the others have the vertical line.
+  // The left border of a header and a cell of each column: the first has none, the others have the vertical line. The header and the last row are read (`tr:first-child` alone would also take the first row of the body, the first child of its own parent).
   const lines = () =>
     browser.execute(() => {
       const left = (e: Element) => getComputedStyle(e).borderLeftWidth;
-      return [...document.querySelectorAll("#database-work .database-grid tr:first-child > *, #database-work .database-grid tbody tr:last-child > *")].map(left);
+      return [...document.querySelectorAll("#database-work .database-grid thead tr > *, #database-work .database-grid tbody tr:last-child > *")].map(left);
     });
   const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThanOrEqual(2);
   const onlyFirstHasNoLine = (all: string[]) => {
@@ -1144,7 +1144,7 @@ describe("database: tree", () => {
         ["status", "tinyint(1)", "NO", "", "0", ""],
       ]);
       expect(await count("#database-work .database-grid")).toBe(1);
-      expect(await count("#database-work .database-pager button")).toBe(0);
+      expect(await count('#database-work .database-pager button:not([data-key="copy"])')).toBe(0);
     });
 
     it("cuts a long comment in its cell with the text as its title", async () => {
@@ -1657,6 +1657,35 @@ describe("database: tree", () => {
       expect(await browser.execute(() => document.activeElement === document.querySelector("#database-work .database-sql-text"))).toBe(true);
       expect(await callsOf("database_sql")).toHaveLength(1);
       expect(await callsOf("database_tables")).toHaveLength(1);
+    });
+
+    it("empties the field on 新規クエリ when its text was typed and not run", async () => {
+      await openShop();
+      await tab("sql").click();
+      await input().setValue(text);
+      await expect(input()).toHaveValue(text);
+      await pickDb("p1/d/shop", 1);
+      await expect(input()).toHaveValue("");
+      expect(await callsOf("database_sql")).toEqual([]);
+    });
+
+    it("keeps the width of a column of the SQL result for the tab of the database and the tabs SQL of its tables, which share the result", async () => {
+      await openShop();
+      await tab("sql").click();
+      await mock("database_sql", result);
+      await runText();
+      const before = await columnWidths(1);
+      await dragGrip(1, 120);
+      const sized = await columnWidths(1);
+      for (const w of sized) near(w, before[0] + 120);
+      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
+      await row("p1/d/shop/t/orders").click();
+      await waitForCalls("database_records");
+      await tab("sql").click();
+      await run().click();
+      await waitForCalls("database_sql", 2);
+      await expect(range()).toHaveText("1 行 / 3 ms");
+      expect(await columnWidths(1)).toEqual(sized);
     });
 
     it("opens a new query on a database that is not open, without reading its tables, and runs on that database", async () => {

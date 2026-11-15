@@ -204,8 +204,11 @@ async function open(worktree: OrcaWorktree) {
       host = tag("div", "database-terminal-term");
       body().append(host);
     }
-    startWatch();
-    void tick();
+    // The pane may have been closed while the terminal was opened: it reads nothing then, and the next opening starts the tick.
+    if ($("database-terminal-toggle").getAttribute("aria-pressed") === "true") {
+      startWatch();
+      void tick();
+    }
   } catch (e) {
     say(String(e));
   } finally {

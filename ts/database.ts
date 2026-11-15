@@ -68,7 +68,9 @@ const closing = new Set<string>();
 let loadSeq = 0;
 
 const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
-const emptySql: SqlState = { text: "", loading: false, error: null, data: null };
+const emptySql: SqlState = { view: 0, text: "", loading: false, error: null, data: null };
+// The number of the last SQL view made: a new query makes a new view, which is drawn again whatever was typed in the one before.
+let sqlViews = 0;
 const databaseOf = (c: ConnectionState, name: string) => {
   let d = c.byName.get(name);
   if (!d) {
@@ -101,13 +103,13 @@ function sideState(): SideState {
 // The SQL tab of the selected connection and database: the view that belongs to them, or an empty one.
 function sqlState(): SqlState {
   if (sql === null || sql.id !== selected?.id || sql.database !== selected.database) return emptySql;
-  return { text: sql.text, loading: sql.loading, error: sql.error, data: sql.data };
+  return { view: sql.view, text: sql.text, loading: sql.loading, error: sql.error, data: sql.data };
 }
 
 // The view of the SQL tab of the selected connection and database, made when none belongs to them; none when no database is selected.
 function sqlView(): SqlView | null {
   if (selected?.database == null) return null;
-  if (sql?.id !== selected.id || sql.database !== selected.database) sql = { id: selected.id, database: selected.database, ...emptySql };
+  if (sql?.id !== selected.id || sql.database !== selected.database) sql = { id: selected.id, database: selected.database, ...emptySql, view: ++sqlViews };
   return sql;
 }
 
@@ -398,7 +400,7 @@ const actions: SideActions = {
   newQuery: (profile, database) => {
     selected = { id: profile.id, database, table: null };
     databaseTab = "sql";
-    sql = { id: profile.id, database, ...emptySql };
+    sql = { id: profile.id, database, ...emptySql, view: ++sqlViews };
     draw();
     focusSqlField();
   },
