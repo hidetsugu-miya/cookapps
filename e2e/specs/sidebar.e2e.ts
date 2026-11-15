@@ -241,11 +241,11 @@ describe("sidebar", () => {
     await waitForBadge({ count: 7, upcoming: [] });
   });
 
-  it("orders the sidebar as mail, calendar, the Google accounts, Todo, Slack, Orca, then the bottom group", async () => {
+  it("orders the sidebar as mail, calendar, the Google accounts, Todo, Slack, Orca, the database, then the bottom group", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
     await waitForCalls("claude_status");
     const ids = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sidebar > *")].filter((e) => e.offsetParent !== null).map((e) => e.id));
-    expect(ids).toEqual(["nav-mail", "nav-calendar", "account-list", "nav-todo", "nav-slack", "nav-orca", "sidebar-bottom"]);
+    expect(ids).toEqual(["nav-mail", "nav-calendar", "account-list", "nav-todo", "nav-slack", "nav-orca", "nav-database", "sidebar-bottom"]);
     await expect($("#nav-slack")).toHaveAttribute("aria-label", "Slack");
   });
 

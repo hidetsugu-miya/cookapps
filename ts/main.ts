@@ -5,6 +5,7 @@ import { initArrivals } from "./arrivals.js";
 import { initCalendar } from "./calendar.js";
 import { initCalendarDetail } from "./calendar-detail.js";
 import { initClaude, refreshClaude } from "./claude.js";
+import { initDatabase } from "./database.js";
 import { initEditorSettings } from "./editor-settings.js";
 import { initFontSettings } from "./font-settings.js";
 import { initGhostty } from "./ghostty.js";
@@ -66,6 +67,7 @@ initSlackClaude();
 initSlackThread();
 initOrca();
 initFileDrops();
+initDatabase();
 
 showKeptInbox();
 refreshClaude();

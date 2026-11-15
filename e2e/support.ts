@@ -8,6 +8,7 @@ import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
+import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
@@ -524,6 +525,21 @@ export const checked = (missingScopes: string[] | null, missingOptional: string[
 // A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
 // "Ago" counts from the second this module was loaded, read once: the same arguments give the same timestamp at every call, so a message made twice in a spec is one message (the timestamp is part of its key).
 const slackNow = Math.floor(Date.now() / 1000);
+// A saved connection of the database screen (D-1) that goes straight to its host.
+export const databaseProfile = (id: string, name: string, extra: Partial<DatabaseProfileView> = {}): DatabaseProfileView => ({
+  id,
+  name,
+  username: "reader",
+  useSsm: false,
+  awsProfile: "",
+  region: "",
+  bastionName: "",
+  dbHost: "db.example.com",
+  dbPort: 3306,
+  passwordSaved: false,
+  ...extra,
+});
+
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 
 // The permalink of the message with `ts` in the channel `C0123ABCD` of `workspace`.

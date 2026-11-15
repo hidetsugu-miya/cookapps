@@ -7,6 +7,8 @@ import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
+import type { DatabaseProfile } from "./bindings/DatabaseProfile";
+import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
@@ -405,6 +407,11 @@ export interface Commands {
   restart_app: { args: undefined; result: null };
   // `count`: what is due or unread now. `upcoming`: the due moments (epoch milliseconds) of open tasks still ahead, which Rust adds once the clock passes them.
   set_badge: { args: { count: number; upcoming: number[] }; result: null };
+  // The connections of the database screen (D-1), in the order they were made, each with whether its password is saved.
+  database_profiles: { args: undefined; result: DatabaseProfileView[] };
+  // Saves a connection (a new one with an empty `id`); an empty `password` leaves the saved one as it is. Answers it as saved.
+  database_profile_save: { args: { profile: DatabaseProfile; password: string }; result: DatabaseProfileView };
+  database_profile_delete: { args: { id: string }; result: null };
 }
 
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).
