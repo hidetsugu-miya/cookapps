@@ -321,7 +321,6 @@ pub fn run() {
             claude::claude_chat_thread,
             orca::orca_overview,
             orca::orca_destination,
-            orca::orca_set_target,
             orca::orca_send,
             orca::orca_start,
             orca::orca_terminal_create,

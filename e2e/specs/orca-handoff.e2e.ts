@@ -1282,9 +1282,8 @@ describe("orca handoff", () => {
     await expect($(`${MAIL.pane} .ho-destination`)).toBeDisabled();
   });
 
-  it("reads the lists of the destination chosen, and hands over to it, with the target of the Orca screen untouched", async () => {
+  it("reads the lists of the destination chosen, and hands over to it", async () => {
     await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab"] }) });
-    const setTarget = await mock("orca_set_target", null);
     const destination = await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Studio", "Lab"], known: false }));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
@@ -1304,7 +1303,6 @@ describe("orca handoff", () => {
     const [call] = (await waitForCalls(handoff)) as { destination: unknown; environment: string | null }[];
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-lab" });
     expect(call.environment).toBe("Lab");
-    expect(await callsOf(setTarget)).toEqual([]);
     // The session is read at its own destination, and the choice is kept for the next handoff.
     await expect($(`${MAIL.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
     expect((await callsOf(destination)).length).toBeGreaterThan(1);

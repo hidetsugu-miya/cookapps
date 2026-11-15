@@ -291,7 +291,6 @@ export interface Commands {
   // `force` is false only for the poll of a shown session: for the destination checked just before, the saved environments are not asked for again and `environments` is empty.
   orca_destination: { args: { environment: string | null; force: boolean }; result: OrcaOverview };
   // Saves the target: a saved environment's name, or null for this machine.
-  orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
   // A-16: starts Claude in the worktree at `path` with no first prompt (the plus of the work pane). The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them). Never run twice.

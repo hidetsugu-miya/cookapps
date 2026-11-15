@@ -1,5 +1,4 @@
 import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
-import { orcaOverview, sample, studio, worktrees } from "../orca-support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
@@ -1225,94 +1224,14 @@ describe("settings: Ghostty (the Orca tab)", () => {
   });
 });
 
-describe("settings: the target of the Orca screen (the Orca tab, A-6)", () => {
-  // The app with what Orca answers and `fixtures`, and the settings screen open on the Orca tab.
-  async function openOrcaTab(value = orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab"] }), fixtures: Record<string, unknown> = {}) {
-    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, orca_overview: value, ...fixtures });
+describe("settings: the Orca tab has no card of the target (A-6)", () => {
+  it("has the cards of the terminal colors, the editor and Ghostty's settings, and none of the target", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("orca");
     await expect($("#settings-panel-orca")).toBeDisplayed();
-  }
-
-  const rows = () => textsOf("#orca-target-items .item");
-  const marked = () => textsOf("#orca-target-items .item:has(.status) .item-name");
-  const pickButton = (name: string) => $(`#orca-target-items button[aria-label="${name}を選ぶ"]`);
-
-  it("is the first card of the tab, and lists this machine and the saved environments with the target marked", async () => {
-    await openOrcaTab();
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["接続先", "ターミナルの配色", "エディタ", "Ghostty の設定"]);
-    expect(await rows()).toEqual(["このマシン選択中", "Studio選ぶ", "Lab選ぶ"]);
-    expect(await marked()).toEqual(["このマシン"]);
-    expect(await count("#orca-target-items .status.ok")).toBe(1);
-  });
-
-  it("reads the environments again when the tab is shown", async () => {
-    await openOrcaTab();
-    await mock("orca_overview", orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab", "Dev"] }));
-    await openTab("google");
-    await openTab("orca");
-    await browser.waitUntil(async () => (await rows()).length === 4, { timeoutMsg: "the new environment never showed" });
-    expect(await callsOf("orca_overview")).toEqual([{ scope: "full", target: null }]);
-  });
-
-  it("marks the saved environment that is the target", async () => {
-    await openOrcaTab(orcaOverview(sample(), worktrees(), studio));
-    expect(await rows()).toEqual(["このマシン選ぶ", "Studio選択中", "Lab選ぶ"]);
-    expect(await marked()).toEqual(["Studio"]);
-  });
-
-  it("saves the environment picked, reads again for it and moves the mark", async () => {
-    await openOrcaTab();
-    const save = await mock("orca_set_target", null);
-    const overview = await mock("orca_overview", orcaOverview([], [], { target: "Studio", environments: ["Studio", "Lab"] }));
-    await pickButton("Studio").click();
-    expect(await waitForCalls(save)).toEqual([{ environment: "Studio" }]);
-    expect(await waitForCalls(overview)).toEqual([{ scope: "full", target: "Studio" }]);
-    await browser.waitUntil(async () => (await marked()).join() === "Studio", { timeoutMsg: "the mark never moved to Studio" });
-    expect(await rows()).toEqual(["このマシン選ぶ", "Studio選択中", "Lab選ぶ"]);
-    // The Orca screen holds the new target.
-    await $("#nav-orca").click();
-    await expect($("#orca")).toBeDisplayed();
-    // Studio is listed, so its list is streamed.
-    await waitForCalls("orca_stream_open");
-  });
-
-  it("saves this machine when it is picked", async () => {
-    await openOrcaTab(orcaOverview(sample(), worktrees(), studio));
-    const save = await mock("orca_set_target", null);
-    await mock("orca_overview", orcaOverview([], [], { target: null, environments: ["Studio", "Lab"] }));
-    await pickButton("このマシン").click();
-    expect(await waitForCalls(save)).toEqual([{ environment: null }]);
-    await browser.waitUntil(async () => (await marked()).join() === "このマシン", { timeoutMsg: "the mark never moved to this machine" });
-  });
-
-  it("shows the message of a save that failed and keeps the mark", async () => {
-    await openOrcaTab();
-    await mock("orca_set_target", rejects("設定を保存できませんでした"));
-    await pickButton("Lab").click();
-    await expect($("#error")).toHaveText("設定を保存できませんでした");
-    expect(await marked()).toEqual(["このマシン"]);
-  });
-
-  it("has the row of this machine alone, with no button, while no environment is saved", async () => {
-    await openOrcaTab(orcaOverview(sample(), worktrees()));
-    expect(await rows()).toEqual(["このマシン選択中"]);
-    expect(await count("#orca-target-items button")).toBe(0);
-  });
-
-  it("keeps the environments it had when the environments cannot be read", async () => {
-    await openOrcaTab();
-    await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is busy", known: false }));
-    await openTab("google");
-    await openTab("orca");
-    await waitForCalls("orca_overview");
-    expect(await rows()).toEqual(["このマシン選択中", "Studio選ぶ", "Lab選ぶ"]);
-  });
-
-  it("opens the hint of the card", async () => {
-    await openOrcaTab();
-    await $("#orca-target-help").click();
-    await expect($('[role="dialog"][aria-label="Orca の接続先"]')).toBeDisplayed();
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定"]);
+    expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
   });
 });
 
@@ -1338,7 +1257,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
 
   it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["接続先", "ターミナルの配色", "エディタ", "Ghostty の設定"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
     expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });

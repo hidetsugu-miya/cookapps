@@ -31,7 +31,7 @@ import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, refreshDi
 import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
-import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
+import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
@@ -80,8 +80,6 @@ const notified = new Set<string>();
 // The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
 let wasStopped = new Set<string>();
 let baselined = false;
-// The target was just changed and the first read of the new one has not come back: nothing is said about it yet.
-let switching = false;
 // Reads: the latest request is the one used; one is on its way; when the last one started.
 let loadSeq = 0;
 let loading = false;
@@ -289,13 +287,12 @@ export function noticeOf(v: OrcaOverview | null) {
 }
 
 function drawNotice() {
-  const v = switching ? null : view;
-  const text = noticeOf(v);
-  const key = JSON.stringify([v?.state, text]);
+  const text = noticeOf(view);
+  const key = JSON.stringify([view?.state, text]);
   if (key === noticeKey) return;
   noticeKey = key;
   if (text === null) return $("orca-notice").replaceChildren();
-  const row = tag("div", v?.state === "failed" ? "pending fail" : "pending");
+  const row = tag("div", view?.state === "failed" ? "pending fail" : "pending");
   row.append(tag("span", "sp", text));
   $("orca-notice").replaceChildren(row);
 }
@@ -373,7 +370,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
 }
 
 function emptyNode(text: string) {
-  if (view === null || switching) {
+  if (view === null) {
     const loadingRow = tag("div", "pending");
     loadingRow.append(tag("span", "spin"), tag("span", "sp", "読み込んでいます…"));
     return loadingRow;
@@ -386,7 +383,7 @@ type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions" | "en
 
 // Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A project opens when work appears in it that the last read did not have (a working session, or the project's own work with no such session), also when the user closed it; work that went on leaves it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing. A project the list no longer holds is forgotten by `opened`.
 function trackWorking() {
-  if (view === null || switching || (view.state !== "ready" && here?.state !== "ready")) return;
+  if (view === null || (view.state !== "ready" && here?.state !== "ready")) return;
   if (view.target !== workingTarget) {
     workingTarget = view.target;
     workingOrder = [];
@@ -477,7 +474,7 @@ function drawFeed() {
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.hosts.map(rowOf), ssh, needle(), on, projectKey, sessions, selectedTab(), switching]);
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.hosts.map(rowOf), ssh, needle(), on, projectKey, sessions, selectedTab()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -678,7 +675,7 @@ function drawStarted() {
 function adopt(read: OrcaOverview) {
   const next = !read.known && view !== null ? { ...read, target: view.target, environments: view.environments } : read;
   const keep = next.state === "failed" && view !== null && view.state !== "missing" && view.target === next.target;
-  // A target that changed without `chooseTarget` (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
+  // A target that changed (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
   if (view !== null && next.target !== view.target) forgetNotices();
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, hosts: view!.hosts, terminals: view!.terminals } : next;
   if (read.known) ssh = read.ssh;
@@ -686,7 +683,6 @@ function adopt(read: OrcaOverview) {
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
   else workingCount = 0;
-  switching = false;
   adoptHere(next.local);
   settle();
 }
@@ -782,7 +778,7 @@ const streaming = () => streamTarget !== null && streamTarget === view?.target;
 
 // Streams the list while the target is a saved environment that is listed (and the command is there), and ends the stream otherwise. The stream tries a lost connection again by itself.
 function syncStream() {
-  const want = view !== null && view.state !== "missing" && !switching && view.target !== null && view.environments.includes(view.target) ? view.target : null;
+  const want = view !== null && view.state !== "missing" && view.target !== null && view.environments.includes(view.target) ? view.target : null;
   if (want === streamTarget) return;
   // A new stream ends the old one by itself: a close is a call of its own, which could reach Rust after the open and end the new stream.
   if (streamTarget !== null && want === null) invoke("orca_stream_close").catch(() => {});
@@ -925,12 +921,6 @@ export async function readDestination(environment: string | null, force: boolean
   }
 }
 
-// Reads everything, the environments too, whatever screen is shown, and gives what is held after it (the card of the target in the settings).
-export async function readOrcaTargets() {
-  await load("full", true);
-  return view;
-}
-
 // Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the selection as it is.
 export function openInOrca(paneKey: string | null) {
   const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
@@ -947,32 +937,6 @@ export function showOrca() {
   noticeKey = feedKey = "";
   draw();
   // The environments are read when the screen is shown, whatever read is on its way.
-  load("full", true);
-}
-
-// Saves `environment` as the target (null: this machine) and reads again; the card of the Orca tab of the settings (`ts/orca-target.ts`) picks through it.
-export async function chooseTarget(environment: string | null) {
-  if (view === null || environment === view.target) return;
-  loadSeq++;
-  loading = false;
-  try {
-    await invoke("orca_set_target", { environment });
-  } catch (e) {
-    showError(e);
-    return;
-  }
-  // The sessions and worktrees belong to the old target, and so do the terminals' screens and the stream.
-  setProject(null);
-  started = null;
-  forgetPanes();
-  pruneTerminals(() => false);
-  view = { ...view, target: environment, rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
-  here = null;
-  remix();
-  forgetNotices();
-  switching = true;
-  syncStream();
-  draw();
   load("full", true);
 }
 
@@ -1054,7 +1018,7 @@ function runPaneOp(op: PaneOp | null) {
   if (key === null || view === null) return;
   const [target, place] = [view.target, projectPlace(key)];
   const tabs = (): PaneTabs | null => {
-    if (view === null || view.target !== target || view.state === "missing" || switching) return null;
+    if (view === null || view.target !== target || view.state === "missing") return null;
     const now = tabsOf(key);
     return { ids: now.map((t) => t.id), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
   };
@@ -1063,7 +1027,7 @@ function runPaneOp(op: PaneOp | null) {
 
 // Asks for the layout when the project's tabs are not the ones it was asked for with (the first time, and each time a tab came or went); only a read that worked says what the tabs are.
 function syncLayout(tabs: Tab[]) {
-  if (projectKey === null || view === null || view.state !== "ready" || switching) return;
+  if (projectKey === null || view === null || view.state !== "ready") return;
   if (needsSync(projectPlace(projectKey), projectKey, tabs.map((t) => t.id))) runPaneOp(null);
 }
 
