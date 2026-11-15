@@ -61,8 +61,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #error { color: #b00020; padding: 8px 32px; margin: 0; white-space: pre-wrap; }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
@@ -1620,7 +1620,15 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-terminal-split { flex: none; }
 #database-terminal { flex: none; width: clamp(25%, var(--terminal-w, 35%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); }
 #database-terminal-head { padding: 0 6px; }
-#database-terminal-body { flex: 1; min-height: 0; }
+#database-terminal-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; }
+.database-terminal-tab { flex: none; display: flex; align-items: center; height: calc(var(--header-h) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--surface); font: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; color: inherit; }
+.database-terminal-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#database-terminal-plus { flex: none; margin-left: 2px; color: var(--ink-soft); }
+#database-terminal-plus:hover:not(:disabled) { background: var(--hover); }
+#database-terminal-plus svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+#database-terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#database-terminal-body > .pending { flex: none; margin: 8px; }
+.database-terminal-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 #database-work { flex: 1; min-height: 0; overflow: auto; }
 .database-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 10px 0 calc(6px + var(--depth, 0) * 16px); border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .database-btn:hover { background: var(--hover); }

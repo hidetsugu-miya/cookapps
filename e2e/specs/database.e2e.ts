@@ -1,4 +1,6 @@
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount } from "../support";
+import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
+import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -1870,5 +1872,203 @@ describe("database: terminal pane", () => {
     await toggle().click();
     await expect($("#database-terminal-split")).toHaveAttribute("aria-valuenow", kept);
     expect(await share("database-terminal")).toBeCloseTo(Number(kept) / 100, 1);
+  });
+});
+
+describe("database: terminal pane, terminals", () => {
+  const plus = () => $("#database-terminal-plus");
+  const toggle = () => $("#database-terminal-toggle");
+  const apiPath = "/work/example-api";
+  const zsh = "term_example-api_zsh";
+  const created: OrcaStarted = { paneKey: null, handle: zsh };
+  const worktreesOf = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-api", "main")];
+  // The list of Orca with a plain terminal of example-api in it, and without.
+  const listed = () => orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-api", "zsh")] });
+  const unlisted = () => orcaOverview([], worktreesOf());
+  const fast = timers({ orcaMirror: 250, orcaClock: 600 });
+  // The app with the database screen open and the pane open, Orca answering `list`.
+  async function openPane(list = listed(), fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), database_profiles: [direct], orca_overview: list, ...fast, ...fixtures });
+    await $("#nav-database").click();
+    await expect($("#database")).toBeDisplayed();
+    await toggle().click();
+    await expect($("#database-terminal")).toBeDisplayed();
+  }
+  const pick = async (path: string) => {
+    await plus().click();
+    await $(`.orca-dest-pop button[data-path="${path}"]`).click();
+  };
+  const tabs = () => textsOf('#database-terminal-tabs [role="tab"]');
+  const screenText = () => $(".database-terminal-term .xterm-rows").getText();
+  const waitScreen = (text: string) => browser.waitUntil(async () => (await screenText()).includes(text), { timeoutMsg: `the terminal never showed "${text}"` });
+  // The terminal opened in example-api, and mirrored.
+  async function openTerminal() {
+    await openPane();
+    const create = await mock("orca_terminal_create", created);
+    await mock("orca_terminal_read", ["$ pwd"]);
+    await pick(apiPath);
+    await waitScreen("$ pwd");
+    return create;
+  }
+
+  it("has a plus with no text after an empty strip of tabs, and an empty body", async () => {
+    await openPane();
+    await expect(plus()).toHaveAttribute("aria-label", "ターミナルを開く");
+    await expect(plus()).toHaveAttribute("aria-haspopup", "dialog");
+    expect((await plus().getText()).trim()).toBe("");
+    await expect(plus().$("svg")).toExist();
+    await expect($("#database-terminal-tabs")).toHaveAttribute("role", "tablist");
+    expect(await count("#database-terminal-tabs > *")).toBe(0);
+    expect(await count("#database-terminal-body > *")).toBe(0);
+    const order = await browser.execute(() => document.getElementById("database-terminal-tabs")!.getBoundingClientRect().left < document.getElementById("database-terminal-plus")!.getBoundingClientRect().left);
+    expect(order).toBe(true);
+  });
+
+  it("opens the dialog of Orca's worktrees under the plus, and creates nothing before one is picked", async () => {
+    await openPane();
+    const create = await mock("orca_terminal_create", created);
+    await plus().click();
+    await expect($(".orca-dest-pop")).toBeDisplayed();
+    expect(await textsOf(".orca-dest-pop button b")).toEqual(["example-app", "example-api"]);
+    expect(await textsOf(".orca-dest-pop button span")).toEqual(["feat/a", "main"]);
+    await browser.keys("Escape");
+    await expect($(".orca-dest-pop")).not.toExist();
+    expect(await callsOf(create)).toEqual([]);
+    expect(await count("#database-terminal-body > *")).toBe(0);
+  });
+
+  it("opens a plain terminal in the worktree picked, with its tab, and draws its screen by the mirror", async () => {
+    const create = await openTerminal();
+    expect(await callsOf(create)).toEqual([{ path: apiPath, environment: null }]);
+    expect(await tabs()).toEqual(["example-api ・ main"]);
+    await expect($('#database-terminal-tabs [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    expect(await count("#database-terminal-body > .database-terminal-term")).toBe(1);
+    expect(await count("#database-terminal-body > .pending")).toBe(0);
+    expect((await callsOf("orca_terminal_read"))[0]).toEqual({ handle: zsh });
+  });
+
+  it("streams the terminal of a saved environment and draws what Orca sends", async () => {
+    await openPane(placedOverview([], worktreesOf(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(placedStream([], worktreesOf(), [orcaTerminal("example-api", "zsh")]));
+    const create = await mock("orca_terminal_create", created);
+    const read = await mock("orca_terminal_read", ["$ mirror"]);
+    await pick(apiPath);
+    expect(await waitForCalls(create)).toEqual([{ path: apiPath, environment: "Studio" }]);
+    const streamed = await waitForCalls("orca_stream_terminal");
+    expect((streamed[0] as { handle: string }).handle).toBe(zsh);
+    await sendTerm({ kind: "snapshot", data: "$ hello", cols: 80, rows: 24 });
+    await waitScreen("$ hello");
+    expect(await callsOf(read)).toEqual([]);
+  });
+
+  it("reads nothing while the pane is closed, and shows the terminal again when it is opened", async () => {
+    await openTerminal();
+    await toggle().click();
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    const read = await mock("orca_terminal_read", ["$ again"]);
+    await browser.pause(400);
+    expect(await callsOf(read)).toEqual([]);
+    expect(await count(".database-terminal-term")).toBe(1);
+    await toggle().click();
+    expect((await waitForCalls(read))[0]).toEqual({ handle: zsh });
+    await waitScreen("$ again");
+    expect(await tabs()).toEqual(["example-api ・ main"]);
+  });
+
+  it("reads nothing while another screen is shown, and goes on when the database screen is shown again", async () => {
+    await openTerminal();
+    await $("#nav-mail").click();
+    await expect($("#database")).not.toBeDisplayed();
+    // The tick that lets the terminal go comes within a period of the mirror.
+    await browser.pause(400);
+    const read = await mock("orca_terminal_read", ["$ back"]);
+    await browser.pause(400);
+    expect(await callsOf(read)).toEqual([]);
+    await $("#nav-database").click();
+    expect((await waitForCalls(read))[0]).toEqual({ handle: zsh });
+  });
+
+  it("forgets the terminal, with its tab and its reads, when the list no longer holds it", async () => {
+    await openTerminal();
+    await mock("orca_overview", unlisted());
+    await waitForCount("#database-terminal-tabs > *", 0);
+    await waitForCount(".database-terminal-term", 0);
+    expect(await count("#database-terminal-body > *")).toBe(0);
+    const read = await mock("orca_terminal_read", ["$"]);
+    await browser.pause(400);
+    expect(await callsOf(read)).toEqual([]);
+  });
+
+  it("shows no terminal while the list does not hold it, and forgets nothing it has not held yet", async () => {
+    await openPane(unlisted());
+    const read = await mock("orca_terminal_read", ["$ late"]);
+    await mock("orca_terminal_create", created);
+    await pick(apiPath);
+    await expect($('#database-terminal-tabs [role="tab"]')).toExist();
+    await browser.pause(400);
+    expect(await callsOf(read)).toEqual([]);
+    await mock("orca_overview", listed());
+    expect((await waitForCalls(read))[0]).toEqual({ handle: zsh });
+    await waitScreen("$ late");
+  });
+
+  it("keeps the plus off while the terminal is opened", async () => {
+    await openPane();
+    const create = await mock("orca_terminal_create", holds);
+    await mock("orca_terminal_read", ["$ pwd"]);
+    await pick(apiPath);
+    await waitForCalls(create);
+    await expect(plus()).toBeDisabled();
+    await release(create, created);
+    await expect(plus()).toBeEnabled();
+    await waitScreen("$ pwd");
+  });
+
+  it("lets the first terminal go when a second is opened in another worktree", async () => {
+    await openPane(orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-api", "zsh"), orcaTerminal("example-app", "zsh")] }));
+    await mock("orca_terminal_create", created);
+    await mock("orca_terminal_read", ["$ first"]);
+    await pick(apiPath);
+    await waitScreen("$ first");
+    await mock("orca_terminal_create", { paneKey: null, handle: "term_example-app_zsh" });
+    await mock("orca_terminal_read", ["$ second"]);
+    await pick("/work/example-app");
+    await waitScreen("$ second");
+    expect(await tabs()).toEqual(["example-app ・ feat/a"]);
+    expect(await count(".database-terminal-term")).toBe(1);
+    expect(((await callsOf("orca_terminal_read")).at(-1) as { handle: string }).handle).toBe("term_example-app_zsh");
+  });
+
+  it("says in the pane that Orca is missing, and opens no dialog", async () => {
+    await openPane(orcaOverview([], [], { state: "missing" }));
+    const create = await mock("orca_terminal_create", created);
+    await plus().click();
+    await expect($("#database-terminal-body > .pending.fail")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await expect($(".orca-dest-pop")).not.toExist();
+    expect(await callsOf(create)).toEqual([]);
+  });
+
+  it("says in the pane that the list could not be read, and clears it at the next press", async () => {
+    await openPane(orcaOverview([], [], { state: "failed", message: "接続できません" }));
+    await plus().click();
+    await expect($("#database-terminal-body > .pending.fail")).toHaveText("読み込めませんでした: 接続できません");
+    await mock("orca_overview", listed());
+    await plus().click();
+    await expect($(".orca-dest-pop")).toBeDisplayed();
+    expect(await count("#database-terminal-body > .pending")).toBe(0);
+  });
+
+  it("says Rust's message when the terminal cannot be opened, and keeps the one that is held", async () => {
+    await openTerminal();
+    await mock("orca_terminal_create", rejects("起動先の worktree が見つかりません。一覧を読み直してください"));
+    await pick("/work/example-app");
+    await expect($("#database-terminal-body > .pending.fail")).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    expect(await tabs()).toEqual(["example-api ・ main"]);
+    await expect(plus()).toBeEnabled();
+    await mock("orca_terminal_create", { paneKey: null, handle: null });
+    await pick("/work/example-app");
+    await expect($("#database-terminal-body > .pending.fail")).toHaveText("Orca がターミナルの名前を返しませんでした");
+    expect(await tabs()).toEqual(["example-api ・ main"]);
   });
 });
