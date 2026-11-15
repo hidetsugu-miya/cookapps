@@ -15,6 +15,10 @@ line: string,
  */
 reply: string | null, 
 /**
+ * How many of the agent's subagents are at work (A-8); 0 when it has none.
+ */
+subagents: number, 
+/**
  * When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
  */
 atMs: number, 
