@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.76.0
+
+A-33: while a saved server is the target of the Orca screen, the list holds the projects and sessions of this machine too, in one list with those of the saved server, and the rows of the saved server end with a chip of its name (#337).
+
 ## v0.75.2
 
 A-8: a session row of the Orca list shows a badge with a robot and a number at its right end while subagents of the session are at work, the number of those at work (#693). A session row no longer takes its name from a JavaScript value that Claude Code put in the conversation, such as `{ a: { isAsync: true, … } }`, the result of a subagent started in the background.
