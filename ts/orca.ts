@@ -324,7 +324,7 @@ function drawSearch() {
   $("orca-search-clear").hidden = query === "";
 }
 
-// The name of the saved environment a row of the list is in (A-33): a project and a session of a saved environment have it, and those of this machine have none. The tabs and the terminals show no place.
+// The name of the saved environment a row of the list is in (A-33): a project and an SSH host of a saved environment have it, and those of this machine have none. The sessions, the tabs and the terminals show no place.
 function environmentChip(environment: string) {
   const chip = tag("span", "orca-env", environment);
   chip.title = environment;
@@ -343,7 +343,6 @@ function sessionNode(t: Tab, key: string) {
   // "{title} - {reply}", as Orca's own list draws a row: the reply is the quieter part.
   if (t.reply !== null) title.append(tag("span", "orca-session-reply", ` - ${t.reply}`));
   row.append(statusIcon(t.status, t.label), title);
-  if (t.environment !== null) row.append(environmentChip(t.environment));
   if (t.subagents > 0) {
     const badge = tag("span", "orca-session-subagents");
     const label = `サブエージェント ${t.subagents} 件が作業中`;

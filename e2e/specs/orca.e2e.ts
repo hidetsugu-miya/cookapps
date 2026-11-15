@@ -3971,14 +3971,14 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     await expect($("#orca-target")).toHaveText("Studio に接続中");
   });
 
-  it("puts the chip on the session rows of Studio and on none of this machine's, and on no tab", async () => {
+  it("puts no chip on the session rows of Studio or of this machine, and on no tab", async () => {
     await openOrca(mixed());
     await project("studio-1").click();
     await project("mac-1").click();
     await waitForCount("#orca-feed .orca-session", 2);
     const sessions = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].map((row) => [row.dataset.session, row.querySelector(".orca-env")?.textContent ?? null]));
     expect(sessions).toEqual([
-      [claudeTab("studio-1"), "Studio"],
+      [claudeTab("studio-1"), null],
       [claudeTab("mac-1"), null],
     ]);
     expect(await count(".orca-tabs .orca-env")).toBe(0);
