@@ -2054,6 +2054,39 @@ describe("database: terminal pane, terminals", () => {
     await waitScreen("$ pwd");
   });
 
+  it("starts no reads when the pane was closed while the terminal was opened, and starts them when it is opened", async () => {
+    await openPane();
+    const create = await mock("orca_terminal_create", holds);
+    await pick(apiPath);
+    await waitForCalls(create);
+    await toggle().click();
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    // A closed pane reads nothing even with the watch running, so the watch itself is counted: the intervals set at the period of the mirror.
+    await browser.execute(() => {
+      const w = window as unknown as { __watches: number };
+      const set = window.setInterval.bind(window);
+      w.__watches = 0;
+      window.setInterval = ((handler: TimerHandler, ms?: number, ...args: unknown[]) => {
+        if (ms === 250) w.__watches++;
+        return set(handler, ms, ...args);
+      }) as typeof window.setInterval;
+    });
+    const watches = () => browser.execute(() => (window as unknown as { __watches: number }).__watches);
+    await release(create, created);
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    const overview = await mock("orca_overview", listed());
+    const read = await mock("orca_terminal_read", ["$ pwd"]);
+    await browser.pause(600);
+    expect(await watches()).toBe(0);
+    expect(await callsOf(overview)).toEqual([]);
+    expect(await callsOf(read)).toEqual([]);
+    await toggle().click();
+    expect(await watches()).toBeGreaterThan(0);
+    await waitForCalls(overview);
+    expect((await waitForCalls(read))[0]).toEqual({ handle: zsh });
+    await waitScreen("$ pwd");
+  });
+
   const app = "term_example-app_zsh";
   const appPath = "/work/example-app";
   const bothListed = () => orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-api", "zsh"), orcaTerminal("example-app", "zsh")] });
