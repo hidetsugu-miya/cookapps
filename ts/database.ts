@@ -6,7 +6,7 @@ import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm } from "./database-form.js";
-import { drawDatabaseWork, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
@@ -57,6 +57,8 @@ let structure: StructureView | null = null;
 let sql: SqlView | null = null;
 // The selected tab of the table that is pressed. The table press selects the records.
 let tab = "records";
+// The selected tab of the database while no table is open. A press on another database, or on a table's database from its tabs, selects the tables.
+let databaseTab = "tables";
 let selected: Selected | null = null;
 const connections = new Map<string, ConnectionState>();
 // The connections whose disconnect is on its way: a press on them waits, so that an opening cannot meet the closing.
@@ -120,10 +122,11 @@ function workState(): WorkState | null {
     loading: d.loading,
     error: d.error,
     tables: d.tables,
+    databaseTab,
     table: mine ? selected.table : null,
     tab,
     records: mine && records ? { page: records.page, loading: records.loading, error: records.error, data: records.data } : null,
-    sql: mine ? sqlState() : null,
+    sql: sqlState(),
     structure: mine && structure?.id === selected.id && structure.database === selected.database && structure.table === selected.table ? { loading: structure.loading, error: structure.error, data: structure.data } : null,
   };
 }
@@ -339,6 +342,11 @@ const workActions: WorkActions = {
     if (id === "structure") readStructure(selected.id, selected.database ?? "", selected.table);
     else draw();
   },
+  databaseTab: (id) => {
+    if (id === databaseTab) return;
+    databaseTab = id;
+    draw();
+  },
   // The field draws nothing while it is typed in: the text is only kept.
   sqlText: (text) => {
     const view = sqlView();
@@ -365,6 +373,8 @@ const actions: SideActions = {
     openConnection(profile);
   },
   pressDatabase: (profile, name) => {
+    // A press on the database that its pane already shows keeps the tab; from anywhere else the pane shows its tables.
+    if (selected?.id !== profile.id || selected.database !== name || selected.table !== null) databaseTab = "tables";
     selected = { id: profile.id, database: name, table: null };
     const c = connections.get(profile.id);
     if (!c) return draw();
@@ -382,6 +392,21 @@ const actions: SideActions = {
     tab = "records";
     structure = null;
     readRecords(profile.id, database, table, 0);
+  },
+  // The SQL tab of the database with an empty field and no result, and the caret in the field.
+  newQuery: (profile, database) => {
+    selected = { id: profile.id, database, table: null };
+    databaseTab = "sql";
+    sql = { id: profile.id, database, ...emptySql };
+    draw();
+    focusSqlField();
+  },
+  // The tree of the database closes and the connection stays; the pane that showed the database empties.
+  closeDatabase: (profile, database) => {
+    const d = connections.get(profile.id)?.byName.get(database);
+    if (d) d.expanded = false;
+    if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
+    draw();
   },
   edit: (profile) => openDatabaseForm(profile, save, test),
   disconnect: async (profile) => {

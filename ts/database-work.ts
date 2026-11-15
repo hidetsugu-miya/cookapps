@@ -1,5 +1,5 @@
-// The work pane of the database screen (D-3, D-4): the tables of the database that was pressed last, with their estimated rows, size and engine (a row opens its table), or, when a table was pressed in the tree, the tabs of that table.
-// Drawing only. The tabs are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here.
+// The work pane of the database screen (D-3, D-4): the database that was pressed last, with the tabs テーブル (its tables with their estimated rows, size and engine, a row opens its table) and SQL, or, when a table was pressed in the tree, the tabs of that table.
+// Drawing only. The tabs of a table are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here; the tabs of a database are `DATABASE_TABS`, and its SQL tab is the one of D-6.
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
@@ -39,12 +39,15 @@ export interface WorkState {
   loading: boolean;
   error: string | null;
   tables: DatabaseTable[];
+  // The selected tab of the database, while no table is open: "tables" or "sql".
+  databaseTab: string;
   // The table that was pressed in the tree, or none; with it, the selected tab and the state of its records.
   table: string | null;
   tab: string;
   records: RecordsState | null;
   structure: StructureState | null;
-  sql: SqlState | null;
+  // The SQL tab of the connection and database: the one the tab of a table shows too.
+  sql: SqlState;
 }
 
 export interface WorkActions {
@@ -54,6 +57,8 @@ export interface WorkActions {
   pageInput: (text: string) => void;
   // Selects the tab `id`; the table stays.
   tab: (id: string) => void;
+  // Selects the tab `id` of the database, while no table is open.
+  databaseTab: (id: string) => void;
   // Keeps the text of the SQL tab as it is typed; nothing is drawn.
   sqlText: (text: string) => void;
   // Runs the text of the SQL tab.
@@ -66,6 +71,12 @@ export interface WorkActions {
 const TABS = [
   { id: "records", label: "レコード" },
   { id: "structure", label: "構造" },
+  { id: "sql", label: "SQL" },
+];
+
+// The tabs of a database, in order.
+const DATABASE_TABS = [
+  { id: "tables", label: "テーブル" },
   { id: "sql", label: "SQL" },
 ];
 
@@ -106,15 +117,15 @@ function note(text: string, failed: boolean) {
   return line;
 }
 
-function tabsNode(active: string, actions: WorkActions) {
+function tabsNode(tabs: { id: string; label: string }[], active: string, pick: (id: string) => void) {
   const bar = tag("div", "database-tabs");
   bar.setAttribute("role", "tablist");
-  for (const t of TABS) {
+  for (const t of tabs) {
     const button = tag("button", "database-tab", t.label);
     button.type = "button";
     button.dataset.tab = t.id;
     button.dataset.key = `tab-${t.id}`;
-    button.onclick = () => actions.tab(t.id);
+    button.onclick = () => pick(t.id);
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(t.id === active));
     bar.append(button);
@@ -265,31 +276,43 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   if (key === drawn) return;
   drawn = key;
   const box = $("database-work");
-  box.classList.toggle("database-table-mode", state?.table != null);
+  // A body that fills the pane (the tabs of a table, or the SQL tab of a database) scrolls inside it, with its footer kept.
+  box.classList.toggle("database-fill", state !== null && (state.table !== null || state.databaseTab === "sql"));
   if (state === null) return box.replaceChildren();
   const active = document.activeElement as HTMLElement | null;
   const focused = active?.dataset?.key;
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
+  const nodes: Node[] = [];
   if (state.table !== null && state.records !== null) {
     const sizes = (tab: string) => [state.connection, state.database, state.table, tab].join("\0");
-    const body =
+    nodes.push(
+      tag("h3", "database-work-title", `${state.database}.${state.table}`),
+      tabsNode(TABS, state.tab, actions.tab),
       state.tab === "structure" && state.structure !== null
         ? structureNode(state.structure, sizes("structure"))
-        : state.tab === "sql" && state.sql !== null
+        : state.tab === "sql"
           ? sqlNode(state.sql, actions, sizes("sql"))
-          : recordsNode(state.records, actions, sizes("records"));
-    box.replaceChildren(tag("h3", "database-work-title", `${state.database}.${state.table}`), tabsNode(state.tab, actions), body);
-    if (focused) {
-      const again = box.querySelector<HTMLElement>(`[data-key="${focused}"]`);
-      again?.focus({ preventScroll: true });
-      if (caret !== null && again instanceof HTMLTextAreaElement) again.setSelectionRange(caret[0], caret[1]);
-    }
-    return;
+          : recordsNode(state.records, actions, sizes("records")),
+    );
+  } else {
+    nodes.push(tag("h3", "database-work-title", state.database), tabsNode(DATABASE_TABS, state.databaseTab, actions.databaseTab));
+    if (state.databaseTab === "sql") nodes.push(sqlNode(state.sql, actions, [state.connection, state.database, "", "sql"].join("\0")));
+    else if (state.loading) nodes.push(note("読み込み中…", false));
+    else if (state.error !== null) nodes.push(note(state.error, true));
+    else if (state.tables.length > 0) nodes.push(tableNode(state, actions));
   }
-  const nodes: Node[] = [tag("h3", "database-work-title", state.database)];
-  if (state.loading) nodes.push(note("読み込み中…", false));
-  else if (state.error !== null) nodes.push(note(state.error, true));
-  else if (state.tables.length > 0) nodes.push(tableNode(state, actions));
   box.replaceChildren(...nodes);
+  if (focused) {
+    const again = box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`);
+    again?.focus({ preventScroll: true });
+    if (caret !== null && again instanceof HTMLTextAreaElement) again.setSelectionRange(caret[0], caret[1]);
+  }
+}
+
+// Puts the focus and the caret in the field of the SQL tab (a new query).
+export function focusSqlField() {
+  const field = $("database-work").querySelector<HTMLTextAreaElement>('[data-key="sql-input"]');
+  field?.focus({ preventScroll: true });
+  field?.setSelectionRange(0, 0);
 }
