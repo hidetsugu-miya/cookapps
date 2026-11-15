@@ -4,6 +4,7 @@ pub mod auth;
 pub mod calendar;
 pub mod claude;
 pub mod claude_auth;
+pub mod database;
 mod disk_cache;
 pub mod fonts;
 pub mod ghostty;
@@ -366,6 +367,9 @@ pub fn run() {
             skills::skill_get,
             skills::skill_save,
             skills::skill_delete,
+            database::database_profiles,
+            database::database_profile_save,
+            database::database_profile_delete,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,
