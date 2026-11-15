@@ -31,6 +31,8 @@ export interface SqlState {
 }
 
 export interface WorkState {
+  // The connection the database belongs to; with the database, the table and the tab it names the grid whose column widths are kept.
+  connection: string;
   database: string;
   loading: boolean;
   error: string | null;
@@ -116,13 +118,13 @@ function pagerButton(key: string, label: string, disabled: boolean, onclick: () 
 }
 
 // The records tab: the page as a grid, and under it the range with the estimated rows, the previous and next page, and the reload.
-function recordsNode(records: RecordsState, actions: WorkActions) {
+function recordsNode(records: RecordsState, actions: WorkActions, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
   if (records.error !== null) scroll.append(note(records.error, true));
   else if (records.data !== null && records.data.columns.length > 0) {
     const { data } = records;
-    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows)));
+    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows, sizes)));
   }
   const pager = tag("div", "database-pager");
   const range = tag("span", "database-range", records.loading ? "読み込み中…" : (records.data?.summary ?? ""));
@@ -138,7 +140,7 @@ function recordsNode(records: RecordsState, actions: WorkActions) {
 }
 
 // The structure tab: the columns as a grid, and under it the number of columns, the engine and the character set as Rust worded them.
-function structureNode(structure: StructureState) {
+function structureNode(structure: StructureState, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
   if (structure.error !== null) scroll.append(note(structure.error, true));
@@ -147,7 +149,7 @@ function structureNode(structure: StructureState) {
     scroll.append(
       gridOf(data, () => {
         const rows = data.columns.map((c) => [c.name, c.columnType, c.nullable ? "YES" : "NO", c.key, c.default, c.comment].map((text) => ({ kind: "text" as const, text })));
-        const grid = gridNode(STRUCTURE_COLUMNS, rows);
+        const grid = gridNode(STRUCTURE_COLUMNS, rows, sizes);
         grid.classList.add("database-structure");
         return grid;
       }),
@@ -162,7 +164,7 @@ function structureNode(structure: StructureState) {
 }
 
 // The SQL tab: the text field and the run button above, the result as a grid under them, and under the grid the rows and the time as Rust worded them.
-function sqlNode(sql: SqlState, actions: WorkActions) {
+function sqlNode(sql: SqlState, actions: WorkActions, sizes: string) {
   const box = tag("div", "database-records database-sql");
   const input = tag("textarea", "database-sql-text");
   input.value = sql.text;
@@ -177,7 +179,7 @@ function sqlNode(sql: SqlState, actions: WorkActions) {
   if (sql.error !== null) scroll.append(note(sql.error, true));
   else if (sql.data !== null && sql.data.columns.length > 0) {
     const { data } = sql;
-    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows)));
+    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows, sizes)));
   }
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", sql.loading ? "実行中…" : (sql.data?.summary ?? ""));
@@ -221,12 +223,13 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
   if (state.table !== null && state.records !== null) {
+    const sizes = (tab: string) => [state.connection, state.database, state.table, tab].join("\0");
     const body =
       state.tab === "structure" && state.structure !== null
-        ? structureNode(state.structure)
+        ? structureNode(state.structure, sizes("structure"))
         : state.tab === "sql" && state.sql !== null
-          ? sqlNode(state.sql, actions)
-          : recordsNode(state.records, actions);
+          ? sqlNode(state.sql, actions, sizes("sql"))
+          : recordsNode(state.records, actions, sizes("records"));
     box.replaceChildren(tag("h3", "database-work-title", `${state.database}.${state.table}`), tabsNode(state.tab, actions), body);
     if (focused) {
       const again = box.querySelector<HTMLElement>(`[data-key="${focused}"]`);

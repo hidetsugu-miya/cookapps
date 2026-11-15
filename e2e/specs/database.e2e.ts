@@ -441,6 +441,32 @@ describe("database: tree", () => {
     browser.execute(() => [...document.querySelectorAll("#database-work tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
   const tables = [databaseTable("orders"), databaseTable("users", { rows: "30", size: "16.0 KB", engine: "MyISAM" }), databaseTable("v_orders", { rows: "", size: "", engine: "" })];
   const lost = "MySQL との接続が切れました。もう一度開いてください: broken pipe";
+  // The widths of the cells of the column `column` (from 1) of the grid in the work pane, the header first.
+  const columnWidths = (column: number) =>
+    browser.execute((n) => [...document.querySelectorAll(`#database-work .database-grid tr > :nth-child(${n})`)].map((c) => Math.round(c.getBoundingClientRect().width)), column);
+  // The grip of the header of the column `column` (from 1), pressed and moved by `dx` pixels.
+  const dragGrip = (column: number, dx: number) =>
+    browser
+      .action("pointer")
+      .move({ origin: $(`#database-work .database-grid thead th:nth-child(${column}) .database-grip`) })
+      .down()
+      .move({ origin: "pointer", x: dx, y: 0 })
+      .up()
+      .perform();
+  // The left border of a header and a cell of each column: the first has none, the others have the vertical line.
+  const lines = () =>
+    browser.execute(() => {
+      const left = (e: Element) => getComputedStyle(e).borderLeftWidth;
+      return [...document.querySelectorAll("#database-work .database-grid tr:first-child > *, #database-work .database-grid tbody tr:last-child > *")].map(left);
+    });
+  const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThanOrEqual(2);
+  const onlyFirstHasNoLine = (all: string[]) => {
+    const per = all.length / 2;
+    for (const half of [all.slice(0, per), all.slice(per)]) {
+      expect(half[0]).toBe("0px");
+      for (const w of half.slice(1)) expect(w).toBe("1px");
+    }
+  };
 
   // The app with the connection p1 open on its database shop (tables mocked), and the tree drawn.
   async function openTree(shopTables = tables) {
@@ -677,6 +703,56 @@ describe("database: tree", () => {
       expect(style).toEqual({ overflow: "ellipsis", align: "right" });
     });
 
+    it("draws a vertical line between the columns and a grip in each header, and no line at the left of the first column", async () => {
+      await openTable();
+      onlyFirstHasNoLine(await lines());
+      expect(await count("#database-work .database-grid thead .database-grip")).toBe(columns.length);
+    });
+
+    it("changes the width of a column by dragging its grip, with no upper limit of 320 px and a lower limit, and leaves the other columns", async () => {
+      await openTable();
+      const before = await columnWidths(3);
+      const others = [await columnWidths(1), await columnWidths(2), await columnWidths(4)];
+      near(before[0], before[1]);
+      await dragGrip(3, 200);
+      const wider = await columnWidths(3);
+      for (const w of wider) near(w, before[0] + 200);
+      expect(wider[0]).toBeGreaterThan(400);
+      expect([await columnWidths(1), await columnWidths(2), await columnWidths(4)]).toEqual(others);
+      await dragGrip(3, -wider[0]);
+      for (const w of await columnWidths(3)) near(w, 48);
+      // The text is still cut in the narrow cell, with its title.
+      await expect($("#database-work .database-grid tbody tr:first-child td:nth-child(3)")).toHaveAttribute("title", long);
+    });
+
+    it("keeps the widths of the table on the next page, on the other tabs and when the table is pressed again, and draws another table with its own widths", async () => {
+      await openTable();
+      const before = await columnWidths(3);
+      await dragGrip(3, 120);
+      const sized = await columnWidths(3);
+      near(sized[0], before[0] + 120);
+      await mock("database_records", page1);
+      await button("next").click();
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      expect(await columnWidths(3)).toEqual([sized[0], sized[0]]);
+      await mock("database_structure", databaseStructure([databaseColumn("id", "bigint")]));
+      await $('#database-work [data-tab="structure"]').click();
+      await expect($("#database-work .database-structure")).toExist();
+      await $('#database-work [data-tab="records"]').click();
+      expect(await columnWidths(3)).toEqual([sized[0], sized[0]]);
+      const other = await mock("database_records", page0);
+      await row("p1/d/shop/t/orders").click();
+      await waitForCalls(other);
+      await expect($("#database-work h3")).toHaveText("shop.orders");
+      await expect($("#database-work .database-grid")).toExist();
+      expect((await columnWidths(3))[0]).toBeLessThan(sized[0]);
+      await mock("database_records", page0);
+      await row("p1/d/shop/t/users").click();
+      await expect($("#database-work h3")).toHaveText("shop.users");
+      await waitForCount("#database-work .database-grid tbody tr", 2);
+      expect(await columnWidths(3)).toEqual([sized[0], sized[0], sized[0]]);
+    });
+
     it("has the range and the estimated rows under the table, with 前へ off on the first page and 次へ on", async () => {
       await openTable();
       await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
@@ -849,6 +925,23 @@ describe("database: tree", () => {
       await expect($("#database-work .database-range")).toHaveText(page0.summary);
       return records;
     }
+
+    it("draws the vertical lines and changes the width of a column by its grip, kept when the structure is read again", async () => {
+      await openTable();
+      await mock("database_structure", structure);
+      await tab("structure").click();
+      await expect($("#database-work .database-structure")).toExist();
+      onlyFirstHasNoLine(await lines());
+      expect(await count("#database-work .database-structure thead .database-grip")).toBe(6);
+      const before = await columnWidths(6);
+      await dragGrip(6, 150);
+      const sized = await columnWidths(6);
+      for (const w of sized) near(w, before[0] + 150);
+      await tab("records").click();
+      await tab("structure").click();
+      await expect($("#database-work .database-structure")).toExist();
+      expect(await columnWidths(6)).toEqual(sized);
+    });
 
     it("has the tabs レコード and 構造 with レコード selected, and calls database_structure on a press of 構造 only", async () => {
       await openTable();
@@ -1024,6 +1117,22 @@ describe("database: tree", () => {
       await input().setValue(sql);
       await run().click();
     }
+
+    it("draws the vertical lines and changes the width of a column by its grip, kept when the statement is run again", async () => {
+      await openSql();
+      await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      onlyFirstHasNoLine(await lines());
+      expect(await count("#database-work .database-grid thead .database-grip")).toBe(3);
+      const before = await columnWidths(2);
+      await dragGrip(2, 80);
+      const sized = await columnWidths(2);
+      for (const w of sized) near(w, before[0] + 80);
+      await run().click();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      expect(await columnWidths(2)).toEqual(sized);
+    });
 
     it("has the tab SQL after 構造, which calls nothing when it is pressed and draws the field and 実行 with no placeholder and no text of help", async () => {
       await openSql();

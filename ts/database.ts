@@ -115,6 +115,7 @@ function workState(): WorkState | null {
   if (!d) return null;
   const mine = selected.table !== null && records?.id === selected.id && records.database === selected.database && records.table === selected.table;
   return {
+    connection: selected.id,
     database: selected.database,
     loading: d.loading,
     error: d.error,
