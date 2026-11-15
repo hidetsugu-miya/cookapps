@@ -1,4 +1,4 @@
-// The reply field at the bottom of the open thread (M-10): the kind of reply, who it goes to as chips, Cc and Bcc, the text, and "送信" / "破棄".
+// The reply field at the bottom of the open thread (M-10), shown when the reply button of the latest message is pressed: the kind of reply, who it goes to as chips, Cc and Bcc, the text, and "送信" / "破棄".
 import type { ReplyChoices } from "./bindings/ReplyChoices";
 import { $ } from "./dom.js";
 import { applySync } from "./inbox.js";
@@ -48,6 +48,18 @@ function clear() {
   syncSend();
 }
 
+// Shows the field and puts the cursor in the text.
+export function openReply() {
+  $("mail-reply").hidden = false;
+  body().focus();
+}
+
+// Empties the field and hides it: "破棄", and a reply that went out.
+function discard() {
+  clear();
+  $("mail-reply").hidden = true;
+}
+
 // The field is empty and hidden: no thread is open.
 export function resetReply() {
   session++;
@@ -58,7 +70,7 @@ export function resetReply() {
   $("mail-reply").hidden = true;
 }
 
-// Shows the field for `thread`, with the recipients Rust worked out. Drawn again for the same thread (Gmail answered with a change, or a reply went out), it keeps the text and the recipients already there.
+// Binds the field to `thread`, with the recipients Rust worked out; it stays hidden until the reply button is pressed, and stays shown when it is. Drawn again for the same thread (Gmail answered with a change), it keeps the text and the recipients already there.
 export function bindReply(thread: ReplyTarget, next: ReplyChoices) {
   target = thread;
   choices = next;
@@ -67,7 +79,6 @@ export function bindReply(thread: ReplyTarget, next: ReplyChoices) {
     filled = key;
     fill(mode().value as Mode);
   }
-  $("mail-reply").hidden = false;
   syncSend();
 }
 
@@ -95,7 +106,7 @@ async function send() {
     // The text stays when the account must log in again.
     if (done === null) return applySync(sent.account, { kind: "needsLogin" });
     filled = null;
-    clear();
+    discard();
     await reload(sent);
   } catch (e) {
     showError(e);
@@ -111,5 +122,5 @@ export function initReply(reloadThread: (target: ReplyTarget) => Promise<void>) 
   recipients.init();
   body().oninput = syncSend;
   $("mail-reply-send").onclick = send;
-  $("mail-reply-discard").onclick = clear;
+  $("mail-reply-discard").onclick = discard;
 }

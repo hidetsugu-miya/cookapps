@@ -707,23 +707,60 @@ describe("thread reply field", () => {
   const edges = () =>
     browser.execute(() => {
       const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
-      return { replyBottom: Math.round(box("mail-reply").bottom), mainBottom: Math.round(box("main").bottom), replyTop: box("mail-reply").top, actionsBottom: box("thread-actions").bottom };
+      return {
+        replyBottom: Math.round(box("mail-reply").bottom),
+        mainBottom: Math.round(box("main").bottom),
+        replyTop: box("mail-reply").top,
+        actionsBottom: box("thread-actions").bottom,
+        replyHeight: box("mail-reply").height,
+        mainHeight: box("main").height,
+        bodyBottom: box("mail-reply-body").bottom,
+        footTop: document.querySelector(".mail-reply-foot")!.getBoundingClientRect().top,
+      };
     });
 
-  async function open(detail = threadDetail("First unread", "Hello from Alice", false), row: "First unread" | "Second unread" = "First unread") {
+  // The field is hidden until the reply button is pressed: `shown` presses it.
+  async function open(detail = threadDetail("First unread", "Hello from Alice", false), row: "First unread" | "Second unread" = "First unread", shown = true) {
     const call = await mock("thread", detail);
     await rowOf("unread-threads", row).$(".subject").click();
     await expect($("#thread-subject")).toHaveText(detail.subject);
     await threadLoaded();
+    if (shown) await $("#mail-reply-open").click();
     return call;
   }
+  const twoMessages = () => {
+    const older = threadDetail("First unread", "Hello from Alice", false);
+    return { ...older, messages: [...older.messages, { ...older.messages[0], id: "m2", from: "me@example.com", fromName: "", fromAddress: "me@example.com", body: "Thanks", snippet: "Thanks" }] };
+  };
 
   beforeEach(async () => {
     await boot({ inbox: inbox() });
     await waitForCount("#unread-threads li", 2);
   });
 
-  it("shows the field at the bottom with the recipients of a reply, and no Cc or Bcc", async () => {
+  it("hides the field when the thread arrives, with one reply button at the right of the date of the latest message, and shows it with the cursor in the text when the button is pressed", async () => {
+    await open(twoMessages(), "First unread", false);
+    await expect($("#mail-reply")).not.toBeDisplayed();
+    expect(await count("#mail-reply-open")).toBe(1);
+    await expect($("#mail-reply-open")).toHaveAttribute("aria-label", "返信");
+    const place = await browser.execute(() => {
+      const button = document.getElementById("mail-reply-open")!;
+      const head = button.closest(".msg-head")!;
+      const latest = document.querySelector("#messages article")!;
+      return {
+        inLatest: latest.contains(button),
+        afterDate: button.getBoundingClientRect().left >= head.querySelector(".when")!.getBoundingClientRect().right,
+        sameRow: Math.abs(button.getBoundingClientRect().top - head.querySelector(".when")!.getBoundingClientRect().top) < 12,
+      };
+    });
+    expect(place).toEqual({ inLatest: true, afterDate: true, sameRow: true });
+    await $("#mail-reply-open").click();
+    await expect($("#mail-reply")).toBeDisplayed();
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("mail-reply-body");
+    await expect($("#messages article")).not.toHaveElementClass("folded");
+  });
+
+  it("takes half the height of the area, fills it with the text, and shows the field at the bottom with the recipients of a reply, and no Cc or Bcc", async () => {
     await open();
     await expect($("#mail-reply")).toBeDisplayed();
     expect(await browser.execute(() => (document.getElementById("mail-reply-mode") as HTMLSelectElement).value)).toBe("one");
@@ -735,9 +772,11 @@ describe("thread reply field", () => {
     await expect($("#mail-reply-bcc-open")).toBeDisplayed();
     await expect($("#mail-reply-send")).toBeDisabled();
     await expect($("#mail-reply-body")).toHaveValue("");
-    const { replyBottom, mainBottom, replyTop, actionsBottom } = await edges();
+    const { replyBottom, mainBottom, replyTop, actionsBottom, replyHeight, mainHeight, bodyBottom, footTop } = await edges();
     expect(replyBottom).toBe(mainBottom);
     expect(replyTop).toBeGreaterThan(actionsBottom);
+    expect(Math.abs(replyHeight - mainHeight / 2)).toBeLessThanOrEqual(2);
+    expect(footTop - bodyBottom).toBeLessThanOrEqual(2);
   });
 
   it("keeps the field at the bottom of the area, under the row of operations, while a long mail scrolls", async () => {
@@ -750,6 +789,16 @@ describe("thread reply field", () => {
     expect(after.replyBottom).toBe(after.mainBottom);
     await expect($("#mail-reply-send")).toBeDisplayedInViewport();
     await expect($("#thread-slack")).toBeDisplayedInViewport();
+    // At the end of the scroll the last message is above the field.
+    await browser.execute(() => {
+      const main = document.getElementById("main")!;
+      main.scrollTop = main.scrollHeight;
+    });
+    const end = await browser.execute(() => ({
+      lastBottom: [...document.querySelectorAll("#messages article")].pop()!.getBoundingClientRect().bottom,
+      replyTop: document.getElementById("mail-reply")!.getBoundingClientRect().top,
+    }));
+    expect(end.lastBottom).toBeLessThanOrEqual(end.replyTop + 1);
   });
 
   it("shows no field until the thread arrives, and none on the list", async () => {
@@ -758,6 +807,9 @@ describe("thread reply field", () => {
     await waitForCalls(call);
     await expect($("#mail-reply")).not.toBeDisplayed();
     await release(call, threadDetail("First unread", "Hello from Alice", false));
+    await expect($("#mail-reply-open")).toBeDisplayed();
+    await expect($("#mail-reply")).not.toBeDisplayed();
+    await $("#mail-reply-open").click();
     await expect($("#mail-reply")).toBeDisplayed();
     await $("#back").click();
     await expect($("#mail-reply")).not.toBeDisplayed();
@@ -800,8 +852,7 @@ describe("thread reply field", () => {
   it("sends the reply with the recipients, the subject and the thread, empties the field and reads the thread again", async () => {
     const open_ = await open();
     const send = await mock("send_mail", true);
-    const older = threadDetail("First unread", "Hello from Alice", false);
-    await mock("thread", { ...older, messages: [...older.messages, { ...older.messages[0], id: "m2", from: "me@example.com", fromName: "", fromAddress: "me@example.com", body: "Thanks", snippet: "Thanks" }] });
+    await mock("thread", twoMessages());
     await pickMode("all");
     await $("#mail-reply-bcc-open").click();
     await $("#mail-reply-bcc-input").setValue("eve@example.com");
@@ -823,6 +874,7 @@ describe("thread reply field", () => {
     ]);
     await waitForCount("#messages article", 2);
     expect(await callsOf(open_)).toHaveLength(1);
+    await expect($("#mail-reply")).not.toBeDisplayed();
     await expect($("#mail-reply-body")).toHaveValue("");
     await expect($("#mail-reply-send")).toBeDisabled();
     expect(await chips("to")).toEqual(["Alice"]);
@@ -917,6 +969,7 @@ describe("thread reply field", () => {
     await $("#mail-reply-bcc-input").setValue("eve@example.com");
     await $("#mail-reply-body").setValue("Thanks");
     await $("#mail-reply-discard").click();
+    await expect($("#mail-reply")).not.toBeDisplayed();
     await expect($("#mail-reply-body")).toHaveValue("");
     expect(await browser.execute(() => (document.getElementById("mail-reply-mode") as HTMLSelectElement).value)).toBe("one");
     expect(await chips("to")).toEqual(["Alice"]);
@@ -941,11 +994,14 @@ describe("thread reply field", () => {
     const refresh = await mock("thread_refresh", holds);
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await waitForCalls(refresh);
+    await expect($("#mail-reply")).not.toBeDisplayed();
+    await $("#mail-reply-open").click();
     await expect($("#mail-reply")).toBeDisplayed();
     await $("#mail-reply-body").setValue("Thanks");
     await $('[aria-label="Alice を外す"]').click();
     await release(refresh, { unread: false, thread: threadDetail("First unread", "A new reply", false) } satisfies ThreadRefresh);
     await expect($("#messages .plain")).toHaveText("A new reply");
+    await expect($("#mail-reply")).toBeDisplayed();
     await expect($("#mail-reply-body")).toHaveValue("Thanks");
     expect(await chips("to")).toEqual([]);
   });
