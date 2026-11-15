@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.77.0
+
+T-8: a right click on a project in the side list of the Todo screen opens a menu with "移動", "アーカイブ" and "削除" (#707, #708). "アーカイブ" archives the project at once, and its tasks stay in Todoist. "削除" asks first, and then deletes the project with its sections and tasks for good. "移動" lists "一番上の階層" and the projects it may go under, and makes it the last sub-project of the one picked. A project can also be dragged onto another project, to become its last sub-project, or onto the heading "プロジェクト", to move to the top level (#709). The sub-projects go along in every case. "インボックス" and "今日" have no menu.
+
+T-1: in a task's detail, the parent's description under the parent chip is always shown when the parent has one, cut at 3 lines; the parent's name no longer opens and folds it, and the "コピー" button is gone (#705). The text can still be selected and copied.
+
+T-1: the month calendar of the due popover is larger, and today has a green ring, so it is told apart from the day picked (#710).
+
+A-33: the chip with the name of the saved environment is on its project and SSH host rows only; the session rows under them have none (#711).
+
+A-6: the label and the menu of the target at the bottom of the Orca list pane are gone, and the app has no place to change the target (#714). The target is the one saved in `orca-settings.json` (when the file does not exist yet, the first saved environment, else this machine). A read that fails still shows in the notice above the list.
+
 ## v0.76.0
 
 A-33: while a saved server is the target of the Orca screen, the list holds the projects and sessions of this machine too, in one list with those of the saved server, and the rows of the saved server end with a chip of its name (#337).
