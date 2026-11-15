@@ -1,4 +1,9 @@
-//! A mail address header taken apart: a From header or one To entry as a display name and an address.
+//! A mail address header taken apart: a From header or one To entry as a display name and an address,
+//! and who a reply to a message goes to.
+
+use serde::Serialize;
+#[cfg(test)]
+use ts_rs::TS;
 
 /// A From header or one To entry as its display name and its address.
 #[derive(Debug, PartialEq, Eq)]
@@ -133,6 +138,143 @@ pub fn recipients_label(to: &str, account: &str) -> String {
     }
     let names: Vec<&str> = people.iter().map(SplitAddress::display).collect();
     format!("To {}", names.join(", "))
+}
+
+/// One person a reply goes to.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Recipient {
+    /// What a chip shows: the name, else the address. A Reply-To address that is none of the From's shows both (`Name <addr>`), so that the chip tells where the reply really goes.
+    pub label: String,
+    /// The entry as its header had it (`Name <addr>` or `addr`): what `send_mail` takes.
+    pub mailbox: String,
+}
+
+/// The To and the Cc of a reply.
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Recipients {
+    pub to: Vec<Recipient>,
+    pub cc: Vec<Recipient>,
+}
+
+/// Who a reply to a message goes to: `one` answers its sender, `all` the sender and the other recipients too.
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct ReplyChoices {
+    pub one: Recipients,
+    pub all: Recipients,
+}
+
+/// One entry of an address header, with its address in lower case.
+struct Entry {
+    recipient: Recipient,
+    address: String,
+}
+
+/// The entries of an address header; one with no address is left out.
+fn entries(header: &str) -> Vec<Entry> {
+    split_recipients(header)
+        .into_iter()
+        .filter_map(|entry| {
+            let person = split_address(entry);
+            let address = person.address.to_lowercase();
+            (!address.is_empty()).then(|| Entry {
+                recipient: Recipient {
+                    label: person.display().to_owned(),
+                    mailbox: entry.to_owned(),
+                },
+                address,
+            })
+        })
+        .collect()
+}
+
+/// The entry with its address in the label too, as a chip shows an address the sender asked to be answered at.
+fn with_address(mut entry: Entry) -> Entry {
+    let person = split_address(&entry.recipient.mailbox);
+    if !person.name.is_empty() {
+        entry.recipient.label = format!("{} <{}>", person.name, person.address);
+    }
+    entry
+}
+
+/// The entries of `lists` in order, one for each address, without the addresses in `skip`.
+fn merge<'a>(lists: &[&'a [Entry]], skip: &[&str]) -> Vec<&'a Entry> {
+    let mut seen: Vec<&str> = skip.to_vec();
+    let mut out = Vec::new();
+    for entry in lists.iter().copied().flatten() {
+        if !seen.contains(&entry.address.as_str()) {
+            seen.push(&entry.address);
+            out.push(entry);
+        }
+    }
+    out
+}
+
+fn recipients_of(list: &[&Entry]) -> Vec<Recipient> {
+    list.iter().map(|e| e.recipient.clone()).collect()
+}
+
+/// The recipients of a reply to a message from `account`'s point of view, from the message's headers.
+/// A reply goes to the Reply-To, else to the From. A message the account sent is answered to the people it was sent to.
+/// The account is never a recipient, unless it is the only one the message went to.
+pub fn reply_choices(
+    account: &str,
+    from: &str,
+    reply_to: &str,
+    to: &str,
+    cc: &str,
+) -> ReplyChoices {
+    let me = account.to_lowercase();
+    let (reply_to, from) = (entries(reply_to), entries(from));
+    let from_me = from.iter().any(|e| e.address == me);
+    // A Reply-To whose address is none of the From's, with the same name or another, is where the reply goes: its chip says so.
+    let sender = if reply_to.is_empty() {
+        from
+    } else {
+        reply_to
+            .into_iter()
+            .map(|e| {
+                if from.iter().any(|f| f.address == e.address) {
+                    e
+                } else {
+                    with_address(e)
+                }
+            })
+            .collect()
+    };
+    let (to, cc) = (entries(to), entries(cc));
+    let none: &[Entry] = &[];
+    let (target, others) = if from_me && !to.is_empty() {
+        (&to[..], none)
+    } else {
+        (&sender[..], &to[..])
+    };
+    let mut one = merge(&[target], &[&me]);
+    if one.is_empty() {
+        one = merge(&[target], &[]);
+    }
+    let mut all_to = merge(&[target, others], &[&me]);
+    if all_to.is_empty() {
+        all_to = one.clone();
+    }
+    let mut skip: Vec<&str> = all_to.iter().map(|e| e.address.as_str()).collect();
+    skip.push(&me);
+    let all_cc = merge(&[&cc], &skip);
+    ReplyChoices {
+        one: Recipients {
+            to: recipients_of(&one),
+            cc: Vec::new(),
+        },
+        all: Recipients {
+            to: recipients_of(&all_to),
+            cc: recipients_of(&all_cc),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -311,5 +453,112 @@ mod tests {
         // A name with no address still names the recipient, and an empty account matches an empty address only.
         assert_eq!(recipients_label("Bob <>", "me@example.com"), "To Bob");
         assert_eq!(recipients_label("Bob <>", ""), "To 自分");
+    }
+
+    fn mailboxes(list: &[Recipient]) -> Vec<&str> {
+        list.iter().map(|r| r.mailbox.as_str()).collect()
+    }
+
+    const ME: &str = "me@example.com";
+
+    #[test]
+    fn a_reply_goes_to_the_sender_and_a_reply_to_all_adds_the_others() {
+        let c = reply_choices(
+            ME,
+            "Alice <a@x>",
+            "",
+            "Me <ME@example.com>, Bob <b@x>",
+            "Carol <c@x>, me@example.com",
+        );
+        assert_eq!(mailboxes(&c.one.to), ["Alice <a@x>"]);
+        assert!(c.one.cc.is_empty());
+        assert_eq!(mailboxes(&c.all.to), ["Alice <a@x>", "Bob <b@x>"]);
+        assert_eq!(mailboxes(&c.all.cc), ["Carol <c@x>"]);
+    }
+
+    #[test]
+    fn the_reply_to_header_takes_the_place_of_the_sender() {
+        let c = reply_choices(ME, "Alice <a@x>", "List <list@x>", ME, "");
+        assert_eq!(mailboxes(&c.one.to), ["List <list@x>"]);
+        assert_eq!(mailboxes(&c.all.to), ["List <list@x>"]);
+        // A Reply-To of the same address as the From's changes nothing in the chip.
+        let c = reply_choices(ME, "Alice <a@x>", "Alice A <A@X>", ME, "");
+        assert_eq!(c.one.to[0].label, "Alice A");
+        // An empty Reply-To is as good as none.
+        let c = reply_choices(ME, "Alice <a@x>", " , ", ME, "");
+        assert_eq!(mailboxes(&c.one.to), ["Alice <a@x>"]);
+    }
+
+    #[test]
+    fn a_reply_to_at_another_address_shows_the_address_in_its_chip() {
+        // The same name as the From's, another address: the chip carries the address.
+        let c = reply_choices(ME, "Alice <a@x>", "Alice <evil@y>", ME, "");
+        assert_eq!(c.one.to[0].label, "Alice <evil@y>");
+        assert_eq!(c.one.to[0].mailbox, "Alice <evil@y>");
+        assert_eq!(c.all.to[0].label, "Alice <evil@y>");
+        // An address with no name shows itself, once.
+        let c = reply_choices(ME, "Alice <a@x>", "list@x", ME, "");
+        assert_eq!(c.one.to[0].label, "list@x");
+        // Only the Reply-To is marked: the others of a reply to all keep their names.
+        let c = reply_choices(
+            ME,
+            "Alice <a@x>",
+            "List <list@x>",
+            "Bob <b@x>",
+            "Carol <c@x>",
+        );
+        assert_eq!(c.all.to[1].label, "Bob");
+        assert_eq!(c.all.cc[0].label, "Carol");
+        // A message the account sent goes to its To, and no Reply-To is looked at.
+        let c = reply_choices(ME, "Me <me@example.com>", "List <list@x>", "Bob <b@x>", "");
+        assert_eq!(c.one.to[0].label, "Bob");
+    }
+
+    #[test]
+    fn a_message_the_account_sent_is_answered_to_the_people_it_went_to() {
+        let c = reply_choices(
+            ME,
+            "Me <me@example.com>",
+            "",
+            "Bob <b@x>, Dan <d@x>",
+            "Carol <c@x>",
+        );
+        assert_eq!(mailboxes(&c.one.to), ["Bob <b@x>", "Dan <d@x>"]);
+        assert_eq!(mailboxes(&c.all.to), ["Bob <b@x>", "Dan <d@x>"]);
+        assert_eq!(mailboxes(&c.all.cc), ["Carol <c@x>"]);
+    }
+
+    #[test]
+    fn a_mail_the_account_sent_to_itself_is_answered_to_itself() {
+        let c = reply_choices(ME, ME, "", ME, "");
+        assert_eq!(mailboxes(&c.one.to), [ME]);
+        assert_eq!(mailboxes(&c.all.to), [ME]);
+        // No To at all: the sender is the one to answer.
+        let c = reply_choices(ME, ME, "", "", "");
+        assert_eq!(mailboxes(&c.one.to), [ME]);
+    }
+
+    #[test]
+    fn an_address_is_listed_once_whatever_its_case_and_a_cc_never_repeats_a_to() {
+        let c = reply_choices(
+            ME,
+            "Alice <a@x>",
+            "",
+            "A@X, bob@x, Bob <BOB@x>",
+            "bob@x, Carol <c@x>, c@X",
+        );
+        assert_eq!(mailboxes(&c.all.to), ["Alice <a@x>", "bob@x"]);
+        assert_eq!(mailboxes(&c.all.cc), ["Carol <c@x>"]);
+    }
+
+    #[test]
+    fn a_chip_shows_the_name_else_the_address_and_an_entry_without_an_address_is_left_out() {
+        let c = reply_choices(ME, r#""Doe, John" <j@x>"#, "", "<>, Eve <>, d@w", "");
+        assert_eq!(c.one.to[0].label, "Doe, John");
+        assert_eq!(c.one.to[0].mailbox, r#""Doe, John" <j@x>"#);
+        assert_eq!(mailboxes(&c.all.to), [r#""Doe, John" <j@x>"#, "d@w"]);
+        assert_eq!(c.all.to[1].label, "d@w");
+        let none = reply_choices(ME, "", "", "", "");
+        assert_eq!(none, ReplyChoices::default());
     }
 }

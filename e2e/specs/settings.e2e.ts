@@ -1,6 +1,6 @@
-import { account, boot, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "orca" | "font" | "update";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -13,7 +13,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -1787,7 +1787,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the eight tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the ten tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
@@ -1825,8 +1825,8 @@ describe("settings: tabs", () => {
     await expect(panel("google")).not.toBeDisplayed();
     await pressArrow("ArrowLeft");
     await pressArrow("ArrowLeft");
-    expect(await selected()).toEqual(["settings-tab-update"]);
-    await expect(panel("update")).toBeDisplayed();
+    expect(await selected()).toEqual(["settings-tab-log"]);
+    await expect(panel("log")).toBeDisplayed();
     await pressArrow("ArrowRight");
     expect(await selected()).toEqual(["settings-tab-google"]);
   });
@@ -1838,7 +1838,7 @@ describe("settings: tabs", () => {
     expect(await focused()).toBe("settings-tab-calendar");
     await pressArrow("ArrowLeft");
     await pressArrow("ArrowLeft");
-    expect(await focused()).toBe("settings-tab-update");
+    expect(await focused()).toBe("settings-tab-log");
   });
 
   it("opens the Claude tab from 設定を開く in the Claude popup", async () => {
@@ -1956,5 +1956,352 @@ describe("settings: Slack channels kept off the list", () => {
     await openSettings([], claudeMissing, "slack");
     await expect($("#slack-hidden .card-empty")).toHaveText("一覧に出さないチャンネルはありません");
     await expect($("#slack-hidden-count")).toHaveText("0 件");
+  });
+});
+
+describe("settings: skills (the スキル tab, A-32)", () => {
+  const rows = () => textsOf("#skill-list .skill-row");
+  const row = (n: number) => $(`#skill-list .skill-row:nth-child(${n})`);
+  const screenBox = (screen: string) => $(`#skill-screens input[data-screen="${screen}"]`);
+  const dialog = '.pop[role="alertdialog"]';
+
+  // The app with the skills `list` and the スキル tab open.
+  async function openSkills(list = [skill("alpha"), skill("beta", { screens: ["slack-thread"] })], fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, skill_list: list, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("skill");
+  }
+
+  it("reads the skills only when the tab is shown, and again each time it is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, skill_list: [skill("alpha")] });
+    await $("#nav-settings").click();
+    await openTab("claude");
+    await browser.pause(300);
+    expect(await callsOf("skill_list")).toEqual([]);
+    await openTab("skill");
+    await waitForCalls("skill_list");
+    await openTab("google");
+    await openTab("skill");
+    expect((await waitForCalls("skill_list", 2)).length).toBe(2);
+  });
+
+  it("lists the skills with the display name and the name, and keeps the form hidden until one is pressed", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
+    await expect($("#skill-form")).not.toBeDisplayed();
+    await expect($("#skill-new")).toHaveText("新しいスキル");
+    expect(await browser.execute(() => document.querySelectorAll("#skill-list [aria-current='true']").length)).toBe(0);
+  });
+
+  it("says there are none when no skill is saved", async () => {
+    await openSkills([]);
+    await expect($("#skill-list .skill-empty")).toHaveText("スキルはまだありません");
+    await expect($("#skill-form")).not.toBeDisplayed();
+  });
+
+  it("shows a failed read in the error line", async () => {
+    await openSkills([], { skill_list: rejects("スキルを読めません") });
+    await expect($("#error")).toHaveText("スキルを読めません");
+  });
+
+  it("fills the form from the pressed skill, with its name read-only and 削除 shown, and no placeholder", async () => {
+    await openSkills([skill("alpha"), skill("beta", { displayName: "ベータ", screens: ["slack-thread"], description: "説明です", instructions: "指示です\n二行目" })]);
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(2).click();
+    await expect($("#skill-form")).toBeDisplayed();
+    await expect(row(2)).toHaveAttribute("aria-current", "true");
+    await expect(row(1)).toHaveAttribute("aria-current", "false");
+    await expect($("#skill-name")).toHaveValue("beta");
+    await expect($("#skill-name")).toHaveAttribute("readonly");
+    await expect($("#skill-display-name")).toHaveValue("ベータ");
+    await expect(screenBox("slack-paste")).not.toBeSelected();
+    await expect(screenBox("slack-thread")).toBeSelected();
+    expect(await textsOf("#skill-screens label")).toEqual(["Slack に貼る文章の校正", "Slack のスレッドの相談"]);
+    await expect($("#skill-description")).toHaveValue("説明です");
+    await expect($("#skill-instructions")).toHaveValue("指示です\n二行目");
+    await expect($("#skill-delete")).toBeDisplayed();
+    expect(await browser.execute(() => [...document.querySelectorAll("#skill-form input, #skill-form textarea")].filter((e) => e.hasAttribute("placeholder")).length)).toBe(0);
+    expect(await callsOf("skill_get")).toEqual([]);
+  });
+
+  it("empties the form for 新しいスキル, with the name editable, the focus on it and no 削除", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(1).click();
+    // The page's own press: the driver's click focuses the button after the page's handler ran, which no real press does.
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      document.getElementById("skill-new")!.click();
+    }, onceId());
+    await expect($("#skill-form")).toBeDisplayed();
+    await expect($("#skill-new")).toHaveAttribute("aria-pressed", "true");
+    await expect(row(1)).toHaveAttribute("aria-current", "false");
+    await expect($("#skill-name")).toHaveValue("");
+    await expect($("#skill-name")).not.toHaveAttribute("readonly");
+    await expect($("#skill-display-name")).toHaveValue("");
+    await expect(screenBox("slack-thread")).not.toBeSelected();
+    await expect($("#skill-description")).toHaveValue("");
+    await expect($("#skill-instructions")).toHaveValue("");
+    await expect($("#skill-delete")).not.toBeDisplayed();
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("skill-name");
+  });
+
+  it("saves a new skill: skill_save gets the fields, the form takes the saved skill and the list is read again", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    const saved = skill("gamma", { displayName: "ガンマ", screens: ["slack-paste", "slack-thread"], description: "説明", instructions: "指示" });
+    const save = await mock("skill_save", saved);
+    await mock("skill_list", [skill("alpha"), saved]);
+    await $("#skill-new").click();
+    await $("#skill-name").setValue("gamma");
+    await $("#skill-display-name").setValue("ガンマ");
+    await screenBox("slack-thread").click();
+    await screenBox("slack-paste").click();
+    await $("#skill-description").setValue("説明");
+    await $("#skill-instructions").setValue("指示");
+    await $("#skill-save").click();
+    // The screens go in the order of the check boxes, not of the presses.
+    expect(await waitForCalls(save)).toEqual([{ skill: { name: "gamma", displayName: "ガンマ", screens: ["slack-paste", "slack-thread"], description: "説明", instructions: "指示" }, create: true }]);
+    await waitForCount("#skill-list .skill-row", 2);
+    expect(await rows()).toEqual(["Skill alphaalpha", "ガンマgamma"]);
+    await expect(row(2)).toHaveAttribute("aria-current", "true");
+    await expect($("#skill-name")).toHaveAttribute("readonly");
+    await expect($("#skill-delete")).toBeDisplayed();
+    await expect($("#skill-new")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("saves a changed skill under its own name, and the form shows the answer as Rust saved it", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    await row(1).click();
+    const save = await mock("skill_save", skill("alpha", { displayName: "新しい表示名", instructions: "Trimmed." }));
+    await mock("skill_list", [skill("alpha", { displayName: "新しい表示名", instructions: "Trimmed." })]);
+    await $("#skill-display-name").setValue("新しい表示名");
+    await $("#skill-instructions").setValue("  Trimmed.  ");
+    await $("#skill-save").click();
+    expect(await waitForCalls(save)).toEqual([{ skill: { name: "alpha", displayName: "新しい表示名", screens: [], description: "About alpha", instructions: "  Trimmed.  " }, create: false }]);
+    await waitForText("#skill-list .skill-row", "新しい表示名");
+    await expect($("#skill-instructions")).toHaveValue("Trimmed.");
+  });
+
+  it("sends nothing for a new skill whose name is a saved skill's, and says so", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    const save = await mock("skill_save", skill("alpha"));
+    await $("#skill-new").click();
+    await $("#skill-name").setValue("alpha");
+    await $("#skill-display-name").setValue("Again");
+    await $("#skill-instructions").setValue("Do.");
+    await $("#skill-save").click();
+    await expect($("#error")).toHaveText("スキル「alpha」はもうあります");
+    await browser.pause(300);
+    expect(await callsOf(save)).toEqual([]);
+    await expect($("#skill-display-name")).toHaveValue("Again");
+  });
+
+  it("sends a new skill with create even when the list was not read, and shows the refusal of Rust", async () => {
+    await openSkills([], { skill_list: rejects("スキルを読めません") });
+    await expect($("#error")).toHaveText("スキルを読めません");
+    const save = await mock("skill_save", rejects("スキル「alpha」はもうあります"));
+    await $("#skill-new").click();
+    await $("#skill-name").setValue("alpha");
+    await $("#skill-display-name").setValue("Again");
+    await $("#skill-instructions").setValue("Do.");
+    await $("#skill-save").click();
+    expect(await waitForCalls(save)).toEqual([{ skill: { name: "alpha", displayName: "Again", screens: [], description: "", instructions: "Do." }, create: true }]);
+    await expect($("#error")).toHaveText("スキル「alpha」はもうあります");
+    await expect($("#skill-display-name")).toHaveValue("Again");
+  });
+
+  it("shows a failed save in the error line and keeps what was typed", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    await mock("skill_save", rejects("表示名を入れてください"));
+    await $("#skill-new").click();
+    await $("#skill-name").setValue("delta");
+    await $("#skill-instructions").setValue("Typed.");
+    await $("#skill-save").click();
+    await expect($("#error")).toHaveText("表示名を入れてください");
+    await expect($("#skill-name")).toHaveValue("delta");
+    await expect($("#skill-instructions")).toHaveValue("Typed.");
+    await expect($("#skill-name")).not.toHaveAttribute("readonly");
+    expect(await rows()).toEqual(["Skill alphaalpha"]);
+  });
+
+  it("ignores a second press of 保存 while a save is on its way", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    await row(1).click();
+    const save = await mock("skill_save", holds);
+    await $("#skill-save").click();
+    await waitForCalls(save);
+    await $("#skill-save").click();
+    await browser.pause(300);
+    expect((await callsOf(save)).length).toBe(1);
+    await release(save, skill("alpha"));
+  });
+
+  it("deletes after the confirmation: skill_delete gets the name, the form closes and the list is read again", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(1).click();
+    const del = await mock("skill_delete", null);
+    await mock("skill_list", [skill("beta", { screens: ["slack-thread"] })]);
+    await $("#skill-delete").click();
+    await expect($(`${dialog} p`)).toHaveText("Skill alpha を完全に削除します。元に戻せません。");
+    expect(await callsOf(del)).toEqual([]);
+    await $(`${dialog} .text-btn.danger`).click();
+    expect(await waitForCalls(del)).toEqual([{ name: "alpha" }]);
+    await waitForCount("#skill-list .skill-row", 1);
+    expect(await rows()).toEqual(["Skill betabeta"]);
+    await expect($("#skill-form")).not.toBeDisplayed();
+  });
+
+  it("keeps the skill when the confirmation is cancelled", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(1).click();
+    const del = await mock("skill_delete", null);
+    await $("#skill-delete").click();
+    await $(`${dialog} .text-btn:not(.danger)`).click();
+    await expect($(dialog)).not.toExist();
+    expect(await callsOf(del)).toEqual([]);
+    await expect($("#skill-form")).toBeDisplayed();
+    expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
+  });
+
+  it("shows a failed delete in the error line and keeps the form and the list", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(1).click();
+    await mock("skill_delete", rejects("スキル「alpha」を消せません"));
+    await $("#skill-delete").click();
+    await $(`${dialog} .text-btn.danger`).click();
+    await expect($("#error")).toHaveText("スキル「alpha」を消せません");
+    await expect($("#skill-form")).toBeDisplayed();
+    expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
+  });
+});
+
+describe("settings: log (the ログ tab, A-3, A-28)", () => {
+  // The lines the table shows: the cells of each row.
+  const cells = () => browser.execute(() => [...document.querySelectorAll("#log-body tbody tr")].map((tr) => [...tr.children].map((c) => c.textContent?.trim() ?? "")));
+  const pressed = () => browser.execute(() => [...document.querySelectorAll(".log-filters button")].filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.textContent));
+  const lines = [
+    logLine("2026-11-14T13:00:55.000Z", "error", "メール", "アーカイブできませんでした: Gmail が 500 を返しました"),
+    logLine("2026-11-14T13:00:41.000Z", "warn", "Orca 端末", "入力したターミナルは表示されていないため、送りませんでした"),
+    logLine("2026-11-14T12:58:10.000Z", "warn", "Slack", "一覧を読めませんでした。2 分後に読み直します"),
+    logLine("2026-11-14T12:52:03.000Z", "info", "Orca", "接続先につながりました"),
+  ];
+
+  // The app with the log `read` answers and the ログ tab open.
+  async function openLog(read: unknown = lines, fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, log_read: read, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("log");
+  }
+
+  it("reads the log only when the tab is shown, and again each time it is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, log_read: lines });
+    await $("#nav-settings").click();
+    await browser.pause(300);
+    expect(await callsOf("log_read")).toEqual([]);
+    await openTab("log");
+    await waitForCalls("log_read");
+    await openTab("google");
+    await openTab("log");
+    expect((await waitForCalls("log_read", 2)).length).toBe(2);
+  });
+
+  it("puts the tab after アップデート and draws the lines in the order Rust answered, under 時刻, 重さ, 場所 and 内容", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    expect(await textsOf("#log-body thead th")).toEqual(["時刻", "重さ", "場所", "内容"]);
+    const rows = await cells();
+    expect(rows.map((r) => r.slice(1))).toEqual([
+      ["エラー", "メール", "アーカイブできませんでした: Gmail が 500 を返しました"],
+      ["警告", "Orca 端末", "入力したターミナルは表示されていないため、送りませんでした"],
+      ["警告", "Slack", "一覧を読めませんでした。2 分後に読み直します"],
+      ["情報", "Orca", "接続先につながりました"],
+    ]);
+    expect(rows.map((r) => r[0]!.slice(-2))).toEqual(["55", "41", "10", "03"]);
+    for (const r of rows) expect(r[0]).toMatch(/^\d\d\/\d\d \d\d:\d\d:\d\d$/);
+    expect(await browser.execute(() => [...document.querySelectorAll("#log-body tbody tr")].map((tr) => tr.className))).toEqual(["log-row error", "log-row warn", "log-row warn", "log-row info"]);
+  });
+
+  it("shows every line to start with, and only the errors or only the warnings with エラー and 警告, and every line again with すべて", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    expect(await pressed()).toEqual(["すべて"]);
+    await $("#log-filter-error").click();
+    expect(await pressed()).toEqual(["エラー"]);
+    expect((await cells()).map((r) => r[1])).toEqual(["エラー"]);
+    await $("#log-filter-warn").click();
+    expect(await pressed()).toEqual(["警告"]);
+    expect((await cells()).map((r) => r[2])).toEqual(["Orca 端末", "Slack"]);
+    await $("#log-filter-all").click();
+    expect(await pressed()).toEqual(["すべて"]);
+    await waitForCount("#log-body tbody tr", 4);
+  });
+
+  it("says there is no log, and has nothing to copy, when no line is shown", async () => {
+    await openLog([]);
+    await expect($("#log-body .card-empty")).toHaveText("ログはありません");
+    await expect($("#log-body table")).not.toExist();
+    await expect($("#log-copy")).toBeDisabled();
+    await openLog([lines[3]]);
+    await waitForCount("#log-body tbody tr", 1);
+    await expect($("#log-copy")).toBeEnabled();
+    await $("#log-filter-error").click();
+    await expect($("#log-body .card-empty")).toHaveText("ログはありません");
+    await expect($("#log-copy")).toBeDisabled();
+  });
+
+  it("copies the lines that are shown, one a line, with the time as the file holds it, and not the others", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    await stubClipboard();
+    await $("#log-filter-warn").click();
+    await $("#log-copy").click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+    expect(await copiedTexts()).toEqual([
+      "2026-11-14T13:00:41.000Z\t警告\tOrca 端末\t入力したターミナルは表示されていないため、送りませんでした\n2026-11-14T12:58:10.000Z\t警告\tSlack\t一覧を読めませんでした。2 分後に読み直します",
+    ]);
+    await $("#log-filter-all").click();
+    await $("#log-copy").click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the clipboard was never written" });
+    expect(((await copiedTexts())[1] as string).split("\n").length).toBe(4);
+  });
+
+  it("opens the folder with フォルダを開く", async () => {
+    await openLog();
+    await mock("log_open_folder", null);
+    await $("#log-open-folder").click();
+    expect((await waitForCalls("log_open_folder")).length).toBe(1);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the message when the folder cannot be opened", async () => {
+    await openLog();
+    await mock("log_open_folder", rejects("/example/config を開けません"));
+    await $("#log-open-folder").click();
+    await expect($("#error")).toHaveText("/example/config を開けません");
+  });
+
+  it("shows the message when the log cannot be read, and no table", async () => {
+    await openLog(rejects("app-log.jsonl を読めません"));
+    await expect($("#error")).toHaveText("app-log.jsonl を読めません");
+    await expect($("#log-body table")).not.toExist();
+  });
+
+  it("draws the log read again when the tab is shown again", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    await mock("log_read", [lines[0]]);
+    await openTab("google");
+    await openTab("log");
+    await waitForCount("#log-body tbody tr", 1);
   });
 });

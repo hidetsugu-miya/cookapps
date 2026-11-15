@@ -184,6 +184,7 @@ pub(super) fn with_cached_images(
         subject: held.subject.clone(),
         unread: held.unread,
         messages,
+        reply: held.reply.clone(),
         pending_images,
     })
 }
@@ -283,6 +284,7 @@ mod tests {
                 .enumerate()
                 .map(|(n, body)| message(&format!("m{n}"), body))
                 .collect(),
+            reply: Default::default(),
             pending_images: Vec::new(),
         }
     }

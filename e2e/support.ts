@@ -14,6 +14,7 @@ import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
+import type { LogEntry } from "../ts/bindings/LogEntry";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaProject } from "../ts/bindings/OrcaProject";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
@@ -26,6 +27,7 @@ import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
+import type { Skill } from "../ts/bindings/Skill";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { RichBlock } from "../ts/bindings/RichBlock";
 import type { SlackThread } from "../ts/bindings/SlackThread";
@@ -233,6 +235,9 @@ export const inbox = (threads = [thread("t1", "First unread", true), thread("t2"
 export const threadLoaded = () =>
   browser.waitUntil(() => browser.execute(() => !document.getElementById("thread")!.hasAttribute("aria-busy")), { timeoutMsg: "the thread did not arrive" });
 
+// Who a reply to the thread of `threadDetail` goes to (M-10): Alice for "返信"; Alice and Bob, with Carol in Cc, for "全員に返信".
+const alice = { label: "Alice", mailbox: "Alice <alice@example.com>" };
+
 // A thread of one plain-text message.
 export const threadDetail = (subject: string, body: string, unread: boolean): ThreadDetail => ({
   subject,
@@ -252,6 +257,10 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
       authenticated: false,
     },
   ],
+  reply: {
+    one: { to: [alice], cc: [] },
+    all: { to: [alice, { label: "Bob", mailbox: "Bob <bob@example.com>" }], cc: [{ label: "Carol", mailbox: "carol@example.com" }] },
+  },
 });
 
 // ---- Calendar ----
@@ -461,6 +470,12 @@ export const claudeSettings: ClaudeSettings = {
   todoChat: { model: "sonnet", effort: "medium" },
   slackChat: { model: "sonnet", effort: "medium" },
 };
+
+// A saved skill (A-32) as `skill_list` answers it; `extra` changes the parts.
+export const skill = (name: string, extra: Partial<Skill> = {}): Skill => ({ name, displayName: `Skill ${name}`, screens: [], description: `About ${name}`, instructions: `Do ${name}.`, ...extra });
+
+// A line of the log (A-28) as `log_read` answers it.
+export const logLine = (time: string, level: LogEntry["level"], source: string, message: string): LogEntry => ({ time, level, source, message });
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };

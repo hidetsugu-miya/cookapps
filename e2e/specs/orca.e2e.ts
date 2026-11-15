@@ -24,7 +24,6 @@ import {
   mock,
   note,
   onceId,
-  orcaOverview,
   orcaRow,
   orcaSsh,
   orcaTerminal,
@@ -37,7 +36,6 @@ import {
   sendTerm,
   setClock,
   setDark,
-  streamList,
   stubClipboard,
   terminalThemes,
   textsOf,
@@ -46,7 +44,7 @@ import {
   waitForCalls,
   waitForCount,
 } from "../support";
-import { claudeTab, filesToggle, openOrca, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
 const twoWorktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" }), orcaWorktree("example-api", "main")];
@@ -3751,5 +3749,124 @@ describe("orca: scratchpad of an SSH host (A-30)", () => {
     expect(await count('.orca-tabs [role="tab"]')).toBe(0);
     await expect($(".orca-edit-area")).not.toExist();
     expect(await callsOf("orca_file_delete")).toEqual([]);
+  });
+});
+
+// The list of a saved environment can hold items of this machine too (#336): an operation on a row, a tab or a worktree goes to the place of that row (the name of its saved environment, null for this machine), whatever target the screen holds.
+describe("orca: an operation goes to the place of its row", () => {
+  const studioOnly = { target: "Studio", environments: ["Studio"] };
+  // example-app is the saved environment Studio's, example-api this machine's. Each has a Claude session and a shell.
+  const mixed = (extra: Parameters<typeof orcaOverview>[2] = {}) =>
+    onThisMachine(
+      orcaOverview(
+        [orcaRow("example-app", "feat/a", "Studio task"), orcaRow("example-api", "main", "Mac task")],
+        [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-api", "main")],
+        { ...studioOnly, terminals: [orcaTerminal("example-app", "zsh"), orcaTerminal("example-api", "zsh")], ...extra },
+      ),
+      "example-api",
+    );
+  const shown = ".orca-term-box:not([hidden]) .xterm-helper-textarea";
+
+  it("closes a terminal in the environment of its row, and with null when the row is this machine's", async () => {
+    await openOrca(mixed());
+    const close = await mock("orca_close", null);
+    await project("example-app").click();
+    await tabOf("orca:term_example-app_zsh").$(".orca-tab-close").click();
+    await project("example-api").click();
+    await tabOf("orca:term_example-api_zsh").$(".orca-tab-close").click();
+    expect(await waitForCalls(close, 2)).toEqual([
+      { handle: "term_example-app_zsh", environment: "Studio" },
+      { handle: "term_example-api_zsh", environment: null },
+    ]);
+  });
+
+  it("starts Claude and a terminal in the environment of the worktree's row, and with null when it is this machine's", async () => {
+    await openOrca(mixed());
+    const start = await mock("orca_start", noPane);
+    const create = await mock("orca_terminal_create", noPane);
+    // The plus is enabled again once a start was answered.
+    const startIn = async (repo: string, label: string, command: string, calls: number) => {
+      await plus(repo, label);
+      await waitForCalls(command, calls);
+      await expect($(".orca-plus")).toBeEnabled();
+    };
+    await startIn("example-app", CLAUDE, start, 1);
+    await startIn("example-api", TERMINAL, create, 1);
+    await startIn("example-api", CLAUDE, start, 2);
+    await startIn("example-app", TERMINAL, create, 2);
+    expect(await waitForCalls(start, 2)).toEqual([
+      { path: "/work/example-app", environment: "Studio" },
+      { path: "/work/example-api", environment: null },
+    ]);
+    expect(await waitForCalls(create, 2)).toEqual([
+      { path: "/work/example-api", environment: null },
+      { path: "/work/example-app", environment: "Studio" },
+    ]);
+  });
+
+  it("asks for the layout of each project under the place of its row", async () => {
+    await openOrca(mixed());
+    await project("example-app").click();
+    await project("example-api").click();
+    await waitForCalls("orca_panes", 2);
+    const calls = (await callsOf("orca_panes")) as { project: string; environment: string | null }[];
+    expect([...new Set(calls.map((c) => `${c.project} ${c.environment}`))].sort()).toEqual(["proj_example-api null", "proj_example-app Studio"]);
+  });
+
+  it("reads the files of a worktree in the environment of its row, and with null when it is this machine's", async () => {
+    await openOrca(mixed(), { orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [] });
+    await pickProject("example-app");
+    await filesToggle().click();
+    await pickProject("example-api");
+    await waitForCalls("orca_files_list", 2);
+    const calls = (await callsOf("orca_files_list")) as { path: string; environment: string | null }[];
+    expect(calls.map((c) => [c.path, c.environment])).toEqual([
+      ["/work/example-app", "Studio"],
+      ["/work/example-api", null],
+    ]);
+  });
+
+  describe("on a terminal mirrored", () => {
+    // The environment of the list is not one that is saved, so no terminal is streamed: each is read and typed into through the place of its row (this machine's has none to name).
+    const mirrored = () => mixed({ environments: [] });
+    const type = async (repo: string) => {
+      await project(repo).click();
+      await tabOf(`orca:term_${repo}_zsh`).$(".orca-tab-btn").click();
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      // Not a letter from p to {, whose key code xterm.js reads as a function key (the driver gives "x" the code 120, which it sends as F9).
+      await browser.keys(["c"]);
+    };
+
+    it("reads the screen and types the keys through the environment of its row", async () => {
+      await openOrca(mirrored(), { orca_terminal_read: ["$"] });
+      const input = await mock("orca_terminal_input", null);
+      await type("example-app");
+      await type("example-api");
+      expect(await waitForCalls(input, 2)).toEqual([
+        { handle: "term_example-app_zsh", text: "c", environment: "Studio" },
+        { handle: "term_example-api_zsh", text: "c" },
+      ]);
+      const reads = (await callsOf("orca_terminal_read")) as { handle: string; environment?: string }[];
+      expect(reads.filter((r) => r.handle === "term_example-app_zsh").every((r) => r.environment === "Studio")).toBe(true);
+      expect(reads.filter((r) => r.handle === "term_example-api_zsh").every((r) => !("environment" in r))).toBe(true);
+    });
+  });
+
+  it("puts a pasted image in the worktree of the row's environment, and with null when it is this machine's", async () => {
+    await openOrca(mixed(), { orca_terminal_read: ["$"] });
+    await waitForCalls("orca_stream_open");
+    const attach = await mock("orca_attach_file", { text: "/work/example/.orca/drops/shot.png ", bracketed: true });
+    await mock("orca_stream_input", null);
+    await mock("orca_terminal_input", null);
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    expect(await fire("paste", shown, [image()])).toBe(true);
+    await project("example-api").click();
+    await waitForCalls("orca_terminal_read");
+    expect(await fire("paste", shown, [image()])).toBe(true);
+    expect(await waitForCalls(attach, 2)).toEqual([
+      { path: "/work/example-app", name: "shot.png", data: PNG, environment: "Studio" },
+      { path: "/work/example-api", name: "shot.png", data: PNG, environment: null },
+    ]);
   });
 });

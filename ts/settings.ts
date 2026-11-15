@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude, Orca (the card of the terminal colors is `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`), the fonts (`ts/font-settings.ts`) and the updater, each with its card.
+// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude, the skills (`ts/skill-settings.ts`), Orca (the card of the terminal colors is `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -17,11 +17,13 @@ import { workspaceColor } from "./slack-view.js";
 import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
+import { showLogTab } from "./log-settings.js";
+import { showSkillTab } from "./skill-settings.js";
 import { showError } from "./view.js";
 
 let settingsSeq = 0;
 
-export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "claude", "orca", "font", "update"] as const;
+export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "claude", "skill", "orca", "font", "update", "log"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 // The tab shown; the settings screen opens on Google unless the way in names another.
@@ -42,6 +44,10 @@ export function selectSettingsTab(name: SettingsTab) {
   $("settings").scrollTop = 0;
   // The connection is asked about only once the Claude tab is shown.
   if (name === "claude") showClaudeTab();
+  // The skills are read only once the Skill tab is shown.
+  if (name === "skill") showSkillTab();
+  // The log is read each time the Log tab is shown.
+  if (name === "log") showLogTab();
   // The tokens are asked about only once the Slack tab is shown.
   if (name === "slack" && workspaces.some((w) => !wsChecks.has(w.teamId))) drawWorkspaces(workspaces, settingsSeq);
 }

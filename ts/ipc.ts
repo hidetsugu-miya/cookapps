@@ -263,13 +263,14 @@ export interface Commands {
   // Claude's proofreading of the original message of the Slack compose screen: the same answer, for `text` instead of the instructions, with `actions`, what the answer made of the things to do that are not posted
   // (a destination it chose from the list Rust gave it, or the cards it wrote; null when it left them alone, S-4). `actions` of the arguments are the cards of "行うこと", the posted ones first.
   // When the request asked to post (S-23) and Rust allowed it, Rust posted them from the top down by the path of `slack_post`, and the ones sent carry `posted`; `postError` is the failure that stopped it after one was sent. Nothing is saved.
+  // `skill` (optional, none or null for no skill) is the name of a saved skill (S-4); a name that is not one is refused, and with one the request may be empty.
   claude_proofread_slack: {
-    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[] };
+    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[]; skill?: string | null };
     result: SlackEdit;
   };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
-  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread).
-  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` is as in `claude_proofread_slack`.
+  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string; skill?: string | null }; result: PromptEdit };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, with the environments listed so the owner can choose again),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.
@@ -378,13 +379,15 @@ export interface Commands {
   // One skill by its name; an error when there is none or the name is not a valid one.
   skill_get: { args: { name: string }; result: Skill };
   // Saves a skill (a new one, or the one of that name replaced) and answers it as saved: trimmed, the screens in a fixed order. A name or text that cannot be saved is an error in Japanese.
-  skill_save: { args: { skill: Skill }; result: Skill };
+  skill_save: { args: { skill: Skill; create: boolean }; result: Skill };
   // Deletes a skill; an error when there is none or the name is not a valid one. Answers null.
   skill_delete: { args: { name: string }; result: null };
   // A-28: adds a line to the app's log (`app-log.jsonl` in the config folder): the weight, the place and a few words of what happened, never a token, a mail, a message, what a terminal printed or what was typed. The text is cut to 500 characters and a word shaped like a token is masked. An empty text is an error in Japanese. Answers null.
   log_write: { args: { level: LogLevel; source: string; message: string }; result: null };
   // A-28: the lines of the log of the last 30 days, the newest first.
   log_read: { args: undefined; result: LogEntry[] };
+  // A-3, A-28: opens the folder of the log (the config folder) in the file manager. The page gives no path. Answers null.
+  log_open_folder: { args: undefined; result: null };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

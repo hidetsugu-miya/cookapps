@@ -48,6 +48,16 @@
     </header>
     <header id="inbox-header" data-tauri-drag-region="deep" hidden>
       <h1>受信トレイ</h1>
+      <button id="mail-compose" class="icon-btn" aria-label="作成">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
+      </button>
+    </header>
+    <header id="new-mail-header" data-tauri-drag-region="deep" hidden>
+      <button id="new-mail-back" class="icon-btn" aria-label="戻る">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+      </button>
+      <h1>新規メッセージ</h1>
+      <button id="new-mail-discard" class="text-btn" type="button">破棄</button>
     </header>
     <p id="error" hidden></p>
     <div id="mail-area" class="split-main">
@@ -87,6 +97,56 @@
         <div id="thread-head"><h2 id="thread-subject"></h2><span id="thread-label" class="label">受信トレイ</span></div>
         <div id="mail-summary" role="status" hidden></div>
         <div id="messages"></div>
+        <div id="mail-reply" hidden>
+          <div class="mail-reply-card">
+            <div class="mail-reply-row">
+              <label class="mail-reply-mode"><select id="mail-reply-mode" aria-label="返信の種類"><option value="one">返信</option><option value="all">全員に返信</option></select></label>
+              <div id="mail-reply-to-field" class="mail-reply-field"><input id="mail-reply-to-input" class="mail-reply-input" aria-label="宛先を追加" autocomplete="off" spellcheck="false"></div>
+              <span class="mail-reply-more"><button id="mail-reply-cc-open" class="mail-reply-link" type="button">Cc</button><button id="mail-reply-bcc-open" class="mail-reply-link" type="button">Bcc</button></span>
+            </div>
+            <div id="mail-reply-cc-row" class="mail-reply-row" hidden>
+              <span class="mail-reply-key">Cc</span>
+              <div id="mail-reply-cc-field" class="mail-reply-field"><input id="mail-reply-cc-input" class="mail-reply-input" aria-label="Cc を追加" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <div id="mail-reply-bcc-row" class="mail-reply-row" hidden>
+              <span class="mail-reply-key">Bcc</span>
+              <div id="mail-reply-bcc-field" class="mail-reply-field"><input id="mail-reply-bcc-input" class="mail-reply-input" aria-label="Bcc を追加" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <textarea id="mail-reply-body" aria-label="返信の本文" rows="3"></textarea>
+            <div class="mail-reply-foot">
+              <button id="mail-reply-send" class="text-btn primary" type="button" disabled>送信</button>
+              <button id="mail-reply-discard" class="text-btn" type="button">破棄</button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section id="new-mail" hidden>
+        <div class="mail-reply-row">
+          <span class="mail-reply-key">差出人</span>
+          <label class="mail-reply-mode"><select id="new-mail-from-select" aria-label="差出人" hidden></select></label>
+          <span id="new-mail-from-text"></span>
+        </div>
+        <div class="mail-reply-row">
+          <span class="mail-reply-key">宛先</span>
+          <div id="new-mail-to-field" class="mail-reply-field"><input id="new-mail-to-input" class="mail-reply-input" aria-label="宛先を追加" autocomplete="off" spellcheck="false"></div>
+          <span class="mail-reply-more"><button id="new-mail-cc-open" class="mail-reply-link" type="button">Cc</button><button id="new-mail-bcc-open" class="mail-reply-link" type="button">Bcc</button></span>
+        </div>
+        <div id="new-mail-cc-row" class="mail-reply-row" hidden>
+          <span class="mail-reply-key">Cc</span>
+          <div id="new-mail-cc-field" class="mail-reply-field"><input id="new-mail-cc-input" class="mail-reply-input" aria-label="Cc を追加" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div id="new-mail-bcc-row" class="mail-reply-row" hidden>
+          <span class="mail-reply-key">Bcc</span>
+          <div id="new-mail-bcc-field" class="mail-reply-field"><input id="new-mail-bcc-input" class="mail-reply-input" aria-label="Bcc を追加" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="mail-reply-row">
+          <span class="mail-reply-key">件名</span>
+          <input id="new-mail-subject" aria-label="件名" autocomplete="off">
+        </div>
+        <textarea id="new-mail-body" aria-label="本文"></textarea>
+        <div id="new-mail-foot">
+          <button id="new-mail-send" class="text-btn primary" type="button" disabled>送信</button>
+        </div>
       </section>
     </main>
     <div id="mail-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Orca の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="40" tabindex="0" hidden><span></span></div>
@@ -187,9 +247,11 @@
           <button id="settings-tab-todoist" class="tab" role="tab" aria-controls="settings-panel-todoist" aria-selected="false" tabindex="-1">Todoist</button>
           <button id="settings-tab-slack" class="tab" role="tab" aria-controls="settings-panel-slack" aria-selected="false" tabindex="-1">Slack</button>
           <button id="settings-tab-claude" class="tab" role="tab" aria-controls="settings-panel-claude" aria-selected="false" tabindex="-1">Claude</button>
+          <button id="settings-tab-skill" class="tab" role="tab" aria-controls="settings-panel-skill" aria-selected="false" tabindex="-1">スキル</button>
           <button id="settings-tab-orca" class="tab" role="tab" aria-controls="settings-panel-orca" aria-selected="false" tabindex="-1">Orca</button>
           <button id="settings-tab-font" class="tab" role="tab" aria-controls="settings-panel-font" aria-selected="false" tabindex="-1">フォント</button>
           <button id="settings-tab-update" class="tab" role="tab" aria-controls="settings-panel-update" aria-selected="false" tabindex="-1">アップデート<span class="tab-dot" hidden></span></button>
+          <button id="settings-tab-log" class="tab" role="tab" aria-controls="settings-panel-log" aria-selected="false" tabindex="-1">ログ</button>
         </div>
       </div>
       <section id="settings-panel-google" class="card" role="tabpanel" aria-labelledby="settings-tab-google">
@@ -288,6 +350,34 @@
         <div id="claude-prompt"></div>
       </section>
       </div>
+      <section id="settings-panel-skill" class="card skill-card" role="tabpanel" aria-labelledby="settings-tab-skill" hidden>
+        <div class="card-head">
+          <h2>
+            <span class="logo claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>スキル
+          </h2>
+        </div>
+        <div class="skill-body">
+          <div class="skill-side">
+            <div id="skill-list"></div>
+            <button id="skill-new" type="button" class="text-btn">新しいスキル</button>
+          </div>
+          <form id="skill-form" hidden>
+            <label class="skill-field">名前<input id="skill-name" autocomplete="off" spellcheck="false"></label>
+            <label class="skill-field">表示名<input id="skill-display-name" autocomplete="off"></label>
+            <fieldset id="skill-screens" class="skill-field">
+              <legend>使う画面</legend>
+              <label><input type="checkbox" data-screen="slack-paste">Slack に貼る文章の校正</label>
+              <label><input type="checkbox" data-screen="slack-thread">Slack のスレッドの相談</label>
+            </fieldset>
+            <label class="skill-field">説明<textarea id="skill-description" rows="3"></textarea></label>
+            <label class="skill-field">指示<textarea id="skill-instructions" rows="12"></textarea></label>
+            <div class="skill-actions">
+              <button id="skill-delete" type="button" class="text-btn danger" hidden>削除</button>
+              <button id="skill-save" class="text-btn primary">保存</button>
+            </div>
+          </form>
+        </div>
+      </section>
       <div id="settings-panel-orca" role="tabpanel" aria-labelledby="settings-tab-orca" hidden>
       <section class="card">
         <div class="card-head">
@@ -350,6 +440,21 @@
           </button>
         </div>
         <div id="update-items"></div>
+      </section>
+      <section id="settings-panel-log" class="card log-card" role="tabpanel" aria-labelledby="settings-tab-log" hidden>
+        <div class="card-head">
+          <h2>
+            <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg></span>ログ
+          </h2>
+          <div class="log-filters" role="group" aria-label="絞り込み">
+            <button id="log-filter-all" type="button" class="text-btn" aria-pressed="true">すべて</button>
+            <button id="log-filter-error" type="button" class="text-btn" aria-pressed="false">エラー</button>
+            <button id="log-filter-warn" type="button" class="text-btn" aria-pressed="false">警告</button>
+          </div>
+          <button id="log-copy" type="button" class="text-btn">コピー</button>
+          <button id="log-open-folder" type="button" class="text-btn">フォルダを開く</button>
+        </div>
+        <div id="log-body"></div>
       </section>
     </section>
     <section id="prompt" hidden>

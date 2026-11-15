@@ -1,13 +1,13 @@
 //! The skills of cookapps: instructions the owner writes once and has Claude follow on the screens that talk to it.
 //!
 //! A skill is a `SKILL.md` in the shape Claude Code reads, at `claude-plugin/skills/{name}/SKILL.md` in the app config directory.
-//! `claude-plugin/` is a Claude Code plugin named `cookapps` of its own (`.claude-plugin/plugin.json`, written with the first save),
-//! so a later call can pass it with `--plugin-dir` and run a skill by `/cookapps:{name}`.
-//! The plugin has a folder of its own, so that the rest of the config directory (the client secret, the settings) is never the root Claude Code reads hooks, MCP servers and agents from.
+//! The folder `claude-plugin/` is a folder of its own, so that the rest of the config directory (the client secret, the settings) is never read by Claude Code.
+//! A call is never given that folder: Claude Code reads everything in a plugin folder (the other skills, the hooks and the MCP servers of a file placed by hand),
+//! so `plugin_for` makes a folder for the call, with a plugin named `cookapps` that holds the one skill the call runs (`/cookapps:{name}`) and nothing else, and deletes it when the call is over.
 //! The front matter holds `name`, `description` (the keys Claude Code reads) and `cookapps-display-name` and `cookapps-screens` (cookapps's own);
 //! the body is the instructions.
 //! The name is the folder's, and it is checked before any path is made of it (`validate_name`), so a name never points outside `skills/`.
-//! This file reads and writes only: nothing here calls Claude.
+//! This file reads and writes only: nothing here calls Claude. `plugin_for` is what a call of a skill asks (S-4, S-7): it gives the folder for `--plugin-dir` only for a saved skill that the screen of the call may use.
 
 use std::{
     path::{Path, PathBuf},
@@ -27,7 +27,7 @@ const PLUGIN_DIR: &str = "claude-plugin";
 const DIR: &str = "skills";
 const FILE: &str = "SKILL.md";
 /// The plugin's name: the `cookapps` of `/cookapps:{name}`.
-const PLUGIN_NAME: &str = "cookapps";
+pub const PLUGIN_NAME: &str = "cookapps";
 const MANIFEST_DIR: &str = ".claude-plugin";
 const MANIFEST_FILE: &str = "plugin.json";
 const NAME_MAX: usize = 64;
@@ -273,13 +273,8 @@ fn split_front_matter(text: &str) -> (&str, &str) {
     ("", text)
 }
 
-/// The plugin's root: the folder `--plugin-dir` is given.
-fn plugin_dir(dir: &Path) -> PathBuf {
-    dir.join(PLUGIN_DIR)
-}
-
 fn skills_dir(dir: &Path) -> PathBuf {
-    plugin_dir(dir).join(DIR)
+    dir.join(PLUGIN_DIR).join(DIR)
 }
 
 /// The skills saved, by name. A folder whose name is not a valid one, or with no readable `SKILL.md`, is left out.
@@ -318,20 +313,12 @@ fn manifest() -> String {
     format!("{{\"name\": {}}}\n", quoted(PLUGIN_NAME))
 }
 
-/// Makes `claude-plugin/` a plugin named `cookapps`, unless `plugin.json` already says so.
-fn ensure_manifest(dir: &Path) -> Result<(), String> {
-    let wanted = manifest();
-    let manifest_dir = plugin_dir(dir).join(MANIFEST_DIR);
-    if std::fs::read_to_string(manifest_dir.join(MANIFEST_FILE)).is_ok_and(|now| now == wanted) {
-        return Ok(());
-    }
-    write_atomic(&manifest_dir, MANIFEST_FILE, &wanted)
-}
-
-/// Saves a skill (a new one, or the one of that name replaced) and answers it as it was saved.
-fn save_skill(dir: &Path, skill: &Skill) -> Result<Skill, String> {
+/// Saves a skill and answers it as it was saved: the one of that name replaced, or, with `create` (a new skill), a refusal in Japanese when that name is saved already.
+fn save_skill(dir: &Path, skill: &Skill, create: bool) -> Result<Skill, String> {
     let skill = check(skill)?;
-    ensure_manifest(dir)?;
+    if create && skills_dir(dir).join(&skill.name).join(FILE).exists() {
+        return Err(format!("スキル「{}」はもうあります", skill.name));
+    }
     write_atomic(&skills_dir(dir).join(&skill.name), FILE, &render(&skill))?;
     Ok(skill)
 }
@@ -344,6 +331,65 @@ fn delete_skill(dir: &Path, name: &str) -> Result<(), String> {
         return Err(format!("スキル「{name}」がありません"));
     }
     std::fs::remove_dir_all(&folder).map_err(|e| format!("スキル「{name}」を消せません: {e}"))
+}
+
+/// The plugin folder of one call, in the system's temporary directory. It is deleted when this is dropped, so the call keeps it until `claude` has ended, and a failed call leaves none behind.
+pub struct CallPlugin {
+    root: PathBuf,
+}
+
+impl CallPlugin {
+    /// The folder `--plugin-dir` is given.
+    pub fn path(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Drop for CallPlugin {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A folder only the owner can open, made new (an existing one is an error), so that no one else can put a file in it before the call.
+fn private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+/// The plugin folder of a call of the skill `name` on `screen`, for a name that passes `validate_name`, has a saved `SKILL.md` and lists `screen` among its screens; any other name is refused, in Japanese.
+/// The folder is made new for the call and holds only `.claude-plugin/plugin.json` and `skills/{name}/SKILL.md`. The `SKILL.md` is the saved one read and written again (`parse`, `render`), so that only `name`, `description` and the keys of cookapps remain:
+/// an `allowed-tools`, a `hooks` or any other key of a file placed by hand is dropped, and so is every other file of `claude-plugin/`.
+pub fn plugin_for(dir: &Path, name: &str, screen: SkillScreen) -> Result<CallPlugin, String> {
+    let skill = read_skill(dir, name)?;
+    if !skill.screens.contains(&screen) {
+        return Err(format!("スキル「{name}」は、この画面では使えません"));
+    }
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    let root = std::env::temp_dir().join(format!(
+        "cookapps-skill-{}",
+        random
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    ));
+    let failed = |e: std::io::Error| format!("スキルの用意ができません: {e}");
+    private_dir(&root).map_err(failed)?;
+    // From here the folder is the plugin's, and a failure below deletes it.
+    let plugin = CallPlugin { root };
+    let manifest_dir = plugin.root.join(MANIFEST_DIR);
+    let skill_dir = plugin.root.join(DIR).join(name);
+    std::fs::create_dir_all(&manifest_dir).map_err(failed)?;
+    std::fs::create_dir_all(&skill_dir).map_err(failed)?;
+    std::fs::write(manifest_dir.join(MANIFEST_FILE), manifest()).map_err(failed)?;
+    std::fs::write(skill_dir.join(FILE), render(&skill)).map_err(failed)?;
+    Ok(plugin)
 }
 
 /// The skills saved, by name.
@@ -364,13 +410,13 @@ pub async fn skill_get(app: AppHandle, name: String) -> Result<Skill, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Saves a skill, a new one or the one of that name replaced, and answers it as saved.
+/// Saves a skill and answers it as saved: the one of that name replaced, or, with `create` (a new skill), a refusal when that name is saved already (the screen's check can rest on a list that was not read).
 #[tauri::command]
-pub async fn skill_save(app: AppHandle, skill: Skill) -> Result<Skill, String> {
+pub async fn skill_save(app: AppHandle, skill: Skill, create: bool) -> Result<Skill, String> {
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
-        save_skill(&dir, &skill)
+        save_skill(&dir, &skill, create)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -545,8 +591,8 @@ mod tests {
     fn a_saved_skill_is_listed_and_read_and_a_deleted_one_is_gone() {
         let dir = temp_dir("flow");
         assert_eq!(list_skills(&dir).unwrap(), Vec::<Skill>::new());
-        let first = save_skill(&dir, &skill("proofread")).unwrap();
-        save_skill(&dir, &skill("another")).unwrap();
+        let first = save_skill(&dir, &skill("proofread"), false).unwrap();
+        save_skill(&dir, &skill("another"), false).unwrap();
         let names: Vec<_> = list_skills(&dir)
             .unwrap()
             .into_iter()
@@ -576,10 +622,10 @@ mod tests {
     #[test]
     fn a_save_replaces_the_skill_of_that_name_and_leaves_no_temporary_file() {
         let dir = temp_dir("replace");
-        save_skill(&dir, &skill("proofread")).unwrap();
+        save_skill(&dir, &skill("proofread"), false).unwrap();
         let mut again = skill("proofread");
         again.instructions = "別の指示".to_string();
-        save_skill(&dir, &again).unwrap();
+        save_skill(&dir, &again, false).unwrap();
         assert_eq!(
             read_skill(&dir, "proofread").unwrap().instructions,
             "別の指示"
@@ -592,24 +638,35 @@ mod tests {
     }
 
     #[test]
-    fn the_first_save_makes_a_folder_of_its_own_a_plugin_named_cookapps() {
-        let dir = temp_dir("manifest");
-        save_skill(&dir, &skill("proofread")).unwrap();
-        let path = dir.join("claude-plugin/.claude-plugin/plugin.json");
-        let value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(value["name"], "cookapps");
-        // A hand-changed manifest is put right at the next save.
-        std::fs::write(&path, "{\"name\": \"other\"}").unwrap();
-        save_skill(&dir, &skill("proofread")).unwrap();
-        let value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(value["name"], "cookapps");
-        // The config folder itself is not the plugin's root.
-        assert!(!dir.join(".claude-plugin").exists());
-        assert!(dir
-            .join("claude-plugin/skills/proofread/SKILL.md")
-            .is_file());
+    fn a_save_makes_only_the_skill_and_a_new_skill_never_replaces_a_saved_one() {
+        let dir = temp_dir("create");
+        save_skill(&dir, &skill("proofread"), true).unwrap();
+        // The plugin is made for each call, so a save writes no manifest and nothing else.
+        assert_eq!(
+            files_under(&dir),
+            vec!["claude-plugin/skills/proofread/SKILL.md"]
+        );
+        // A new skill with a saved name is refused in Japanese, and the saved one stays as it was.
+        let mut again = skill("proofread");
+        again.instructions = "別の指示".to_string();
+        assert_eq!(
+            save_skill(&dir, &again, true).unwrap_err(),
+            "スキル「proofread」はもうあります"
+        );
+        assert_eq!(
+            read_skill(&dir, "proofread").unwrap().instructions,
+            "# 手順\n\n1. 誤字を直す"
+        );
+        // Without `create` the same save replaces it, and a new name is made with `create`.
+        save_skill(&dir, &again, false).unwrap();
+        assert_eq!(
+            read_skill(&dir, "proofread").unwrap().instructions,
+            "別の指示"
+        );
+        save_skill(&dir, &skill("another"), true).unwrap();
+        // A folder with no SKILL.md is not a saved skill: its name is free.
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/empty")).unwrap();
+        save_skill(&dir, &skill("empty"), true).unwrap();
     }
 
     #[test]
@@ -618,7 +675,7 @@ mod tests {
         let inside = dir.join("config");
         std::fs::create_dir_all(&inside).unwrap();
         for name in ["../evil", "a/b", "..", "a\\b", "/abs"] {
-            assert!(save_skill(&inside, &skill(name)).is_err(), "{name}");
+            assert!(save_skill(&inside, &skill(name), false).is_err(), "{name}");
             assert!(read_skill(&inside, name).is_err(), "{name}");
             assert!(delete_skill(&inside, name).is_err(), "{name}");
         }
@@ -629,6 +686,164 @@ mod tests {
             .collect();
         assert_eq!(made, vec!["config"]);
         assert_eq!(std::fs::read_dir(&inside).unwrap().count(), 0);
+    }
+
+    /// The files under `dir`, as paths relative to it with `/`, sorted.
+    fn files_under(dir: &Path) -> Vec<String> {
+        fn walk(base: &Path, at: &Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(at).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(base, &path, found);
+                } else {
+                    let relative = path.strip_prefix(base).unwrap();
+                    found.push(relative.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(dir, dir, &mut found);
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn a_call_gets_a_plugin_of_its_own_with_the_one_skill_and_nothing_else() {
+        let dir = temp_dir("plugin-for");
+        save_skill(&dir, &skill("proofread"), false).unwrap();
+        save_skill(&dir, &skill("another"), false).unwrap();
+        // Files of the folder that Claude Code would read, placed by hand.
+        let plugin_root = dir.join("claude-plugin");
+        std::fs::create_dir_all(plugin_root.join("hooks")).unwrap();
+        std::fs::write(plugin_root.join("hooks/hooks.json"), "{}").unwrap();
+        std::fs::write(plugin_root.join(".mcp.json"), "{}").unwrap();
+        std::fs::create_dir_all(plugin_root.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            plugin_root.join(".claude-plugin/plugin.json"),
+            "{\"name\": \"other\"}",
+        )
+        .unwrap();
+
+        let plugin = plugin_for(&dir, "proofread", SkillScreen::SlackPaste).unwrap();
+        let root = plugin.path().to_path_buf();
+        assert_ne!(root, plugin_root);
+        assert!(root.starts_with(std::env::temp_dir()));
+        assert_eq!(
+            files_under(&root),
+            vec![".claude-plugin/plugin.json", "skills/proofread/SKILL.md"]
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".claude-plugin/plugin.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["name"], PLUGIN_NAME);
+        assert_eq!(
+            std::fs::read_to_string(root.join("skills/proofread/SKILL.md")).unwrap(),
+            render(&check(&skill("proofread")).unwrap())
+        );
+        // The config folder is left as it was.
+        assert_eq!(
+            files_under(&dir)
+                .into_iter()
+                .filter(|f| f.contains("hooks") || f.contains(".mcp") || f.contains("plugin.json"))
+                .count(),
+            3
+        );
+        // Each call has its own folder, and it is deleted with the plugin.
+        let second = plugin_for(&dir, "proofread", SkillScreen::SlackPaste).unwrap();
+        assert_ne!(second.path(), root);
+        drop(plugin);
+        assert!(!root.exists());
+        let second_root = second.path().to_path_buf();
+        assert!(second_root.exists());
+        drop(second);
+        assert!(!second_root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_plugin_folder_of_a_call_is_for_the_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("plugin-private");
+        save_skill(&dir, &skill("proofread"), false).unwrap();
+        let plugin = plugin_for(&dir, "proofread", SkillScreen::SlackThread).unwrap();
+        let mode = std::fs::metadata(plugin.path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[test]
+    fn the_skill_file_of_a_call_drops_every_key_but_the_names_and_the_keys_of_cookapps() {
+        let dir = temp_dir("plugin-keys");
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/mine")).unwrap();
+        std::fs::write(
+            dir.join("claude-plugin/skills/mine/SKILL.md"),
+            "---\nname: other\ndescription: Fixes the text\nallowed-tools: Bash(rm:*)\nhooks:\n  PreToolUse:\n    - command: evil\nmodel: opus\ncookapps-display-name: \"校正\"\ncookapps-screens: slack-paste\n---\n\nDo it.\n",
+        )
+        .unwrap();
+        let plugin = plugin_for(&dir, "mine", SkillScreen::SlackPaste).unwrap();
+        let text = std::fs::read_to_string(plugin.path().join("skills/mine/SKILL.md")).unwrap();
+        assert_eq!(
+            text,
+            "---\nname: \"mine\"\ndescription: \"Fixes the text\"\ncookapps-display-name: \"校正\"\ncookapps-screens: slack-paste\n---\n\nDo it.\n"
+        );
+        // The file placed by hand is not changed.
+        assert!(
+            std::fs::read_to_string(dir.join("claude-plugin/skills/mine/SKILL.md"))
+                .unwrap()
+                .contains("allowed-tools")
+        );
+    }
+
+    #[test]
+    fn a_skill_is_refused_on_a_screen_it_does_not_list_and_nothing_is_made() {
+        let dir = temp_dir("plugin-screen");
+        let mut paste = skill("paste-only");
+        paste.screens = vec![SkillScreen::SlackPaste];
+        save_skill(&dir, &paste, false).unwrap();
+        let mut thread = skill("thread-only");
+        thread.screens = vec![SkillScreen::SlackThread];
+        save_skill(&dir, &thread, false).unwrap();
+        let mut none = skill("none");
+        none.screens = Vec::new();
+        save_skill(&dir, &none, false).unwrap();
+        save_skill(&dir, &skill("both"), false).unwrap();
+
+        assert!(plugin_for(&dir, "paste-only", SkillScreen::SlackPaste).is_ok());
+        assert!(plugin_for(&dir, "thread-only", SkillScreen::SlackThread).is_ok());
+        assert!(plugin_for(&dir, "both", SkillScreen::SlackPaste).is_ok());
+        assert!(plugin_for(&dir, "both", SkillScreen::SlackThread).is_ok());
+        assert_eq!(
+            plugin_for(&dir, "paste-only", SkillScreen::SlackThread).err(),
+            Some("スキル「paste-only」は、この画面では使えません".to_string())
+        );
+        assert_eq!(
+            plugin_for(&dir, "thread-only", SkillScreen::SlackPaste).err(),
+            Some("スキル「thread-only」は、この画面では使えません".to_string())
+        );
+        for screen in [SkillScreen::SlackPaste, SkillScreen::SlackThread] {
+            assert!(plugin_for(&dir, "none", screen).is_err());
+        }
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_saved_skill_is_refused() {
+        let dir = temp_dir("plugin-for-refused");
+        save_skill(&dir, &skill("proofread"), false).unwrap();
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/empty")).unwrap();
+        // Unknown, a folder with no SKILL.md, and names that are not valid at all.
+        for name in ["unknown", "empty", "../x", "a/b", "Proofread", "", "a--b"] {
+            assert!(
+                plugin_for(&dir, name, SkillScreen::SlackPaste).is_err(),
+                "{name:?}"
+            );
+        }
+        assert_eq!(
+            plugin_for(&dir, "unknown", SkillScreen::SlackPaste).err(),
+            Some("スキル「unknown」がありません".to_string())
+        );
     }
 
     #[test]
@@ -643,7 +858,7 @@ mod tests {
     #[test]
     fn the_list_leaves_out_folders_that_are_not_skills() {
         let dir = temp_dir("list-skips");
-        save_skill(&dir, &skill("proofread")).unwrap();
+        save_skill(&dir, &skill("proofread"), false).unwrap();
         std::fs::create_dir_all(dir.join("claude-plugin/skills/empty")).unwrap();
         std::fs::create_dir_all(dir.join("claude-plugin/skills/Bad Name")).unwrap();
         std::fs::write(dir.join("claude-plugin/skills/Bad Name/SKILL.md"), "x").unwrap();

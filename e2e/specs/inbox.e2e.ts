@@ -766,4 +766,190 @@ describe("inbox", () => {
       expect(await loads()).toHaveLength(1);
     });
   });
+
+  describe("writing a new mail (M-11)", () => {
+    const other = "other@example.com";
+    const chips = (kind: "to" | "cc" | "bcc") => textsOf(`#new-mail-${kind}-field .mail-reply-chip > span`);
+    const compose = async () => {
+      await $("#mail-compose").click();
+      await expect($("#new-mail")).toBeDisplayed();
+    };
+    // Starts the app with two accounts, so that the sender can be chosen.
+    const bootTwoAccounts = async () => {
+      await boot({ inbox: { ...inbox(), accounts: [account, other] } });
+      await waitForCount("#unread-threads li", 2);
+    };
+
+    it("opens from 作成 in the header of the list, in the area of the detail with a header of its own, and not as a dialog", async () => {
+      await expect($("#mail-compose")).toHaveAttribute("aria-label", "作成");
+      await compose();
+      await expect($("#threads")).not.toBeDisplayed();
+      await expect($("#inbox-header")).not.toBeDisplayed();
+      await expect($("#mail-header")).not.toBeDisplayed();
+      await expect($("#new-mail-header")).toBeDisplayed();
+      await expect($("#new-mail-header")).toHaveAttribute("data-tauri-drag-region", "deep");
+      await expect($("#new-mail-header h1")).toHaveText("新規メッセージ");
+      await expect($("#new-mail-back")).toBeDisplayed();
+      await expect($("#new-mail-discard")).toBeDisplayed();
+      const layout = await browser.execute(() => {
+        const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+        return {
+          inMain: document.getElementById("main")!.contains(document.getElementById("new-mail")),
+          footAtBottom: box("new-mail-foot").bottom === box("main").bottom,
+          placeholders: [...document.querySelectorAll("#new-mail input, #new-mail textarea")].filter((e) => e.hasAttribute("placeholder")).length,
+        };
+      });
+      expect(layout).toEqual({ inMain: true, footAtBottom: true, placeholders: 0 });
+      await expect($("#new-mail-send")).toBeDisabled();
+    });
+
+    it("shows the sender as text when there is one account", async () => {
+      await compose();
+      await expect($("#new-mail-from-text")).toHaveText(account);
+      await expect($("#new-mail-from-select")).not.toBeDisplayed();
+    });
+
+    it("lets the sender be chosen among the accounts, the first one being chosen at the start", async () => {
+      await bootTwoAccounts();
+      await compose();
+      await expect($("#new-mail-from-text")).not.toBeDisplayed();
+      expect(await textsOf("#new-mail-from-select option")).toEqual([account, other]);
+      expect(await browser.execute(() => (document.getElementById("new-mail-from-select") as HTMLSelectElement).value)).toBe(account);
+    });
+
+    it("adds an address as a chip with Enter, a comma or by leaving the field, opens Cc and Bcc, and takes a chip off", async () => {
+      await compose();
+      await $("#new-mail-to-input").setValue("dan@example.com");
+      await browser.keys(["Enter"]);
+      await $("#new-mail-to-input").setValue("erin@example.com,");
+      expect(await chips("to")).toEqual(["dan@example.com", "erin@example.com"]);
+      await expect($("#new-mail-cc-row")).not.toBeDisplayed();
+      await $("#new-mail-cc-open").click();
+      await expect($("#new-mail-cc-row")).toBeDisplayed();
+      await expect($("#new-mail-cc-open")).not.toBeDisplayed();
+      await $("#new-mail-cc-input").setValue("fay@example.com");
+      await $("#new-mail-subject").click();
+      expect(await chips("cc")).toEqual(["fay@example.com"]);
+      await $('[aria-label="dan@example.com を外す"]').click();
+      expect(await chips("to")).toEqual(["erin@example.com"]);
+    });
+
+    it("sends the mail with the sender, the recipients, the subject and the text, and goes back to the list", async () => {
+      const send = await mock("send_mail", true);
+      await compose();
+      await $("#new-mail-to-input").setValue("dan@example.com");
+      await browser.keys(["Enter"]);
+      await $("#new-mail-cc-open").click();
+      await $("#new-mail-cc-input").setValue("erin@example.com");
+      await browser.keys(["Enter"]);
+      await $("#new-mail-bcc-open").click();
+      await $("#new-mail-bcc-input").setValue("fay@example.com");
+      await $("#new-mail-subject").setValue("Hello");
+      await $("#new-mail-body").setValue("Line one\nLine two");
+      await expect($("#new-mail-send")).toBeEnabled();
+      await $("#new-mail-send").click();
+      expect(await waitForCalls(send)).toEqual([
+        { account, mail: { to: ["dan@example.com"], cc: ["erin@example.com"], bcc: ["fay@example.com"], subject: "Hello", body: "Line one\nLine two" } },
+      ]);
+      await expect($("#threads")).toBeDisplayed();
+      await expect($("#new-mail")).not.toBeDisplayed();
+      await expect($("#inbox-header")).toBeDisplayed();
+      await expect($(".toast")).toHaveText(expect.stringContaining("送信しました"));
+      await expect($("#error")).not.toBeDisplayed();
+    });
+
+    it("sends from the account chosen", async () => {
+      await bootTwoAccounts();
+      const send = await mock("send_mail", true);
+      await compose();
+      // Sets the select as the user does (value, then change); the real WebView's select popup is not driven.
+      await browser.execute(
+        (id, v) => {
+          if (!window.__e2e_once__(id)) return;
+          const select = document.getElementById("new-mail-from-select") as HTMLSelectElement;
+          select.value = v;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        onceId(),
+        other,
+      );
+      await $("#new-mail-to-input").setValue("dan@example.com");
+      await browser.keys(["Enter"]);
+      await $("#new-mail-body").setValue("Hi");
+      await $("#new-mail-send").click();
+      expect(await waitForCalls(send)).toEqual([{ account: other, mail: { to: ["dan@example.com"], cc: [], bcc: [], subject: "", body: "Hi" } }]);
+    });
+
+    it("cannot be sent while the text is blank or while the mail goes out", async () => {
+      const send = await mock("send_mail", holds);
+      await compose();
+      await $("#new-mail-to-input").setValue("dan@example.com");
+      await expect($("#new-mail-send")).toBeDisabled();
+      await $("#new-mail-body").setValue("Hi");
+      await expect($("#new-mail-send")).toBeEnabled();
+      await $("#new-mail-send").click();
+      await waitForCalls(send);
+      await expect($("#new-mail-send")).toBeDisabled();
+      await release(send, true);
+      await expect($("#threads")).toBeDisplayed();
+    });
+
+    it("shows the error and keeps what was written when the send fails", async () => {
+      await mock("send_mail", rejects("宛先がありません"));
+      await compose();
+      await $("#new-mail-subject").setValue("Hello");
+      await $("#new-mail-body").setValue("Hi");
+      await $("#new-mail-send").click();
+      await expect($("#error")).toHaveText("宛先がありません");
+      await expect($("#new-mail")).toBeDisplayed();
+      await expect($("#new-mail-subject")).toHaveValue("Hello");
+      await expect($("#new-mail-body")).toHaveValue("Hi");
+      await expect($("#new-mail-send")).toBeEnabled();
+    });
+
+    it("keeps what was written when the account must log in again", async () => {
+      const send = await mock("send_mail", null);
+      await compose();
+      await $("#new-mail-body").setValue("Hi");
+      await $("#new-mail-send").click();
+      await waitForCalls(send);
+      await expect($("#new-mail-send")).toBeEnabled();
+      await expect($("#new-mail")).toBeDisplayed();
+      await expect($("#new-mail-body")).toHaveValue("Hi");
+    });
+
+    it("goes back to the list with 戻る and with 破棄, calling nothing, and opens empty the next time", async () => {
+      const send = await mock("send_mail", true);
+      for (const button of ["new-mail-back", "new-mail-discard"]) {
+        await compose();
+        await $("#new-mail-to-input").setValue("dan@example.com");
+        await browser.keys(["Enter"]);
+        await $("#new-mail-subject").setValue("Hello");
+        await $("#new-mail-body").setValue("Hi");
+        await $(`#${button}`).click();
+        await expect($("#threads")).toBeDisplayed();
+        await expect($("#new-mail")).not.toBeDisplayed();
+        await compose();
+        expect(await chips("to")).toEqual([]);
+        await expect($("#new-mail-subject")).toHaveValue("");
+        await expect($("#new-mail-body")).toHaveValue("");
+        await expect($("#new-mail-send")).toBeDisabled();
+        await $("#new-mail-back").click();
+      }
+      expect(await callsOf(send)).toEqual([]);
+    });
+
+    it("stays when the list loads again behind it", async () => {
+      await compose();
+      await $("#new-mail-body").setValue("Hi");
+      await mock("inbox", inbox());
+      // The sync that says the account needs a login asks for a load; with the list hidden, it is the next round that loads.
+      await loadByNeedsLogin();
+      await syncRound();
+      await waitForCalls("inbox");
+      await browser.pause(300);
+      await expect($("#new-mail")).toBeDisplayed();
+      await expect($("#new-mail-body")).toHaveValue("Hi");
+    });
+  });
 });

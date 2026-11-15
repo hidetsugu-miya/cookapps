@@ -6,7 +6,7 @@ html, body { height: 100%; }
 /* A-23: the header band at the top of every screen is one height at the default font (--header-h, a minimum: a larger font stretches it), and the icon buttons in it one size (--header-btn, with --header-ic for the icon); no screen sets its own. */
 :root { --header-h: 44px; --header-btn: 28px; --header-ic: 17px; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
-#mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#mail-header, #inbox-header, #new-mail-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -61,8 +61,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #error { color: #b00020; padding: 8px 32px; margin: 0; white-space: pre-wrap; }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
@@ -128,12 +128,47 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: var(--surface); }
-/* The operations of the open mail: a row of icons at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding (and sticks 8px above its content box, WebKit measuring from there) and has the color of the body, so that nothing shows through it. The line before "ゴミ箱へ移動" is drawn by the button itself, so it is not there when the buttons that take a row out are hidden. */
-#thread-actions { position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 4px 24px 4px 88px; background: var(--surface); }
+/* The operations of the open mail (M-2): a row of icons, 48px high, at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding and has the color of the body, so that nothing shows through it, and a line under it. The icons are in three groups, set apart by a line drawn by the first button of a group: the summary, then "Slack に貼る", "Todo にする" and "Orca に渡す", then the two that take the row out; so no line is there when the group before it, or the group itself, is hidden. */
+#thread-actions { position: sticky; top: 0; z-index: 2; flex: none; box-sizing: border-box; height: 48px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 0 24px 0 88px; background: var(--surface); border-bottom: 1px solid var(--line); }
 #thread-actions .icon-btn { width: 34px; height: 34px; color: var(--ink-soft); border-radius: 50%; }
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
-#thread-actions #trash { position: relative; margin-left: 10px; }
-#thread-actions #trash::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
+#thread-actions #trash, #thread-summary:not([hidden]) + #thread-slack { position: relative; margin-left: 10px; }
+#thread-actions #trash::before, #thread-summary:not([hidden]) + #thread-slack::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
+/* M-10: while a thread is open, #main is a column that holds the thread to the height of the area, and the reply field (#mail-reply) sits at its bottom: it stays there, over the end of the messages, while they scroll. The field reaches the edges of #main's padding, as the row of operations does. */
+#main:has(> #thread:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
+#main > #thread:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; }
+#mail-reply { position: sticky; bottom: 0; z-index: 2; flex: none; margin: auto -24px 0 -32px; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); }
+.mail-reply-card { display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
+.mail-reply-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.mail-reply-mode { position: relative; flex: none; display: inline-flex; align-items: center; color: var(--ink-soft); }
+#mail-reply-mode, #new-mail-from-select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
+.mail-reply-mode::after { content: ""; position: absolute; right: 2px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+.mail-reply-key { flex: none; min-width: 2.6em; padding: 2px 0; color: var(--ink-soft); }
+.mail-reply-field { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.mail-reply-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 0 2px 0 8px; border: 1px solid var(--chip-line); border-radius: 999px; font-size: calc(12px * var(--fs)); }
+.mail-reply-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-reply-chip-x { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-soft); line-height: 1; cursor: pointer; }
+.mail-reply-chip-x:hover { background: var(--soft); }
+.mail-reply-input { flex: 1 1 80px; min-width: 80px; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
+.mail-reply-more { flex: none; display: flex; gap: 8px; }
+.mail-reply-link { padding: 2px 0; border: 0; background: none; color: var(--ink-soft); font: inherit; cursor: pointer; }
+.mail-reply-link:hover { color: var(--accent); }
+#mail-reply-body { display: block; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 40vh; padding: 10px 12px; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: vertical; }
+.mail-reply-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
+.mail-reply-foot #mail-reply-discard { margin-left: auto; }
+.mail-reply-foot .text-btn:disabled { opacity: .4; cursor: default; }
+/* M-11: the screen that writes a new mail takes the place of the thread. The header is a band like the thread's (it holds "戻る", the title and "破棄"); the rows are those of the reply field without its card, and "送信" is in a band fixed at the bottom of the area, as the reply field is. */
+#new-mail-header { box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#new-mail-header .icon-btn { color: #444746; border-radius: 50%; }
+#new-mail-header #new-mail-discard { flex: none; height: var(--header-btn); padding: 0 12px; }
+#main:has(> #new-mail:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
+#main > #new-mail:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; padding-top: 8px; }
+#new-mail .mail-reply-row { padding: 8px 0; }
+#new-mail .mail-reply-key { min-width: 3.4em; }
+#new-mail-subject { flex: 1; min-width: 0; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
+#new-mail-body { flex: 1; display: block; box-sizing: border-box; width: 100%; min-height: 200px; padding: 12px 0; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: none; }
+#new-mail-foot { position: sticky; bottom: 0; z-index: 2; flex: none; display: flex; align-items: center; gap: 8px; margin: auto -24px 0 -32px; padding: 10px 32px; background: var(--bar); border-top: 1px solid var(--line); }
+#new-mail-foot .text-btn:disabled { opacity: .4; cursor: default; }
 #thread-head { margin: 16px 0 20px 56px; font-size: calc(22px * var(--fs)); line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: calc(11px * var(--fs)); vertical-align: middle; }
@@ -710,6 +745,22 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item-meta { color: #666; font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
 .item-meta.warn { color: var(--warn); }
 .hidden-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; }
+/* The Log tab (A-3, A-28): the head holds the filter, the copy and the folder; the lines are a table, the errors on the warn ground. */
+.log-card { max-width: 860px; }
+.log-card .card-head h2 { flex: 1; }
+.log-filters { display: flex; gap: 4px; margin-right: 8px; }
+.log-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: calc(13px * var(--fs)); }
+.log-table th, .log-table td { text-align: left; vertical-align: top; }
+.log-table th { padding: 8px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; }
+.log-table td { padding: 10px 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.log-table th:nth-child(1), .log-table td:nth-child(1) { width: 128px; padding-left: 20px; }
+.log-table th:nth-child(2), .log-table td:nth-child(2) { width: 72px; padding-left: 0; }
+.log-table th:nth-child(3), .log-table td:nth-child(3) { width: 120px; padding-left: 0; }
+.log-time { font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); white-space: nowrap; }
+.log-row.error { background: var(--del-bg); }
+.log-level { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #f1f1f1; color: var(--effort-low); font-size: calc(11px * var(--fs)); }
+.log-level.error { background: var(--surface); color: var(--del); }
+.log-level.warn { background: var(--warn-bg); color: var(--warn); }
 .card-empty { padding: 12px 20px 14px; border-top: 1px solid var(--line); color: #666; font-size: calc(13px * var(--fs)); }
 /* The entries of Ghostty's config (A-13): the ones taken, and the ones left with the reason. */
 .ghostty-report { padding: 10px 20px 12px; border-top: 1px solid var(--line); }
@@ -724,6 +775,27 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item select.theme-select { width: 200px; }
 .item select.font-family { width: 240px; }
 .item select.font-size { width: 90px; }
+/* The Skill tab (A-32): the skills in a column at the left, the form of the one shown at the right. */
+.skill-card { max-width: 860px; }
+.skill-body { display: flex; align-items: flex-start; border-top: 1px solid var(--line); }
+.skill-side { box-sizing: border-box; flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 210px; padding: 12px; border-right: 1px solid var(--line); }
+#skill-list { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.skill-row { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.skill-row:hover { background: var(--hover); }
+.skill-row[aria-current="true"] { background: var(--soft); }
+.skill-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.skill-empty { padding: 0 10px; }
+#skill-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 16px; }
+.skill-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; color: #666; font-size: calc(12px * var(--fs)); font-weight: bold; }
+.skill-field legend { padding: 0; margin-bottom: 4px; }
+.skill-field :is(input:not([type="checkbox"]), textarea) { box-sizing: border-box; width: 100%; padding: 6px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: #333; font: inherit; font-size: calc(13px * var(--fs)); font-weight: normal; }
+.skill-field input:not([type="checkbox"]) { height: 32px; border-radius: 16px; }
+.skill-field textarea { resize: vertical; line-height: 1.6; }
+.skill-field :is(input:not([type="checkbox"]), textarea):focus { outline: 2px solid var(--accent); border-color: transparent; }
+.skill-field input[readonly] { background: var(--bar); }
+#skill-screens label { display: flex; align-items: center; gap: 6px; color: #333; font-size: calc(13px * var(--fs)); font-weight: normal; }
+#skill-screens input { margin: 0; accent-color: var(--accent); }
+.skill-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }

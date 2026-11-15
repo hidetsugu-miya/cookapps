@@ -26,7 +26,7 @@ use crate::images::{
     cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
     CidRef, InlineImage, UriCache, FETCH_TIMEOUT, MAX_INLINE_IMAGES,
 };
-use crate::mail_address::{recipients_label, split_address};
+use crate::mail_address::{recipients_label, reply_choices, split_address, ReplyChoices};
 
 mod held;
 
@@ -201,6 +201,8 @@ pub struct ThreadDetail {
     /// Some message of the thread carries the UNREAD label.
     unread: bool,
     messages: Vec<MessageDetail>,
+    /// Who a reply to the thread goes to, by the account that reads it (M-10).
+    reply: ReplyChoices,
     /// The `cid:` images left as references in the bodies because they have to be fetched; `thread_images` takes them back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pending_images: Vec<PendingImage>,
@@ -310,6 +312,20 @@ impl MessageDetail {
     }
 }
 
+/// Who a reply goes to: the answer to the last message of the thread that is not a draft, the one `send_mail` threads the reply to.
+fn reply_to_last(t: &Thread, account: &str) -> ReplyChoices {
+    let Some(last) = t
+        .messages
+        .iter()
+        .rev()
+        .find(|m| !m.label_ids.iter().any(|l| l == "DRAFT"))
+    else {
+        return ReplyChoices::default();
+    };
+    let h = |name: &str| header(&last.payload, name);
+    reply_choices(account, &h("From"), &h("Reply-To"), &h("To"), &h("Cc"))
+}
+
 impl ThreadDetail {
     fn new(t: &Thread, prefer_plain: bool, account: &str) -> Self {
         let mut messages: Vec<_> = t
@@ -319,6 +335,7 @@ impl ThreadDetail {
             .collect();
         messages.sort_by_key(|m| m.date_ms);
         Self {
+            reply: reply_to_last(t, account),
             subject: t
                 .messages
                 .first()
@@ -2124,6 +2141,35 @@ mod tests {
             ),
             ("", "", "")
         );
+    }
+
+    #[test]
+    fn the_reply_choices_follow_the_last_message_that_is_not_a_draft() {
+        let t: Thread = serde_json::from_value(json!({"id": "t", "messages": [
+            {"id": "m1", "internalDate": "1", "payload": {"mimeType": "text/plain",
+                "headers": [{"name": "From", "value": "Alice <a@example.com>"},
+                            {"name": "To", "value": "me@example.com, Bob <b@example.com>"},
+                            {"name": "Cc", "value": "Carol <c@example.com>"}],
+                "body": {"data": "AAAA"}}},
+            {"id": "m2", "internalDate": "2", "labelIds": ["DRAFT"], "payload": {"mimeType": "text/plain",
+                "headers": [{"name": "From", "value": "me@example.com"},
+                            {"name": "To", "value": "z@example.com"}],
+                "body": {"data": "AAAA"}}}]}))
+        .unwrap();
+        let d = ThreadDetail::new(&t, false, "me@example.com");
+        let boxes = |l: &[crate::mail_address::Recipient]| {
+            l.iter().map(|r| r.mailbox.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(boxes(&d.reply.one.to), ["Alice <a@example.com>"]);
+        assert_eq!(
+            boxes(&d.reply.all.to),
+            ["Alice <a@example.com>", "Bob <b@example.com>"]
+        );
+        assert_eq!(boxes(&d.reply.all.cc), ["Carol <c@example.com>"]);
+        let value = serde_json::to_value(&d).unwrap();
+        assert_eq!(value["reply"]["one"]["to"][0]["label"], "Alice");
+        let none = ThreadDetail::new(&thread_with_labels("t", &[&["DRAFT"]]), false, "acc");
+        assert_eq!(none.reply, ReplyChoices::default());
     }
 
     #[test]
