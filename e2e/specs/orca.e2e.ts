@@ -3833,7 +3833,8 @@ describe("orca: an operation goes to the place of its row", () => {
       await project(repo).click();
       await tabOf(`orca:term_${repo}_zsh`).$(".orca-tab-btn").click();
       await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
-      await browser.keys(["x"]);
+      // Not a letter from p to {, whose key code xterm.js reads as a function key (the driver gives "x" the code 120, which it sends as F9).
+      await browser.keys(["c"]);
     };
 
     it("reads the screen and types the keys through the environment of its row", async () => {
@@ -3842,8 +3843,8 @@ describe("orca: an operation goes to the place of its row", () => {
       await type("example-app");
       await type("example-api");
       expect(await waitForCalls(input, 2)).toEqual([
-        { handle: "term_example-app_zsh", text: "x", environment: "Studio" },
-        { handle: "term_example-api_zsh", text: "x" },
+        { handle: "term_example-app_zsh", text: "c", environment: "Studio" },
+        { handle: "term_example-api_zsh", text: "c" },
       ]);
       const reads = (await callsOf("orca_terminal_read")) as { handle: string; environment?: string }[];
       expect(reads.filter((r) => r.handle === "term_example-app_zsh").every((r) => r.environment === "Studio")).toBe(true);
