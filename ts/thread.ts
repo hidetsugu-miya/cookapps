@@ -1,9 +1,9 @@
-// The thread detail view: the messages of the open thread, their folding, the row of its operations and the reply field.
+// The thread detail view: the messages of the open thread, their folding, the row of its operations and the reply field (shown by the reply button of the latest message).
 import type { MessageDetail } from "./bindings/MessageDetail";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, formatDetailDate, initials, unescapeHtml } from "./format.js";
-import { PERSON_SVG } from "./icons.js";
+import { PERSON_SVG, RETURN_SVG } from "./icons.js";
 import { dismiss } from "./arrivals.js";
 import { applySync, load, removeRow } from "./inbox.js";
 import { rowKey, rows, setReadState, updateBadge } from "./inbox-rows.js";
@@ -14,7 +14,7 @@ import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
-import { bindReply, initReply, resetReply, type ReplyTarget } from "./mail-reply.js";
+import { bindReply, initReply, openReply, resetReply, type ReplyTarget } from "./mail-reply.js";
 import { mailCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
 import { makeTodo } from "./todo-add.js";
@@ -47,7 +47,8 @@ let drawCount = 0;
 
 // The header of an open message: avatar, sender, recipients and date. A div, so the address can be selected;
 // when the message can be folded it acts as a button (`message` adds the click).
-function openHead(m: MessageDetail, foldable: boolean) {
+// `replyable` puts the button that shows the reply field (M-10) at the right of the date.
+function openHead(m: MessageDetail, foldable: boolean, replyable: boolean) {
   const head = document.createElement("div");
   head.className = "msg-head";
   if (foldable) {
@@ -60,7 +61,26 @@ function openHead(m: MessageDetail, foldable: boolean) {
   who.append(span("name", m.fromName || m.fromAddress));
   if (m.fromName) who.append(" ", span("addr", `<${m.fromAddress}>`));
   if (m.toLabel) who.append(span("to", m.toLabel));
-  head.append(avatar, who, span("when", formatDetailDate(m.dateMs)));
+  const when = span("when", formatDetailDate(m.dateMs));
+  if (!replyable) {
+    head.append(avatar, who, when);
+    return head;
+  }
+  const reply = document.createElement("button");
+  reply.id = "mail-reply-open";
+  reply.className = "icon-btn msg-reply";
+  reply.type = "button";
+  reply.setAttribute("aria-label", "返信");
+  reply.innerHTML = RETURN_SVG;
+  // The button is inside the head that folds the message: neither its click nor Enter and Space may reach it.
+  reply.onclick = (e) => {
+    e.stopPropagation();
+    openReply();
+  };
+  reply.onkeydown = (e) => e.stopPropagation();
+  const side = span("msg-side", "");
+  side.append(when, reply);
+  head.append(avatar, who, side);
   return head;
 }
 
@@ -79,9 +99,10 @@ function foldedHead(m: MessageDetail) {
 
 // `ctx` is the open thread's.
 // `folded` starts the message as one line; the head toggles it. A thread's only message has no toggle.
-function message(m: MessageDetail, ctx: ThreadCtx, folded: boolean, foldable: boolean) {
+// `replyable` is the message the reply goes to: its head has the reply button.
+function message(m: MessageDetail, ctx: ThreadCtx, folded: boolean, foldable: boolean, replyable: boolean) {
   const article = document.createElement("article");
-  const open = openHead(m, foldable);
+  const open = openHead(m, foldable, replyable);
   const body = document.createElement("div");
   body.className = "msg-body";
   article.append(open, body);
@@ -233,7 +254,7 @@ function draw(t: ThreadDetail, { id, account, li }: ThreadTarget, seq: number) {
   // Newest first. Only the latest message (the first) is open when the thread has several.
   const several = t.messages.length > 1;
   $("messages").replaceChildren(
-    ...[...t.messages].reverse().map((m, i) => message(m, ctx, several && i > 0, several)),
+    ...[...t.messages].reverse().map((m, i) => message(m, ctx, several && i > 0, several, i === 0)),
   );
   // A Todo still being made from the thread opened before keeps its button until it ends.
   for (const button of ACTIONS) {

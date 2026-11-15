@@ -53,6 +53,13 @@ fn check_size(text: &str) -> Result<(), PatchError> {
     }
 }
 
+/// Whether an HTML block of the Markdown is an empty paragraph of the editor: Milkdown writes a paragraph with nothing in it as `<br />`, alone in its block, and a reader of the Markdown (a mail, a Slack post) takes it as a blank line, not as the text of a tag.
+pub(crate) fn is_empty_paragraph(html: &str) -> bool {
+    ["<br>", "<br/>", "<br />"]
+        .iter()
+        .any(|tag| html.trim().eq_ignore_ascii_case(tag))
+}
+
 /// Cuts the front matter off the top of a text: `(front matter, body)`, which join back into the text. The front matter is the lines from an opening `---` (or `+++`) to the next line that is the same mark, both included with their line ends. A text that does not begin with the mark, or whose block is never closed, has none.
 pub fn split_front_matter(text: &str) -> (&str, &str) {
     let mark = if text.starts_with("---") {
@@ -373,6 +380,16 @@ pub async fn markdown_patch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_html_block_of_one_br_is_an_empty_paragraph() {
+        for html in ["<br />\n", "<br>", " <BR/> \n", "<br />"] {
+            assert!(is_empty_paragraph(html), "{html:?}");
+        }
+        for html in ["<br />x", "<br /><br />", "<div>", "<br class=\"a\">", ""] {
+            assert!(!is_empty_paragraph(html), "{html:?}");
+        }
+    }
 
     #[test]
     fn splits_yaml_and_toml_front_matter() {

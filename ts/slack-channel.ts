@@ -8,7 +8,7 @@ import { $, tag } from "./dom.js";
 import { formatDay } from "./format.js";
 import { HASH_SVG, LOCK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { createSlackEditor } from "./slack-editor.js";
+import { createRichEditor } from "./rich-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
 import { applyReactionChange, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
@@ -51,7 +51,7 @@ function syncDraft() {
 }
 
 const feed = () => $("sc-feed");
-const editor = createSlackEditor({
+const editor = createRichEditor({
   prefix: "sc",
   label: "チャンネルに投稿",
   onChange: () => {

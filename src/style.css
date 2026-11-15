@@ -134,12 +134,12 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
 #thread-actions #trash, #thread-summary:not([hidden]) + #thread-slack { position: relative; margin-left: 10px; }
 #thread-actions #trash::before, #thread-summary:not([hidden]) + #thread-slack::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
-/* M-10: while a thread is open, #main is a column that holds the thread to the height of the area, and the reply field (#mail-reply) sits at its bottom: it stays there, over the end of the messages, while they scroll. The field reaches the edges of #main's padding, as the row of operations does. */
-#main:has(> #thread:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
+/* M-10: while a thread is open, #main is a column that holds the thread to the height of the area. The reply field (#mail-reply) is shown by the reply button of the latest message, and it takes half the height of #main (#main is a size container while a thread is open, so that the half is of the area, not of the thread, which grows with the messages; the menus and pops are in the body, which the containment would not move) and sits at its bottom: it stays there, over the end of the messages, while they scroll, and at the end of the scroll the last message is above it. The text fills what the rows and the foot leave of the field, and scrolls inside it. The field reaches the edges of #main's padding, as the row of operations does. */
+#main:has(> #thread:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; container-type: size; }
 #main > #thread:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; }
-#mail-reply { position: sticky; bottom: 0; z-index: 2; flex: none; margin: auto -24px 0 -32px; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); }
-.mail-reply-card { display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
-.mail-reply-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+#mail-reply { position: sticky; bottom: 0; z-index: 2; flex: none; display: flex; flex-direction: column; box-sizing: border-box; height: 50cqh; margin: auto -24px 0 -32px; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); }
+.mail-reply-card { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
+.mail-reply-row { flex: none; display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .mail-reply-mode { position: relative; flex: none; display: inline-flex; align-items: center; color: var(--ink-soft); }
 #mail-reply-mode, #new-mail-from-select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
 .mail-reply-mode::after { content: ""; position: absolute; right: 2px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
@@ -153,8 +153,16 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .mail-reply-more { flex: none; display: flex; gap: 8px; }
 .mail-reply-link { padding: 2px 0; border: 0; background: none; color: var(--ink-soft); font: inherit; cursor: pointer; }
 .mail-reply-link:hover { color: var(--accent); }
-#mail-reply-body { display: block; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 40vh; padding: 10px 12px; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: vertical; }
-.mail-reply-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
+#mail-reply-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+/* The text is the rich editor of ts/rich-editor.ts, with no arrow: the toolbar over the text, and the text fills the rest of the card and scrolls inside it. */
+#mail-reply-body .rich-composer { flex: 1; min-height: 0; border: 0; border-radius: 0; background: transparent; }
+#mail-reply-body .rich-composer:focus-within { outline: 0; }
+#mail-reply-body .rich-composer.busy { background: var(--bar); }
+#mail-reply-body .rich-tools { border-radius: 0; }
+#mail-reply-body .rich-input { flex: 1 1 0; min-height: 0; max-height: none; display: flex; flex-direction: column; }
+#mail-reply-body .rich-input .milkdown { flex: 1 0 auto; display: flex; flex-direction: column; }
+#mail-reply-body .rich-input .ProseMirror { flex: 1 0 auto; }
+.mail-reply-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
 .mail-reply-foot #mail-reply-discard { margin-left: auto; }
 .mail-reply-foot .text-btn:disabled { opacity: .4; cursor: default; }
 /* M-11: the screen that writes a new mail takes the place of the thread. The header is a band like the thread's (it holds "戻る", the title and "破棄"); the rows are those of the reply field without its card, and "送信" is in a band fixed at the bottom of the area, as the reply field is. */
@@ -195,6 +203,10 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .msg-head .to { display: block; margin-top: 2px; }
 .msg-head .addr, .msg-head .to { user-select: text; -webkit-user-select: text; }
 .msg-head .when { padding-top: 2px; white-space: nowrap; }
+/* M-10: the date of the latest message and, at its right, the button that shows the reply field; the button is 28px and takes no more height than the name line. */
+.msg-side { display: flex; align-items: flex-start; gap: 4px; }
+.msg-reply { flex: none; width: 28px; height: 28px; margin: -4px -6px 0 0; color: var(--ink-soft); border-radius: 50%; }
+.msg-reply svg { width: 18px; height: 18px; }
 .msg-head.folded { align-items: center; padding: 10px 0; border-radius: 8px; }
 .msg-head.folded:hover { background: var(--hover); }
 .msg-head.folded .avatar { justify-self: center; }
@@ -1491,7 +1503,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .icon-btn.chat-send-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .icon-btn.chat-send-icon:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
 .chat-send-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-/* S-21: the rich field for writing a Slack message (ts/slack-editor.ts): the toolbar over the field, the send arrow at the right end of the row under it, all inside one frame. Milkdown has no theme, so the elements get their looks here. */
+/* S-21: the rich field for writing a Slack message (ts/rich-editor.ts): the toolbar over the field, the send arrow at the right end of the row under it, all inside one frame. Milkdown has no theme, so the elements get their looks here. */
 .rich-composer { padding: 0; gap: 0; }
 .rich-composer.busy { background: var(--bar); }
 .rich-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--line); border-radius: 12px 12px 0 0; background: var(--bar); }

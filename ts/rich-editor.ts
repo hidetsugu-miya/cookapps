@@ -1,15 +1,17 @@
-// The rich field for writing a Slack message (S-21, and the thread reply of S-6): one frame that holds a toolbar of the styles Slack's mrkdwn has, the Milkdown editor under it (src/vendor/milkdown.js, A-26) and the round send arrow at the right end of the row below.
-// The owner puts `el` in its pane and keeps the text itself (the Markdown of the field, `markdown()`); Rust turns it into mrkdwn when it posts (`markdown: true` of `slack_channel_post`, S-21).
+// The rich field for writing a message: the Slack posts of S-21, the thread reply of S-6 and the body of a mail reply (M-10). One frame that holds a toolbar of the styles, the Milkdown editor under it (src/vendor/milkdown.js, A-26) and, unless `arrow` is off, the round send arrow at the right end of the row below.
+// The owner puts `el` in its pane and keeps the text itself (the Markdown of the field, `markdown()`); Rust turns it into mrkdwn (`markdown: true` of `slack_channel_post`, S-21) or into the HTML of a mail (`markdown: true` of `send_mail`, M-10) when it sends.
 // Milkdown is read the first time `ensure()` is called. Until it is there the frame is drawn with the field off and the arrow off, and `ensure()` says when it is ready. The field has no placeholder (`.claude/rules/frontend.md`).
 import { composing, isMac, tag } from "./dom.js";
 import { SEND_SVG, svgOf } from "./icons.js";
 import { loadMilkdown } from "./vendor-load.js";
 
-export interface SlackEditorOptions {
+export interface RichEditorOptions {
   // Ids of the parts are `{prefix}-input` (the field), `{prefix}-send` (the arrow) and `{prefix}-tools` (the toolbar).
   prefix: string;
   // The accessible name of the field.
   label: string;
+  // Whether the frame has the send arrow (default true). The owner of a field with its own send button turns it off.
+  arrow?: boolean;
   // The accessible name of the arrow (default "投稿").
   sendLabel?: string;
   // The text changed by typing or by a toolbar button (not by `set`).
@@ -18,11 +20,13 @@ export interface SlackEditorOptions {
   onSubmit: () => void;
 }
 
-export interface SlackEditor {
+export interface RichEditor {
   el: HTMLElement;
   // Reads Milkdown if it is not read yet and makes the editor; resolves when it is ready. A failed read is tried again at the next call.
   ensure(): Promise<void>;
   ready(): boolean;
+  // Puts the cursor in the field (nothing before it is ready).
+  focus(): void;
   markdown(): string;
   // True when the field holds no text but spaces.
   blank(): boolean;
@@ -30,6 +34,7 @@ export interface SlackEditor {
   set(markdown: string): void;
   // The field and the toolbar are off while busy.
   setBusy(busy: boolean): void;
+  // Nothing when the frame has no arrow.
   setSendDisabled(disabled: boolean): void;
 }
 
@@ -47,7 +52,7 @@ const TOOLS: { name: MilkdownCommand | null; label: string; svg: string }[] = [
   { name: "codeBlock", label: "コードブロック", svg: svgOf('<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>') },
 ];
 
-export function createSlackEditor({ prefix, label, sendLabel = "投稿", onChange, onSubmit }: SlackEditorOptions): SlackEditor {
+export function createRichEditor({ prefix, label, arrow = true, sendLabel = "投稿", onChange, onSubmit }: RichEditorOptions): RichEditor {
   let view: MilkdownComposer | null = null;
   let loading: Promise<void> | null = null;
   let busy = false;
@@ -122,9 +127,10 @@ export function createSlackEditor({ prefix, label, sendLabel = "投稿", onChang
     }
   };
   tools.append(href);
-  frame.append(tools, host, foot);
+  frame.append(tools, host);
+  if (arrow) frame.append(foot);
 
-  // Cmd+Enter (Ctrl+Enter off macOS) posts and is kept from the editor, unless it only confirms an IME conversion. Enter alone is the editor's own line break.
+  // Cmd+Enter (Ctrl+Enter off macOS) sends and is kept from the editor, unless it only confirms an IME conversion. Enter alone is the editor's own line break.
   host.addEventListener(
     "keydown",
     (e) => {
@@ -165,6 +171,7 @@ export function createSlackEditor({ prefix, label, sendLabel = "投稿", onChang
       return loading;
     },
     ready: () => view !== null,
+    focus: () => view?.focus(),
     markdown: () => view?.markdown() ?? "",
     blank: () => view?.blank() ?? true,
     set(markdown) {

@@ -5,9 +5,13 @@
  */
 export type OutgoingMail = { to: Array<string>, cc: Array<string>, bcc: Array<string>, subject: string, 
 /**
- * Plain text.
+ * Plain text, or Markdown when `markdown` is true.
  */
 body: string, 
+/**
+ * `true`: `body` is Markdown, and the mail goes out as `multipart/alternative`, the Markdown as it is and the HTML made from it.
+ */
+markdown?: boolean, 
 /**
  * The thread this mail answers: it gets the thread's ID, `In-Reply-To`, `References` and a `Re:` subject.
  */

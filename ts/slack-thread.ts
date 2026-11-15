@@ -1,4 +1,4 @@
-// The Slack thread (S-6, S-7, S-11, S-22): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), reactions, a rich field to reply in (slack-editor.ts), a card to make a Todo from the message,
+// The Slack thread (S-6, S-7, S-11, S-22): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), reactions, a rich field to reply in (rich-editor.ts), a card to make a Todo from the message,
 // and a conversation with Claude (claude-chat.ts) to ask about the thread and the reply: proofread it, summarise the thread, write a reply. Nothing leaves the app until the reply is posted; Claude is asked only when the user sends a request,
 // and then it gets the reply field's text, the conversation, the request and the messages of the thread as shown.
 // The thread is read when it is opened and after a reply, not on a timer. The reply and the conversation are kept per thread in memory until the app quits.
@@ -15,7 +15,7 @@ import { FILE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu } from "./menu.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
-import { createSlackEditor } from "./slack-editor.js";
+import { createRichEditor } from "./rich-editor.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
 import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
@@ -121,7 +121,7 @@ const chat = createChat({
   keyHint: false,
 });
 
-const editor = createSlackEditor({
+const editor = createRichEditor({
   prefix: "st",
   label: "スレッドに返信",
   sendLabel: "返信",

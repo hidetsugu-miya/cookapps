@@ -6,6 +6,7 @@
 
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
+use crate::markdown_patch::is_empty_paragraph;
 use crate::slack::escape_mrkdwn;
 
 /// A block level that collects its blocks: the text itself, a quote, a list or one item of it.
@@ -53,7 +54,7 @@ fn link_target(url: &str) -> String {
 /// `markdown` as mrkdwn, without the blank lines at its ends.
 /// Bold, italic, strike, code, a code block, a link, a list (bulleted or numbered, nested) and a quote become Slack's. A heading becomes a bold line.
 /// Only an `http`, `https` or `mailto` address makes a link; any other leaves the text alone. A link or an image inside a link's text adds its text to it.
-/// Inside a link's text no style is kept, and the language of a code block is dropped. Anything else (a table, a task mark, HTML) stays as the text it is, escaped.
+/// Inside a link's text no style is kept, and the language of a code block is dropped. An empty paragraph of the editor (`<br />` alone in its block) is one more blank line. Anything else (a table, a task mark, HTML) stays as the text it is, escaped.
 pub(crate) fn to_mrkdwn(markdown: &str) -> String {
     let mut stack = vec![Frame::default()];
     // The link being read: where its text starts in the inline text, and its address.
@@ -68,6 +69,12 @@ pub(crate) fn to_mrkdwn(markdown: &str) -> String {
         let top = stack.last_mut().expect("the root frame stays");
         match event {
             Event::Text(text) if in_code_block => top.inline.push_str(&text),
+            // An empty paragraph of the editor is one more line after the block before it, which a blank line already separates from the next.
+            Event::Html(text) if is_empty_paragraph(&text) => {
+                if let Some(last) = top.blocks.last_mut() {
+                    last.push('\n');
+                }
+            }
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
                 top.inline.push_str(&escape_mrkdwn(&text));
             }
@@ -334,6 +341,15 @@ mod tests {
         assert_eq!(to_mrkdwn("a  \nb\\\nc"), "a\nb\nc");
         assert_eq!(to_mrkdwn("\n\n  a  \n\n"), "a");
         assert_eq!(to_mrkdwn("  \n"), "");
+    }
+
+    #[test]
+    fn an_empty_paragraph_of_the_editor_is_one_more_blank_line() {
+        assert_eq!(to_mrkdwn("A\n\n<br />\n\nB\n"), "A\n\n\nB");
+        assert_eq!(to_mrkdwn("A\n\n<br />\n\n<br />\n\nB"), "A\n\n\n\nB");
+        assert_eq!(to_mrkdwn("<br />\n\nA\n\n<br />\n"), "A");
+        assert_eq!(to_mrkdwn("<br />x"), "&lt;br /&gt;x");
+        assert_eq!(to_mrkdwn("```\n<br />\n```"), "```\n&lt;br /&gt;\n```");
     }
 
     #[test]

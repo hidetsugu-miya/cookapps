@@ -7,6 +7,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE},
     Engine,
 };
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,6 +18,7 @@ use ts_rs::TS;
 use crate::auth::{config_dir, Auth};
 use crate::gmail::{log_failure, send_json_refreshing, thread_url, ApiError};
 use crate::mail_address::split_address;
+use crate::markdown_patch::is_empty_paragraph;
 
 const SEND_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 /// An encoded-word holds at most 75 characters; 42 bytes become 56 characters of base64, 68 with the frame.
@@ -38,8 +40,12 @@ pub struct OutgoingMail {
     #[serde(default)]
     pub bcc: Vec<String>,
     pub subject: String,
-    /// Plain text.
+    /// Plain text, or Markdown when `markdown` is true.
     pub body: String,
+    /// `true`: `body` is Markdown, and the mail goes out as `multipart/alternative`, the Markdown as it is and the HTML made from it.
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    pub markdown: Option<bool>,
     /// The thread this mail answers: it gets the thread's ID, `In-Reply-To`, `References` and a `Re:` subject.
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
@@ -55,6 +61,7 @@ struct Checked {
     bcc: Vec<String>,
     subject: String,
     body: String,
+    markdown: bool,
 }
 
 /// The headers that put a reply in its thread.
@@ -190,6 +197,7 @@ fn check(account: &str, mail: &OutgoingMail) -> Result<Checked, String> {
         bcc: format_mailboxes(&mail.bcc)?,
         subject: format_subject(&subject)?,
         body: mail.body.clone(),
+        markdown: mail.markdown.unwrap_or(false),
     })
 }
 
@@ -318,6 +326,117 @@ fn encode_body(body: &str) -> String {
         .collect()
 }
 
+/// The boundary of `multipart/alternative`. The parts are base64, whose lines never hold a `-`, so no body can contain it.
+const BOUNDARY: &str = "cookapps-alternative";
+
+fn escape_html(text: &str, out: &mut String) {
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+}
+
+/// Only these links keep their anchor; `javascript:`, `data:` and the like are left as the text of the link.
+fn link_allowed(url: &str) -> bool {
+    let url = url.trim_start().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
+}
+
+/// The HTML part: Markdown with strikethrough, and a raw HTML tag in it written out as text, not passed on as a tag.
+/// An image is left as its alt text.
+fn markdown_to_html(markdown: &str) -> String {
+    let mut out = String::from("<html><body>");
+    let mut link_open = false;
+    for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+        match event {
+            Event::Html(text) if is_empty_paragraph(&text) => out.push_str("<p><br></p>\n"),
+            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
+                escape_html(&text, &mut out)
+            }
+            Event::Code(text) => {
+                out.push_str("<code>");
+                escape_html(&text, &mut out);
+                out.push_str("</code>");
+            }
+            Event::SoftBreak => out.push('\n'),
+            Event::HardBreak => out.push_str("<br>\n"),
+            Event::Rule => out.push_str("<hr>\n"),
+            Event::Start(tag) => match tag {
+                Tag::Paragraph => out.push_str("<p>"),
+                Tag::Heading { level, .. } => out.push_str(&format!("<h{}>", level as usize)),
+                Tag::BlockQuote(_) => out.push_str("<blockquote>\n"),
+                Tag::CodeBlock(_) => out.push_str("<pre><code>"),
+                Tag::List(Some(1)) => out.push_str("<ol>\n"),
+                Tag::List(Some(start)) => out.push_str(&format!("<ol start=\"{start}\">\n")),
+                Tag::List(None) => out.push_str("<ul>\n"),
+                Tag::Item => out.push_str("<li>"),
+                Tag::Emphasis => out.push_str("<em>"),
+                Tag::Strong => out.push_str("<strong>"),
+                Tag::Strikethrough => out.push_str("<del>"),
+                Tag::Link { dest_url, .. } if link_allowed(&dest_url) => {
+                    link_open = true;
+                    out.push_str("<a href=\"");
+                    escape_html(&dest_url, &mut out);
+                    out.push_str("\">");
+                }
+                _ => {}
+            },
+            Event::End(tag) => match tag {
+                TagEnd::Paragraph => out.push_str("</p>\n"),
+                TagEnd::Heading(level) => out.push_str(&format!("</h{}>\n", level as usize)),
+                TagEnd::BlockQuote(_) => out.push_str("</blockquote>\n"),
+                TagEnd::CodeBlock => out.push_str("</code></pre>\n"),
+                TagEnd::List(true) => out.push_str("</ol>\n"),
+                TagEnd::List(false) => out.push_str("</ul>\n"),
+                TagEnd::Item => out.push_str("</li>\n"),
+                TagEnd::Emphasis => out.push_str("</em>"),
+                TagEnd::Strong => out.push_str("</strong>"),
+                TagEnd::Strikethrough => out.push_str("</del>"),
+                TagEnd::Link if link_open => {
+                    link_open = false;
+                    out.push_str("</a>");
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    out.push_str("</body></html>");
+    out
+}
+
+/// The text part: the Markdown as it is, except that an empty paragraph of the editor (`<br />` alone in its block) is left out, so that it is one more blank line and not the text of a tag.
+fn plain_text(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut at = 0;
+    for (event, range) in
+        Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    {
+        if matches!(&event, Event::Html(text) if is_empty_paragraph(text)) {
+            out.push_str(&markdown[at..range.start]);
+            at = range.end;
+        }
+    }
+    out.push_str(&markdown[at..]);
+    out
+}
+
+/// One MIME part: its headers, a blank line and the text as base64.
+fn text_part(subtype: &str, text: &str) -> String {
+    format!(
+        "Content-Type: text/{subtype}; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{}",
+        encode_body(text)
+    )
+}
+
 /// The RFC 5322 message.
 fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
     let mut m = format!("From: {}\r\n", c.from);
@@ -330,9 +449,20 @@ fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
         m += &format!("References: {}\r\n", fold_ids(&r.references));
     }
     m += "MIME-Version: 1.0\r\n";
-    m += "Content-Type: text/plain; charset=UTF-8\r\n";
-    m += "Content-Transfer-Encoding: base64\r\n\r\n";
-    m += &encode_body(&c.body);
+    if c.markdown {
+        m += &format!("Content-Type: multipart/alternative; boundary=\"{BOUNDARY}\"\r\n\r\n");
+        m += &format!(
+            "--{BOUNDARY}\r\n{}",
+            text_part("plain", &plain_text(&c.body))
+        );
+        m += &format!(
+            "--{BOUNDARY}\r\n{}",
+            text_part("html", &markdown_to_html(&c.body))
+        );
+        m += &format!("--{BOUNDARY}--\r\n");
+    } else {
+        m += &text_part("plain", &c.body);
+    }
     m
 }
 
@@ -424,8 +554,34 @@ mod tests {
             bcc: vec![],
             subject: subject.into(),
             body: body.into(),
+            markdown: None,
             reply_thread_id: None,
         }
+    }
+
+    /// The mail parts of a multipart message: each one's unfolded header lines and its decoded body.
+    fn parts(message: &str, boundary: &str) -> Vec<(Vec<String>, String)> {
+        let body = message.split_once("\r\n\r\n").unwrap().1;
+        let delimiter = format!("--{boundary}");
+        let mut pieces = body.split(delimiter.as_str());
+        assert_eq!(pieces.next(), Some(""));
+        let mut out = Vec::new();
+        for piece in pieces {
+            if piece == "--\r\n" {
+                return out;
+            }
+            let (head, b64) = piece
+                .strip_prefix("\r\n")
+                .unwrap()
+                .split_once("\r\n\r\n")
+                .unwrap();
+            let b64: String = b64.split("\r\n").collect();
+            out.push((
+                head.split("\r\n").map(str::to_owned).collect(),
+                String::from_utf8(STANDARD.decode(b64).unwrap()).unwrap(),
+            ));
+        }
+        panic!("no closing delimiter");
     }
 
     fn build(
@@ -896,6 +1052,165 @@ mod tests {
         let e = post(&url, &send_body("x", None)).unwrap_err();
         assert_eq!(e.status, Some(400));
         server.join().unwrap();
+    }
+
+    fn html_of(markdown: &str) -> String {
+        let html = markdown_to_html(markdown);
+        html.strip_prefix("<html><body>")
+            .and_then(|h| h.strip_suffix("</body></html>"))
+            .expect("wrapped in html and body")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_markdown_mail_is_multipart_alternative_with_text_then_html() {
+        let mut m = mail(&["a@example.com"], "s", "**太字** と\nline");
+        m.markdown = Some(true);
+        let message = build("me@example.com", &m, None).unwrap();
+        let h = headers(&message);
+        assert!(h.contains(&"MIME-Version: 1.0".to_owned()));
+        let content_type = h.iter().find(|l| l.starts_with("Content-Type:")).unwrap();
+        let boundary = content_type
+            .strip_prefix("Content-Type: multipart/alternative; boundary=\"")
+            .and_then(|b| b.strip_suffix('"'))
+            .expect("multipart/alternative with a boundary");
+        assert!(message.ends_with(&format!("--{boundary}--\r\n")));
+        let parts = parts(&message, boundary);
+        assert_eq!(parts.len(), 2);
+        let part_headers = |ct: &str| {
+            vec![
+                format!("Content-Type: {ct}; charset=UTF-8"),
+                "Content-Transfer-Encoding: base64".to_owned(),
+            ]
+        };
+        assert_eq!(parts[0].0, part_headers("text/plain"));
+        assert_eq!(parts[0].1, "**太字** と\r\nline");
+        assert_eq!(parts[1].0, part_headers("text/html"));
+        assert_eq!(
+            parts[1].1,
+            "<html><body><p><strong>太字</strong> と\r\nline</p>\r\n</body></html>"
+        );
+    }
+
+    #[test]
+    fn the_boundary_cannot_appear_in_the_encoded_parts() {
+        let mut m = mail(&["a@example.com"], "s", "--cookapps-alternative\n--");
+        m.markdown = Some(true);
+        let message = build("me@example.com", &m, None).unwrap();
+        let boundary = "cookapps-alternative";
+        assert_eq!(parts(&message, boundary).len(), 2);
+        assert_eq!(message.matches(&format!("--{boundary}")).count(), 3);
+    }
+
+    #[test]
+    fn a_markdown_mail_with_an_empty_body_still_has_two_parts() {
+        let mut m = mail(&["a@example.com"], "s", "");
+        m.markdown = Some(true);
+        let message = build("me@example.com", &m, None).unwrap();
+        let parts = parts(&message, "cookapps-alternative");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].1, "");
+    }
+
+    #[test]
+    fn markdown_is_off_by_default_in_the_json_of_the_screen() {
+        let m: OutgoingMail = serde_json::from_value(
+            json!({"to": ["a@example.com"], "subject": "s", "body": "**b**"}),
+        )
+        .unwrap();
+        assert_eq!(m.markdown, None);
+        let message = build("me@example.com", &m, None).unwrap();
+        assert!(message.contains("Content-Type: text/plain; charset=UTF-8"));
+        assert!(!message.contains("multipart"));
+        assert_eq!(body_of(&message), "**b**");
+    }
+
+    #[test]
+    fn markdown_becomes_html() {
+        assert_eq!(
+            html_of("**bold** and *it*"),
+            "<p><strong>bold</strong> and <em>it</em></p>\n"
+        );
+        assert_eq!(
+            html_of("[site](https://example.com/a?b=1&c=\"2\")"),
+            "<p><a href=\"https://example.com/a?b=1&amp;c=&quot;2&quot;\">site</a></p>\n"
+        );
+        assert_eq!(
+            html_of("- one\n- two\n"),
+            "<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n"
+        );
+        assert_eq!(
+            html_of("3. a\n4. b\n"),
+            "<ol start=\"3\">\n<li>a</li>\n<li>b</li>\n</ol>\n"
+        );
+        assert_eq!(html_of("1. a\n"), "<ol>\n<li>a</li>\n</ol>\n");
+        assert_eq!(html_of("~~gone~~"), "<p><del>gone</del></p>\n");
+        assert_eq!(
+            html_of("# T\n\n> q"),
+            "<h1>T</h1>\n<blockquote>\n<p>q</p>\n</blockquote>\n"
+        );
+        assert_eq!(html_of("`a<b`"), "<p><code>a&lt;b</code></p>\n");
+        assert_eq!(
+            html_of("```\nx < y\n```"),
+            "<pre><code>x &lt; y\n</code></pre>\n"
+        );
+        assert_eq!(html_of("a  \nb\n\n---"), "<p>a<br>\nb</p>\n<hr>\n");
+    }
+
+    #[test]
+    fn raw_html_in_the_markdown_is_text() {
+        assert_eq!(
+            html_of("x <script>alert(1)</script> y"),
+            "<p>x &lt;script&gt;alert(1)&lt;/script&gt; y</p>\n"
+        );
+        assert_eq!(
+            html_of("<div onclick=\"x\">a</div>\n\nb"),
+            "&lt;div onclick=&quot;x&quot;&gt;a&lt;/div&gt;\n<p>b</p>\n"
+        );
+    }
+
+    #[test]
+    fn an_empty_paragraph_of_the_editor_is_a_blank_line_not_the_text_of_a_tag() {
+        assert_eq!(
+            html_of("A\n\n<br />\n\nB\n"),
+            "<p>A</p>\n<p><br></p>\n<p>B</p>\n"
+        );
+        assert_eq!(html_of("<br>\n\n<BR/>\n"), "<p><br></p>\n<p><br></p>\n");
+        assert_eq!(html_of("<br />x"), "<p>&lt;br /&gt;x</p>\n");
+        assert_eq!(
+            html_of("```\n<br />\n```"),
+            "<pre><code>&lt;br /&gt;\n</code></pre>\n"
+        );
+        assert_eq!(plain_text("A\n\n<br />\n\nB\n"), "A\n\n\nB\n");
+        assert_eq!(plain_text("<br>\n\nA"), "\nA");
+        assert_eq!(plain_text("```\n<br />\n```"), "```\n<br />\n```");
+        assert_eq!(plain_text("x <br /> y"), "x <br /> y");
+    }
+
+    #[test]
+    fn both_parts_of_a_markdown_mail_leave_the_empty_paragraph_out_of_the_text() {
+        let mut m = mail(&["a@example.com"], "s", "A\n\n<br />\n\nB\n");
+        m.markdown = Some(true);
+        let message = build("me@example.com", &m, None).unwrap();
+        let boundary = "cookapps-alternative";
+        let parts = parts(&message, boundary);
+        assert_eq!(parts[0].1, "A\r\n\r\n\r\nB\r\n");
+        assert_eq!(
+            parts[1].1,
+            "<html><body><p>A</p>\r\n<p><br></p>\r\n<p>B</p>\r\n</body></html>"
+        );
+    }
+
+    #[test]
+    fn a_link_that_is_not_http_https_or_mailto_loses_its_anchor() {
+        assert_eq!(html_of("[x](javascript:alert(1))"), "<p>x</p>\n");
+        assert_eq!(html_of("[x](JaVaScRiPt:alert(1))"), "<p>x</p>\n");
+        assert_eq!(html_of("[x](data:text/html,a)"), "<p>x</p>\n");
+        assert_eq!(
+            html_of("[x](mailto:a@example.com)"),
+            "<p><a href=\"mailto:a@example.com\">x</a></p>\n"
+        );
+        assert_eq!(html_of("![alt](https://example.com/a.png)"), "<p>alt</p>\n");
     }
 
     #[test]
