@@ -3,6 +3,20 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.74.0
+
+D-1: the side menu has a button for a new screen, "データベース", after Orca, with a drawn cylinder as its icon (#628, #629). The screen has a list of connections at the left, headed "接続" with a plus ("接続を追加"), and the work pane at the right. A row has a menu with "編集", "切断" (while the connection is open) and "削除", which asks first. The plus and "編集" open a popup with "接続名", "ユーザー名", "パスワード", the check box "SSM 経由で接続する" and, while it is checked, "AWS のプロファイル名", "リージョン" and "踏み台の名前", then "DB のホスト" and "ポート" (3306 for a new connection). A saved password is shown as "保存済み" and is never shown again; leave the field empty on an edit to keep it. The connections are saved in `database-profiles.json` in the config folder, and each password is in the OS keychain.
+
+D-2: the popup has "接続をテスト", which logs in with what is typed, shows "MySQL {version}" or the reason it failed, and saves nothing (#630, #631). The server is MySQL 5.7, 8.0 or 8.4. TLS is used when the server offers it, and a connection over a network that does not go through SSM requires it; the certificate is not verified. A connection through AWS Systems Manager opens a port forward through the bastion found by its Name tag, with the AWS SDK and `session-manager-plugin`, and closes it after the test. The errors tell apart an AWS login that is gone, a bastion that is not found, a missing `session-manager-plugin`, a tunnel that is open while MySQL does not answer, and a login that MySQL refuses.
+
+D-3: a press on a connection opens it, with its databases under it, and a press on a database shows its tables (a view is among them) and, in the work pane, their estimated rows, size and engine (#632). A dot at the right of a connection is green while it is open, orange while it opens and gray otherwise. "切断" closes the connection and its tunnel; so do an edit and a delete of it, and quitting the app.
+
+D-4: a press on a table shows its records, 100 rows a page, with "前へ", "次へ" and "再読み込み", and the range with the estimated number of rows (#633). NULL, numbers and binary values are told apart (a binary value shows its size), and a text of more than 200 characters is cut at 200 (the rest is not kept).
+
+D-5: the tab "構造" of a table lists its columns with their type, NULL, key, default and comment, and under them the number of columns, the engine and the character set (#634).
+
+D-6: the tab "SQL" of a table has a field for one statement and "実行" (#635). The result is shown as a grid, up to its first 1,000 rows, with the number of rows and the time under it; a SELECT that runs for more than 30 seconds is stopped by MySQL, and a run that does not end in 35 seconds closes the connection. The errors of MySQL are shown in Japanese.
+
 ## v0.73.0
 
 M-10: an open mail thread has a reply field fixed at the bottom, under the messages, so the thread can be read while the reply is written (#488). "返信" goes to the sender of the last message (to its Reply-To when it has one), and "全員に返信" also to the other people of its To, with its Cc in Cc; the account that reads the thread is left out. The recipients are chips, with × to take one off, and "Cc" and "Bcc" open a row each, where an address typed becomes a chip with Enter, with a comma or by leaving the field. The text is plain text. "送信" sends the reply from the account that received the thread, into the same thread, and the thread is read again with the sent mail in it; a failure shows its error and keeps what was written. "破棄" empties the field. What was written is dropped when the thread is left: no draft is saved.
