@@ -6,6 +6,8 @@
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
+pub mod ssm;
+
 use std::{path::Path, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
