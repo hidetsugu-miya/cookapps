@@ -9,6 +9,8 @@ import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
+import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
+import type { DatabaseRecords } from "../ts/bindings/DatabaseRecords";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
@@ -543,6 +545,20 @@ export const databaseProfile = (id: string, name: string, extra: Partial<Databas
 
 // A table of a database as `database_tables` answers it (D-3): the row count, the size and the engine as Rust words them.
 export const databaseTable = (name: string, extra: Partial<DatabaseTable> = {}): DatabaseTable => ({ name, engine: "InnoDB", rows: "1,200", size: "1.5 MB", ...extra });
+
+// A value as `database_records` answers it (D-4): Rust has made the text and told how to draw it.
+export const databaseCell = (text: string, kind: DatabaseCell["kind"] = "text"): DatabaseCell => ({ kind, text });
+export const databaseNull = databaseCell("NULL", "null");
+
+// A page of records as `database_records` answers it.
+export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra: Partial<DatabaseRecords> = {}): DatabaseRecords => ({
+  columns,
+  rows,
+  page: 0,
+  hasMore: false,
+  summary: rows.length === 0 ? "0 行" : `1–${rows.length} 行目`,
+  ...extra,
+});
 
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 

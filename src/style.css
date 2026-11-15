@@ -1637,7 +1637,23 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-tables th, .database-tables td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .database-tables th { color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; border-top: 1px solid var(--line); }
 .database-tables .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.database-tables tr[aria-selected="true"] td { background: var(--soft); }
+/* D-4: the tabs of a table, the grid of its records and, under it, the range and the pager. */
+#database-work.database-table-mode { display: flex; flex-direction: column; }
+.database-tabs { flex: none; display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.database-tab { height: 32px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: var(--muted); cursor: pointer; }
+.database-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: inherit; font-weight: 600; }
+.database-records { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.database-records-scroll { flex: 1; min-height: 0; overflow: auto; }
+.database-pager { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 12px; }
+.database-range { margin-right: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.database-pager .text-btn:disabled { opacity: .4; cursor: default; }
+.database-pager .text-btn:disabled:hover { background: var(--surface); }
+.database-grid { border-collapse: collapse; }
+.database-grid th, .database-grid td { padding: 6px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.database-grid th { position: sticky; top: 0; background: var(--surface); border-top: 1px solid var(--line); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; }
+.database-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.database-cell[data-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+.database-cell[data-kind="null"], .database-cell[data-kind="binary"] { color: var(--muted); font-style: italic; }
 .database-more { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; color: var(--ink-soft); }
 .database-more svg { width: 15px; height: 15px; }
 .scrim.scrim-center { justify-content: center; align-items: center; }

@@ -1,12 +1,12 @@
-// The database screen (D-1, D-3): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last.
+// The database screen (D-1, D-3, D-4): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the records of the table that was pressed.
 // This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
-// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server.
+// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records of a table are held in memory for the table that was pressed last only.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm } from "./database-form.js";
-import { drawDatabaseWork, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, type RecordsState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
@@ -31,7 +31,15 @@ interface ConnectionState {
   byName: Map<string, DatabaseState>;
 }
 
+// The records of the table that was pressed last, with the table they belong to. A read that ends after another press has replaced this is dropped.
+interface RecordsView extends RecordsState {
+  id: string;
+  database: string;
+  table: string;
+}
+
 let profiles: DatabaseProfileView[] = [];
+let records: RecordsView | null = null;
 let selected: Selected | null = null;
 const connections = new Map<string, ConnectionState>();
 // The connections whose disconnect is on its way: a press on them waits, so that an opening cannot meet the closing.
@@ -69,17 +77,26 @@ function sideState(): SideState {
   };
 }
 
-// The tables of the database that was pressed last; none while a connection or a connection's databases are all that was pressed.
+// The tables of the database that was pressed last, or the tabs of the table that was pressed; none while a connection or a connection's databases are all that was pressed.
 function workState(): WorkState | null {
   if (selected?.database == null) return null;
   const d = connections.get(selected.id)?.byName.get(selected.database);
   if (!d) return null;
-  return { database: selected.database, loading: d.loading, error: d.error, tables: d.tables, table: selected.table };
+  const mine = selected.table !== null && records?.id === selected.id && records.database === selected.database && records.table === selected.table;
+  return {
+    database: selected.database,
+    loading: d.loading,
+    error: d.error,
+    tables: d.tables,
+    table: mine ? selected.table : null,
+    tab: "records",
+    records: mine && records ? { page: records.page, loading: records.loading, error: records.error, data: records.data } : null,
+  };
 }
 
 const draw = () => {
   drawDatabaseSide(sideState(), actions);
-  drawDatabaseWork(workState());
+  drawDatabaseWork(workState(), workActions);
 };
 
 // Reads the connections from Rust (the file and the keychain are the only copy) and draws them.
@@ -195,6 +212,36 @@ async function openDatabase(profile: DatabaseProfileView, c: ConnectionState, na
   draw();
 }
 
+// Reads the page `page` of the records of a table (D-4). The page that was shown stays until the new one comes; an error drops it.
+async function readRecords(id: string, database: string, table: string, page: number) {
+  const same = records?.id === id && records.database === database && records.table === table;
+  const mine: RecordsView = { id, database, table, page, loading: true, error: null, data: same ? (records?.data ?? null) : null };
+  records = mine;
+  draw();
+  try {
+    mine.data = await invoke("database_records", { id, database, table, page });
+    mine.page = mine.data.page;
+  } catch (e) {
+    mine.data = null;
+    mine.error = String(e);
+    // A stream that broke closes the connection: its tree closes and says why.
+    if (records === mine && (await dropClosed()).includes(id)) {
+      connections.set(id, { ...emptyConnection(), expanded: true, error: mine.error });
+      records = null;
+      draw();
+      return;
+    }
+  }
+  mine.loading = false;
+  draw();
+}
+
+const workActions: WorkActions = {
+  page: (page) => {
+    if (records) readRecords(records.id, records.database, records.table, page);
+  },
+};
+
 const actions: SideActions = {
   // A row that is closed opens (and is read again); one that is open closes and stays connected; one that failed tries again; one that is being read waits.
   pressConnection: (profile) => {
@@ -219,10 +266,10 @@ const actions: SideActions = {
     }
     openDatabase(profile, c, name);
   },
-  // The table list stays as it is; the tabs of the table come here later.
+  // The tabs of the table open in the work pane, with the first page of its records, read again at every press.
   pressTable: (profile, database, table) => {
     selected = { id: profile.id, database, table };
-    draw();
+    readRecords(profile.id, database, table, 0);
   },
   edit: (profile) => openDatabaseForm(profile, save, test),
   disconnect: async (profile) => {

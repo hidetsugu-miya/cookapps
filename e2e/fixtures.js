@@ -74,6 +74,8 @@ const answers = {
   // D-3: a connection opens with no database and a database with no table, nothing is open to ask about, and a disconnect succeeds; a spec that opens a tree mocks `database_connect` and `database_tables`.
   database_connect: [],
   database_tables: [],
+  // D-4: a table with no row; a spec that opens a table mocks `database_records`.
+  database_records: { columns: [], rows: [], page: 0, hasMore: false, summary: "0 行" },
   database_connections: [],
   database_disconnect: null,
   // No orca command: the Orca screen reads once and stops.

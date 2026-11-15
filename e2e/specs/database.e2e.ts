@@ -1,4 +1,4 @@
-import { boot, callsOf, count, databaseProfile, databaseTable, holds, inbox, mock, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, count, databaseCell, databaseNull, databaseProfile, databaseRecords, databaseTable, holds, inbox, mock, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -551,17 +551,212 @@ describe("database: tree", () => {
     await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
   });
 
-  it("selects a table on a press, marks it in the table list and calls nothing", async () => {
-    await openTree();
-    await row("p1/d/shop").click();
-    await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
-    await row("p1/d/shop/t/users").click();
-    await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
-    await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "false");
-    await expect($('#database-work tr[data-table="users"]')).toHaveAttribute("aria-selected", "true");
-    await expect($('#database-work tr[data-table="orders"]')).toHaveAttribute("aria-selected", "false");
-    expect(await count("#database-work tbody tr")).toBe(3);
-    expect(await callsOf("database_tables")).toHaveLength(1);
+  describe("records of a table", () => {
+    const num = (text: string) => databaseCell(text, "number");
+    const bin = (text: string) => databaseCell(text, "binary");
+    const long = `${"x".repeat(200)}…`;
+    const columns = ["id", "name", "note", "avatar", "deleted_at", "price"];
+    const page0 = databaseRecords(
+      columns,
+      [
+        [num("1"), databaseCell("Alice"), databaseCell(long), bin("バイナリ 16 B"), databaseNull, num("12.50")],
+        [num("2"), databaseCell("Bob"), databaseCell("注文メモ"), databaseNull, databaseCell("2024-01-02 03:04:05"), num("0.00")],
+      ],
+      { hasMore: true, summary: "1–2 行目 / 約 1,200 行" },
+    );
+    const page1 = databaseRecords(columns, [[num("3"), databaseCell("Carol"), databaseCell(""), bin("バイナリ 1.5 KB"), databaseNull, num("1.00")]], {
+      page: 1,
+      summary: "3–3 行目 / 約 1,200 行",
+    });
+    const read = (page: number) => ({ id: "p1", database: "shop", table: "users", page });
+    const grid = () =>
+      browser.execute(() => [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const button = (key: string) => $(`#database-work [data-key="${key}"]`);
+
+    // The app with the table users of the database shop pressed, and its first page drawn.
+    async function openTable(first = page0) {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
+      const command = await mock("database_records", first);
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls(command);
+      await expect($("#database-work .database-range")).toHaveText(first.summary);
+      return command;
+    }
+
+    it("selects a table on a press and calls database_records with the id, the database, the table and the page 0", async () => {
+      const command = await openTable();
+      expect(await callsOf(command)).toEqual([read(0)]);
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
+      await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "false");
+      expect(await callsOf("database_tables")).toHaveLength(1);
+      await expect($("#database-work h3")).toHaveText("shop.users");
+    });
+
+    it("draws the tab レコード, selected, in place of the table list", async () => {
+      await openTable();
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード"]);
+      await expect($("#database-work [role='tab']")).toHaveAttribute("aria-selected", "true");
+      expect(await count("#database-work table.database-tables")).toBe(0);
+    });
+
+    it("draws the columns and the values as Rust gave them: NULL, binary and a long text", async () => {
+      await openTable();
+      expect(await textsOf("#database-work .database-grid thead th")).toEqual(columns);
+      expect(await grid()).toEqual([
+        ["1", "Alice", long, "バイナリ 16 B", "NULL", "12.50"],
+        ["2", "Bob", "注文メモ", "NULL", "2024-01-02 03:04:05", "0.00"],
+      ]);
+      const kinds = await browser.execute(() =>
+        [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => (td as HTMLElement).dataset.kind)),
+      );
+      expect(kinds).toEqual([
+        ["number", "text", "text", "binary", "null", "number"],
+        ["number", "text", "text", "null", "text", "number"],
+      ]);
+    });
+
+    it("cuts a long text in the cell by its width, with the text as its title, and puts a number at the right", async () => {
+      await openTable();
+      const note = $("#database-work .database-grid tbody tr:first-child td:nth-child(3)");
+      await expect(note).toHaveAttribute("title", long);
+      expect((await note.getSize("width")) as number).toBeLessThan(400);
+      const style = await browser.execute(() => ({
+        overflow: getComputedStyle(document.querySelector("#database-work .database-grid tbody tr td:nth-child(3)")!).textOverflow,
+        align: getComputedStyle(document.querySelector("#database-work .database-grid tbody tr td:nth-child(6)")!).textAlign,
+      }));
+      expect(style).toEqual({ overflow: "ellipsis", align: "right" });
+    });
+
+    it("has the range and the estimated rows under the table, with 前へ off on the first page and 次へ on", async () => {
+      await openTable();
+      await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
+      expect(await textsOf("#database-work .database-pager button")).toEqual(["前へ", "次へ", "再読み込み"]);
+      await expect(button("prev")).toBeDisabled();
+      await expect(button("next")).toBeEnabled();
+      await expect(button("reload")).toBeEnabled();
+    });
+
+    it("reads the next page with 次へ and the page before with 前へ", async () => {
+      await openTable();
+      const next = await mock("database_records", page1);
+      await button("next").click();
+      expect(await waitForCalls(next)).toEqual([read(1)]);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      expect(await grid()).toEqual([["3", "Carol", "", "バイナリ 1.5 KB", "NULL", "1.00"]]);
+      await expect(button("prev")).toBeEnabled();
+      await expect(button("next")).toBeDisabled();
+      const back = await mock("database_records", page0);
+      await button("prev").click();
+      expect(await waitForCalls(back)).toEqual([read(0)]);
+      await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
+      await expect(button("prev")).toBeDisabled();
+    });
+
+    it("reads the page that is shown again with 再読み込み, and draws what Rust answers now", async () => {
+      await openTable();
+      await mock("database_records", page1);
+      await button("next").click();
+      await waitForCalls("database_records");
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      const changed = databaseRecords(columns, [[num("3"), databaseCell("Carol B"), databaseCell(""), bin("バイナリ 4 B"), databaseNull, num("2.00")]], { page: 1, summary: "3–3 行目" });
+      const again = await mock("database_records", changed);
+      await button("reload").click();
+      expect(await waitForCalls(again)).toEqual([read(1)]);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目");
+      expect(await grid()).toEqual([["3", "Carol B", "", "バイナリ 4 B", "NULL", "2.00"]]);
+    });
+
+    it("reads the first page again when the table is pressed once more", async () => {
+      await openTable();
+      await mock("database_records", page1);
+      await button("next").click();
+      await waitForCalls("database_records");
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      const again = await mock("database_records", page0);
+      await row("p1/d/shop/t/users").click();
+      expect(await waitForCalls(again)).toEqual([read(0)]);
+      await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
+    });
+
+    it("shows 読み込み中… under the table with the buttons off and the page kept while the next one is read", async () => {
+      await openTable();
+      const wait = await mock("database_records", holds);
+      await button("next").click();
+      await waitForCalls(wait);
+      await expect($("#database-work .database-range")).toHaveText("読み込み中…");
+      for (const key of ["prev", "next", "reload"]) await expect(button(key)).toBeDisabled();
+      expect(await count("#database-work .database-grid tbody tr")).toBe(2);
+      await release("database_records", page1);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      expect(await count("#database-work .database-grid tbody tr")).toBe(1);
+      expect(await callsOf(wait)).toHaveLength(1);
+    });
+
+    it("draws only the range for a table with no row", async () => {
+      await openTable(databaseRecords([], []));
+      await expect($("#database-work .database-range")).toHaveText("0 行");
+      expect(await count("#database-work .database-grid")).toBe(0);
+      await expect(button("prev")).toBeDisabled();
+      await expect(button("next")).toBeDisabled();
+      await expect(button("reload")).toBeEnabled();
+    });
+
+    it("shows the error of a read under the tab, drops the page, and 再読み込み reads it again", async () => {
+      await openTable();
+      const message = "MySQL がエラーを返しました (1142): SELECT command denied";
+      await mock("database_records", rejects(message));
+      await mock("database_connections", ["p1"]);
+      await button("next").click();
+      await waitForCalls("database_records");
+      await expect($("#database-work .database-note")).toHaveText(message);
+      await expect($("#database-work .database-note")).toHaveElementClass("danger");
+      expect(await count("#database-work .database-grid")).toBe(0);
+      await expect(button("next")).toBeDisabled();
+      await expect(button("reload")).toBeEnabled();
+      await expect(dot("p1")).toHaveAttribute("data-state", "connected");
+      const again = await mock("database_records", page1);
+      await button("reload").click();
+      expect(await waitForCalls(again)).toEqual([read(1)]);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      expect(await count("#database-work .database-note")).toBe(0);
+    });
+
+    it("closes the tree of a connection that the read shows lost, and says why under the connection", async () => {
+      await openTable();
+      await mock("database_records", rejects(lost));
+      await mock("database_connections", []);
+      await button("reload").click();
+      await waitForCalls("database_records");
+      await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
+      expect(await notes()).toEqual([lost]);
+      await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+      expect(await count("#database-work > *")).toBe(0);
+    });
+
+    it("has no control to add, edit or delete a row: only the tab and the three buttons", async () => {
+      await openTable();
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "前へ", "次へ", "再読み込み"]);
+      expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
+      await $("#database-work .database-grid tbody td:nth-child(2)").doubleClick();
+      expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
+    });
+
+    it("goes back to the table list on a press on the database, and the next press on a table opens the records again", async () => {
+      await openTable();
+      await row("p1/d/shop").click();
+      await expect($("#database-work h3")).toHaveText("shop");
+      expect(await count("#database-work .database-grid")).toBe(0);
+      expect(await count("#database-work tbody tr")).toBe(3);
+      await row("p1/d/shop").click();
+      await waitForCalls("database_tables", 2);
+      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
+      const again = await mock("database_records", page0);
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls(again);
+      await expect($("#database-work h3")).toHaveText("shop.users");
+    });
   });
 
   it("draws only the title for a database with no table", async () => {

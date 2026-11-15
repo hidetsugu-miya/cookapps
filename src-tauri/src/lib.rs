@@ -375,6 +375,7 @@ pub fn run() {
             database::database_test,
             database::database_connect,
             database::database_tables,
+            database::database_records,
             database::database_disconnect,
             database::database_connections,
             markdown_patch::markdown_split,

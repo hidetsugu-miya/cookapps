@@ -16,6 +16,7 @@ use ts_rs::TS;
 
 use super::{
     mysql::{self, QueryFailure},
+    records::{self, DatabaseRecords},
     ssm::Tunnels,
 };
 
@@ -69,7 +70,7 @@ pub fn format_rows(rows: Option<u64>) -> String {
 }
 
 /// `bytes` as `512 B`, or with one decimal in KB, MB, GB or TB (1024 each; a value that rounds to 1024.0 is shown in the next unit).
-fn format_bytes(bytes: u64) -> String {
+pub(super) fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
     if bytes < 1024 {
         return format!("{bytes} B");
@@ -261,6 +262,30 @@ impl Sessions {
             .map(to_table)
             .collect())
     }
+
+    /// The page `page` (from 0) of the records of `table` in `database` (D-4).
+    pub async fn records(
+        &self,
+        tunnels: &Tunnels,
+        id: &str,
+        database: &str,
+        table: &str,
+        page: u32,
+    ) -> Result<DatabaseRecords, String> {
+        let session = self.session(id).await?;
+        let read = {
+            let mut guard = session.connection.lock().await;
+            let Some(connection) = guard.as_mut() else {
+                return Err(NOT_OPEN.to_owned());
+            };
+            tokio::time::timeout(
+                QUERY_TIMEOUT,
+                records::read(connection, database, table, page),
+            )
+            .await
+        };
+        self.settle(tunnels, id, read).await
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +384,10 @@ mod tests {
         );
         assert_eq!(
             sessions.tables(&tunnels, "a", "shop").await,
+            Err(NOT_OPEN.to_owned())
+        );
+        assert_eq!(
+            sessions.records(&tunnels, "a", "shop", "orders", 0).await,
             Err(NOT_OPEN.to_owned())
         );
         sessions.close_all().await;
