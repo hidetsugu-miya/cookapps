@@ -1333,7 +1333,10 @@ describe("orca: projects", () => {
       ]);
       // It stays at the right end, and the long title is cut before it, not pushed past it.
       const box = await browser.execute(() => {
-        const r = (e: Element) => e.getBoundingClientRect();
+        const r = (e: Element) => {
+          const { left, right } = e.getBoundingClientRect();
+          return { left, right };
+        };
         const row = document.querySelector("#orca-feed .orca-session")!;
         return { row: r(row), title: r(row.querySelector(".orca-session-title")!), badge: r(row.querySelector(".orca-session-subagents")!) };
       });
