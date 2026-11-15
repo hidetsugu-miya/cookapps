@@ -37,6 +37,8 @@ const MADE_TTL: Duration = Duration::from_secs(60);
 pub(crate) const TEXT_LIMIT: usize = 100_000;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
 const LINE_LIMIT: usize = 200;
+/// How many characters of a line are read for its tags, so that a line of thousands of `<` costs no more than this; the line is cut to `LINE_LIMIT` afterwards.
+const LINE_READ_LIMIT: usize = LINE_LIMIT * 20;
 const SETTINGS_FILE: &str = "orca-settings.json";
 
 /// Where `orca` is looked for. A GUI app does not inherit the shell's PATH, so the places Orca installs it come first and last.
@@ -361,7 +363,7 @@ fn without_status_mark(title: &str) -> &str {
 }
 
 /// The length of the XML tag (`<name …>`, `</name>` or `<name/>`) that `s` starts with, or `None` when it starts with none.
-/// The name begins with an ASCII letter and is followed by a blank, `/` or `>`; a `>` inside a quoted value does not end the tag, and a tag that is never closed is none.
+/// The name begins with an ASCII letter, holds letters, digits, `-`, `_` and `.` (no `:`, so `<https://…>` is none) and is followed by a blank, `/` or `>`; a `>` inside a quoted value does not end the tag, and a tag that is never closed is none.
 fn tag_len(s: &str) -> Option<usize> {
     let body = s.strip_prefix('<')?;
     let name = body.strip_prefix('/').unwrap_or(body);
@@ -369,7 +371,7 @@ fn tag_len(s: &str) -> Option<usize> {
         return None;
     }
     let name_len = name
-        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.')))
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
         .unwrap_or(name.len());
     if !name[name_len..].starts_with(|c: char| c.is_whitespace() || matches!(c, '/' | '>')) {
         return None;
@@ -389,19 +391,26 @@ fn tag_len(s: &str) -> Option<usize> {
 }
 
 /// `line` without its XML tags, which Claude Code's harness puts in a message (`<event …>`, `<system-reminder>`); the text between them stays.
-/// An opening `<` that follows an ASCII letter, a digit or `_` is a generic (`Vec<String>`), not a tag.
+/// An opening `<` that follows an ASCII letter, a digit or `_` is a generic (`Vec<String>`), not a tag, and what is between a pair of backticks stays as it is.
 fn without_tags(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
-    while let Some(start) = rest.find('<') {
+    while let Some(start) = rest.find(['<', '`']) {
         out.push_str(&rest[..start]);
         let after = &rest[start..];
+        if let Some(inner) = after.strip_prefix('`') {
+            // A span runs to the next backtick; with none, the backtick is only a character.
+            let end = inner.find('`').map_or(1, |i| i + 2);
+            out.push_str(&after[..end]);
+            rest = &after[end..];
+            continue;
+        }
         let glued = !after.starts_with("</")
             && rest[..start]
                 .chars()
                 .next_back()
                 .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-        match tag_len(after).filter(|_| !glued) {
+        match (!glued).then(|| tag_len(after)).flatten() {
             Some(len) => rest = &after[len..],
             None => {
                 out.push('<');
@@ -416,8 +425,8 @@ fn without_tags(line: &str) -> String {
 /// The first line of `text` that still has text once its tags are taken off, cut to `LINE_LIMIT` characters.
 fn first_text_line(text: &str) -> Option<String> {
     text.lines()
-        .map(|l| without_tags(l.trim()))
-        .map(|l| l.trim().to_string())
+        .map(|l| l.trim().chars().take(LINE_READ_LIMIT).collect::<String>())
+        .map(|l| without_tags(&l).trim().to_string())
         .find(|l| !l.is_empty())
         .map(|l| l.chars().take(LINE_LIMIT).collect())
 }
@@ -2281,9 +2290,29 @@ mod tests {
                 "日本語<command-name>/review</command-name>",
                 "日本語/review",
             ),
+            (
+                "<https://github.com/o/r/issues/682> を見て",
+                "<https://github.com/o/r/issues/682> を見て",
+            ),
+            ("<mailto:a@b.c> へ", "<mailto:a@b.c> へ"),
+            ("Fix the `<div>` layout", "Fix the `<div>` layout"),
+            ("`<b>` and <b>bold</b>", "`<b>` and bold"),
+            ("a `<b> and <i>x</i>", "a ` and x"),
+            ("<a>`</a>`<b>", "`</a>`"),
         ] {
             assert_eq!(without_tags(line), text, "{line}");
         }
+    }
+
+    #[test]
+    fn a_line_is_read_only_up_to_a_limit_before_its_tags_are_taken_off() {
+        let long = format!("{}end", "<a ".repeat(LINE_READ_LIMIT));
+        assert_eq!(first_text_line(&long).unwrap().chars().count(), LINE_LIMIT);
+        let tag_then_text = format!("<a>{}", "x".repeat(LINE_READ_LIMIT * 2));
+        assert_eq!(
+            first_text_line(&tag_then_text).unwrap(),
+            "x".repeat(LINE_LIMIT)
+        );
     }
 
     #[test]
