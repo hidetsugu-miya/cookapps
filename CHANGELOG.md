@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.75.1
+
+M-10: the reply field of an open thread is no longer always at the bottom; the reply button at the right of the date of the latest message opens it (#687). It takes half of the height of the mail area, and the text scrolls inside it. "破棄" and a reply that went out close it.
+
+M-10: the text of a reply is written in the rich editor of the Slack fields, with bold, italic, strikethrough, links, lists, quotes and code (#688). Cmd+Enter (Ctrl+Enter off macOS) sends it too. The mail goes out with an HTML part made from the text beside the plain text part (#686); a new mail (M-11) is still plain text.
+
+S-6, S-21: an empty line in a Slack post or a reply could reach Slack as the text `<br />`; it is now an empty line, and so it is in a mail reply.
+
+A-8: a session row of the Orca list could show a message that Claude Code put in the conversation, such as the result of a tool, instead of the conversation; it now shows the name of the conversation first, as Orca does, with the last answer after it as "{name} - {answer}" (#690).
+
 ## v0.75.0
 
 D-3: the work pane of a database has two tabs, "テーブル" and "SQL" (#670). A row of the table list opens that table, as its row in the tree does, also with Enter (#671). A right click on a database row opens a menu with "新規クエリ", which opens the SQL tab of the database with an empty field, and "データベースを閉じる", which closes its tree and keeps the connection open (#670).
