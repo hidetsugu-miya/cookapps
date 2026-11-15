@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.75.2
+
+A-8: a session row of the Orca list shows a badge with a robot and a number at its right end while subagents of the session are at work, the number of those at work (#693). A session row no longer takes its name from a JavaScript value that Claude Code put in the conversation, such as `{ a: { isAsync: true, … } }`, the result of a subagent started in the background.
+
 ## v0.75.1
 
 M-10: the reply field of an open thread is no longer always at the bottom; the reply button at the right of the date of the latest message opens it (#687). It takes half of the height of the mail area, and the text scrolls inside it. "破棄" and a reply that went out close it.
