@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.74.2
+
+D-1: the menu of a connection on the database screen ("編集", "切断" while it is open, and "削除") opens with a right click on its row, where the pointer is; the button with three dots at the right of the row is gone (#664).
+
 ## v0.74.1
 
 D-2: a connection through AWS Systems Manager could not be opened: looking for the bastion failed with "AWS の呼び出しに失敗しました: … ValidationException" (#661). The bastion is now asked for by its Name tag alone, and the app picks a node that is Online from the answer.
