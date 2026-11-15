@@ -582,6 +582,15 @@ fn task_api_url(id: &str, action: Option<&str>) -> Result<String, String> {
     })
 }
 
+/// `…/projects/{id}` (plus `/{action}`). The ID comes from the frontend; Todoist's are alphanumeric, so anything else is refused.
+fn project_api_url(id: &str, action: Option<&str>) -> Result<String, String> {
+    valid_id(id, "プロジェクト ID")?;
+    Ok(match action {
+        Some(action) => format!("/projects/{id}/{action}"),
+        None => format!("/projects/{id}"),
+    })
+}
+
 /// The URL and body that move task `id` under `parent_id`, as its last subtask. Both IDs come from the frontend, and a task cannot be its own parent.
 fn move_under_request(id: &str, parent_id: &str) -> Result<(String, Value), String> {
     let url = task_api_url(id, Some("move"))?;
@@ -1693,6 +1702,33 @@ pub async fn todoist_delete(
     Ok(done.map(|_| true))
 }
 
+/// Archives a project (T-8; `POST /projects/{id}/archive`). Todoist keeps its tasks, and its sub-projects go with it; the next sync drops them from the list.
+#[tauri::command]
+pub async fn todoist_archive_project(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_archive_project";
+    let url =
+        project_api_url(&id, Some("archive")).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(&auth, &state, command, Method::POST, &url, None).await?;
+    Ok(done.map(|_| true))
+}
+
+/// Deletes a project for good with its sections and tasks (T-8; `DELETE /projects/{id}`); Todoist cannot undo it, so the screen asks first.
+#[tauri::command]
+pub async fn todoist_delete_project(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_delete_project";
+    let url = project_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(&auth, &state, command, Method::DELETE, &url, None).await?;
+    Ok(done.map(|_| true))
+}
+
 /// A task's comments are read up to this many pages (200 each), and so are a project's collaborators.
 // shortcut: past these the rest is dropped, upgrade if a task ever collects that many comments.
 const MAX_COMMENT_PAGES: usize = 5;
@@ -2487,6 +2523,19 @@ mod tests {
             "https://mail.google.com/mail/u/a@example.com/",
         ] {
             assert_eq!(mail_of(description), None, "{description}");
+        }
+    }
+
+    #[test]
+    fn project_urls_refuse_ids_that_are_not_alphanumeric() {
+        assert_eq!(
+            project_api_url("6XGgmFVcrG5RRjVr", Some("archive")).unwrap(),
+            "/projects/6XGgmFVcrG5RRjVr/archive"
+        );
+        assert_eq!(project_api_url("6XGg", None).unwrap(), "/projects/6XGg");
+        for id in ["", "a/b", "a?b", "../x", "6XGg/archive"] {
+            assert!(project_api_url(id, None).is_err(), "{id}");
+            assert!(project_api_url(id, Some("archive")).is_err(), "{id}");
         }
     }
 

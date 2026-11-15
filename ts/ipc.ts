@@ -159,6 +159,10 @@ export interface Commands {
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };
   todoist_move_under: { args: { id: string; parentId: string }; result: boolean | null };
   todoist_delete: { args: { id: string }; result: boolean | null };
+  // T-8: archives the project (its sub-projects with it); its tasks are kept in Todoist. null: a token is needed.
+  todoist_archive_project: { args: { id: string }; result: boolean | null };
+  // T-8: deletes the project for good, with its sub-projects, sections and tasks. null: a token is needed.
+  todoist_delete_project: { args: { id: string }; result: boolean | null };
   todoist_open: { args: { id: string }; result: null };
   // A task's comments, oldest first. `projectId` is the task's project, whose collaborators name the authors. null: a token is needed.
   todoist_comments: { args: { taskId: string; projectId: string }; result: Comment[] | null };

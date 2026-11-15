@@ -3222,3 +3222,133 @@ describe("todo count by due moment", () => {
     await expect($(badge)).toHaveText("1");
   });
 });
+
+// T-8: the right press on a project of the side list.
+describe("todo projects", () => {
+  const MENU = '.menu[role="menu"]';
+  const projectRow = (id: string) => `#projects .proj[data-view="${id}"]`;
+  // The right button on a row, as the page gets it.
+  const rightClick = (selector: string) =>
+    browser.execute(
+      (s, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const el = document.querySelector(s)!;
+        const r = el.getBoundingClientRect();
+        el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.left + 10, clientY: r.top + 10 }));
+      },
+      selector,
+      onceId(),
+    );
+  // What Todoist answers once the projects `ids` are gone: they and their tasks are out of the data.
+  const without = (...ids: string[]) => {
+    const data = todoData();
+    data.projects = data.projects.filter((p) => !ids.includes(p.id));
+    data.tasks = data.tasks.filter((t) => !ids.includes(t.projectId));
+    return data;
+  };
+  const projectNames = () => textsOf("#projects .proj-line .name");
+
+  it("opens a menu of アーカイブ and 削除 on the right press of a project, and none on インボックス and 今日", async () => {
+    await openTodo();
+    await rightClick(projectRow("p4"));
+    await expect($(MENU)).toBeDisplayed();
+    expect(await textsOf(`${MENU} > button`)).toEqual(["アーカイブ", "削除"]);
+    await expect($(`${MENU} > button:nth-child(2)`)).toHaveElementClass("danger");
+    await browser.keys("Escape");
+    await expect($(MENU)).not.toExist();
+    for (const view of ["inbox", "today"]) {
+      await rightClick(projectRow(view));
+      await expect($(MENU)).not.toExist();
+    }
+  });
+
+  it("archives the project at once with todoist_archive_project and the project id, and asks for no confirmation", async () => {
+    await openTodo();
+    const archive = await mock("todoist_archive_project", true);
+    await mock("todoist_load", without("p4"));
+    await rightClick(projectRow("p4"));
+    await $(`${MENU} > button:nth-child(1)`).click();
+    expect(await waitForCalls(archive)).toEqual([{ id: "p4" }]);
+    await expect($(".pop")).not.toExist();
+    expect(await projectNames()).toEqual(["Work", "Design", "Sketch"]);
+  });
+
+  it("takes the sub-projects and the tasks of an archived project out of the list too, and goes back to 今日 when one of them was open", async () => {
+    await openTodo();
+    const archive = await mock("todoist_archive_project", true);
+    await mock("todoist_load", holds);
+    await projectOf("p3").click();
+    await expect($("#todo-title")).toHaveText("Sketch");
+    await rightClick(projectRow("p1"));
+    await $(`${MENU} > button:nth-child(1)`).click();
+    expect(await waitForCalls(archive)).toEqual([{ id: "p1" }]);
+    expect(await projectNames()).toEqual(["Home"]);
+    await expect($("#todo-title")).toHaveText("今日");
+    expect(await count("#todo-list li.task")).toBe(0);
+  });
+
+  it("asks before deleting, and calls todoist_delete_project with the project id only when 削除 of the question is pressed", async () => {
+    await openTodo();
+    const del = await mock("todoist_delete_project", true);
+    await mock("todoist_load", without("p4"));
+    await rightClick(projectRow("p4"));
+    await $(`${MENU} > button:nth-child(2)`).click();
+    await expect($('.pop[role="alertdialog"]')).toBeDisplayed();
+    await expect($('.pop[role="alertdialog"]')).toHaveText(expect.stringContaining("Home"));
+    expect(await callsOf(del)).toEqual([]);
+    expect(await projectNames()).toContain("Home");
+    await $('.pop[role="alertdialog"] .text-btn.danger').click();
+    expect(await waitForCalls(del)).toEqual([{ id: "p4" }]);
+    await expect($(".pop")).not.toExist();
+    expect(await projectNames()).toEqual(["Work", "Design", "Sketch"]);
+  });
+
+  it("calls nothing and keeps the project when the question is cancelled", async () => {
+    await openTodo();
+    const del = await mock("todoist_delete_project", true);
+    await rightClick(projectRow("p4"));
+    await $(`${MENU} > button:nth-child(2)`).click();
+    await $('.pop[role="alertdialog"] .popup-actions .text-btn:not(.danger)').click();
+    await expect($(".pop")).not.toExist();
+    expect(await callsOf(del)).toEqual([]);
+    expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
+  });
+
+  it("goes back to 今日 when the open project is deleted, with its sub-projects out of the list", async () => {
+    await openTodo();
+    const del = await mock("todoist_delete_project", true);
+    await mock("todoist_load", holds);
+    await projectOf("p1").click();
+    await expect($("#todo-title")).toHaveText("Work");
+    await rightClick(projectRow("p1"));
+    await $(`${MENU} > button:nth-child(2)`).click();
+    await $('.pop[role="alertdialog"] .text-btn.danger').click();
+    expect(await waitForCalls(del)).toEqual([{ id: "p1" }]);
+    await expect($("#todo-title")).toHaveText("今日");
+    expect(await projectNames()).toEqual(["Home"]);
+  });
+
+  it("puts the project back and shows the error when archiving fails", async () => {
+    await openTodo();
+    const archive = await mock("todoist_archive_project", rejects("Todoist に接続できません"));
+    await rightClick(projectRow("p4"));
+    await $(`${MENU} > button:nth-child(1)`).click();
+    await waitForCalls(archive);
+    // The reload brings back what Todoist has.
+    await browser.waitUntil(async () => (await projectNames()).includes("Home"), { timeoutMsg: "Home did not come back" });
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
+  });
+
+  it("puts the project back, and the view with it left at 今日, and shows the error when deleting fails", async () => {
+    await openTodo();
+    const del = await mock("todoist_delete_project", rejects("Todoist に接続できません"));
+    await rightClick(projectRow("p4"));
+    await $(`${MENU} > button:nth-child(2)`).click();
+    await $('.pop[role="alertdialog"] .text-btn.danger').click();
+    await waitForCalls(del);
+    await browser.waitUntil(async () => (await projectNames()).includes("Home"), { timeoutMsg: "Home did not come back" });
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
+  });
+});

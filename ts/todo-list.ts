@@ -1,16 +1,19 @@
 // The Todo screen's side list of projects and the task list: rows, the grip that moves a task to a project or under another task, and the name edited in place.
 import type { MailRef } from "./bindings/MailRef";
+import type { ProjectItem } from "./bindings/ProjectItem";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, tag } from "./dom.js";
-import { CHEVRON_SVG, DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG, TAG_SVG } from "./icons.js";
+import { confirmDelete } from "./hint.js";
+import { CHEVRON_SVG, DATE_SVG, DAY_SVG, DELETE_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG, svgOf, TAG_SVG } from "./icons.js";
 import { rowButton, rows } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
+import { openMenu } from "./menu.js";
 import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
 import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
-import { moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
+import { archiveProject, deleteProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showError } from "./view.js";
 
@@ -31,6 +34,21 @@ function projectButton(view: string, icon: string, name: string, count: number) 
     renderTodo();
   };
   return b;
+}
+
+const ARCHIVE_SVG = svgOf('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>');
+
+// The menu of a right press on the row of the project `p` (T-8): the items of what can be done to a project are listed here. 削除 asks first, as it cannot be undone.
+function openProjectActions(row: HTMLElement, p: ProjectItem, e: MouseEvent) {
+  e.preventDefault();
+  openMenu(
+    row,
+    [
+      { label: "アーカイブ", color: "", icon: ARCHIVE_SVG, current: false, pick: () => void archiveProject(p.id) },
+      { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmDelete(row, p.name, () => void deleteProject(p.id)) },
+    ],
+    { at: { x: e.clientX, y: e.clientY } },
+  );
 }
 
 export function renderProjects() {
@@ -60,7 +78,9 @@ export function renderProjects() {
     const line = tag("div", "proj-line");
     line.dataset.under = under.get(p.id);
     line.style.paddingLeft = `${p.depth * 16}px`;
-    line.append(projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0));
+    const button = projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0);
+    button.oncontextmenu = (e) => openProjectActions(button, p, e);
+    line.append(button);
     if (parents.has(p.id)) {
       line.classList.add("parent");
       const closed = todoState.closedProjects.has(p.id);

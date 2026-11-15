@@ -207,6 +207,21 @@ export function moveUnderLocal(id: string, parentId: string) {
   todoState.openTasks.add(parentId);
 }
 
+// Takes the project `id` out of the list with the projects nested under it, however deep, and their tasks: Todoist archives or deletes them together (T-8).
+// The view goes back to "今日" when it was one of them, and an open task of theirs is closed.
+export function dropProjectLocal(id: string) {
+  const todo = todoState.todo!;
+  const gone = new Set([id]);
+  // Todoist lists a project after the one it is nested in, so one pass finds them all.
+  for (const p of todo.projects) if (p.parentId && gone.has(p.parentId)) gone.add(p.id);
+  const open = todoState.open === null ? undefined : todoState.taskById.get(todoState.open);
+  if (open && gone.has(open.projectId)) todoState.open = null;
+  if (gone.has(todoState.view)) todoState.view = "today";
+  todo.projects = todo.projects.filter((p) => !gone.has(p.id));
+  todo.tasks = todo.tasks.filter((t) => !gone.has(t.projectId));
+  todoState.projectById = new Map(todo.projects.map((p) => [p.id, p]));
+}
+
 // Completes (`done` true), reopens (false) or deletes (null) a task. In the subtask list of the task holding it, it turns done, open or goes, and the counts follow.
 // A completed or deleted one leaves the list with the rows of its subtasks. A reopened one has no row until the reload, which has the data for it.
 export function settleLocal(id: string, done: boolean | null) {
