@@ -18,6 +18,7 @@ use ts_rs::TS;
 use crate::auth::{config_dir, Auth};
 use crate::gmail::{log_failure, send_json_refreshing, thread_url, ApiError};
 use crate::mail_address::split_address;
+use crate::markdown_patch::is_empty_paragraph;
 
 const SEND_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 /// An encoded-word holds at most 75 characters; 42 bytes become 56 characters of base64, 68 with the frame.
@@ -356,6 +357,7 @@ fn markdown_to_html(markdown: &str) -> String {
     let mut link_open = false;
     for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
         match event {
+            Event::Html(text) if is_empty_paragraph(&text) => out.push_str("<p><br></p>\n"),
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
                 escape_html(&text, &mut out)
             }
@@ -411,6 +413,22 @@ fn markdown_to_html(markdown: &str) -> String {
     out
 }
 
+/// The text part: the Markdown as it is, except that an empty paragraph of the editor (`<br />` alone in its block) is left out, so that it is one more blank line and not the text of a tag.
+fn plain_text(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut at = 0;
+    for (event, range) in
+        Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    {
+        if matches!(&event, Event::Html(text) if is_empty_paragraph(text)) {
+            out.push_str(&markdown[at..range.start]);
+            at = range.end;
+        }
+    }
+    out.push_str(&markdown[at..]);
+    out
+}
+
 /// One MIME part: its headers, a blank line and the text as base64.
 fn text_part(subtype: &str, text: &str) -> String {
     format!(
@@ -433,7 +451,10 @@ fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
     m += "MIME-Version: 1.0\r\n";
     if c.markdown {
         m += &format!("Content-Type: multipart/alternative; boundary=\"{BOUNDARY}\"\r\n\r\n");
-        m += &format!("--{BOUNDARY}\r\n{}", text_part("plain", &c.body));
+        m += &format!(
+            "--{BOUNDARY}\r\n{}",
+            text_part("plain", &plain_text(&c.body))
+        );
         m += &format!(
             "--{BOUNDARY}\r\n{}",
             text_part("html", &markdown_to_html(&c.body))
@@ -1145,6 +1166,38 @@ mod tests {
         assert_eq!(
             html_of("<div onclick=\"x\">a</div>\n\nb"),
             "&lt;div onclick=&quot;x&quot;&gt;a&lt;/div&gt;\n<p>b</p>\n"
+        );
+    }
+
+    #[test]
+    fn an_empty_paragraph_of_the_editor_is_a_blank_line_not_the_text_of_a_tag() {
+        assert_eq!(
+            html_of("A\n\n<br />\n\nB\n"),
+            "<p>A</p>\n<p><br></p>\n<p>B</p>\n"
+        );
+        assert_eq!(html_of("<br>\n\n<BR/>\n"), "<p><br></p>\n<p><br></p>\n");
+        assert_eq!(html_of("<br />x"), "<p>&lt;br /&gt;x</p>\n");
+        assert_eq!(
+            html_of("```\n<br />\n```"),
+            "<pre><code>&lt;br /&gt;\n</code></pre>\n"
+        );
+        assert_eq!(plain_text("A\n\n<br />\n\nB\n"), "A\n\n\nB\n");
+        assert_eq!(plain_text("<br>\n\nA"), "\nA");
+        assert_eq!(plain_text("```\n<br />\n```"), "```\n<br />\n```");
+        assert_eq!(plain_text("x <br /> y"), "x <br /> y");
+    }
+
+    #[test]
+    fn both_parts_of_a_markdown_mail_leave_the_empty_paragraph_out_of_the_text() {
+        let mut m = mail(&["a@example.com"], "s", "A\n\n<br />\n\nB\n");
+        m.markdown = Some(true);
+        let message = build("me@example.com", &m, None).unwrap();
+        let boundary = "cookapps-alternative";
+        let parts = parts(&message, boundary);
+        assert_eq!(parts[0].1, "A\r\n\r\n\r\nB\r\n");
+        assert_eq!(
+            parts[1].1,
+            "<html><body><p>A</p>\r\n<p><br></p>\r\n<p>B</p>\r\n</body></html>"
         );
     }
 

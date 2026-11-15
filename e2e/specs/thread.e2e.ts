@@ -802,12 +802,16 @@ describe("thread reply field", () => {
 
   it("keeps the field at the bottom of the area, under the row of operations, while a long mail scrolls", async () => {
     await open(threadDetail("First unread", Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n"), false));
-    expect((await edges()).replyBottom).toBe((await edges()).mainBottom);
+    const before = await edges();
+    expect(before.replyBottom).toBe(before.mainBottom);
+    // Half of the area, not of the thread, which is far taller than the area here.
+    expect(Math.abs(before.replyHeight - before.mainHeight / 2)).toBeLessThanOrEqual(2);
     await browser.execute(() => {
       document.getElementById("main")!.scrollTop = 600;
     });
     const after = await edges();
     expect(after.replyBottom).toBe(after.mainBottom);
+    expect(Math.abs(after.replyHeight - after.mainHeight / 2)).toBeLessThanOrEqual(2);
     await expect($("#mail-reply-send")).toBeDisplayedInViewport();
     await expect($("#thread-slack")).toBeDisplayedInViewport();
     // At the end of the scroll the last message is above the field.

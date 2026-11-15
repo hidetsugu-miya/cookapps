@@ -23,6 +23,8 @@ let choices = NOBODY;
 // The thread whose recipients the chips hold (null: the next bind fills them), so that Gmail's answer for the same thread leaves what was typed and edited.
 let filled: string | null = null;
 let sending = false;
+// Whether the editor was told to wait: it is told only when that changes, because each call redraws its toolbar.
+let waiting = false;
 // The session the send in flight belongs to: the editor waits only in that session, so a thread opened again after leaving one whose send is still on its way can be written in.
 let sendingIn = -1;
 // Counts the times the field was reset, so that a send that outlives its thread can tell that the field is another one's now, even for the same thread opened again.
@@ -45,7 +47,11 @@ const mode = () => $<HTMLSelectElement>("mail-reply-mode");
 // "送信" is off while the text is blank or a send is on its way, and the editor waits while it is.
 function syncSend() {
   $<HTMLButtonElement>("mail-reply-send").disabled = sending || !editor.ready() || editor.blank();
-  editor.setBusy(sending && sendingIn === session);
+  const wait = sending && sendingIn === session;
+  if (wait !== waiting) {
+    waiting = wait;
+    editor.setBusy(wait);
+  }
 }
 
 // To and Cc are the kind of reply's; Bcc is left as it is.
