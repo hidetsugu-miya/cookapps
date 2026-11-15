@@ -91,6 +91,8 @@ pub struct OrcaRow {
     pub line: String,
     /// The first line of the agent's last answer, which the list shows after the line; `None` when it has none.
     pub reply: Option<String>,
+    /// How many of the agent's subagents are at work (A-8); 0 when it has none.
+    pub subagents: u32,
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
     #[cfg_attr(test, ts(type = "number"))]
     pub at_ms: i64,
@@ -445,7 +447,20 @@ fn after_string(s: &str) -> Option<&str> {
     Some(&s[s.find('"')? + 1..])
 }
 
-/// Whether `text` opens as people do not type: a keyed object, an array of objects or of strings, an XML or HTML document (Orca's `PASTED_DATA_LEAD`).
+/// What follows an unquoted key at the start of `s`: an ASCII letter, `_` or `$`, then ASCII letters, digits, `_` and `$`.
+fn after_bare_key(s: &str) -> Option<&str> {
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    if !s
+        .chars()
+        .next()
+        .is_some_and(|c| is_name(c) && !c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(s.trim_start_matches(is_name))
+}
+
+/// Whether `text` opens as people do not type: a keyed object (its key quoted, as JSON has it, or bare, as a JS value is written), an array of objects or of strings, an XML or HTML document (Orca's `PASTED_DATA_LEAD`, and the JS values a REPL prints).
 fn is_pasted_data(text: &str) -> bool {
     if let Some(rest) = text.strip_prefix('[') {
         let rest = rest.trim_start();
@@ -455,7 +470,10 @@ fn is_pasted_data(text: &str) -> bool {
             || after_string(rest).is_some_and(|r| r.trim_start().starts_with(','));
     }
     if let Some(rest) = text.strip_prefix('{') {
-        return after_string(rest.trim_start()).is_some_and(|r| r.trim_start().starts_with(':'));
+        let key = rest.trim_start();
+        return after_string(key)
+            .or_else(|| after_bare_key(key))
+            .is_some_and(|r| r.trim_start().starts_with(':'));
     }
     let head = text
         .chars()
@@ -538,6 +556,17 @@ fn project_key_of(worktree: &Value) -> Option<String> {
     }
 }
 
+/// How many of an agent's `subagents` are at work: the items whose `state` is `working`. Orca lists them only while they run; an absent or malformed list counts none.
+fn working_subagents(agent: &Value) -> u32 {
+    let count = agent["subagents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| s["state"] == "working")
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
 /// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first.
 /// A field that is absent or of another type is left out, not an error.
 pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
@@ -597,6 +626,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                         .to_owned(),
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
                     reply: text_of(agent, "lastAssistantMessage").and_then(first_text_line),
+                    subagents: working_subagents(agent),
                     at_ms: if group == OrcaGroup::Done {
                         updated
                     } else {
@@ -2230,6 +2260,7 @@ mod tests {
                 branch: "feat/a".into(),
                 line: "Write the docs".into(),
                 reply: None,
+                subagents: 0,
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
                 pane_key: Some("tabA:leaf1".into()),
@@ -2359,6 +2390,72 @@ mod tests {
             a["prompt"] = json!(prompt);
             assert_eq!(line_of(&a, None), prompt, "{prompt}");
         }
+    }
+
+    #[test]
+    fn a_prompt_that_opens_with_a_js_value_is_no_line() {
+        let mut a = agent("tabA:leaf1", "working");
+        a["taskTitle"] = json!("Task");
+        for prompt in [
+            "{ a: { isAsync: true, status: 'async_launched', agentId: 'x' } }",
+            "{a:1}",
+            "{ _a : 1}",
+            "{$a:1}",
+            "{ a1_$: 1}",
+            "{\n  a: 1\n}",
+            "<event kind=\"repl-eval\">\n{ a: 1 }\n</event>",
+        ] {
+            a["prompt"] = json!(prompt);
+            assert_eq!(line_of(&a, None), "Task", "{prompt}");
+        }
+        // Words that only look like it stay a line.
+        for prompt in [
+            "{not json",
+            "{ a b",
+            "Fix {a:1}",
+            "{ 1a: 1}",
+            "{ é: 1}",
+            "{ a",
+            "{:1}",
+            "{ a; 1}",
+            "{}",
+        ] {
+            a["prompt"] = json!(prompt);
+            assert_eq!(line_of(&a, None), prompt, "{prompt}");
+        }
+    }
+
+    #[test]
+    fn a_row_counts_the_subagents_that_work() {
+        let count = |subagents: Value| {
+            let mut a = agent("tabA:leaf1", "working");
+            a["subagents"] = subagents;
+            rows_of(&ps(&[a]), &terminals())[0].subagents
+        };
+        assert_eq!(count(json!([{"id": "a", "state": "working"}])), 1);
+        assert_eq!(
+            count(json!([
+                {"id": "a", "state": "working", "agentType": "general-purpose"},
+                {"id": "b", "state": "done"},
+                {"id": "c", "state": "working"},
+                {"id": "d"},
+                {"id": "e", "state": 1},
+            ])),
+            2
+        );
+        assert_eq!(count(json!([{"state": "done"}])), 0);
+        assert_eq!(count(json!([])), 0);
+        assert_eq!(count(json!([null, 3, "working", ["working"]])), 0);
+        for malformed in [
+            json!("working"),
+            json!({"state": "working"}),
+            json!(2),
+            Value::Null,
+        ] {
+            assert_eq!(count(malformed.clone()), 0, "{malformed}");
+        }
+        let bare = agent("tabA:leaf1", "working");
+        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].subagents, 0);
     }
 
     #[test]
@@ -2670,6 +2767,7 @@ mod tests {
                 branch: String::new(),
                 line: String::new(),
                 reply: None,
+                subagents: 0,
                 at_ms: 0,
                 handle: None,
                 pane_key: None,

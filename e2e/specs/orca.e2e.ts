@@ -1315,6 +1315,47 @@ describe("orca: projects", () => {
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
     });
 
+    it("draws a badge with a robot and the number of subagents at work at the right end of a session row, none for a row with no subagent, and none on the tab", async () => {
+      const long = "長い題名".repeat(30);
+      const read = (subagents: number) => orcaOverview([orcaRow("example-app", "feat/a", long, { subagents }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      const badges = () =>
+        browser.execute(() =>
+          [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].map((row) => {
+            const badge = row.querySelector<HTMLElement>(".orca-session-subagents");
+            return [row.dataset.session, badge?.textContent ?? null, badge?.getAttribute("aria-label") ?? null, badge?.title ?? null, badge?.querySelector("svg") != null];
+          }),
+        );
+      await openOrca(read(2));
+      await project("example-api").click();
+      expect(await badges()).toEqual([
+        [claudeTab("example-app"), "2", "サブエージェント 2 件が作業中", "サブエージェント 2 件が作業中", true],
+        [claudeTab("example-api"), null, null, null, false],
+      ]);
+      // It stays at the right end, and the long title is cut before it, not pushed past it.
+      const box = await browser.execute(() => {
+        const r = (e: Element) => {
+          const { left, right } = e.getBoundingClientRect();
+          return { left, right };
+        };
+        const row = document.querySelector("#orca-feed .orca-session")!;
+        return { row: r(row), title: r(row.querySelector(".orca-session-title")!), badge: r(row.querySelector(".orca-session-subagents")!) };
+      });
+      expect(box.badge.right).toBeLessThanOrEqual(box.row.right);
+      expect(box.badge.left).toBeGreaterThanOrEqual(box.title.right);
+      // A session with subagents at work shows none on its tab.
+      await sessionOf(claudeTab("example-app")).click();
+      expect(await tabTitles()).toEqual([long]);
+      expect(await count("#orca-work .orca-session-subagents")).toBe(0);
+      // A read with another number draws the row again, and one with none takes the badge away.
+      await mock("orca_overview", read(3));
+      await showAgain();
+      await browser.waitUntil(async () => (await badges())[0][1] === "3", { timeoutMsg: "the row did not draw the new number" });
+      expect((await badges())[0][2]).toBe("サブエージェント 3 件が作業中");
+      await mock("orca_overview", read(0));
+      await showAgain();
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-subagents")) === 0, { timeoutMsg: "the row did not drop the badge" });
+    });
+
     it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
       await openOrca(withTerminals());
       await mock("orca_terminal_read", ["$ ls"]);
