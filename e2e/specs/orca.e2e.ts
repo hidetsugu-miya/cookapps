@@ -44,7 +44,7 @@ import {
   waitForCalls,
   waitForCount,
 } from "../support";
-import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
 const twoWorktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" }), orcaWorktree("example-api", "main")];
@@ -3929,5 +3929,159 @@ describe("orca: an operation goes to the place of its row", () => {
       { path: "/work/example-app", name: "shot.png", data: PNG, environment: "Studio" },
       { path: "/work/example-api", name: "shot.png", data: PNG, environment: null },
     ]);
+  });
+});
+
+// A saved environment as the target lists this machine's projects with its own (A-33): one list, the name of the saved environment on the rows that are its, none on this machine's.
+describe("orca: this machine and a saved environment in one list (A-33)", () => {
+  const studioOnly = { target: "Studio", environments: ["Studio"] };
+  // Studio's projects and this machine's, all finished so that the order is the newest activity first: studio-1, mac-1, studio-2, mac-2 (Studio's and this machine's alternate).
+  const studioRows = () => [finished("studio-1"), finished("studio-2")];
+  const studioTrees = () => [orcaWorktree("studio-1", "main"), orcaWorktree("studio-2", "main")];
+  const macRows = () => [finished("mac-1"), finished("mac-2")];
+  const macTrees = () => [orcaWorktree("mac-1", "main"), orcaWorktree("mac-2", "main")];
+  const activity = <T extends { name: string; atMs: number }>(projects: T[], at: Record<string, number>): T[] => projects.map((p) => ({ ...p, atMs: at[p.name] ?? p.atMs }));
+  const ACTIVITY = { "studio-1": 4000, "mac-1": 3000, "studio-2": 2000, "mac-2": 1000 };
+  const mac = (rows = macRows(), trees = macTrees()) => {
+    const local = beside(rows, trees);
+    return { ...local, projects: activity(local.projects, ACTIVITY) };
+  };
+  // The read of Studio as the target, with this machine's beside it.
+  const mixed = (extra: Parameters<typeof orcaOverview>[2] = {}) => {
+    const read = orcaOverview(studioRows(), studioTrees(), { ...studioOnly, local: mac(), ...extra });
+    return { ...read, projects: activity(read.projects, ACTIVITY) };
+  };
+  // The name of each project row of the list and the chip it carries (null: none), in the order drawn.
+  const chips = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].map((row) => [row.querySelector(".orca-project-name")!.textContent, row.querySelector(".orca-env")?.textContent ?? null]),
+    );
+  const failedRead = (message: string) => orcaOverview([], [], { state: "failed", message, known: false });
+
+  it("draws the projects of both in one list, newest first, with the name of Studio on the rows of Studio and none on this machine's", async () => {
+    await openOrca(mixed());
+    await waitForCount("#orca-feed .orca-project", 4);
+    expect(await chips()).toEqual([
+      ["studio-1", "Studio"],
+      ["mac-1", null],
+      ["studio-2", "Studio"],
+      ["mac-2", null],
+    ]);
+    // The footer says the target's state alone (the two states side by side are #338).
+    await expect($("#orca-target")).toHaveText("Studio に接続中");
+  });
+
+  it("puts the chip on the session rows of Studio and on none of this machine's, and on no tab", async () => {
+    await openOrca(mixed());
+    await project("studio-1").click();
+    await project("mac-1").click();
+    await waitForCount("#orca-feed .orca-session", 2);
+    const sessions = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].map((row) => [row.dataset.session, row.querySelector(".orca-env")?.textContent ?? null]));
+    expect(sessions).toEqual([
+      [claudeTab("studio-1"), "Studio"],
+      [claudeTab("mac-1"), null],
+    ]);
+    expect(await count(".orca-tabs .orca-env")).toBe(0);
+  });
+
+  it("shows no chip when this machine is the target", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()));
+    await waitForCount("#orca-feed .orca-project", 4);
+    expect(await count("#orca-feed .orca-env")).toBe(0);
+  });
+
+  it("counts only the sessions of the target: a session of this machine that waits does not reach the button", async () => {
+    await openOrca(mixed({ local: beside([orcaRow("mac-1", "main", "Mac task", { group: "waiting" })], [orcaWorktree("mac-1", "main")]) }));
+    await waitForCount("#orca-feed .orca-project", 3);
+    await expectCount(0);
+    await sendStream(streamList([finished("studio-1"), orcaRow("studio-2", "main", "Studio task", { group: "waiting" })], studioTrees()));
+    await expectCount(1);
+  });
+
+  it("starts Claude in a project of this machine and follows the session when the read of this machine holds it", async () => {
+    await openOrca(mixed(), timers({ orcaClock: 60_000 }));
+    await waitForCalls("orca_stream_open");
+    const start = await mock("orca_start", reply);
+    const destination = await mock("orca_destination", orcaOverview([...macRows(), orcaRow("mac-1", "main", "New session", { paneKey: "tab_new:leaf_1", handle: "term_new" })], macTrees(), { known: false }));
+    await plus("mac-1", CLAUDE);
+    expect(await waitForCalls(start)).toEqual([{ path: "/work/mac-1", environment: null }]);
+    // The streamed target says nothing of it: the list of this machine is read at once, and the tab is selected when it holds it.
+    expect(await waitForCalls(destination)).toEqual([{ environment: null, force: false }]);
+    await expect(selectedTab()).toHaveText(expect.stringContaining("New session"));
+    await expect($("#orca-started")).not.toBeDisplayed();
+  });
+
+  describe("while the target is streamed", () => {
+    it("reads this machine's list every period, and not the target's, and shows what it finds", async () => {
+      await openOrca(mixed(), timers({ orcaClock: 1000 }));
+      await waitForCalls("orca_stream_open");
+      await waitForCount("#orca-feed .orca-project", 4);
+      const overview = await mock("orca_overview", mixed());
+      const destination = await mock("orca_destination", orcaOverview([...macRows(), finished("mac-3")], [...macTrees(), orcaWorktree("mac-3", "main")], { known: false }));
+      await waitForCalls(destination);
+      await waitForCount("#orca-feed .orca-project", 5);
+      expect(((await callsOf(destination)) as { environment: string | null; force: boolean }[])[0]).toEqual({ environment: null, force: false });
+      expect(await callsOf(overview)).toEqual([]);
+      expect((await chips()).filter(([, chip]) => chip === null).map(([name]) => name).sort()).toEqual(["mac-1", "mac-2", "mac-3"]);
+    });
+
+    it("keeps this machine's projects and says nothing more when its read fails, and the target's too", async () => {
+      await openOrca(mixed(), timers({ orcaClock: 1000 }));
+      await waitForCalls("orca_stream_open");
+      await waitForCount("#orca-feed .orca-project", 4);
+      const destination = await mock("orca_destination", failedRead("Orca is busy"));
+      await waitForCalls(destination);
+      await browser.pause(300);
+      expect((await chips()).map(([name]) => name)).toEqual(["studio-1", "mac-1", "studio-2", "mac-2"]);
+      await expect($("#orca-target")).toHaveText("Studio に接続中");
+      expect(await textsOf("#orca-notice")).toEqual([""]);
+      // The target's list goes on: a list of the stream replaces Studio's rows and leaves this machine's.
+      await sendStream(streamList([finished("studio-1")], [orcaWorktree("studio-1", "main")]));
+      await waitForCount("#orca-feed .orca-project", 3);
+      expect((await chips()).map(([name]) => name).sort()).toEqual(["mac-1", "mac-2", "studio-1"]);
+    });
+
+    it("keeps Studio's projects beside this machine's when the connection is lost, and says it in the footer", async () => {
+      await openOrca(mixed());
+      await waitForCalls("orca_stream_open");
+      await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
+      await expect($("#orca-target")).toHaveText("Studio に接続できません");
+      await expect($("#orca-notice")).toHaveText("読み込めませんでした: Studio is unreachable");
+      expect(await count("#orca-feed .orca-project")).toBe(4);
+      expect((await chips()).filter(([, chip]) => chip === "Studio")).toHaveLength(2);
+    });
+  });
+
+  it("shows this machine's projects alone when the first read of Studio fails, with the failure said as before", async () => {
+    await openOrca(orcaOverview([], [], { state: "failed", message: "Studio is unreachable", ...studioOnly, local: mac() }));
+    await waitForCount("#orca-feed .orca-project", 2);
+    expect(await chips()).toEqual([
+      ["mac-1", null],
+      ["mac-2", null],
+    ]);
+    await expect($("#orca-target")).toHaveText("Studio に接続できません");
+    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Studio is unreachable");
+  });
+
+  it("shows Studio's projects alone when the first read of this machine fails", async () => {
+    await openOrca(mixed({ local: { ...beside([], []), state: "failed", message: "Orca is busy" } }));
+    await waitForCount("#orca-feed .orca-project", 2);
+    expect(await chips()).toEqual([
+      ["studio-1", "Studio"],
+      ["studio-2", "Studio"],
+    ]);
+    await expect($("#orca-target")).toHaveText("Studio に接続中");
+    expect(await textsOf("#orca-notice")).toEqual([""]);
+  });
+
+  it("drops this machine's projects when the target is changed to it", async () => {
+    await openOrca(mixed({ environments: ["Studio", "Lab"] }));
+    await waitForCount("#orca-feed .orca-project", 4);
+    await mock("orca_set_target", null);
+    await mock("orca_overview", orcaOverview(macRows(), macTrees(), { environments: ["Studio", "Lab"] }));
+    await $("#orca-target").click();
+    await pickMenu("このマシン");
+    await waitForCount("#orca-feed .orca-project", 2);
+    expect(await count("#orca-feed .orca-env")).toBe(0);
   });
 });
