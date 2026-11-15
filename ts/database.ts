@@ -1,12 +1,12 @@
-// The database screen (D-1, D-3, D-4, D-5): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure) of the table that was pressed.
+// The database screen (D-1, D-3 to D-6): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure, SQL) of the table that was pressed.
 // This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
-// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only.
+// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm } from "./database-form.js";
-import { drawDatabaseWork, type RecordsState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
@@ -45,9 +45,16 @@ interface RecordsView extends RecordsState {
   table: string;
 }
 
+// The SQL tab of a connection and database: what was typed and the result of the last run. It stays when another table of the same database is pressed, and is dropped when the tree selects another connection or database and the field is used.
+interface SqlView extends SqlState {
+  id: string;
+  database: string;
+}
+
 let profiles: DatabaseProfileView[] = [];
 let records: RecordsView | null = null;
 let structure: StructureView | null = null;
+let sql: SqlView | null = null;
 // The selected tab of the table that is pressed. The table press selects the records.
 let tab = "records";
 let selected: Selected | null = null;
@@ -58,6 +65,7 @@ const closing = new Set<string>();
 let loadSeq = 0;
 
 const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
+const emptySql: SqlState = { text: "", loading: false, error: null, data: null };
 const databaseOf = (c: ConnectionState, name: string) => {
   let d = c.byName.get(name);
   if (!d) {
@@ -87,6 +95,19 @@ function sideState(): SideState {
   };
 }
 
+// The SQL tab of the selected connection and database: the view that belongs to them, or an empty one.
+function sqlState(): SqlState {
+  if (sql === null || sql.id !== selected?.id || sql.database !== selected.database) return emptySql;
+  return { text: sql.text, loading: sql.loading, error: sql.error, data: sql.data };
+}
+
+// The view of the SQL tab of the selected connection and database, made when none belongs to them; none when no database is selected.
+function sqlView(): SqlView | null {
+  if (selected?.database == null) return null;
+  if (sql?.id !== selected.id || sql.database !== selected.database) sql = { id: selected.id, database: selected.database, ...emptySql };
+  return sql;
+}
+
 // The tables of the database that was pressed last, or the tabs of the table that was pressed; none while a connection or a connection's databases are all that was pressed.
 function workState(): WorkState | null {
   if (selected?.database == null) return null;
@@ -101,6 +122,7 @@ function workState(): WorkState | null {
     table: mine ? selected.table : null,
     tab,
     records: mine && records ? { page: records.page, loading: records.loading, error: records.error, data: records.data } : null,
+    sql: mine ? sqlState() : null,
     structure: mine && structure?.id === selected.id && structure.database === selected.database && structure.table === selected.table ? { loading: structure.loading, error: structure.error, data: structure.data } : null,
   };
 }
@@ -269,6 +291,32 @@ async function readStructure(id: string, database: string, table: string) {
   draw();
 }
 
+// Runs the text of the SQL tab on the connection and database that the tree has selected (D-6). The result of an older run is dropped by a newer one: a run waits for the one before it.
+async function runSql() {
+  const mine = sqlView();
+  if (mine === null || mine.loading) return;
+  mine.loading = true;
+  mine.error = null;
+  draw();
+  try {
+    mine.data = await invoke("database_sql", { id: mine.id, database: mine.database, sql: mine.text });
+  } catch (e) {
+    mine.data = null;
+    mine.error = String(e);
+    // A stream that broke closes the connection: its tree closes and says why.
+    if (sql === mine && (await dropClosed()).includes(mine.id)) {
+      connections.set(mine.id, { ...emptyConnection(), expanded: true, error: mine.error });
+      records = null;
+      structure = null;
+      sql = null;
+      draw();
+      return;
+    }
+  }
+  mine.loading = false;
+  draw();
+}
+
 const workActions: WorkActions = {
   page: (page) => {
     if (records) readRecords(records.id, records.database, records.table, page);
@@ -280,6 +328,12 @@ const workActions: WorkActions = {
     if (id === "structure") readStructure(selected.id, selected.database ?? "", selected.table);
     else draw();
   },
+  // The field draws nothing while it is typed in: the text is only kept.
+  sqlText: (text) => {
+    const view = sqlView();
+    if (view) view.text = text;
+  },
+  runSql,
 };
 
 const actions: SideActions = {

@@ -10,6 +10,7 @@ import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
+import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { Effort } from "./bindings/Effort";
@@ -425,6 +426,8 @@ export interface Commands {
   database_structure: { args: { id: string; database: string; table: string }; result: DatabaseStructure };
   // D-4: a page of the records of a table of the open connection `id` (`page` counts from 0), each value already text; one more row is read to tell whether a next page exists.
   database_records: { args: { id: string; database: string; table: string; page: number }; result: DatabaseRecords };
+  // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is MySQL's error (the session is read only).
+  database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
   // D-3: closes the connection `id` and its tunnel.
   database_disconnect: { args: { id: string }; result: null };
   // D-3: the ids of the connections that are open now.

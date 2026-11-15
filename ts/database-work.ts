@@ -1,6 +1,7 @@
 // The work pane of the database screen (D-3, D-4): the tables of the database that was pressed last, with their estimated rows, size and engine, or, when a table was pressed in the tree, the tabs of that table.
-// Drawing only. The tabs are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4) and the structure tab (D-5) are here, and the SQL tab is added to both (#635).
+// Drawing only. The tabs are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here.
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
+import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { gridNode } from "./database-grid.js";
@@ -21,6 +22,14 @@ export interface StructureState {
   data: DatabaseStructure | null;
 }
 
+// The SQL tab of the connection and database that the tree has selected: the text as typed, and the result of the run asked for last. `data` is none before a run and after an error.
+export interface SqlState {
+  text: string;
+  loading: boolean;
+  error: string | null;
+  data: DatabaseSqlResult | null;
+}
+
 export interface WorkState {
   database: string;
   loading: boolean;
@@ -31,6 +40,7 @@ export interface WorkState {
   tab: string;
   records: RecordsState | null;
   structure: StructureState | null;
+  sql: SqlState | null;
 }
 
 export interface WorkActions {
@@ -38,12 +48,17 @@ export interface WorkActions {
   page: (page: number) => void;
   // Selects the tab `id`; the table stays.
   tab: (id: string) => void;
+  // Keeps the text of the SQL tab as it is typed; nothing is drawn.
+  sqlText: (text: string) => void;
+  // Runs the text of the SQL tab.
+  runSql: () => void;
 }
 
 // The tabs of a table, in order. The body of the selected one is drawn in `drawDatabaseWork`, where the body of a tab that is added goes.
 const TABS = [
   { id: "records", label: "レコード" },
   { id: "structure", label: "構造" },
+  { id: "sql", label: "SQL" },
 ];
 
 const STRUCTURE_COLUMNS = ["名前", "型", "NULL", "キー", "既定値", "注釈"];
@@ -140,6 +155,29 @@ function structureNode(structure: StructureState) {
   return box;
 }
 
+// The SQL tab: the text field and the run button above, the result as a grid under them, and under the grid the rows and the time as Rust worded them.
+function sqlNode(sql: SqlState, actions: WorkActions) {
+  const box = tag("div", "database-records database-sql");
+  const input = tag("textarea", "database-sql-text");
+  input.value = sql.text;
+  input.rows = 8;
+  input.spellcheck = false;
+  input.dataset.key = "sql-input";
+  input.setAttribute("aria-label", "SQL");
+  input.oninput = () => actions.sqlText(input.value);
+  const bar = tag("div", "database-sql-bar");
+  bar.append(pagerButton("run", "実行", sql.loading, actions.runSql));
+  const scroll = tag("div", "database-records-scroll");
+  if (sql.error !== null) scroll.append(note(sql.error, true));
+  else if (sql.data !== null && sql.data.columns.length > 0) scroll.append(gridNode(sql.data.columns, sql.data.rows));
+  const footer = tag("div", "database-pager");
+  const summary = tag("span", "database-range", sql.loading ? "実行中…" : (sql.data?.summary ?? ""));
+  summary.setAttribute("role", "status");
+  footer.append(summary);
+  box.append(input, bar, scroll, footer);
+  return box;
+}
+
 export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) {
   const key = JSON.stringify(state);
   if (key === drawn) return;
@@ -147,11 +185,23 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   const box = $("database-work");
   box.classList.toggle("database-table-mode", state?.table != null);
   if (state === null) return box.replaceChildren();
-  const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
+  const active = document.activeElement as HTMLElement | null;
+  const focused = active?.dataset?.key;
+  // The text field is made again with the pane: the caret stays where it was.
+  const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
   if (state.table !== null && state.records !== null) {
-    const body = state.tab === "structure" && state.structure !== null ? structureNode(state.structure) : recordsNode(state.records, actions);
+    const body =
+      state.tab === "structure" && state.structure !== null
+        ? structureNode(state.structure)
+        : state.tab === "sql" && state.sql !== null
+          ? sqlNode(state.sql, actions)
+          : recordsNode(state.records, actions);
     box.replaceChildren(tag("h3", "database-work-title", `${state.database}.${state.table}`), tabsNode(state.tab, actions), body);
-    if (focused) box.querySelector<HTMLElement>(`[data-key="${focused}"]`)?.focus({ preventScroll: true });
+    if (focused) {
+      const again = box.querySelector<HTMLElement>(`[data-key="${focused}"]`);
+      again?.focus({ preventScroll: true });
+      if (caret !== null && again instanceof HTMLTextAreaElement) again.setSelectionRange(caret[0], caret[1]);
+    }
     return;
   }
   const nodes: Node[] = [tag("h3", "database-work-title", state.database)];

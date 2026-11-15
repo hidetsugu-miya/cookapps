@@ -17,6 +17,7 @@ use ts_rs::TS;
 use super::{
     mysql::{self, QueryFailure},
     records::{self, DatabaseRecords},
+    sql::{self, DatabaseSqlResult},
     ssm::Tunnels,
     structure::{self, DatabaseStructure},
 };
@@ -26,6 +27,8 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 const NOT_OPEN: &str = "接続が開いていません。もう一度開いてください";
 const TIMED_OUT: &str = "MySQL への問い合わせが時間内に終わりませんでした。もう一度開いてください";
+const SQL_TIMED_OUT: &str =
+    "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください";
 /// The names of the databases the user may see.
 const DATABASES: &str =
     "SELECT CAST(SCHEMA_NAME AS CHAR) FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME";
@@ -204,11 +207,24 @@ impl Sessions {
         id: &str,
         read: Result<Result<T, sqlx::Error>, tokio::time::error::Elapsed>,
     ) -> Result<T, String> {
+        self.settle_with(tunnels, id, read, mysql::query_failure, TIMED_OUT)
+            .await
+    }
+
+    /// `settle` with the words of the failure and of the time out given: the SQL tab words what MySQL answered itself (D-6).
+    async fn settle_with<T>(
+        &self,
+        tunnels: &Tunnels,
+        id: &str,
+        read: Result<Result<T, sqlx::Error>, tokio::time::error::Elapsed>,
+        failed: fn(&sqlx::Error) -> QueryFailure,
+        timed_out: &str,
+    ) -> Result<T, String> {
         let failure = match read {
             Ok(Ok(value)) => return Ok(value),
-            Ok(Err(e)) => mysql::query_failure(&e),
+            Ok(Err(e)) => failed(&e),
             Err(_) => QueryFailure {
-                message: TIMED_OUT.to_owned(),
+                message: timed_out.to_owned(),
                 lost: true,
             },
         };
@@ -286,6 +302,27 @@ impl Sessions {
             .await
         };
         self.settle(tunnels, id, read).await
+    }
+
+    /// The text of the user run as one statement in `database` (D-6).
+    pub async fn sql(
+        &self,
+        tunnels: &Tunnels,
+        id: &str,
+        database: &str,
+        text: &str,
+    ) -> Result<DatabaseSqlResult, String> {
+        let text = sql::statement(text)?;
+        let session = self.session(id).await?;
+        let read = {
+            let mut guard = session.connection.lock().await;
+            let Some(connection) = guard.as_mut() else {
+                return Err(NOT_OPEN.to_owned());
+            };
+            tokio::time::timeout(sql::CLIENT_LIMIT, sql::run(connection, database, text)).await
+        };
+        self.settle_with(tunnels, id, read, sql::failure, SQL_TIMED_OUT)
+            .await
     }
 
     /// The structure of `table` in `database` (D-5).
@@ -413,6 +450,15 @@ mod tests {
         assert_eq!(
             sessions.structure(&tunnels, "a", "shop", "orders").await,
             Err(NOT_OPEN.to_owned())
+        );
+        assert_eq!(
+            sessions.sql(&tunnels, "a", "shop", "SELECT 1").await,
+            Err(NOT_OPEN.to_owned())
+        );
+        // Nothing to run is told before the connection is looked at.
+        assert_eq!(
+            sessions.sql(&tunnels, "a", "shop", " ; ").await,
+            Err("SQL を入力してください".to_owned())
         );
         sessions.close_all().await;
     }

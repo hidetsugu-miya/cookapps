@@ -262,7 +262,7 @@ pub fn format_summary(offset: u64, shown: usize, estimate: Option<u64>) -> Strin
     text
 }
 
-fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
+pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
     row.columns()
         .iter()
         .enumerate()

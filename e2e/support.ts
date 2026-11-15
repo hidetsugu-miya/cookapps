@@ -12,6 +12,7 @@ import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
 import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
 import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
 import type { DatabaseRecords } from "../ts/bindings/DatabaseRecords";
+import type { DatabaseSqlResult } from "../ts/bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
@@ -567,6 +568,9 @@ export const databaseColumn = (name: string, columnType: string, extra: Partial<
 
 // The structure of a table as `database_structure` answers it.
 export const databaseStructure = (columns: DatabaseColumn[], summary = `${columns.length} 列 / InnoDB / utf8mb4`): DatabaseStructure => ({ columns, summary });
+
+// The result of a statement as `database_sql` answers it (D-6): the cells as D-4's, and the line under the table.
+export const databaseSqlResult = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`): DatabaseSqlResult => ({ columns, rows, summary });
 
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 

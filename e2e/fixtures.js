@@ -78,6 +78,8 @@ const answers = {
   database_records: { columns: [], rows: [], page: 0, hasMore: false, summary: "0 行" },
   // D-5: a table of no column; a spec that opens the tab 構造 mocks `database_structure`.
   database_structure: { columns: [], summary: "0 列" },
+  // D-6: a statement with no row; a spec that runs one mocks `database_sql`.
+  database_sql: { columns: [], rows: [], summary: "0 行 / 1 ms" },
   database_connections: [],
   database_disconnect: null,
   // No orca command: the Orca screen reads once and stops.
