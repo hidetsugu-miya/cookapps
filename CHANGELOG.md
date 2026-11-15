@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.75.0
+
+D-3: the work pane of a database has two tabs, "テーブル" and "SQL" (#670). A row of the table list opens that table, as its row in the tree does, also with Enter (#671). A right click on a database row opens a menu with "新規クエリ", which opens the SQL tab of the database with an empty field, and "データベースを閉じる", which closes its tree and keeps the connection open (#670).
+
+D-4: the footer of the records has the reload and the copy as icons with the range at the left, and at the right the first page, the previous page, a field for the page number (Enter opens that page), the number of pages from the estimated rows ("/ 約 15,062"), the next page and the last page (#667). The number of pages comes from the estimate, so the last page can be empty or leave rows after it.
+
+D-4, D-5, D-6: the grids of the records, the structure and the SQL result have a vertical line between the columns, and dragging the line in the header changes the width of a column, kept until the app is closed (#669). The copy icon at the left of each footer copies the list that is shown, with its header, as tab-separated text that a spreadsheet takes as it is; the values are copied as they are shown (#668).
+
+D-7: the header of the work pane has an icon that opens and closes a pane at its right, whose width is changed by dragging the divider (#673). Its plus opens a plain Orca terminal in the Orca worktree picked from a list (#674). Each terminal opened is a tab, pressed to switch to it and closed with its ×, which closes the terminal in Orca as the tabs of the Orca screen do (#675).
+
 ## v0.74.2
 
 D-1: the menu of a connection on the database screen ("編集", "切断" while it is open, and "削除") opens with a right click on its row, where the pointer is; the button with three dots at the right of the row is gone (#664).
