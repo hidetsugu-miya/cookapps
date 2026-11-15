@@ -1,8 +1,8 @@
-// The side menu of the database screen (D-1, D-3): the connections by name, each with the button of its menu (edit, disconnect, delete), and under an open connection its databases and under an open database its tables.
+// The side menu of the database screen (D-1, D-3): the connections by name, each with a menu that a right press opens (edit, disconnect, delete), and under an open connection its databases and under an open database its tables.
 // Drawing only: what is held and what each press does belong to database.ts. It is drawn again only when what it shows changes, and the focus stays.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { $, tag } from "./dom.js";
-import { CHEVRON_SVG, CLOSE_SVG, DATABASE_SVG, DELETE_SVG, EDIT_SVG, MORE_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLOSE_SVG, DATABASE_SVG, DELETE_SVG, EDIT_SVG } from "./icons.js";
 import { openMenu } from "./menu.js";
 
 export interface DatabaseNode {
@@ -42,7 +42,7 @@ export interface SideActions {
   pressTable: (profile: DatabaseProfileView, database: string, table: string) => void;
   edit: (profile: DatabaseProfileView) => void;
   disconnect: (profile: DatabaseProfileView) => void;
-  // `anchor` is the button of the row's menu, which the confirmation opens under.
+  // `anchor` is the name of the row, which the confirmation opens under.
   remove: (profile: DatabaseProfileView, anchor: Element) => void;
 }
 
@@ -100,19 +100,21 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
   const item = tag("div", "database-item");
   const button = row(profile.id, 0, selected?.id === profile.id && selected.database === null, node.expanded, DATABASE_SVG, profile.name, () => actions.pressConnection(profile));
   button.append(dotNode(node));
-  const more = tag("button", "icon-btn database-more");
-  more.type = "button";
-  more.dataset.key = `${profile.id}/more`;
-  more.setAttribute("aria-label", `${profile.name} のメニュー`);
-  more.setAttribute("aria-haspopup", "menu");
-  more.innerHTML = MORE_SVG;
-  more.onclick = () =>
-    openMenu(more, [
-      { label: "編集", color: "", icon: EDIT_SVG, current: false, pick: () => actions.edit(profile) },
-      ...(node.connected ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
-      { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => actions.remove(profile, more) },
-    ]);
-  item.append(button, more);
+  // The menu is anchored on the name, not on the button, which carries the aria-expanded of its tree.
+  const name = button.querySelector(".database-name")!;
+  button.oncontextmenu = (e) => {
+    e.preventDefault();
+    openMenu(
+      name,
+      [
+        { label: "編集", color: "", icon: EDIT_SVG, current: false, pick: () => actions.edit(profile) },
+        ...(node.connected ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
+        { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => actions.remove(profile, name) },
+      ],
+      { at: { x: e.clientX, y: e.clientY } },
+    );
+  };
+  item.append(button);
   if (node.expanded) {
     const children = tag("div", "database-children");
     if (node.loading) children.append(note(node.connected ? "読み込み中…" : "接続中…", 1, false));

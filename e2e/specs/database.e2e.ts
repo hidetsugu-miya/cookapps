@@ -1,4 +1,4 @@
-import { boot, callsOf, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -12,9 +12,22 @@ async function openDatabase(profiles = [direct, tunnel], fixtures: Record<string
 }
 
 const names = () => textsOf("#database-side-feed .database-btn");
-// Presses the menu of the row of `id`, and then the item (1 edit, 2 delete; 2 disconnect and 3 delete while the connection is open).
+// The page's own right button on the row of `id`, at `at` (the pointer; the middle of the row when none).
+const rightPress = (id: string, at?: { x: number; y: number }) =>
+  browser.execute(
+    (key, point, once) => {
+      if (!window.__e2e_once__(once)) return;
+      const row = document.querySelector(`#database-side-feed [data-key="${key}"]`)!;
+      const r = row.getBoundingClientRect();
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: point?.x ?? r.left + 40, clientY: point?.y ?? r.top + r.height / 2 }));
+    },
+    id,
+    at,
+    onceId(),
+  );
+// Opens the menu of the row of `id` with a right press, and then picks the item (1 edit, 2 delete; 2 disconnect and 3 delete while the connection is open).
 const pickFromMenu = async (id: string, item: 1 | 2 | 3) => {
-  await $(`#database-side-feed [data-key="${id}/more"]`).click();
+  await rightPress(id);
   await $(`.menu button[role="menuitem"]:nth-child(${item})`).click();
 };
 const field = (name: string) => $(`#database-form [name="${name}"]`);
@@ -38,6 +51,23 @@ describe("database", () => {
     await expect($("#database-pane")).toBeDisplayed();
     await expect($("#database-side-split")).toBeDisplayed();
     expect(await callsOf("database_profiles")).toEqual([null]);
+  });
+
+  it("opens the menu at the pointer on a right press of a row, with no button of a menu in the row", async () => {
+    await openDatabase();
+    expect(await count("#database-side-feed .database-item button")).toBe(2);
+    expect(await count("#database-side-feed .database-more")).toBe(0);
+    await rightPress("p1", { x: 120, y: 90 });
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["編集", "削除"]);
+    const at = await browser.execute(() => {
+      const r = document.querySelector(".menu")!.getBoundingClientRect();
+      return { x: Math.round(r.left), y: Math.round(r.top) };
+    });
+    expect(at).toEqual({ x: 120, y: 90 });
+    await expect($('#database-side-feed [data-key="p1"]')).toHaveAttribute("aria-expanded", "false");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
   });
 
   it("lists the connections by name, in the order Rust gives them, with no text that explains", async () => {
@@ -1166,10 +1196,10 @@ describe("database: tree", () => {
 
   it("has 切断 in the menu of an open connection only, between 編集 and 削除", async () => {
     await openTree();
-    await $('#database-side-feed [data-key="p1/more"]').click();
+    await rightPress("p1");
     expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["編集", "切断", "削除"]);
     await browser.keys("Escape");
-    await $('#database-side-feed [data-key="p2/more"]').click();
+    await rightPress("p2");
     expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["編集", "削除"]);
     await browser.keys("Escape");
   });
