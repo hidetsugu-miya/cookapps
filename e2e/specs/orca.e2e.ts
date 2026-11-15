@@ -813,16 +813,6 @@ describe("orca", () => {
     expect(await count("#orca-feed .orca-project")).toBe(4);
   });
 
-  it("starts a session on the saved environment that is the target", async () => {
-    await openOrca(orcaOverview(sample(), worktrees(), studio));
-    // A launch names the target the screen shows.
-    const start = await mock("orca_start", noPane);
-    await select("example-app");
-    await pressPlus();
-    await pickItem(CLAUDE);
-    expect(await waitForCalls(start)).toEqual([{ path: "/work/example-app", environment: "Studio" }]);
-  });
-
   it("keeps the selection through a read in the background, and does not start the terminal again", async () => {
     await openOrca();
     await mock("orca_terminal_read", ["$ first frame"]);

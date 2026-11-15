@@ -284,13 +284,12 @@ export interface Commands {
   // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` is as in `claude_proofread_slack`.
   claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string; skill?: string | null }; result: PromptEdit };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
-  // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, with the environments listed so the owner can choose again),
+  // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, and the owner corrects the file),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.
   orca_overview: { args: { scope: "full" | "screen" | "badge"; target: string | null }; result: OrcaOverview };
   // A-9: the lists of the destination the side pane chose (null: this machine, else a saved environment's name, checked against the saved ones; one that is not saved is a failed read). It reads the agents and their terminals, the worktrees and the projects like "screen", with `environments` filled, and does not touch the target the Orca screen holds.
   // `force` is false only for the poll of a shown session: for the destination checked just before, the saved environments are not asked for again and `environments` is empty.
   orca_destination: { args: { environment: string | null; force: boolean }; result: OrcaOverview };
-  // Saves the target: a saved environment's name, or null for this machine.
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
   // A-16: starts Claude in the worktree at `path` with no first prompt (the plus of the work pane). The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them). Never run twice.
