@@ -1621,8 +1621,15 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-terminal { flex: none; width: clamp(25%, var(--terminal-w, 35%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); }
 #database-terminal-head { padding: 0 6px; }
 #database-terminal-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; }
-.database-terminal-tab { flex: none; display: flex; align-items: center; height: calc(var(--header-h) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--surface); font: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; color: inherit; }
+.database-terminal-tab { flex: none; display: flex; align-items: center; height: calc(var(--header-h) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
+.database-terminal-tab:has(.database-terminal-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
+.database-terminal-tab-btn { display: flex; align-items: center; min-width: 0; height: 100%; padding: 0 2px 0 12px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.database-terminal-tab-btn:hover { color: var(--accent); }
+.database-terminal-tab-btn[aria-selected="true"] { font-weight: 600; }
+.database-terminal-tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .database-terminal-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#database-terminal-head .database-terminal-tab-close { flex: none; width: 22px; height: 22px; margin-right: 4px; color: inherit; }
+#database-terminal-head .database-terminal-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #database-terminal-plus { flex: none; margin-left: 2px; color: var(--ink-soft); }
 #database-terminal-plus:hover:not(:disabled) { background: var(--hover); }
 #database-terminal-plus svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }

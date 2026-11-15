@@ -2025,19 +2025,185 @@ describe("database: terminal pane, terminals", () => {
     await waitScreen("$ pwd");
   });
 
-  it("lets the first terminal go when a second is opened in another worktree", async () => {
-    await openPane(orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-api", "zsh"), orcaTerminal("example-app", "zsh")] }));
+  const app = "term_example-app_zsh";
+  const appPath = "/work/example-app";
+  const bothListed = () => orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-api", "zsh"), orcaTerminal("example-app", "zsh")] });
+  const tabButton = (n: number) => $(`#database-terminal-tabs [role="presentation"]:nth-child(${n}) [role="tab"]`);
+  const closeButton = (n: number) => $(`#database-terminal-tabs [role="presentation"]:nth-child(${n}) .icon-btn`);
+  const selection = () => browser.execute(() => [...document.querySelectorAll('#database-terminal-tabs [role="tab"]')].map((e) => e.getAttribute("aria-selected")));
+  const readHandles = async () => [...new Set(((await callsOf("orca_terminal_read")) as { handle: string }[]).map((c) => c.handle))];
+  // The two terminals, example-api first and example-app second (selected), mirrored.
+  async function openTwo(list = bothListed()) {
+    await openPane(list);
     await mock("orca_terminal_create", created);
-    await mock("orca_terminal_read", ["$ first"]);
+    await mock("orca_terminal_read", ["$ pwd"]);
     await pick(apiPath);
-    await waitScreen("$ first");
-    await mock("orca_terminal_create", { paneKey: null, handle: "term_example-app_zsh" });
-    await mock("orca_terminal_read", ["$ second"]);
-    await pick("/work/example-app");
-    await waitScreen("$ second");
-    expect(await tabs()).toEqual(["example-app ・ feat/a"]);
+    await waitScreen("$ pwd");
+    await mock("orca_terminal_create", { paneKey: null, handle: app });
+    await pick(appPath);
+    await waitForCount('#database-terminal-tabs [role="tab"]', 2);
+  }
+
+  it("gives a second terminal a second tab that is selected, and keeps the first", async () => {
+    await openTwo();
+    expect(await tabs()).toEqual(["example-api ・ main", "example-app ・ feat/a"]);
+    expect(await selection()).toEqual(["false", "true"]);
     expect(await count(".database-terminal-term")).toBe(1);
-    expect(((await callsOf("orca_terminal_read")).at(-1) as { handle: string }).handle).toBe("term_example-app_zsh");
+    await browser.waitUntil(async () => ((await callsOf("orca_terminal_read")) as { handle: string }[]).at(-1)?.handle === app, { timeoutMsg: "the second terminal was never read" });
+  });
+
+  it("switches to the terminal of the tab pressed, and reads only the one shown", async () => {
+    await openTwo();
+    await tabButton(1).click();
+    expect(await selection()).toEqual(["true", "false"]);
+    await browser.pause(500);
+    const read = await mock("orca_terminal_read", ["$ pwd"]);
+    await browser.pause(600);
+    expect(await readHandles()).toEqual([zsh]);
+    await tabButton(2).click();
+    expect(await selection()).toEqual(["false", "true"]);
+    await browser.pause(500);
+    await mock(read, ["$ pwd"]);
+    await browser.pause(600);
+    expect(await readHandles()).toEqual([app]);
+    expect(await count(".database-terminal-term")).toBe(1);
+  });
+
+  it("streams only the terminal of the tab selected, and ends the stream of the one left", async () => {
+    await openPane(placedOverview([], worktreesOf(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(placedStream([], worktreesOf(), [orcaTerminal("example-api", "zsh"), orcaTerminal("example-app", "zsh")]));
+    await mock("orca_terminal_create", created);
+    await pick(apiPath);
+    expect(((await waitForCalls("orca_stream_terminal"))[0] as { handle: string }).handle).toBe(zsh);
+    const closed = await mock("orca_stream_terminal_close", null);
+    await mock("orca_terminal_create", { paneKey: null, handle: app });
+    await pick(appPath);
+    expect(((await waitForCalls("orca_stream_terminal", 2))[1] as { handle: string }).handle).toBe(app);
+    expect(((await waitForCalls(closed))[0] as { handle: string }).handle).toBe(zsh);
+    await tabButton(1).click();
+    expect(((await waitForCalls("orca_stream_terminal", 3))[2] as { handle: string }).handle).toBe(zsh);
+    expect(((await waitForCalls(closed, 2))[1] as { handle: string }).handle).toBe(app);
+  });
+
+  it("does not show a terminal of the tab that the list does not hold yet", async () => {
+    await openPane(listed());
+    await mock("orca_terminal_create", created);
+    await mock("orca_terminal_read", ["$ pwd"]);
+    await pick(apiPath);
+    await waitScreen("$ pwd");
+    await mock("orca_terminal_create", { paneKey: null, handle: app });
+    await pick(appPath);
+    await waitForCount('#database-terminal-tabs [role="tab"]', 2);
+    await browser.pause(400);
+    const read = await mock("orca_terminal_read", ["$ pwd"]);
+    await browser.pause(600);
+    expect(await callsOf(read)).toEqual([]);
+    expect(await selection()).toEqual(["false", "true"]);
+  });
+
+  it("has a close button beside each tab, with a drawn cross and no text", async () => {
+    await openTwo();
+    for (const n of [1, 2]) {
+      await expect(closeButton(n)).toHaveAttribute("aria-label", "閉じる");
+      expect((await closeButton(n).getText()).trim()).toBe("");
+      await expect(closeButton(n).$("svg")).toExist();
+      await expect(closeButton(n)).toBeEnabled();
+    }
+    expect(await count('#database-terminal-tabs [role="tab"] .icon-btn')).toBe(0);
+  });
+
+  it("closes the terminal in Orca with its handle and place, and drops its tab without selecting it", async () => {
+    await openTwo();
+    const close = await mock("orca_close", null);
+    await closeButton(1).click();
+    expect(await waitForCalls(close)).toEqual([{ handle: zsh, environment: null }]);
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    expect(await tabs()).toEqual(["example-app ・ feat/a"]);
+    expect(await selection()).toEqual(["true"]);
+    await mock("orca_terminal_read", ["$ pwd"]);
+    await browser.pause(600);
+    expect(await readHandles()).toEqual([app]);
+  });
+
+  it("selects the tab before the one closed when the last tab is closed, and empties the pane when none is left", async () => {
+    await openTwo();
+    const close = await mock("orca_close", null);
+    await closeButton(2).click();
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    expect(await tabs()).toEqual(["example-api ・ main"]);
+    expect(await selection()).toEqual(["true"]);
+    await browser.waitUntil(async () => ((await callsOf("orca_terminal_read")) as { handle: string }[]).at(-1)?.handle === zsh, { timeoutMsg: "the first terminal was not shown again" });
+    await closeButton(1).click();
+    expect((await waitForCalls(close, 2)).map((c) => (c as { handle: string }).handle)).toEqual([app, zsh]);
+    await waitForCount("#database-terminal-tabs > *", 0);
+    await waitForCount(".database-terminal-term", 0);
+    expect(await count("#database-terminal-body > *")).toBe(0);
+    const read = await mock("orca_terminal_read", ["$"]);
+    await browser.pause(600);
+    expect(await callsOf(read)).toEqual([]);
+  });
+
+  it("selects the tab that followed the one closed", async () => {
+    await openTwo();
+    await tabButton(1).click();
+    await mock("orca_close", null);
+    await closeButton(1).click();
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    expect(await tabs()).toEqual(["example-app ・ feat/a"]);
+    expect(await selection()).toEqual(["true"]);
+  });
+
+  it("closes a terminal of a saved environment with the name of the environment", async () => {
+    await openPane(placedOverview([], worktreesOf(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(placedStream([], worktreesOf(), [orcaTerminal("example-api", "zsh")]));
+    await mock("orca_terminal_create", created);
+    await pick(apiPath);
+    await waitForCalls("orca_stream_terminal");
+    const close = await mock("orca_close", null);
+    await closeButton(1).click();
+    expect(await waitForCalls(close)).toEqual([{ handle: zsh, environment: "Studio" }]);
+    await waitForCount("#database-terminal-tabs > *", 0);
+  });
+
+  it("keeps the close button off while the close is on its way, and drops the tab when Orca has closed it", async () => {
+    await openTwo();
+    const close = await mock("orca_close", holds);
+    await closeButton(1).click();
+    await waitForCalls(close);
+    await expect(closeButton(1)).toBeDisabled();
+    await expect(closeButton(2)).toBeEnabled();
+    expect(await count('#database-terminal-tabs [role="tab"]')).toBe(2);
+    await release(close, null);
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+  });
+
+  it("keeps the tab and says Rust's message when the close fails, reads the list again, and clears the notice at the next press", async () => {
+    await openTwo();
+    const close = await mock("orca_close", rejects("Orca が時間内に応答しませんでした"));
+    const overview = await mock("orca_overview", bothListed());
+    await closeButton(1).click();
+    await waitForCalls(close);
+    await expect($("#database-terminal-body > .pending.fail")).toHaveText("Orca が時間内に応答しませんでした");
+    await waitForCalls(overview);
+    expect(await tabs()).toEqual(["example-api ・ main", "example-app ・ feat/a"]);
+    await expect(closeButton(1)).toBeEnabled();
+    await mock("orca_close", null);
+    await closeButton(1).click();
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    expect(await count("#database-terminal-body > .pending")).toBe(0);
+  });
+
+  it("forgets a terminal that Orca closed, whether or not its tab is selected, and keeps the other with its reads", async () => {
+    await openTwo();
+    await mock("orca_overview", orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-app", "zsh")] }));
+    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    expect(await tabs()).toEqual(["example-app ・ feat/a"]);
+    expect(await selection()).toEqual(["true"]);
+    const read = await mock("orca_terminal_read", ["$ pwd"]);
+    expect(((await waitForCalls(read))[0] as { handle: string }).handle).toBe(app);
+    expect(await count(".database-terminal-term")).toBe(1);
   });
 
   it("says in the pane that Orca is missing, and opens no dialog", async () => {
