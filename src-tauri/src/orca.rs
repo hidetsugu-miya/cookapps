@@ -447,9 +447,10 @@ const HARNESS_ELEMENTS: [&str; 9] = [
     "user-prompt-submit-hook",
 ];
 
-/// How many bytes of `s`, which starts with `<`, a harness element takes: its tag and what it holds up to its closing tag, or up to the end of `s` when it is never closed (a message cut inside it) or its opening tag is cut;
-/// the opening tag alone for `<name/>`. `None` when `s` does not start with the opening of a harness element.
-fn harness_element_len(s: &str) -> Option<usize> {
+/// How many bytes of `s`, which starts with `<`, a harness element takes: its tag and what it holds up to its closing tag;
+/// when it is never closed (a message cut inside it) or its opening tag is cut, up to the end of `s` if it starts a line (`at_line_start`: only spaces before it on its line), else the opening tag alone, or nothing when that is cut too, because text before it shows it is a word in a sentence (`Fix the <log> view`);
+/// the opening tag alone for `<name/>`. `None` when `s` does not start with the opening of a harness element, or when it is a cut tag in a sentence.
+fn harness_element_len(s: &str, at_line_start: bool) -> Option<usize> {
     let body = s.strip_prefix('<')?;
     let name = HARNESS_ELEMENTS.iter().find(|name| {
         body.strip_prefix(**name).is_some_and(|r| {
@@ -457,11 +458,14 @@ fn harness_element_len(s: &str) -> Option<usize> {
         })
     })?;
     Some(match tag_len(s) {
-        None => s.len(),
+        None if at_line_start => s.len(),
+        None => return None,
         Some(open) if s[..open].ends_with("/>") => open,
         Some(open) => s[open..]
             .find(&format!("</{name}>"))
-            .map_or(s.len(), |i| open + i + name.len() + 3),
+            .map_or(if at_line_start { s.len() } else { open }, |i| {
+                open + i + name.len() + 3
+            }),
     })
 }
 
@@ -478,7 +482,10 @@ fn without_harness_elements(text: &str) -> String {
             rest = &after[end..];
             continue;
         }
-        if let Some(len) = harness_element_len(after) {
+        let at_line_start = out[out.rfind('\n').map_or(0, |i| i + 1)..]
+            .trim()
+            .is_empty();
+        if let Some(len) = harness_element_len(after, at_line_start) {
             rest = &after[len..];
         } else {
             out.push('<');
@@ -498,7 +505,11 @@ fn is_process_output(line: &str) -> bool {
 /// `None` when nothing is left, or when what is left opens as data or as the output of a process (`is_pasted_data`, `is_process_output`; the first three lines are read, so that an object over several lines is found).
 /// Only the first `LINE_READ_LIMIT` characters are read.
 fn first_text_line(text: &str) -> Option<String> {
-    let text = without_harness_elements(&text.chars().take(LINE_READ_LIMIT).collect::<String>());
+    let read = text
+        .char_indices()
+        .nth(LINE_READ_LIMIT)
+        .map_or(text, |(i, _)| &text[..i]);
+    let text = without_harness_elements(read);
     let head: Vec<String> = text_lines(&text).take(3).collect();
     let first = head.first()?;
     if is_process_output(first) || is_pasted_data(&head.join(" ")) {
@@ -2504,6 +2515,13 @@ mod tests {
             ("<event/>Fix the list", "Fix the list"),
             ("Fix the `<event>` element", "Fix the `<event>` element"),
             ("Fix <eventual> list", "Fix  list"),
+            ("Fix the <log> view", "Fix the  view"),
+            ("Fix the <result> and <log> view", "Fix the  and  view"),
+            ("Fix the <event kind=\"x\"> view", "Fix the  view"),
+            ("Fix the <log view", "Fix the <log view"),
+            ("<log>\nFix the list", ""),
+            ("  <log> Fix the list", ""),
+            ("Fix the list\n<log>\nx", "Fix the list"),
             ("<events> list", "list"),
             ("Fix [stderr] output", "Fix [stderr] output"),
         ] {
