@@ -1156,7 +1156,7 @@ pub(crate) fn args_of(args: &[&str]) -> Vec<String> {
 }
 
 /// `--environment=NAME` after the command's own arguments, in the `=` form so a name is never read as another option.
-fn with_environment(mut args: Vec<String>, environment: Option<&str>) -> Vec<String> {
+pub(crate) fn with_environment(mut args: Vec<String>, environment: Option<&str>) -> Vec<String> {
     if let Some(name) = environment {
         args.push(format!("--environment={name}"));
     }

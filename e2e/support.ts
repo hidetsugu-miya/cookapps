@@ -758,7 +758,7 @@ function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaT
 export const formationChild = (name: string, state: FormationState, extra: Partial<FormationChild> & { minutes?: number } = {}): FormationChild => {
   const { minutes = 2, ...rest } = extra;
   const planned = state === "planned";
-  return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, ...rest };
+  return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", ...rest };
 };
 
 // What `orca_overview` answers: a read that worked, this machine's, unless `extra` says another.
