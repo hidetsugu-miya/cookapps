@@ -122,6 +122,7 @@ const answers = {
   lsp_status: { state: "stopped", reason: "notStarted" },
   lsp_start: { state: "indexing" },
   lsp_stop: null,
+  lsp_restart: { state: "indexing" },
   lsp_container_start: null,
   lsp_launch: { method: "none", candidates: [], service: null, command: null, mount: null },
   // A-14: the two default themes, with example colors (a spec that chooses among themes gives `terminalThemes` of e2e/support.ts); a spec that presses a select mocks `terminal_theme_set`.

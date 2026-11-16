@@ -354,6 +354,8 @@ export interface Commands {
   lsp_launch: { args: { environment: string | null; project: string; worktree: string }; result: LspLaunch };
   // A-34: starts ruby-lsp for `worktree` of the project `project` of `environment` (null: this machine) and answers its state (`indexing`). A server that is there and not stopped is left as it is; a stopped one is started again. How it is started is read from the worktree by Rust; a failure of that or of the process is the state `stopped` with its message, told by the event `lsp-status` (`LspStatusEvent`).
   lsp_start: { args: { environment: string | null; project: string; worktree: string }; result: LspStatus };
+  // A-34: stops the server of `worktree` and starts it again (the restart of the screen), as `lsp_start` does, and answers its state (`indexing`). The places outside the worktree that the stopped server gave stay known to the new one.
+  lsp_restart: { args: { environment: string | null; project: string; worktree: string }; result: LspStatus };
   // A-34: stops the server of `worktree` (`shutdown`, `exit`, then its standard input is closed). A worktree with none is no error.
   lsp_stop: { args: { environment: string | null; worktree: string }; result: null };
   // A-34: the state of the server of `worktree`: `indexing`, `running`, or `stopped` with the reason (`notStarted` when there is none, `containerDown` when the container of the service does not run, `failed` with a message).

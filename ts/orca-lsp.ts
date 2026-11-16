@@ -1,5 +1,5 @@
 // The language server of the Orca screen (A-34): the state of ruby-lsp for a worktree and its settings, shown under the definition in the file pane, and when it is started and stopped.
-// Rust starts, keeps and stops the process (`lsp_start`, `lsp_stop`), tells each change of its state (the event `lsp-status`), reads how it is started from the worktree (`lsp_launch`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
+// Rust starts, keeps and stops the process (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of its state (the event `lsp-status`), reads how it is started from the worktree (`lsp_launch`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
 // A Ruby file opened in the editor starts the server of its worktree when the settings say 「自動で起動」 (`ensureServer`); a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
@@ -209,8 +209,8 @@ async function run(kind: "restart" | "container", action: (place: LspPlace) => P
 
 const restart = () =>
   run("restart", async (place) => {
-    await invoke("lsp_stop", { environment: place.target, worktree: place.path });
-    await startServer(place);
+    started.set(keyOf(place.target, place.path), place);
+    statuses.set(keyOf(place.target, place.path), await invoke("lsp_restart", args(place)));
   });
 
 const startContainer = () =>

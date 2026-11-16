@@ -59,6 +59,12 @@ fn path_of(line: &str) -> Option<String> {
     ok.then(|| path.to_owned())
 }
 
+/// Whether the script ran: the line between the two listings is there. A `cd` that failed, or an ssh that did not connect, prints none, and then the output says nothing about the files; a `find` that failed somewhere prints it all the same, and its listing is used as far as it goes (`parse`).
+pub(crate) fn started(output: &str) -> bool {
+    let whole = output.rfind('\n').map_or("", |at| &output[..=at]);
+    whole.lines().any(|line| line == SPLIT)
+}
+
 /// The listing from what the command printed. A last line that was cut is dropped, and `all` is there only when the end line is.
 pub(crate) fn parse(output: &str) -> Listing {
     let whole = output.rfind('\n').map_or("", |at| &output[..=at]);
@@ -188,6 +194,16 @@ mod tests {
     }
 
     // ---- what it printed ----
+
+    #[test]
+    fn the_script_has_run_when_the_line_between_the_listings_is_there() {
+        assert!(started("--\n"));
+        assert!(started("./a.rb\n--\n./a.rb\n"));
+        // Nothing printed (a `cd` or ssh that failed), or a line cut before its end.
+        assert!(!started(""));
+        assert!(!started("./a.rb\n"));
+        assert!(!started("./a.rb\n--"));
+    }
 
     #[test]
     fn the_listing_is_the_recent_files_and_all_of_them() {

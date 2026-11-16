@@ -1,6 +1,6 @@
 //! A-34: the ruby-lsp processes that stay, one for each worktree (the place of its project and its path), their state, and the questions to them.
 //!
-//! A server is started by `lsp_start` and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
+//! A server is started by `lsp_start` (or replaced by `lsp_restart`) and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
 //! The state is `indexing` from the start to the end of the progress ruby-lsp shows (`protocol::Progress`), `running` after it, and `stopped` with a reason when the process is gone. A service of compose whose container does not run is told as `containerDown`, so that the screen can offer to start it; starting the container is not done here. Each change of the state is told by the event `lsp-status` (`LspStatusEvent`), and `lsp_status` answers the state as it is.
 //! A server is stopped by `shutdown` and `exit`, and then by closing its standard input, which ends ruby-lsp, through `docker compose exec` and `ssh` as well; a process that is still there after a moment is killed.
 //! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which Ruby files changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered.
@@ -11,7 +11,10 @@ use std::{
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -548,13 +551,28 @@ async fn run_spawn(ctx: &mut Ctx, spawn: &Spawn, mount: &str, timing: &Timing) {
     let kept = Arc::new(Mutex::new(Vec::new()));
     let mut errors = tokio::spawn(collect_stderr(stderr, kept.clone()));
     let publisher = ctx.publisher.clone();
+    // The first state the session tells is the one at `initialized`: the files on the disk are looked at then, once, so that what is gone or renamed by the first question is told then (`look`).
+    let first = AtomicBool::new(true);
+    let (watch, way) = (ctx.watch.clone(), ctx.way.clone());
     let end = session(
         stdout,
         stdin,
         &uri_of(mount),
         timing,
         &mut ctx.rx,
-        &|status| publisher.set(status),
+        &|status| {
+            if first.swap(false, Ordering::SeqCst) {
+                let (watch, way) = (watch.clone(), way.clone());
+                let worktree = publisher.key.worktree.clone();
+                tokio::spawn(async move {
+                    let way = way.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if let Some(way) = way {
+                        look(&watch, &way, &worktree, run_on).await;
+                    }
+                });
+            }
+            publisher.set(status);
+        },
     )
     .await;
     let code = match timeout(timing.child, child.wait()).await {
@@ -670,6 +688,8 @@ pub(crate) struct Ctx {
     publisher: Publisher,
     /// How the server is started, set by the task once it is known.
     way: Arc<Mutex<Option<Way>>>,
+    /// What the app knows of the files of the worktree on the disk; the task takes the first look at `initialized`.
+    watch: Arc<tokio::sync::Mutex<Watch>>,
 }
 
 /// What the app knows of the files of the worktree on the disk: when it last looked, and the `*.rb` files it saw then (`None` before the first look).
@@ -685,7 +705,7 @@ struct Server {
     task: Mutex<Option<JoinHandle<()>>>,
     /// The paths outside the worktree that the server answered as a definition.
     outside: Mutex<HashSet<String>>,
-    watch: tokio::sync::Mutex<Watch>,
+    watch: Arc<tokio::sync::Mutex<Watch>>,
 }
 
 impl Server {
@@ -726,24 +746,62 @@ impl LspServers {
         F: FnOnce(Ctx) -> Fut,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        self.start_carrying(key, emit, run, HashSet::new()).await
+    }
+
+    /// Stops the server of `key` if there is one, and starts it again with `run` (the restart of the screen). The places outside the worktree that the one it replaces gave stay known to the new one, because the list of definitions that shows them is still on the screen. Answers the state.
+    pub(crate) async fn restart_with<F, Fut>(&self, key: Key, emit: Emit, run: F) -> LspStatus
+    where
+        F: FnOnce(Ctx) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let old = self.inner.lock().await.remove(&key);
+        let mut outside = HashSet::new();
+        if let Some(old) = old {
+            old.finish().await;
+            outside = std::mem::take(&mut *old.outside.lock().unwrap_or_else(|e| e.into_inner()));
+        }
+        self.start_carrying(key, emit, run, outside).await
+    }
+
+    /// `start_with`, where `outside` are the places outside the worktree that the server to be started knows from the start.
+    async fn start_carrying<F, Fut>(
+        &self,
+        key: Key,
+        emit: Emit,
+        run: F,
+        mut outside: HashSet<String>,
+    ) -> LspStatus
+    where
+        F: FnOnce(Ctx) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
         let mut servers = self.inner.lock().await;
         if let Some(server) = servers.get(&key) {
             let status = server.status();
             if status.state != LspState::Stopped {
+                let mut known = server.outside.lock().unwrap_or_else(|e| e.into_inner());
+                let room = MAX_OUTSIDE.saturating_sub(known.len());
+                known.extend(outside.into_iter().take(room));
                 return status;
             }
         }
         // The places that the server of a definition gave stay known to the one that replaces it: the list that shows them is still on the screen.
-        let mut outside = HashSet::new();
         if let Some(old) = servers.remove(&key) {
             if let Some(task) = old.task.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 task.abort();
             }
-            outside = std::mem::take(&mut *old.outside.lock().unwrap_or_else(|e| e.into_inner()));
+            outside.extend(std::mem::take(
+                &mut *old.outside.lock().unwrap_or_else(|e| e.into_inner()),
+            ));
         }
         let (commands, rx) = mpsc::unbounded_channel();
         let status = Arc::new(Mutex::new(LspStatus::indexing()));
         let way = Arc::new(Mutex::new(None));
+        let watch = Arc::new(tokio::sync::Mutex::new(Watch {
+            at: Instant::now(),
+            known: None,
+        }));
         let publisher = Publisher {
             key: key.clone(),
             status: status.clone(),
@@ -753,6 +811,7 @@ impl LspServers {
             rx,
             publisher,
             way: way.clone(),
+            watch: watch.clone(),
         }));
         servers.insert(
             key,
@@ -762,10 +821,7 @@ impl LspServers {
                 commands,
                 task: Mutex::new(Some(task)),
                 outside: Mutex::new(outside),
-                watch: tokio::sync::Mutex::new(Watch {
-                    at: Instant::now(),
-                    known: None,
-                }),
+                watch,
             }),
         );
         LspStatus::indexing()
@@ -857,7 +913,7 @@ impl LspServers {
         known.then(|| server.way()).flatten()
     }
 
-    /// Tells the server of `key` which Ruby files of the worktree changed on the disk since the last look (`watch`): `run` runs the listing in the worktree by the route of the server. It is one run, within `REFRESH_TIMEOUT`; a listing that fails is left out and tried again at the next question, and the question goes on without it.
+    /// Tells the server of `key` which Ruby files of the worktree changed on the disk since the last look (`look`): `run` runs the listing in the worktree by the route of the server. A look that fails is left out and tried again at the next question, and the question goes on without it.
     pub(crate) async fn refresh<F>(&self, key: &Key, run: F)
     where
         F: FnOnce(&Route, &str, &str, usize) -> Result<Ran, String> + Send + 'static,
@@ -868,31 +924,46 @@ impl LspServers {
         let Some(way) = server.way() else {
             return;
         };
-        let mut watch = server.watch.lock().await;
-        let looked_at = Instant::now();
-        let command = watch::command(watch::minutes_since(looked_at.duration_since(watch.at)));
-        let (route, worktree) = (way.route.clone(), key.worktree.clone());
-        let ran = timeout(
-            REFRESH_TIMEOUT,
-            tokio::task::spawn_blocking(move || run(&route, &worktree, &command, watch::LIMIT)),
-        )
-        .await;
-        let Ok(Ok(Ok(ran))) = ran else {
-            return;
-        };
-        if ran.code != Some(0) {
-            return;
-        }
-        let listing = watch::parse(&String::from_utf8_lossy(&ran.stdout));
-        let changes = watch::changes(&listing, watch.known.as_ref());
-        watch.at = looked_at;
-        if let Some(all) = listing.all {
-            watch.known = Some(all.into_iter().collect());
-        }
+        let changes = look(&server.watch, &way, &key.worktree, run).await;
         if let Some(message) = watch::message(&way.mount, &changes) {
             let _ = server.commands.send(Cmd::Changed(message));
         }
     }
+}
+
+/// One look at the `*.rb` files of the worktree on the disk (`state`: what was seen at the last one): one run of `run`, within `REFRESH_TIMEOUT`, and the changes since then. A run that fails, is cut or is late, or a script that did not run (`cd` or ssh failed), tells nothing, and the time and the known files stay. Otherwise the time of the look is kept, and the known files too when the full list ended well (`--end`): a `find` that met a folder it cannot read has an exit code of 1, and the files it listed are still the answer.
+async fn look<F>(
+    state: &tokio::sync::Mutex<Watch>,
+    way: &Way,
+    worktree: &str,
+    run: F,
+) -> Vec<watch::Change>
+where
+    F: FnOnce(&Route, &str, &str, usize) -> Result<Ran, String> + Send + 'static,
+{
+    let mut state = state.lock().await;
+    let looked_at = Instant::now();
+    let command = watch::command(watch::minutes_since(looked_at.duration_since(state.at)));
+    let (route, worktree) = (way.route.clone(), worktree.to_owned());
+    let ran = timeout(
+        REFRESH_TIMEOUT,
+        tokio::task::spawn_blocking(move || run(&route, &worktree, &command, watch::LIMIT)),
+    )
+    .await;
+    let Ok(Ok(Ok(ran))) = ran else {
+        return Vec::new();
+    };
+    let output = String::from_utf8_lossy(&ran.stdout);
+    if !watch::started(&output) {
+        return Vec::new();
+    }
+    let listing = watch::parse(&output);
+    let changes = watch::changes(&listing, state.known.as_ref());
+    state.at = looked_at;
+    if let Some(all) = listing.all {
+        state.known = Some(all.into_iter().collect());
+    }
+    changes
 }
 
 fn key_of(environment: Option<&str>, worktree: &str) -> Key {
@@ -927,6 +998,27 @@ pub async fn lsp_start(
     let run_key = key.clone();
     Ok(servers
         .start_with(key, emitter(app), move |ctx| {
+            run_server(ctx, dir, run_key, project)
+        })
+        .await)
+}
+
+/// Stops the server of `worktree` and starts it again, as `lsp_start` does (the restart of the screen), and answers the state, `indexing`. The places outside the worktree that the stopped one gave stay known to the new one, which `lsp_stop` and `lsp_start` one after the other would lose (A-34).
+#[tauri::command]
+pub async fn lsp_restart(
+    app: AppHandle,
+    servers: State<'_, LspServers>,
+    environment: Option<String>,
+    project: String,
+    worktree: String,
+) -> Result<LspStatus, String> {
+    check_worktree(&worktree)?;
+    check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
+    let dir = config_dir(&app)?;
+    let key = key_of(environment.as_deref(), &worktree);
+    let run_key = key.clone();
+    Ok(servers
+        .restart_with(key, emitter(app), move |ctx| {
             run_server(ctx, dir, run_key, project)
         })
         .await)
@@ -1886,6 +1978,169 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_restart_replaces_the_running_server_and_keeps_the_places_outside_the_worktree() {
+        let servers = LspServers::default();
+        let (emit, _) = collector();
+        let plan = Plan::new();
+        *plan.definition.lock().unwrap() = json!([
+            {"uri": "file:///usr/local/bundle/gems/rack-3.1.0/lib/rack.rb", "range": {"start": {"line": 10, "character": 2}}},
+        ]);
+        let started = Arc::new(AtomicUsize::new(0));
+        let k = key("/w/a");
+        servers
+            .start_with(
+                k.clone(),
+                emit.clone(),
+                standin(plan.clone(), started.clone()),
+            )
+            .await;
+        plan.end.notify_one();
+        wait_for(&servers, &k, LspState::Running).await;
+        servers
+            .definition(&k, "lib/a.rb", "Rack\n".into(), 0, 2)
+            .await
+            .unwrap();
+        let gem = "/usr/local/bundle/gems/rack-3.1.0/lib/rack.rb";
+        let again = Plan::new();
+        assert_eq!(
+            servers
+                .restart_with(k.clone(), emit, standin(again.clone(), started.clone()))
+                .await,
+            LspStatus::indexing()
+        );
+        // The new server is the one that is there, and it knows what the old one gave.
+        until(|| started.load(Ordering::SeqCst) == 2).await;
+        again.end.notify_one();
+        wait_for(&servers, &k, LspState::Running).await;
+        assert_eq!(
+            servers.outside_way(None, "/w/a", gem).await,
+            Some(way_of("/app"))
+        );
+        servers.close_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_restart_of_a_worktree_with_no_server_starts_one() {
+        let servers = LspServers::default();
+        let (emit, _) = collector();
+        let k = key("/w/a");
+        let plan = Plan::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        assert_eq!(
+            servers
+                .restart_with(k.clone(), emit, standin(plan.clone(), started.clone()))
+                .await,
+            LspStatus::indexing()
+        );
+        plan.end.notify_one();
+        wait_for(&servers, &k, LspState::Running).await;
+        until(|| started.load(Ordering::SeqCst) == 1).await;
+        servers.close_all().await;
+    }
+
+    // ---- the look at the disk ----
+
+    fn new_watch() -> Arc<tokio::sync::Mutex<Watch>> {
+        Arc::new(tokio::sync::Mutex::new(Watch {
+            at: Instant::now(),
+            known: None,
+        }))
+    }
+
+    fn printed(
+        code: i32,
+        stdout: &str,
+    ) -> impl FnOnce(&Route, &str, &str, usize) -> Result<Ran, String> + Send + 'static {
+        let stdout = stdout.as_bytes().to_vec();
+        move |_, _, _, _| {
+            Ok(Ran {
+                code: Some(code),
+                stdout,
+                stderr: String::new(),
+            })
+        }
+    }
+
+    fn change(path: &str, kind: u8) -> watch::Change {
+        watch::Change {
+            path: path.into(),
+            kind,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_look_whose_find_met_a_folder_it_cannot_read_still_tells_what_it_listed() {
+        let state = new_watch();
+        // The second `find` ended with 1 (Permission denied), so there is no `--end`, and so the whole script has the code 1.
+        let got = look(
+            &state,
+            &way_of("/app"),
+            "/w/a",
+            printed(1, "./a.rb\n--\n./a.rb\n./b.rb\n"),
+        )
+        .await;
+        assert_eq!(got, vec![change("a.rb", 2)]);
+        // The list was cut, so it says nothing of the files that are gone.
+        assert_eq!(state.lock().await.known, None);
+    }
+
+    #[tokio::test]
+    async fn a_look_that_ended_well_keeps_the_list_even_with_a_failing_code() {
+        let state = new_watch();
+        look(
+            &state,
+            &way_of("/app"),
+            "/w/a",
+            printed(1, "--\n./a.rb\n./b.rb\n--end\n"),
+        )
+        .await;
+        assert_eq!(
+            state.lock().await.known,
+            Some(["a.rb".to_owned(), "b.rb".to_owned()].into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_script_that_did_not_run_and_a_run_that_failed_tell_nothing_and_keep_what_was_known()
+    {
+        let state = new_watch();
+        let at = state.lock().await.at;
+        let first = look(&state, &way_of("/app"), "/w/a", printed(255, "")).await;
+        let second = look(
+            &state,
+            &way_of("/app"),
+            "/w/a",
+            |_: &Route, _: &str, _: &str, _: usize| Err("no".to_owned()),
+        )
+        .await;
+        assert!(first.is_empty() && second.is_empty());
+        let kept = state.lock().await;
+        assert_eq!((kept.at, kept.known.clone()), (at, None));
+    }
+
+    #[tokio::test]
+    async fn the_first_look_is_the_start_for_the_files_that_are_gone_by_the_first_question() {
+        let state = new_watch();
+        // The look at `initialized`: nothing is told, the list is kept.
+        look(
+            &state,
+            &way_of("/app"),
+            "/w/a",
+            printed(0, "--\n./a.rb\n./b.rb\n--end\n"),
+        )
+        .await;
+        // At the first question `b.rb` is gone: it is told as deleted.
+        let got = look(
+            &state,
+            &way_of("/app"),
+            "/w/a",
+            printed(0, "--\n./a.rb\n--end\n"),
+        )
+        .await;
+        assert_eq!(got, vec![change("b.rb", 3)]);
+    }
+
+    #[tokio::test]
     async fn a_definition_refuses_a_path_that_is_not_below_the_worktree_and_a_text_that_is_too_large(
     ) {
         let servers = LspServers::default();
@@ -1982,6 +2237,7 @@ mod tests {
                 emit,
             },
             way: Arc::default(),
+            watch: new_watch(),
         };
         (ctx, commands, events)
     }

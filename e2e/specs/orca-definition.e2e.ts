@@ -555,16 +555,20 @@ describe("orca: definition (A-34)", () => {
     expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ environment: "Studio", sshHost: "build" }) }]);
   });
 
-  it("restarts the server: stops it, and starts it again once it is stopped (A-34)", async () => {
+  it("restarts the server with one command that replaces it, and keeps the state it answers (A-34)", async () => {
     await showServer();
-    const stop = await mock("lsp_stop", holds);
+    const restart = await mock("lsp_restart", holds);
+    const stop = await mock("lsp_stop", null);
     const start = await mock("lsp_start", status("indexing"));
     await $("#orca-lsp-restart").click();
-    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree }]);
-    expect(await callsOf(start)).toEqual([]);
-    await release(stop, null);
-    expect(await waitForCalls(start)).toEqual([worktreeArgs]);
+    expect(await waitForCalls(restart)).toEqual([worktreeArgs]);
+    await expect($("#orca-lsp-restart")).toBeDisabled();
+    await release(restart, status("indexing"));
+    await expect($("#orca-lsp-restart")).toBeEnabled();
     await expect(stateText()).toHaveText("ruby-lsp 索引中");
+    // The stop and the start are not called one after the other: that would drop the places outside the worktree that the server gave.
+    expect(await callsOf(stop)).toEqual([]);
+    expect(await callsOf(start)).toEqual([]);
   });
 
   it("offers to start the container when it is down, and starts the server again after it (A-34)", async () => {
