@@ -671,11 +671,22 @@ fn git(args: &[String]) -> Result<String, String> {
         .map_or_else(|| "git が失敗しました".to_owned(), str::to_owned))
 }
 
-/// Whether the worktree the record names is one of `orca worktree ps` (its `result`): the path is the same and so is its git branch. The record is a file the orchestrator can write, so nothing is removed on its word alone.
-fn is_listed(ps: &Value, path: &str, branch: &str) -> bool {
+/// Whether the worktree the record names is one of `orca worktree ps` (its `result`) and is not the repository's own folder. The branch is not compared: a child may switch it, and it is a part of the record that the orchestrator can write. The record is a file the orchestrator can write, so nothing is removed on its word alone.
+fn is_listed(ps: &Value, path: &str) -> bool {
     orca::worktrees_of(ps)
         .iter()
-        .any(|w| w.path == path && w.git_branch == branch)
+        .any(|w| w.path == path && !w.is_main)
+}
+
+/// Whether `ps` (`orca worktree ps`, its `result`) lists an agent of the pane `pane_key` under the worktree at `path`: what confirms that a terminal is the child's.
+fn has_agent_at(ps: &Value, path: &str, pane_key: &str) -> bool {
+    ps["worktrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|worktree| worktree["path"].as_str() == Some(path))
+        .flat_map(|worktree| worktree["agents"].as_array().into_iter().flatten())
+        .any(|agent| agent["paneKey"].as_str() == Some(pane_key))
 }
 
 /// Whether the repository has a remote (`git remote` printed a name): a repository with none has no commit that a remote lacks to ask for.
@@ -684,8 +695,8 @@ fn has_remote(remotes: &str) -> bool {
 }
 
 /// Closes a child: its terminal and its worktree with its branch, and its entry of the record. A worktree with a change, an untracked file or a commit no remote has is not removed, and so is nothing else. A child that is only planned is dropped from the record.
-/// A worktree that is gone from the disk (the owner removed it in Orca) has only its terminal closed and its entry dropped.
-/// The record is not trusted: the path and the handle must be well formed, and `orca worktree ps` must list a worktree of that path on that branch, or nothing is deleted.
+/// A worktree that is gone from the disk (the owner removed it in Orca) has only its terminal closed, when `orca worktree ps` lists an agent of the recorded pane under the recorded path, and its entry dropped.
+/// The record is not trusted: the path and the handle must be well formed, and `orca worktree ps` must list a worktree of that path that is not the repository's own folder, or nothing is deleted.
 pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
     close_with(config, name, &orca_read, &|args| orca::write(args))
 }
@@ -714,23 +725,25 @@ fn close_with(
             ))
         })?;
     if !Path::new(path).is_dir() {
-        let terminal = write(&terminal_close_args(&launch.handle));
+        // The handle is closed only when Orca's list says the terminal is the child's; a list that cannot be read or does not say so leaves every terminal alone.
+        let confirmed =
+            read(&orca::ps_args(None)).is_ok_and(|ps| has_agent_at(&ps, path, &launch.pane_key));
+        let terminal = confirmed.then(|| write(&terminal_close_args(&launch.handle)));
         dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
         return Ok(json!({
             "name": name,
             "path": path,
             "worktreeGone": true,
-            "terminalClosed": terminal.is_ok(),
+            "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
         }));
     }
     let ps = read(&orca::ps_args(None)).map_err(|e| Refusal::failed(STEP_LISTED, e))?;
-    if !is_listed(&ps, path, &launch.branch) {
+    if !is_listed(&ps, path) {
         return Err(Refusal::from(
-            "記録にある worktree が Orca の一覧になく、またはブランチが記録と違います。何も消していません。children.json の記録を確かめてください"
+            "記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです。何も消していません。children.json の記録を確かめてください"
                 .to_owned(),
         )
-        .with("path", path)
-        .with("branch", launch.branch.as_str()));
+        .with("path", path));
     }
     let status = git(&git_status_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
     let remotes = git(&git_remote_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
@@ -1437,26 +1450,47 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_is_listed_when_its_path_and_its_branch_are_the_records() {
+    fn a_worktree_is_listed_by_its_path_whatever_its_branch_and_never_the_main_one() {
         let ps = json!({"worktrees": [
             {"path": "/w/a", "branch": "refs/heads/me/a", "displayName": "a"},
-            {"path": "/w/b", "branch": "refs/heads/me/b"},
+            {"path": "/w/switched", "branch": "refs/heads/me/other"},
             {"path": "/w/detached"},
+            {"path": "/w/main", "branch": "refs/heads/main", "isMainWorktree": true},
+            {"path": "/w/child", "isMainWorktree": false},
             {"branch": "refs/heads/me/nopath"},
         ]});
-        assert!(is_listed(&ps, "/w/a", "me/a"));
-        assert!(is_listed(&ps, "/w/b", "me/b"));
-        assert!(is_listed(&ps, "/w/detached", ""));
-        for (path, branch) in [
-            ("/w/a", "me/b"),
-            ("/w/a", ""),
-            ("/w/a", "refs/heads/me/a"),
-            ("/w/c", "me/a"),
-            ("/w", "me/a"),
-        ] {
-            assert!(!is_listed(&ps, path, branch), "{path} {branch}");
+        // The branch is not asked: a child may switch it or detach HEAD.
+        for path in ["/w/a", "/w/switched", "/w/detached", "/w/child"] {
+            assert!(is_listed(&ps, path), "{path}");
         }
-        assert!(!is_listed(&Value::Null, "/w/a", "me/a"));
+        // The repository's own folder is never a child's.
+        for path in ["/w/main", "/w/c", "/w"] {
+            assert!(!is_listed(&ps, path), "{path}");
+        }
+        assert!(!is_listed(&Value::Null, "/w/a"));
+    }
+
+    #[test]
+    fn a_terminal_is_confirmed_only_by_an_agent_of_its_pane_under_the_recorded_path() {
+        let ps = json!({"worktrees": [
+            {"path": "/w/a", "agents": [{"paneKey": "tab:a"}, {"paneKey": "tab:b", "hasLivePty": false}]},
+            {"path": "/w/b", "agents": [{"paneKey": "tab:c"}]},
+            {"path": "/w/none"},
+        ]});
+        assert!(has_agent_at(&ps, "/w/a", "tab:a"));
+        assert!(has_agent_at(&ps, "/w/a", "tab:b"));
+        assert!(has_agent_at(&ps, "/w/b", "tab:c"));
+        for (path, pane) in [
+            ("/w/a", "tab:c"),
+            ("/w/b", "tab:a"),
+            ("/w/none", "tab:a"),
+            ("/w/other", "tab:a"),
+            ("/w", "tab:a"),
+            ("/w/a", ""),
+        ] {
+            assert!(!has_agent_at(&ps, path, pane), "{path} {pane}");
+        }
+        assert!(!has_agent_at(&Value::Null, "/w/a", "tab:a"));
     }
 
     /// The calls of a stand-in Orca, in order, and what it answers to `worktree ps`.
@@ -1487,16 +1521,47 @@ mod tests {
     #[test]
     fn a_child_whose_worktree_is_gone_has_its_terminal_closed_and_its_entry_dropped() {
         let config = temp_dir("close-gone");
-        recorded(&config, "/nonexistent-tsunagiai/w/a", "term_a", "me/a");
+        let gone = "/nonexistent-tsunagiai/w/a";
+        recorded(&config, gone, "term_a", "me/a");
+        // `launched` records the pane `tab-a:leaf`.
+        let listed = json!({"worktrees": [{"path": gone, "agents": [{"paneKey": "tab-a:leaf"}]}]});
         let orca = Calls::new();
-        let done =
-            close_with(&config, "a", &|args| orca.run(args), &|args| orca.run(args)).unwrap();
+        let done = close_with(&config, "a", &|_| Ok(listed.clone()), &|args| {
+            orca.run(args)
+        })
+        .unwrap();
         assert_eq!(done["worktreeGone"], true);
         assert_eq!(done["name"], "a");
-        // Only the terminal is closed: no list is read and nothing is removed.
+        assert_eq!(done["terminalClosed"], true);
+        // Only the terminal is closed: nothing is removed.
         assert_eq!(orca.names(), ["terminal close"]);
         assert_eq!(orca.0.borrow()[0], terminal_close_args("term_a"));
         assert_eq!(names(&read_children(&config)), ["p"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_that_the_list_does_not_confirm_is_left_and_the_entry_is_dropped_all_the_same() {
+        let config = temp_dir("close-gone-unconfirmed");
+        let gone = "/nonexistent-tsunagiai/w/a";
+        let cases: [Result<Value, String>; 5] = [
+            // Another pane, another path, no worktree, no agent, and a list that cannot be read.
+            Ok(json!({"worktrees": [{"path": gone, "agents": [{"paneKey": "tab-x:leaf"}]}]})),
+            Ok(json!({"worktrees": [{"path": "/w/other", "agents": [{"paneKey": "tab-a:leaf"}]}]})),
+            Ok(json!({"worktrees": [{"path": gone}]})),
+            Ok(json!({})),
+            Err("orca が答えません".into()),
+        ];
+        for (i, listed) in cases.into_iter().enumerate() {
+            recorded(&config, gone, "term_a", "me/a");
+            let orca = Calls::new();
+            let done =
+                close_with(&config, "a", &|_| listed.clone(), &|args| orca.run(args)).unwrap();
+            assert_eq!(done["worktreeGone"], true, "{i}");
+            assert_eq!(done["terminalClosed"], false, "{i}");
+            assert!(orca.0.borrow().is_empty(), "{i}");
+            assert_eq!(names(&read_children(&config)), ["p"], "{i}");
+        }
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -1507,6 +1572,7 @@ mod tests {
         std::fs::create_dir_all(&there).unwrap();
         let path = there.to_string_lossy().into_owned();
         let ps = |branch: &str, at: &str| json!({"worktrees": [{"path": at, "branch": format!("refs/heads/{branch}")}]});
+        let main = json!({"worktrees": [{"path": path, "branch": "refs/heads/main", "isMainWorktree": true}]});
         let cases = [
             // A path that is not absolute, and a handle that is not one.
             (
@@ -1517,9 +1583,9 @@ mod tests {
             ),
             (path.as_str(), "--force", "me/a", ps("me/a", &path)),
             (path.as_str(), "term_a x", "me/a", ps("me/a", &path)),
-            // Orca lists another worktree, or this one on another branch.
+            // Orca lists another worktree, or this one as the repository's own folder.
             (path.as_str(), "term_a", "me/a", ps("me/a", "/w/other")),
-            (path.as_str(), "term_a", "me/a", ps("me/other", &path)),
+            (path.as_str(), "term_a", "main", main),
             (path.as_str(), "term_a", "me/a", json!({})),
         ];
         for (p, handle, branch, listed) in cases {

@@ -232,8 +232,25 @@ fn write_formation_files(config: &Path, claude: &Path, mcp: &Path) -> Result<Pat
         SCRIPT_FILE,
         &formation_script(claude, &dir.join(MCP_FILE)),
     )?;
-    crate::accounts::write_atomic(&dir.join(".claude"), "settings.json", "{}")?;
+    write_empty_settings(&dir.join(".claude"))?;
     Ok(dir.join(SCRIPT_FILE))
+}
+
+/// Writes `{}` as `settings.json` in `claude_dir`. The orchestrator can write in its folder, so a link it placed there (the folder, the file or its temporary file) is removed first, and what it leads to is not written.
+fn write_empty_settings(claude_dir: &Path) -> Result<(), String> {
+    let drop_link = |path: &Path| {
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            std::fs::remove_file(path)
+                .map_err(|e| format!("{} を外せません: {e}", path.display()))?;
+        }
+        Ok::<(), String>(())
+    };
+    drop_link(claude_dir)?;
+    std::fs::create_dir_all(claude_dir)
+        .map_err(|e| format!("{} を作れません: {e}", claude_dir.display()))?;
+    drop_link(&claude_dir.join("settings.json.tmp"))?;
+    drop_link(&claude_dir.join("settings.json"))?;
+    crate::accounts::write_atomic(claude_dir, "settings.json", "{}")
 }
 
 // ---- the pseudo terminal ----
@@ -949,6 +966,58 @@ mod tests {
         let mcp = std::fs::read_to_string(config.join("claude-code/mcp.json")).unwrap();
         assert!(mcp.contains("/app/tsunagiai-mcp"));
         assert!(!config.join("claude-code/mcp.json.tmp").exists());
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_orchestrators_settings_are_written_where_a_link_of_its_own_would_not_lead() {
+        use std::os::unix::fs::symlink;
+        let config = temp_dir("formation-links");
+        let dir = config.join("formation");
+        let elsewhere = config.join("elsewhere");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("settings.json"), "keep").unwrap();
+        let write = || {
+            write_formation_files(
+                &config,
+                Path::new("/bin/claude"),
+                Path::new("/app/tsunagiai-mcp"),
+            )
+            .unwrap()
+        };
+        // `.claude` linked to another folder: the link goes, and its target is not written.
+        symlink(&elsewhere, dir.join(".claude")).unwrap();
+        write();
+        assert!(!std::fs::symlink_metadata(dir.join(".claude"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
+            "{}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join("settings.json")).unwrap(),
+            "keep"
+        );
+        // The temporary file and the file itself linked to files elsewhere.
+        let (tmp_target, target) = (elsewhere.join("tmp-target"), elsewhere.join("target"));
+        std::fs::write(&tmp_target, "keep tmp").unwrap();
+        std::fs::write(&target, "keep target").unwrap();
+        std::fs::remove_file(dir.join(".claude/settings.json")).unwrap();
+        symlink(&tmp_target, dir.join(".claude/settings.json.tmp")).unwrap();
+        symlink(&target, dir.join(".claude/settings.json")).unwrap();
+        write();
+        for (file, text) in [(&tmp_target, "keep tmp"), (&target, "keep target")] {
+            assert_eq!(std::fs::read_to_string(file).unwrap(), text);
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
+            "{}"
+        );
+        assert!(!dir.join(".claude/settings.json.tmp").exists());
         std::fs::remove_dir_all(config).unwrap();
     }
 
