@@ -44,13 +44,14 @@ pub struct DatabaseProfile {
     pub id: String,
     pub name: String,
     pub username: String,
-    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets a free port as `COOKAPPS_PORT` and listens there.
+    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `COOKAPPS_PORT` and listens there.
     /// Empty when the connection goes straight to the host and the port. Old files have none (`default`).
     #[serde(default)]
     pub script: String,
-    /// The host of a connection with no script. A connection with a script does not use it: the script opens the way, so `check` leaves it empty.
+    /// The host MySQL is logged in to, with a script or without one (a script opens the way to it).
     pub db_host: String,
-    /// A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese. 0 for a connection with a script.
+    /// A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese.
+    /// A file saved while a connection with a script needed none (#719) may hold 0, which `check_address` refuses until the owner puts a port in.
     pub db_port: u32,
 }
 
@@ -91,15 +92,30 @@ fn has_control(text: &str) -> bool {
     text.chars().any(char::is_control)
 }
 
+/// The port of `host` and `port` (the host trimmed already), or the first reason, in Japanese.
+/// Every connection needs both, with a script or without one: `check` calls it, and so does the opening of a connection, which reads a profile that was saved with none (#745).
+fn check_address(host: &str, port: u32) -> Result<u16, String> {
+    if host.is_empty() {
+        return Err("DB のホストを入力してください".to_owned());
+    }
+    if host.chars().any(char::is_whitespace) {
+        return Err("DB のホストに空白は使えません".to_owned());
+    }
+    u16::try_from(port)
+        .ok()
+        .filter(|p| *p >= 1)
+        .ok_or_else(|| format!("ポートは 1 から {PORT_MAX} の間で入力してください"))
+}
+
 /// `profile` trimmed and checked against the other profiles of `profiles` (the ones with another id), or the first reason, in Japanese.
 /// The script is trimmed and its line breaks are `\n`; a control character in it is refused, but line feeds and tabs are not.
-/// A connection with a script needs no host and no port (the script opens the way, D-1): they are not checked and are saved as an empty host and the port 0.
+/// The host and the port are needed with a script or without one (D-1), and are checked by `check_address`.
 fn check(
     profile: DatabaseProfile,
     profiles: &[DatabaseProfile],
 ) -> Result<DatabaseProfile, String> {
     let trim = |s: &str| s.trim().to_owned();
-    let mut p = DatabaseProfile {
+    let p = DatabaseProfile {
         name: trim(&profile.name),
         username: trim(&profile.username),
         script: trim(&profile.script).replace("\r\n", "\n"),
@@ -118,20 +134,7 @@ fn check(
     if p.username.is_empty() {
         return Err("ユーザー名を入力してください".to_owned());
     }
-    if p.script.is_empty() {
-        if p.db_host.is_empty() {
-            return Err("DB のホストを入力してください".to_owned());
-        }
-        if p.db_host.chars().any(char::is_whitespace) {
-            return Err("DB のホストに空白は使えません".to_owned());
-        }
-        if !(1..=PORT_MAX).contains(&p.db_port) {
-            return Err(format!("ポートは 1 から {PORT_MAX} の間で入力してください"));
-        }
-    } else {
-        p.db_host.clear();
-        p.db_port = 0;
-    }
+    check_address(&p.db_host, p.db_port)?;
     if [&p.name, &p.username, &p.db_host]
         .into_iter()
         .any(|s| has_control(s))
@@ -287,7 +290,7 @@ pub fn save(
 }
 
 /// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
-/// The saved password is kept only while the connection logs in as the saved one does (`same_login`); an edit of the user, the script, or the host and the port of a connection with no script deletes it first,
+/// The saved password is kept only while the connection logs in as the saved one does (`same_login`); an edit of the user, the script, the host or the port deletes it first,
 /// so that a test of the connection never sends it to another place than the one it was saved for (D-2). The input is checked before the deletion, so a refused save deletes nothing.
 pub fn save_without_password(
     dir: &Path,
@@ -320,13 +323,31 @@ pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<()
     store(dir, &profiles)
 }
 
+/// Whom a connection logs in as and where: the user, and the place, which is its script, its host and its port, with a script or without one. The name is not part of it.
+/// A session keeps the login it was opened with (`Sessions::opened_login`), and the saved password is the one for one login and for no other (`same_login`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Login {
+    username: String,
+    script: String,
+    db_host: String,
+    db_port: u32,
+}
+
+impl Login {
+    pub fn of(profile: &DatabaseProfile) -> Self {
+        Self {
+            username: profile.username.clone(),
+            script: profile.script.clone(),
+            db_host: profile.db_host.clone(),
+            db_port: profile.db_port,
+        }
+    }
+}
+
 /// Whether `typed` logs in as the same user at the same place as `saved`: the saved password is the one for that login and for no other.
-/// The place of a connection with a script is its script; the host and the port are not where it logs in, so they are not compared (a file saved before they were dropped may still hold them).
+/// The place of a connection is its script, its host and its port, with a script or without one: any of them changed is another place.
 fn same_login(saved: &DatabaseProfile, typed: &DatabaseProfile) -> bool {
-    saved.username == typed.username
-        && saved.script == typed.script
-        && (!typed.script.is_empty()
-            || (saved.db_host == typed.db_host && saved.db_port == typed.db_port))
+    Login::of(saved) == Login::of(typed)
 }
 
 /// The password a test of `profile` (already checked) logs in with: the one typed, else the one saved for its id, but only when the profile still logs in as the saved one does (`same_login`),
@@ -352,37 +373,29 @@ fn test_password(
     Ok(passwords.get(&profile.id)?.unwrap_or_default())
 }
 
-/// Where MySQL is reached: the port of the connection's script when it has one (`script_port`), else the host and the port of the profile.
-fn endpoint_of(host: &str, port: u16, script_port: Option<u16>) -> mysql::Endpoint {
-    match script_port {
-        Some(local) => mysql::Endpoint {
-            host: "127.0.0.1".to_owned(),
-            port: local,
-            scripted: true,
-        },
-        None => mysql::Endpoint {
-            host: host.to_owned(),
-            port,
-            scripted: false,
-        },
-    }
-}
-
-/// Starts the script of `profile` when it has one (D-1), and answers where MySQL is reached and the id of the script to end (none when there is no script).
+/// Starts the script of `profile` when it has one (D-1) and answers where MySQL is reached, and the id of the script to end (none when there is no script).
+/// The host and the port are the connection's own, and are checked here too: a profile saved with none (#719) is refused until they are put in.
 /// The test of a connection (D-2) and the opening of one (D-3) both go through this.
 async fn open_endpoint(
     scripts: &script::Scripts,
     profile: &DatabaseProfile,
 ) -> Result<(mysql::Endpoint, Option<u64>), String> {
-    // The port of a connection with a script is not used, so it is not checked.
-    let (port, opened) = if profile.script.is_empty() {
-        let port = u16::try_from(profile.db_port).map_err(|_| "ポートが範囲外です".to_owned())?;
-        (port, None)
+    let port = check_address(&profile.db_host, profile.db_port)?;
+    let script = if profile.script.is_empty() {
+        None
     } else {
-        (0, Some(scripts.open(&profile.script).await?))
+        Some(
+            scripts
+                .open(&profile.db_host, port, &profile.script)
+                .await?,
+        )
     };
-    let endpoint = endpoint_of(&profile.db_host, port, opened.map(|o| o.port));
-    Ok((endpoint, opened.map(|o| o.id)))
+    let endpoint = mysql::Endpoint {
+        host: profile.db_host.clone(),
+        port,
+        scripted: script.is_some(),
+    };
+    Ok((endpoint, script))
 }
 
 /// Tests `profile` as typed (not as saved): starts its script when it has one, logs in, reads `SELECT VERSION()` and ends the script.
@@ -399,6 +412,42 @@ pub async fn test_connection(
         scripts.close(id).await;
     }
     tested
+}
+
+/// How a test of `typed` reaches MySQL, given the login its connection was opened with in the app (`opened`; none when it is not open).
+#[derive(Debug, PartialEq)]
+enum TestWay {
+    /// Starts the script of the profile (when it has one) and ends it again.
+    OwnScript,
+    /// The connection is open and logs in as the typed one does: its script already listens on the port, so the test logs in there and runs nothing.
+    OpenWay,
+}
+
+/// The way a test of `typed` goes (D-2). An open connection holds the port of its script, so a test that started the script again would meet its own connection's script on that port.
+/// What is open is the session, not the saved file: `cookapps-mcp` may have saved another script, host or port since it was opened, and the saved file then says nothing of what listens.
+/// A typed connection with no script has no script to start, so it is tested as any other.
+fn test_way(opened: Option<&Login>, typed: &DatabaseProfile) -> Result<TestWay, String> {
+    let Some(opened) = opened else {
+        return Ok(TestWay::OwnScript);
+    };
+    if *opened == Login::of(typed) {
+        return Ok(TestWay::OpenWay);
+    }
+    if typed.script.is_empty() {
+        return Ok(TestWay::OwnScript);
+    }
+    Err("この接続は開いています。切断してからテストしてください".to_owned())
+}
+
+/// Tests `profile` through the way that its open connection already holds: logs in at its host and port, reads `SELECT VERSION()`, and starts and ends nothing.
+async fn test_open_way(profile: &DatabaseProfile, password: &str) -> Result<String, String> {
+    let port = check_address(&profile.db_host, profile.db_port)?;
+    let endpoint = mysql::Endpoint {
+        host: profile.db_host.clone(),
+        port,
+        scripted: !profile.script.is_empty(),
+    };
+    mysql::server_version(&endpoint, &profile.username, password).await
 }
 
 /// Tests the connection of `id` as saved, with the password saved for it (D-8), through `test_connection`, the function of the test of D-2.
@@ -456,7 +505,9 @@ async fn open_session(
             return Err(e);
         }
     };
-    sessions.add(scripts, &profile.id, script, connection).await;
+    sessions
+        .add(scripts, &profile.id, script, Login::of(profile), connection)
+        .await;
     Ok(())
 }
 
@@ -497,24 +548,35 @@ pub async fn database_profile_save(
 #[tauri::command]
 pub async fn database_test(
     app: AppHandle,
+    sessions: tauri::State<'_, session::Sessions>,
     scripts: tauri::State<'_, script::Scripts>,
     profile: DatabaseProfile,
     password: Option<String>,
 ) -> Result<String, String> {
     let dir = config_dir(&app)?;
     let profile = check(profile, &[])?;
+    let opened = if profile.id.is_empty() {
+        None
+    } else {
+        sessions.opened_login(&scripts, &profile.id).await
+    };
     let tested = profile.clone();
-    let password = tokio::task::spawn_blocking(move || {
+    let (password, way) = tokio::task::spawn_blocking(move || {
         let saved = if profile.id.is_empty() {
             Vec::new()
         } else {
             load(&dir)?
         };
-        test_password(&Keychain, &saved, &profile, password.as_deref())
+        let way = test_way(opened.as_ref(), &profile)?;
+        let password = test_password(&Keychain, &saved, &profile, password.as_deref())?;
+        Ok::<_, String>((password, way))
     })
     .await
     .map_err(|e| e.to_string())??;
-    test_connection(&scripts, tested, &password).await
+    match way {
+        TestWay::OpenWay => test_open_way(&tested, &password).await,
+        TestWay::OwnScript => test_connection(&scripts, tested, &password).await,
+    }
 }
 
 /// Deletes a connection and its password. A connection that is open is closed first (D-3).
@@ -721,7 +783,6 @@ mod tests {
     fn scripted(name: &str) -> DatabaseProfile {
         DatabaseProfile {
             script: "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\"".to_owned(),
-            db_host: "db.cluster.example".to_owned(),
             ..direct(name)
         }
     }
@@ -830,56 +891,90 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_with_a_script_needs_no_host_and_no_port_and_saves_neither() {
-        for (host, port) in [("", 0), ("db host", 99999), ("db.cluster.example", 3306)] {
-            let p = DatabaseProfile {
-                db_host: host.to_owned(),
-                db_port: port,
-                ..scripted("a")
+    fn a_connection_with_a_script_needs_a_host_and_a_port_as_one_with_none_does_and_keeps_them() {
+        let checked = check(scripted("a"), &[]).unwrap();
+        assert_eq!(
+            (checked.db_host.as_str(), checked.db_port),
+            ("127.0.0.1", 3306)
+        );
+        for with_script in [true, false] {
+            let base = if with_script {
+                scripted("a")
+            } else {
+                direct("a")
             };
-            let checked = check(p, &[]).unwrap();
-            assert_eq!((checked.db_host.as_str(), checked.db_port), ("", 0));
+            let no_host = DatabaseProfile {
+                db_host: " ".to_owned(),
+                ..base.clone()
+            };
+            assert_eq!(reason(no_host, &[]), "DB のホストを入力してください");
+            let spaced = DatabaseProfile {
+                db_host: "db host".to_owned(),
+                ..base.clone()
+            };
+            assert_eq!(reason(spaced, &[]), "DB のホストに空白は使えません");
+            let no_port = DatabaseProfile { db_port: 0, ..base };
+            assert_eq!(
+                reason(no_port, &[]),
+                "ポートは 1 から 65535 の間で入力してください"
+            );
         }
-        // A blank script is none: the host and the port are needed again.
+        // A blank script is none, and the host and the port are the same as before.
         let blank = DatabaseProfile {
             script: " \n".to_owned(),
+            ..scripted("a")
+        };
+        let checked = check(blank, &[]).unwrap();
+        assert_eq!(
+            (
+                checked.script.as_str(),
+                checked.db_host.as_str(),
+                checked.db_port
+            ),
+            ("", "127.0.0.1", 3306)
+        );
+    }
+
+    #[test]
+    fn the_save_of_the_mcp_server_needs_the_host_and_the_port_with_a_script_too() {
+        let dir = temp_dir("mcp-script");
+        let passwords = Memory::default();
+        let without = DatabaseProfile {
             db_host: String::new(),
             db_port: 0,
             ..scripted("a")
         };
-        assert_eq!(reason(blank, &[]), "DB のホストを入力してください");
-    }
-
-    #[test]
-    fn the_save_of_the_mcp_server_takes_a_connection_with_a_script_and_no_host() {
-        let dir = temp_dir("mcp-script");
-        let passwords = Memory::default();
+        assert_eq!(
+            save_without_password(&dir, &passwords, without).unwrap_err(),
+            "DB のホストを入力してください"
+        );
+        assert_eq!(list(&dir, &passwords).unwrap(), Vec::new());
         let input = DatabaseProfile {
-            db_host: String::new(),
-            db_port: 0,
+            db_host: "localhost".to_owned(),
+            db_port: 3307,
             ..scripted("a")
         };
         let saved = save_without_password(&dir, &passwords, input).unwrap();
         assert_eq!(
             (saved.profile.db_host.as_str(), saved.profile.db_port),
-            ("", 0)
+            ("localhost", 3307)
         );
         assert_eq!(list(&dir, &passwords).unwrap(), vec![saved]);
     }
 
     #[test]
-    fn a_connection_with_a_script_is_saved_without_a_host_and_a_port() {
+    fn a_connection_with_a_script_is_saved_with_its_host_and_its_port() {
         let (profiles, saved) = upsert(
             Vec::new(),
             DatabaseProfile {
-                db_host: String::new(),
-                db_port: 0,
+                db_host: "localhost".to_owned(),
+                db_port: 3307,
                 ..scripted("a")
             },
             "id-a",
         )
         .unwrap();
-        assert_eq!((saved.db_host.as_str(), saved.db_port), ("", 0));
+        assert_eq!((saved.db_host.as_str(), saved.db_port), ("localhost", 3307));
         assert_eq!(profiles, vec![saved]);
     }
 
@@ -929,6 +1024,26 @@ mod tests {
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].script, "");
         assert!(!render(&profiles).unwrap().contains("Ssm"));
+    }
+
+    #[test]
+    fn a_file_saved_with_a_script_and_no_host_and_no_port_is_read() {
+        let text = r#"{"profiles":[{"id":"x","name":"a","username":"u","script":"exec forward","dbHost":"","dbPort":0}]}"#;
+        let profiles = parse(text).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(
+            (
+                profiles[0].script.as_str(),
+                profiles[0].db_host.as_str(),
+                profiles[0].db_port
+            ),
+            ("exec forward", "", 0)
+        );
+        // It is not saved again as it is: the next save is checked, and needs a host and a port.
+        assert_eq!(
+            reason(profiles[0].clone(), &[]),
+            "DB のホストを入力してください"
+        );
     }
 
     #[test]
@@ -1177,75 +1292,59 @@ mod tests {
     fn the_saved_password_is_used_only_for_the_login_it_was_saved_for() {
         let passwords = Memory::default();
         passwords.set("a", "saved").unwrap();
-        let stored = DatabaseProfile {
-            id: "a".to_owned(),
-            ..scripted("a")
-        };
-        let saved = [stored.clone()];
-        let of = |profile: &DatabaseProfile, typed: Option<&str>| {
-            test_password(&passwords, &saved, profile, typed)
-        };
-        assert_eq!(of(&stored, None), Ok("saved".to_owned()));
-        // Each of the fields that say where and as whom the login goes refuses the saved password.
-        let changed = [
-            DatabaseProfile {
-                username: "root".to_owned(),
-                ..stored.clone()
-            },
-            DatabaseProfile {
-                script: String::new(),
-                ..stored.clone()
-            },
-            DatabaseProfile {
-                script: "exec other-forward".to_owned(),
-                ..stored.clone()
-            },
-        ];
-        for profile in &changed {
-            let told = of(profile, None).unwrap_err();
-            assert_eq!(
-                told, "接続先やユーザーを変えたときは、パスワードを入力してください",
-                "{profile:?}"
-            );
-            // A password typed goes where it was typed for.
-            assert_eq!(of(profile, Some("typed")), Ok("typed".to_owned()));
-        }
-        // The name is not where the login goes, and neither are the host and the port of a connection with a script.
-        let renamed = DatabaseProfile {
-            name: "renamed".to_owned(),
-            db_host: String::new(),
-            db_port: 0,
-            ..stored
-        };
-        assert_eq!(of(&renamed, None), Ok("saved".to_owned()));
-    }
-
-    #[test]
-    fn the_saved_password_of_a_connection_with_no_script_is_refused_at_another_host_or_port() {
-        let passwords = Memory::default();
-        passwords.set("a", "saved").unwrap();
-        let stored = DatabaseProfile {
-            id: "a".to_owned(),
-            ..direct("a")
-        };
-        let saved = [stored.clone()];
-        let of = |profile: &DatabaseProfile| test_password(&passwords, &saved, profile, None);
-        assert_eq!(of(&stored), Ok("saved".to_owned()));
-        for profile in [
-            DatabaseProfile {
-                db_host: "evil.example.com".to_owned(),
-                ..stored.clone()
-            },
-            DatabaseProfile {
-                db_port: 3307,
-                ..stored.clone()
-            },
-        ] {
-            assert_eq!(
-                of(&profile).unwrap_err(),
-                "接続先やユーザーを変えたときは、パスワードを入力してください",
-                "{profile:?}"
-            );
+        for stored in [scripted("a"), direct("a")] {
+            let stored = DatabaseProfile {
+                id: "a".to_owned(),
+                ..stored
+            };
+            let saved = [stored.clone()];
+            let of = |profile: &DatabaseProfile, typed: Option<&str>| {
+                test_password(&passwords, &saved, profile, typed)
+            };
+            assert_eq!(of(&stored, None), Ok("saved".to_owned()));
+            // Each of the fields that say where and as whom the login goes refuses the saved password.
+            let other_script = if stored.script.is_empty() {
+                "exec other-forward".to_owned()
+            } else {
+                String::new()
+            };
+            let changed = [
+                DatabaseProfile {
+                    username: "root".to_owned(),
+                    ..stored.clone()
+                },
+                DatabaseProfile {
+                    script: other_script,
+                    ..stored.clone()
+                },
+                DatabaseProfile {
+                    script: "exec other-forward".to_owned(),
+                    ..stored.clone()
+                },
+                DatabaseProfile {
+                    db_host: "evil.example.com".to_owned(),
+                    ..stored.clone()
+                },
+                DatabaseProfile {
+                    db_port: 3307,
+                    ..stored.clone()
+                },
+            ];
+            for profile in &changed {
+                let told = of(profile, None).unwrap_err();
+                assert_eq!(
+                    told, "接続先やユーザーを変えたときは、パスワードを入力してください",
+                    "{profile:?}"
+                );
+                // A password typed goes where it was typed for.
+                assert_eq!(of(profile, Some("typed")), Ok("typed".to_owned()));
+            }
+            // The name is not where the login goes.
+            let renamed = DatabaseProfile {
+                name: "renamed".to_owned(),
+                ..stored
+            };
+            assert_eq!(of(&renamed, None), Ok("saved".to_owned()));
         }
     }
 
@@ -1278,20 +1377,6 @@ mod tests {
         assert_eq!(
             test_password(&Locked, &saved, &a, Some("typed")),
             Ok("typed".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_test_goes_to_the_port_of_the_script_or_else_to_the_host_of_the_profile() {
-        let scripted = endpoint_of("db.example.com", 3306, Some(50123));
-        assert_eq!(
-            (scripted.host.as_str(), scripted.port, scripted.scripted),
-            ("127.0.0.1", 50123, true)
-        );
-        let direct = endpoint_of("db.example.com", 3307, None);
-        assert_eq!(
-            (direct.host.as_str(), direct.port, direct.scripted),
-            ("db.example.com", 3307, false)
         );
     }
 
@@ -1376,13 +1461,165 @@ mod tests {
             ("db.example.com", 3307, false)
         );
         assert_eq!(script, None);
+    }
+
+    #[tokio::test]
+    async fn a_profile_without_a_host_or_a_port_is_refused_before_a_script_is_run() {
+        let scripts = script::Scripts::default();
+        // What a file saved while a script needed none (#719) holds: the script, an empty host and the port 0.
+        let old = DatabaseProfile {
+            db_host: String::new(),
+            db_port: 0,
+            ..scripted("a")
+        };
+        assert_eq!(
+            open_endpoint(&scripts, &old).await.unwrap_err(),
+            "DB のホストを入力してください"
+        );
+        assert_eq!(
+            test_connection(&scripts, old.clone(), "pw")
+                .await
+                .unwrap_err(),
+            "DB のホストを入力してください"
+        );
         let out_of_range = DatabaseProfile {
             db_port: 70000,
-            ..direct("a")
+            ..scripted("a")
         };
         assert_eq!(
             open_endpoint(&scripts, &out_of_range).await.unwrap_err(),
-            "ポートが範囲外です"
+            "ポートは 1 から 65535 の間で入力してください"
+        );
+        let no_port = DatabaseProfile {
+            db_port: 0,
+            ..direct("a")
+        };
+        assert_eq!(
+            open_endpoint(&scripts, &no_port).await.unwrap_err(),
+            "ポートは 1 から 65535 の間で入力してください"
+        );
+        let sessions = session::Sessions::default();
+        assert_eq!(
+            open_session(&sessions, &scripts, &old, "pw")
+                .await
+                .unwrap_err(),
+            "DB のホストを入力してください"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_connection_with_a_script_runs_it_for_its_own_host_and_port_and_reaches_them() {
+        use script::support::{free_port, listen_later};
+        let scripts = script::Scripts::default();
+        let port = free_port();
+        let _listener = listen_later(port);
+        let profile = DatabaseProfile {
+            script: "sleep 30".to_owned(),
+            db_host: "127.0.0.1".to_owned(),
+            db_port: u32::from(port),
+            ..direct("a")
+        };
+        let (endpoint, script) = open_endpoint(&scripts, &profile).await.unwrap();
+        assert_eq!(
+            (endpoint.host.as_str(), endpoint.port, endpoint.scripted),
+            ("127.0.0.1", port, true)
+        );
+        let id = script.unwrap();
+        assert_eq!(scripts.exited(id).await, None);
+        scripts.close(id).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_port_in_use_before_the_script_is_run_stops_the_test_and_the_opening() {
+        let scripts = script::Scripts::default();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let profile = DatabaseProfile {
+            script: "exit 0".to_owned(),
+            db_port: u32::from(port),
+            ..direct("a")
+        };
+        let expected = format!("127.0.0.1:{port} は、スクリプトを実行する前から使われています。使っているものを止めるか、別のポートにしてください");
+        assert_eq!(
+            test_connection(&scripts, profile.clone(), "pw")
+                .await
+                .unwrap_err(),
+            expected
+        );
+        let sessions = session::Sessions::default();
+        assert_eq!(
+            open_session(&sessions, &scripts, &profile, "pw")
+                .await
+                .unwrap_err(),
+            expected
+        );
+        // With no script, a port in use is the connection's own place: nothing is refused for it.
+        let plain = DatabaseProfile {
+            script: String::new(),
+            ..profile
+        };
+        assert!(open_endpoint(&scripts, &plain).await.is_ok());
+    }
+
+    #[test]
+    fn a_test_of_an_open_connection_uses_its_open_way_or_is_refused() {
+        // What the session was opened with.
+        let opened_with = DatabaseProfile {
+            id: "a".to_owned(),
+            ..scripted("a")
+        };
+        let opened = Login::of(&opened_with);
+        // The name alone is not the login.
+        let renamed = DatabaseProfile {
+            name: "renamed".to_owned(),
+            ..opened_with.clone()
+        };
+        assert_eq!(test_way(Some(&opened), &renamed), Ok(TestWay::OpenWay));
+        // Not open: the script is started as before.
+        assert_eq!(test_way(None, &opened_with), Ok(TestWay::OwnScript));
+        // Open, and the user, the script, the host or the port is not the open one's: the script would meet the open connection's.
+        // This includes a file that `cookapps-mcp` saved after the session was opened, with the pane reading it and the test going out as typed (#720): the typed login is the saved one, and not the open one.
+        let moved: [fn(&mut DatabaseProfile); 4] = [
+            |p| p.username = "other".to_owned(),
+            |p| p.script = "exec other-forward".to_owned(),
+            |p| p.db_host = "db.elsewhere.example".to_owned(),
+            |p| p.db_port = 3307,
+        ];
+        for edit in moved {
+            let mut typed = opened_with.clone();
+            edit(&mut typed);
+            assert_eq!(
+                test_way(Some(&opened), &typed),
+                Err("この接続は開いています。切断してからテストしてください".to_owned())
+            );
+            // The same typed login with no script has nothing to start, so the open connection is no obstacle.
+            let plain = DatabaseProfile {
+                script: String::new(),
+                ..typed
+            };
+            assert_eq!(test_way(Some(&opened), &plain), Ok(TestWay::OwnScript));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_open_way_logs_in_at_the_port_and_does_not_meet_the_port_in_use() {
+        // The connection's own script listens on this port, as the listener does: the test is not stopped for it.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let profile = DatabaseProfile {
+            script: "exit 0".to_owned(),
+            db_port: u32::from(port),
+            ..direct("a")
+        };
+        let accepting = std::thread::spawn(move || listener.accept().map(|_| ()));
+        let error = test_open_way(&profile, "pw").await.unwrap_err();
+        accepting.join().unwrap().unwrap();
+        assert!(
+            !error.contains("使われています"),
+            "the port in use is not the answer: {error}"
         );
     }
 
@@ -1393,6 +1630,7 @@ mod tests {
         let scripts = script::Scripts::default();
         let profile = DatabaseProfile {
             script: "echo no route >&2\nexit 0".to_owned(),
+            db_port: u32::from(script::support::free_port()),
             ..direct("a")
         };
         let expected = "接続のスクリプトが、準備ができる前に終了しました（終了コード 0）。標準エラーの最後の行: no route";
@@ -1474,31 +1712,40 @@ mod tests {
     }
 
     #[test]
-    fn a_save_without_a_password_of_a_script_connection_deletes_it_for_another_script_only() {
-        let (dir, passwords, saved) = saved_with_password("mcp-away-script", scripted("a"));
-        // The host and the port of a connection with a script are not where it logs in.
-        let same = DatabaseProfile {
+    fn a_save_without_a_password_of_a_script_connection_deletes_it_when_the_script_the_host_or_the_port_changes(
+    ) {
+        let (dir, passwords, saved) = saved_with_password("mcp-away-scripted", scripted("a"));
+        // Only the name is not where the login goes.
+        let renamed = DatabaseProfile {
             name: "renamed".to_owned(),
-            db_host: "ignored.example".to_owned(),
-            db_port: 9,
             ..saved.profile.clone()
         };
         assert!(
-            save_without_password(&dir, &passwords, same)
+            save_without_password(&dir, &passwords, renamed)
                 .unwrap()
                 .password_saved
         );
-        let other = DatabaseProfile {
-            script: "exec other-forward".to_owned(),
-            ..saved.profile.clone()
-        };
-        assert!(
-            !save_without_password(&dir, &passwords, other)
-                .unwrap()
-                .password_saved
-        );
-        assert_eq!(passwords.get(&saved.profile.id), None);
         std::fs::remove_dir_all(dir).unwrap();
+        type Edit = fn(&mut DatabaseProfile);
+        let edits: [(&str, Edit); 3] = [
+            ("script", |p| p.script = "exec other-forward".to_owned()),
+            ("host", |p| p.db_host = "db.elsewhere.example".to_owned()),
+            ("port", |p| p.db_port = 3307),
+        ];
+        for (what, edit) in edits {
+            let (dir, passwords, saved) =
+                saved_with_password(&format!("mcp-away-script-{what}"), scripted("a"));
+            let mut moved = saved.profile.clone();
+            edit(&mut moved);
+            assert!(
+                !save_without_password(&dir, &passwords, moved)
+                    .unwrap()
+                    .password_saved,
+                "{what}"
+            );
+            assert_eq!(passwords.get(&saved.profile.id), None, "{what}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
@@ -1539,6 +1786,7 @@ mod tests {
             &passwords,
             DatabaseProfile {
                 script: "echo no route >&2\nexit 7".to_owned(),
+                db_port: u32::from(script::support::free_port()),
                 ..direct("a")
             },
         )

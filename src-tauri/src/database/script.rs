@@ -2,17 +2,19 @@
 //!
 //! A connection with a script runs it as a child process, with no shell: the body is written to a file of its own (the owner only, in a folder of its own, deleted when the script has ended)
 //! and that file is run, so the first line decides the interpreter (`#!/bin/sh` is put before a body that has no `#!` line).
-//! The app picks a free port on `127.0.0.1` and gives it to the script as `COOKAPPS_PORT`; the script is to listen there, for instance with a port forward.
-//! The script is ready when a TCP connection to `127.0.0.1:{COOKAPPS_PORT}` succeeds. It fails when the script ends before that (an exit code of 0 too), when it is not ready in two minutes,
+//! The port is the one the connection names (its host and its port, D-1); it is given to the script as `COOKAPPS_PORT`, and the script is to listen there, for instance with a port forward.
+//! A port that something answers on before the script is run is an error, and the script is not run.
+//! The script is ready when a TCP connection to `{host}:{COOKAPPS_PORT}` succeeds. It fails when the script ends before that (an exit code of 0 too), when it is not ready in two minutes,
 //! and, once it was ready, when it ends: the connection is then closed. The error holds the last lines of the script's standard error.
 //! The script runs in a process group of its own, which is sent SIGTERM when the connection is closed and the app exits, and SIGKILL when it is still there after a few seconds.
 //!
-//! `start` and `Script` take the folder for the script file as a `&Path`, so that `cookapps-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
+//! `start` takes the folder for the script file as a `&Path`, so that `cookapps-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
 //! The decisions (the shebang, the lines kept, the words of an error) are pure functions.
 
 use std::{
     collections::{HashMap, VecDeque},
     io::Write,
+    net::SocketAddr,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -41,6 +43,10 @@ const TAIL_LINES: usize = 5;
 const POLL: Duration = Duration::from_millis(100);
 /// One try of the port.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+/// One lookup of the host's name.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the addresses found are kept while the port does not answer, before the name is looked up again.
+const RELOOKUP: Duration = Duration::from_secs(2);
 /// How long the end of the script waits for the last of its standard error.
 const STDERR_WAIT: Duration = Duration::from_secs(1);
 /// `ETXTBSY`: the file is still open for writing in another thread that forked meanwhile.
@@ -135,14 +141,32 @@ fn failure_text(stage: Stage, exit: &Exit, limit: Duration) -> String {
     }
 }
 
-/// A free port on `127.0.0.1`: bound and let go at once, so that another process may take it before the script does.
-fn pick_port() -> Result<u16, String> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|e| format!("空いているポートを選べません: {e}"))?;
-    listener
-        .local_addr()
-        .map(|a| a.port())
-        .map_err(|e| format!("空いているポートを選べません: {e}"))
+/// How the text of `in_use_text` ends (the part that does not hold the host and the port).
+const IN_USE_TAIL: &str = "使っているものを止めるか、別のポートにしてください";
+
+/// What the screen is told when something already answers on the port the script is to listen on.
+fn in_use_text(host: &str, port: u16) -> String {
+    format!("{host}:{port} は、スクリプトを実行する前から使われています。{IN_USE_TAIL}")
+}
+
+/// Whether `text` is the error of a port that was in use before the script was run (`cookapps-mcp` adds its own hint to it).
+pub fn is_in_use_text(text: &str) -> bool {
+    text.ends_with(IN_USE_TAIL)
+}
+
+/// The addresses of `host:port`; none when the name cannot be looked up (a host that only a running script makes known, such as one behind a VPN, has none yet).
+async fn resolve(host: &str, port: u16) -> Vec<SocketAddr> {
+    match tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((host, port))).await {
+        Ok(Ok(found)) => found.collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a TCP connection to one of `addrs` succeeds now: the port is in use before the script is run, and it is ready after.
+async fn answers(addrs: &[SocketAddr]) -> bool {
+    tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(addrs))
+        .await
+        .is_ok_and(|connected| connected.is_ok())
 }
 
 /// A folder of its own in `dir` (the owner only) with the script in it, made to be run. Deleted by `supervise`.
@@ -287,7 +311,6 @@ async fn supervise(
 
 /// A script that is running and ready.
 pub struct Script {
-    pub port: u16,
     /// The process group of the script (0 when its id could not be read: no signal is sent then).
     pgid: i32,
     done: watch::Receiver<Option<Exit>>,
@@ -328,13 +351,20 @@ impl Drop for Script {
     }
 }
 
-/// Starts the script `body` with a port that is free now, written in a folder of `dir`, and answers when it is ready, or why it is not.
-pub async fn start(dir: &Path, body: &str, timing: Timing) -> Result<Script, String> {
-    start_on(dir, body, pick_port()?, timing).await
-}
-
-/// `start` with the port given.
-pub async fn start_on(dir: &Path, body: &str, port: u16, timing: Timing) -> Result<Script, String> {
+/// Starts the script `body` written in a folder of `dir`, with `port` given as `COOKAPPS_PORT`, and answers when `host:port` answers, or why it does not.
+/// A port that answers before the script is run is an error, and nothing is run.
+pub async fn start(
+    dir: &Path,
+    host: &str,
+    port: u16,
+    body: &str,
+    timing: Timing,
+) -> Result<Script, String> {
+    // A name that cannot be looked up is not in use: the script may be what makes it known.
+    let mut addrs = resolve(host, port).await;
+    if !addrs.is_empty() && answers(&addrs).await {
+        return Err(in_use_text(host, port));
+    }
     let folder = {
         let (dir, body) = (dir.to_owned(), body.to_owned());
         tokio::task::spawn_blocking(move || make_folder(&dir, &body))
@@ -379,24 +409,37 @@ pub async fn start_on(dir: &Path, body: &str, port: u16, timing: Timing) -> Resu
         done_tx,
     ));
     let mut script = Script {
-        port,
         pgid,
         done,
         stop: Some(stop),
         task,
     };
     let deadline = Instant::now() + timing.ready;
+    let mut looked_up = Instant::now();
     loop {
         let ended = script.done.borrow().clone();
         if let Some(exit) = ended {
             let _ = script.finish().await;
             return Err(failure_text(Stage::Early, &exit, timing.ready));
         }
-        if tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(("127.0.0.1", port)))
-            .await
-            .is_ok_and(|connected| connected.is_ok())
-        {
+        if !addrs.is_empty() && answers(&addrs).await {
             return Ok(script);
+        }
+        // The name is looked up again while it has no address, and when the addresses found do not answer (every `RELOOKUP`).
+        if addrs.is_empty() || looked_up.elapsed() >= RELOOKUP {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let lookup = tokio::select! {
+                found = resolve(host, port) => Some(found),
+                _ = script.done.changed() => None,
+                _ = tokio::time::sleep(left) => None,
+            };
+            looked_up = Instant::now();
+            if let Some(found) = lookup.filter(|found| !found.is_empty()) {
+                addrs = found;
+                if answers(&addrs).await {
+                    return Ok(script);
+                }
+            }
         }
         let now = Instant::now();
         if now >= deadline {
@@ -413,13 +456,6 @@ pub async fn start_on(dir: &Path, body: &str, port: u16, timing: Timing) -> Resu
     }
 }
 
-/// What `Scripts::open` answers: `id` is what `close` takes, and the database is reached at `127.0.0.1:{port}`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Opened {
-    pub id: u64,
-    pub port: u16,
-}
-
 /// The scripts that are open. Managed by Tauri (`lib.rs`), so that the app's exit ends them.
 #[derive(Default)]
 pub struct Scripts {
@@ -428,13 +464,12 @@ pub struct Scripts {
 }
 
 impl Scripts {
-    /// Starts the script `body`, in a folder of the system's temporary folder, and answers its id and port once it is ready. The error is in Japanese.
-    pub async fn open(&self, body: &str) -> Result<Opened, String> {
-        let script = start(&std::env::temp_dir(), body, TIMING).await?;
-        let port = script.port;
+    /// Starts the script `body`, in a folder of the system's temporary folder, and answers its id (what `close` takes) once `host:port` answers. The error is in Japanese.
+    pub async fn open(&self, host: &str, port: u16, body: &str) -> Result<u64, String> {
+        let script = start(&std::env::temp_dir(), host, port, body, TIMING).await?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.open.lock().await.insert(id, script);
-        Ok(Opened { id, port })
+        Ok(id)
     }
 
     /// The words of the failure when the script of `id` has ended since it was ready; none while it runs, and none for an id that is not open.
@@ -442,7 +477,7 @@ impl Scripts {
         self.open.lock().await.get(&id)?.exited()
     }
 
-    /// Keeps a script that was started by `start_on`, for the tests of the sessions.
+    /// Keeps a script that was started by `start`, for the tests of the sessions.
     #[cfg(test)]
     pub(super) async fn insert(&self, script: Script) -> u64 {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -462,6 +497,46 @@ impl Scripts {
     pub async fn close_all(&self) {
         let scripts: Vec<Script> = self.open.lock().await.drain().map(|(_, s)| s).collect();
         futures_util::future::join_all(scripts.into_iter().map(Script::stop)).await;
+    }
+}
+
+/// What the tests of the scripts and of the sessions share: a port that is free now, and a listener that comes up a little after the script is run, as a script's own does.
+#[cfg(test)]
+pub(super) mod support {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    /// A port that is free now (bound and let go at once).
+    pub fn free_port() -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    /// Listens on `port` from 300 ms after the call until it is dropped.
+    pub struct Later {
+        stop: Option<mpsc::Sender<()>>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    pub fn listen_later(port: u16) -> Later {
+        let (stop, stopped) = mpsc::channel::<()>();
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            let _listener = std::net::TcpListener::bind(("127.0.0.1", port));
+            let _ = stopped.recv();
+        });
+        Later {
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+
+    impl Drop for Later {
+        fn drop(&mut self) {
+            drop(self.stop.take());
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
     }
 }
 
@@ -526,10 +601,17 @@ mod tests {
     }
 
     #[test]
-    fn picks_a_port_on_this_machine() {
-        let port = pick_port().unwrap();
-        assert!(port > 0);
-        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
+    fn tells_the_text_of_a_port_in_use_from_the_other_errors() {
+        assert!(is_in_use_text(&in_use_text("127.0.0.1", 3307)));
+        assert!(!is_in_use_text("スクリプトを起動できません: x"));
+    }
+
+    #[test]
+    fn says_that_the_port_is_in_use_with_the_host_and_the_port() {
+        assert_eq!(
+            in_use_text("127.0.0.1", 3307),
+            "127.0.0.1:3307 は、スクリプトを実行する前から使われています。使っているものを止めるか、別のポートにしてください"
+        );
     }
 
     #[tokio::test]
@@ -542,7 +624,10 @@ mod tests {
 
     #[cfg(unix)]
     mod running {
+        use super::support::{free_port, listen_later};
         use super::*;
+
+        const HOST: &str = "127.0.0.1";
 
         /// A folder of the test's own for the files of the scripts, deleted at the end.
         struct Dir(PathBuf);
@@ -589,13 +674,6 @@ mod tests {
             }
         }
 
-        /// A port that something listens on for the length of the test, so that a script is ready at once.
-        fn listening() -> (std::net::TcpListener, u16) {
-            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-            let port = listener.local_addr().unwrap().port();
-            (listener, port)
-        }
-
         fn alive(pid: i32) -> bool {
             // SAFETY: signal 0 only asks whether the process exists.
             unsafe { libc::kill(pid, 0) == 0 }
@@ -626,11 +704,13 @@ mod tests {
         #[tokio::test]
         async fn is_ready_when_the_port_answers_and_is_given_the_port_in_the_environment() {
             let dir = Dir::new("ready");
-            let (_listener, port) = listening();
+            let port = free_port();
+            let _listener = listen_later(port);
             let out = dir.file("port");
             let body = format!("echo \"${PORT_ENV}\" > '{}'\nsleep 30", out.display());
-            let script = start_on(&dir.0, &body, port, quick(10_000)).await.unwrap();
-            assert_eq!(script.port, port);
+            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+                .await
+                .unwrap();
             assert_eq!(script.exited(), None);
             assert_eq!(dir.leftovers(), 1);
             for _ in 0..100 {
@@ -650,13 +730,16 @@ mod tests {
         #[tokio::test]
         async fn runs_a_body_with_its_own_interpreter_line() {
             let dir = Dir::new("shebang");
-            let (_listener, port) = listening();
+            let port = free_port();
+            let _listener = listen_later(port);
             let out = dir.file("shell");
             let body = format!(
                 "#!/bin/bash\necho \"$BASH_VERSION\" > '{}'\nsleep 30",
                 out.display()
             );
-            let script = start_on(&dir.0, &body, port, quick(10_000)).await.unwrap();
+            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+                .await
+                .unwrap();
             for _ in 0..100 {
                 if std::fs::read_to_string(&out).is_ok_and(|t| t.ends_with('\n')) {
                     break;
@@ -672,6 +755,8 @@ mod tests {
             let dir = Dir::new("early");
             let result = start(
                 &dir.0,
+                HOST,
+                free_port(),
                 "echo one >&2\necho two >&2\necho three >&2\nexit 0",
                 quick(10_000),
             )
@@ -686,10 +771,16 @@ mod tests {
         #[tokio::test]
         async fn fails_with_the_exit_code_of_a_script_that_fails_before_it_is_ready() {
             let dir = Dir::new("early-code");
-            let err = start(&dir.0, "echo nope >&2\nexit 7", quick(10_000))
-                .await
-                .err()
-                .unwrap();
+            let err = start(
+                &dir.0,
+                HOST,
+                free_port(),
+                "echo nope >&2\nexit 7",
+                quick(10_000),
+            )
+            .await
+            .err()
+            .unwrap();
             assert!(
                 err.contains("終了コード 7") && err.ends_with("nope"),
                 "{err}"
@@ -705,9 +796,13 @@ mod tests {
                 pid_file.display()
             );
             let started = Instant::now();
-            let err = start(&dir.0, &body, quick(400)).await.err().unwrap();
+            // 2 s, not less: on a loaded machine the stderr of the script was not read yet after 400 ms.
+            let err = start(&dir.0, HOST, free_port(), &body, quick(2_000))
+                .await
+                .err()
+                .unwrap();
             assert!(started.elapsed() < Duration::from_secs(10));
-            assert!(err.contains("0 秒たっても準備できませんでした"), "{err}");
+            assert!(err.contains("2 秒たっても準備できませんでした"), "{err}");
             assert!(err.ends_with("waiting"), "{err}");
             // The `sleep` is a child of the script, in its group: it is ended with it.
             assert!(gone(read_pid(&pid_file).await).await);
@@ -717,11 +812,13 @@ mod tests {
         #[tokio::test]
         async fn tells_that_it_ended_after_it_was_ready() {
             let dir = Dir::new("after");
-            let (_listener, port) = listening();
-            let script = start_on(
+            let port = free_port();
+            let _listener = listen_later(port);
+            let script = start(
                 &dir.0,
-                "sleep 1\necho oops >&2\nexit 3",
+                HOST,
                 port,
+                "sleep 1\necho oops >&2\nexit 3",
                 quick(10_000),
             )
             .await
@@ -745,13 +842,16 @@ mod tests {
         #[tokio::test]
         async fn sigkills_a_group_that_ignores_sigterm_after_the_grace() {
             let dir = Dir::new("stubborn");
-            let (_listener, port) = listening();
+            let port = free_port();
+            let _listener = listen_later(port);
             let pid_file = dir.file("pid");
             let body = format!(
                 "trap '' TERM\necho $$ > '{}'\nwhile true; do sleep 0.1; done",
                 pid_file.display()
             );
-            let script = start_on(&dir.0, &body, port, quick(10_000)).await.unwrap();
+            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+                .await
+                .unwrap();
             let pid = read_pid(&pid_file).await;
             assert!(alive(pid));
             let started = Instant::now();
@@ -764,12 +864,13 @@ mod tests {
         #[test]
         fn a_script_dropped_after_its_runtime_ended_takes_its_children_with_it() {
             let dir = Dir::new("drop");
-            let (_listener, port) = listening();
+            let port = free_port();
+            let _listener = listen_later(port);
             let pid_file = dir.file("pid");
             let body = format!("sleep 300 &\necho $! > '{}'\nwait", pid_file.display());
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let script = runtime
-                .block_on(start_on(&dir.0, &body, port, quick(10_000)))
+                .block_on(start(&dir.0, HOST, port, &body, quick(10_000)))
                 .unwrap();
             let child = runtime.block_on(read_pid(&pid_file));
             assert!(alive(child));
@@ -787,12 +888,13 @@ mod tests {
         #[tokio::test]
         async fn ends_a_script_with_sigterm_at_once() {
             let dir = Dir::new("term");
-            let (_listener, port) = listening();
+            let port = free_port();
+            let _listener = listen_later(port);
             let timing = Timing {
                 ready: Duration::from_secs(10),
                 grace: Duration::from_secs(3),
             };
-            let script = start_on(&dir.0, "sleep 30", port, timing).await.unwrap();
+            let script = start(&dir.0, HOST, port, "sleep 30", timing).await.unwrap();
             let started = Instant::now();
             script.stop().await;
             assert!(
@@ -802,11 +904,64 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_port_that_answers_before_the_script_is_run_is_an_error_and_runs_nothing() {
+            let dir = Dir::new("in-use");
+            let listener = std::net::TcpListener::bind((HOST, 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let ran = dir.file("ran");
+            let body = format!("echo run > '{}'\nsleep 30", ran.display());
+            let err = start(&dir.0, HOST, port, &body, quick(10_000))
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(err, in_use_text(HOST, port));
+            assert_eq!(dir.leftovers(), 0, "no file of the script is made");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(!ran.exists(), "the script is not run");
+            // The same port, once it is free, is taken by the script.
+            drop(listener);
+            let _listener = listen_later(port);
+            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+                .await
+                .unwrap();
+            script.stop().await;
+        }
+
+        #[tokio::test]
+        async fn a_name_that_cannot_be_looked_up_still_runs_the_script_and_waits_for_it() {
+            let dir = Dir::new("unresolved");
+            let host = "no-such-host.invalid";
+            assert!(resolve(host, 3307).await.is_empty());
+            let ran = dir.file("ran");
+            let body = format!("echo run > '{}'\necho waiting >&2\nsleep 30", ran.display());
+            let err = start(&dir.0, host, free_port(), &body, quick(1_500))
+                .await
+                .err()
+                .unwrap();
+            assert!(err.contains("準備できませんでした"), "{err}");
+            assert!(err.ends_with("waiting"), "{err}");
+            assert!(ran.exists(), "the script is run");
+            assert_eq!(dir.leftovers(), 0);
+        }
+
+        #[tokio::test]
+        async fn scripts_open_with_the_host_and_the_port_of_the_connection_and_close_by_id() {
+            let port = free_port();
+            let _listener = listen_later(port);
+            let scripts = Scripts::default();
+            let id = scripts.open(HOST, port, "sleep 30").await.unwrap();
+            assert_eq!(scripts.exited(id).await, None);
+            scripts.close(id).await;
+            assert!(scripts.open.lock().await.is_empty());
+        }
+
+        #[tokio::test]
         async fn scripts_open_close_and_tell_the_end_by_id() {
             let dir = Dir::new("scripts");
-            let (_listener, port) = listening();
+            let port = free_port();
+            let _listener = listen_later(port);
             let scripts = Scripts::default();
-            let script = start_on(&dir.0, "sleep 30", port, quick(10_000))
+            let script = start(&dir.0, HOST, port, "sleep 30", quick(10_000))
                 .await
                 .unwrap();
             scripts.open.lock().await.insert(5, script);

@@ -1,4 +1,4 @@
-// The terminal pane of the database screen (D-7): a pane at the right of the work pane that the icon at the right end of the work pane's header (or of the edit pane's header, D-1) opens and closes, and a divider between them that is dragged.
+// The terminal pane of the database screen (D-7): a pane at the right of the work pane that the icon at the right end of the work pane's header opens and closes, and a divider between them that is dragged.
 // Whether it is open is the `aria-pressed` of the icon, and its width is the divider's (ts/split.ts); both are kept in memory only.
 // Its head is a strip of tabs with a plus. The plus asks Orca for its worktrees, lets the user pick one (the dialog of A-16) and opens a plain terminal there (`orca_terminal_create`); the terminal is drawn by ts/orca-terminal.ts (A-8, A-12), with this pane as its owner.
 // Each terminal the plus opened has a tab, in the order they were opened, and the newest is selected. A tab is pressed to show its terminal, and its close button (the one of the tabs of the Orca screen) closes the terminal in Orca (`orca_close`).
@@ -234,11 +234,11 @@ async function press() {
   }
 }
 
-// Whether the pane is open: the `aria-pressed` of the icon of the work pane's header, which the icon of the edit pane (database-form.ts) follows.
+// Whether the pane is open: the `aria-pressed` of the icon of the work pane's header.
 export const isDatabaseTerminalOpen = () => $("database-terminal-toggle").getAttribute("aria-pressed") === "true";
 
-// Opens the pane when it is closed and closes it when it is open: the press of either icon (the work pane's header, the edit pane's header).
-export function toggleDatabaseTerminal() {
+// Opens the pane when it is closed and closes it when it is open: the press of the icon of the work pane's header.
+function toggleDatabaseTerminal() {
   const open = !isDatabaseTerminalOpen();
   $("database-terminal-toggle").setAttribute("aria-pressed", String(open));
   $("database-terminal").hidden = !open;

@@ -61,13 +61,11 @@ struct DbProfileSaveArgs {
     name: String,
     /// User name to log in to MySQL with.
     username: String,
-    /// The whole script that opens the way to the database, or an empty text for none. It runs before the login, gets a free port in the environment variable COOKAPPS_PORT and must listen on 127.0.0.1 at that port. A save replaces the saved script with this text.
+    /// The whole script that opens the way to the database, or an empty text for none. It runs before the login, gets db_port in the environment variable COOKAPPS_PORT and must listen there, at db_host. The connection fails when something already answers at db_host:db_port before the script is run. A save replaces the saved script with this text.
     script: String,
-    /// Host of the database, needed when there is no script. With a script, leave it out: the script reaches the database, and MySQL is logged in to at 127.0.0.1 and COOKAPPS_PORT.
-    #[serde(default)]
+    /// Host MySQL is logged in to, always needed, with a script or without one.
     db_host: String,
-    /// Port of the database, 1 to 65535, needed when there is no script. With a script, leave it out.
-    #[serde(default)]
+    /// Port MySQL is logged in to, 1 to 65535, always needed, with a script or without one. With a script, it is also the port the script listens on.
     db_port: u32,
 }
 
@@ -88,6 +86,15 @@ impl DbProfileSaveArgs {
 struct DbTestArgs {
     /// The `id` of a saved connection (from `db_profiles` or `db_profile_save`). Its saved password is used.
     id: String,
+}
+
+/// The error of a port in use before the script, with the way out that only the app can be told of: `db_test` cannot know that cookapps holds the port with its own open connection (D-8).
+fn with_open_hint(error: String) -> String {
+    if database::script::is_in_use_text(&error) {
+        format!("{error}。cookapps でこの接続を開いているときは、切断してからテストしてください")
+    } else {
+        error
+    }
 }
 
 /// What `db_test` answers. The error is text that the script, MySQL or the app wrote: it is quoted as a JSON string and the answer says it is data.
@@ -187,7 +194,7 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "List the connections of the database screen: id, name, username, script (the script that opens the way to the database), dbHost, dbPort and passwordSaved. The password is never returned.",
+        description = "List the connections of the database screen: id, name, username, script (the script that opens the way to the database, empty for none), dbHost, dbPort and passwordSaved. The password is never returned.",
         annotations(read_only_hint = true)
     )]
     async fn db_profiles(&self) -> Result<String, String> {
@@ -199,7 +206,7 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "Save a connection of the database screen with its script: a new one without id, or the one of that id replaced. The password is not handled here: it is typed in the app, and a new connection has none. Answers the connection as saved. Try it with db_test. The script is run by db_test and by the app, and a change of the user, the script or the host and port deletes the saved password.",
+        description = "Save a connection of the database screen: its host and port, and its script when the way to the database has to be opened first (an empty script is none). A new one without id, or the one of that id replaced. The password is not handled here: it is typed in the app, and a new connection has none. Answers the connection as saved. Try it with db_test. The script is run by db_test and by the app, with the port in COOKAPPS_PORT, and a change of the user, the script, the host or the port deletes the saved password.",
         annotations(destructive_hint = true)
     )]
     async fn db_profile_save(
@@ -217,11 +224,15 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "Test a saved connection as the database screen does: run its script, log in to MySQL with the saved password, read the version and end the script. Answers {ok: true, version} or {ok: false, error}, where error holds the last lines of the standard error of the script when it ended. It can take up to two minutes.",
+        description = "Test a saved connection as the database screen does: run its script when it has one (an error when its port is in use before that), log in to MySQL at its host and port with the saved password, read the version and end the script. Answers {ok: true, version} or {ok: false, error}, where error holds the last lines of the standard error of the script when it ended. It can take up to two minutes.",
         annotations(destructive_hint = true, open_world_hint = true)
     )]
     async fn db_test(&self, Parameters(a): Parameters<DbTestArgs>) -> Result<String, String> {
-        db_test_answer(database::test_saved(&self.dir, &Keychain, &Scripts::default(), &a.id).await)
+        db_test_answer(
+            database::test_saved(&self.dir, &Keychain, &Scripts::default(), &a.id)
+                .await
+                .map_err(with_open_hint),
+        )
     }
 }
 
@@ -266,15 +277,31 @@ mod tests {
     }
 
     #[test]
-    fn a_save_with_a_script_needs_no_host_and_no_port() {
+    fn a_save_takes_the_host_and_the_port_with_a_script_and_needs_both() {
         let args: DbProfileSaveArgs = serde_json::from_value(serde_json::json!({
             "name": "dev",
             "username": "reader",
-            "script": "exec forward"
+            "script": "exec forward",
+            "db_host": "127.0.0.1",
+            "db_port": 3307
         }))
         .unwrap();
         let profile = args.into_profile();
-        assert_eq!((profile.db_host.as_str(), profile.db_port), ("", 0));
+        assert_eq!(
+            (profile.db_host.as_str(), profile.db_port),
+            ("127.0.0.1", 3307)
+        );
+        for missing in ["db_host", "db_port"] {
+            let mut value = serde_json::json!({
+                "name": "dev",
+                "username": "reader",
+                "script": "exec forward",
+                "db_host": "127.0.0.1",
+                "db_port": 3307
+            });
+            value.as_object_mut().unwrap().remove(missing);
+            assert!(serde_json::from_value::<DbProfileSaveArgs>(value).is_err());
+        }
     }
 
     #[test]

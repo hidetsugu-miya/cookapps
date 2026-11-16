@@ -1,27 +1,49 @@
 // The edit pane that registers or edits a connection (D-1): while it is open it takes the place of the work pane (`#database-pane`), with the side menu and the terminal pane as they were.
-// Its header has the title and the buttons 接続をテスト, キャンセル and 保存; under it are the fields, and the way the connection goes: 直接 (the host and the port of the database) or スクリプト経由 (the script that opens the way).
+// Its header has the title and the buttons 接続をテスト, キャンセル and 保存; under it are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
 // Saving runs `save`; a refusal (the reason Rust gives, in Japanese) shows under the fields and the pane stays with what was typed. キャンセル and Escape close it.
 // "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers, or the error (with the last lines of the script's standard error), under the fields.
-// The icon at the right end of the header opens and closes the terminal pane (D-7), where Claude Code may save this connection through cookapps-mcp (D-8): while the pane of a saved connection is open, the list is read at an interval, and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The interval stops when the pane is closed or the connection is gone from the list.
+// The icon at the right end of the header opens and closes the Claude Code pane at the right of the edit pane (A-36, `ts/claude-code.ts`; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through cookapps-mcp (D-8).
+// Pressing it again hides the pane and the process goes on; closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) ends the process. While the edit pane of a saved connection is open, the list is read at an interval, and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The interval stops when the edit pane is closed or the connection is gone from the list.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { $, composing, tag } from "./dom.js";
-import { isDatabaseTerminalOpen, toggleDatabaseTerminal } from "./database-terminal.js";
+import { closeClaudeCode, hideClaudeCode, showClaudeCode } from "./claude-code.js";
 import { periodMs } from "./e2e-timers.js";
 import { closeHint } from "./hint.js";
 import { TERMINAL_SVG } from "./icons.js";
 import { closeMenu } from "./menu.js";
+import { initSplit } from "./split.js";
 
 // How often the list is read while the pane of a saved connection is open.
 const WATCH_MS = 2000;
 
+// The id and the owner of the Claude Code pane of the edit pane (A-36): one pane, so one id.
+const CLAUDE_ID = "database-edit";
+const CLAUDE_OWNER = "database-claude";
+
 let opened: { opener: HTMLElement | null; timer: number | null } | null = null;
+
+// Shows the Claude Code pane at the right of the edit pane (the first show starts the process), or hides it (the process goes on).
+function setClaudeOpen(open: boolean) {
+  $("database-claude").hidden = !open;
+  $("database-claude-split").hidden = !open;
+  if (open) showClaudeCode($("database-claude-body"), { id: CLAUDE_ID, builtinTools: true }, CLAUDE_OWNER);
+  else hideClaudeCode(CLAUDE_OWNER);
+}
+
+// The width of the Claude Code pane is its divider's (ts/split.ts), kept in memory only.
+export function initDatabaseForm() {
+  initSplit($("database"), $("database-claude-split"), { min: 0.25, max: 0.5, initial: 0.35, property: "--claude-w" });
+}
 
 export function closeDatabaseForm() {
   if (!opened) return;
   const { opener, timer } = opened;
   if (timer !== null) clearInterval(timer);
   opened = null;
+  // The pane belongs to the edit pane: its process ends with it.
+  setClaudeOpen(false);
+  closeClaudeCode(CLAUDE_ID, CLAUDE_OWNER);
   $("database-edit").replaceChildren();
   $("database-edit").hidden = true;
   $("database-pane").hidden = false;
@@ -63,11 +85,6 @@ const portOf = (text: string) => {
   return Number.isNaN(n) ? 0 : n;
 };
 
-const MODES = [
-  { id: "direct", label: "直接" },
-  { id: "script", label: "スクリプト経由" },
-] as const;
-
 // `initial` is the connection to edit, or null for a new one. `save` answers when it is saved and throws what the user is told when it is not. `test` answers the version of the server, and throws what the user is told when it cannot log in. `list` reads the saved connections, and answers none when it cannot.
 export function openDatabaseForm(
   initial: DatabaseProfileView | null,
@@ -88,48 +105,19 @@ export function openDatabaseForm(
 
   const saved = initial?.passwordSaved ? tag("span", "status ok", "保存済み") : undefined;
 
-  // The fields that the user changed by hand (the way too), which a reload of the saved connection leaves as they are.
+  // The fields that the user changed by hand, which a reload of the saved connection leaves as they are.
   const byHand = new Set<string>();
-  const handled: [string, HTMLInputElement | HTMLTextAreaElement][] = [["name", name], ["username", username], ["script", script], ["dbHost", dbHost], ["dbPort", dbPort]];
+  const handled: [string, HTMLInputElement | HTMLTextAreaElement][] = [["name", name], ["username", username], ["dbHost", dbHost], ["dbPort", dbPort], ["script", script]];
   for (const [key, control] of handled) control.addEventListener("input", () => byHand.add(key));
 
-  // The way the connection goes: a connection with a script goes by it, and one with none goes straight to the host and the port.
-  const modeOf = (p: DatabaseProfileView | null) => (p && p.script !== "" ? "script" : "direct");
-  let mode: (typeof MODES)[number]["id"] = modeOf(initial);
-  const direct = tag("div", "database-way");
-  direct.append(field("DB のホスト", dbHost), field("ポート", dbPort));
-  const scripted = tag("div", "database-way");
-  scripted.append(field("事前スクリプト", script));
-  const tabs = tag("div", "database-tabs");
-  tabs.setAttribute("role", "tablist");
-  tabs.setAttribute("aria-label", "接続のしかた");
-  const drawMode = () => {
-    direct.hidden = mode !== "direct";
-    scripted.hidden = mode !== "script";
-    for (const b of tabs.querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.mode === mode));
-  };
-  for (const m of MODES) {
-    const button = tag("button", "database-tab", m.label);
-    button.type = "button";
-    button.dataset.mode = m.id;
-    button.setAttribute("role", "tab");
-    button.onclick = () => {
-      mode = m.id;
-      byHand.add("mode");
-      drawMode();
-    };
-    tabs.append(button);
-  }
-  drawMode();
-
-  // The fields as typed, in the shape that Rust takes: the fields of the way that is selected only, and no host and port with a script.
+  // The fields as typed, in the shape that Rust takes; the checks are Rust's.
   const typed = (): DatabaseProfile => ({
     id: initial?.id ?? "",
     name: name.value,
     username: username.value,
-    script: mode === "script" ? script.value : "",
-    dbHost: mode === "direct" ? dbHost.value : "",
-    dbPort: mode === "direct" ? portOf(dbPort.value) : 0,
+    script: script.value,
+    dbHost: dbHost.value,
+    dbPort: portOf(dbPort.value),
   });
 
   // The answer of "接続をテスト": the version as a status, or the error.
@@ -168,12 +156,13 @@ export function openDatabaseForm(
   const terminal = tag("button", "icon-btn");
   terminal.type = "button";
   terminal.id = "database-edit-terminal";
-  terminal.setAttribute("aria-label", "ターミナル");
-  terminal.setAttribute("aria-pressed", String(isDatabaseTerminalOpen()));
+  terminal.setAttribute("aria-label", "Claude Code");
+  terminal.setAttribute("aria-pressed", "false");
   terminal.innerHTML = TERMINAL_SVG;
   terminal.onclick = () => {
-    toggleDatabaseTerminal();
-    terminal.setAttribute("aria-pressed", String(isDatabaseTerminalOpen()));
+    const open = terminal.getAttribute("aria-pressed") !== "true";
+    terminal.setAttribute("aria-pressed", String(open));
+    setClaudeOpen(open);
   };
 
   const head = tag("header", "database-edit-head");
@@ -182,7 +171,7 @@ export function openDatabaseForm(
   actions.append(probe, cancel, submit);
   head.append(tag("h1", "", title), actions, terminal);
   const body = tag("div", "database-edit-body");
-  body.append(field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), tabs, direct, scripted, result, err);
+  body.append(field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), field("DB のホスト", dbHost), field("ポート", dbPort), field("事前スクリプト", script), result, err);
 
   const form = tag("form", "database-form");
   form.id = "database-form";
@@ -236,13 +225,9 @@ export function openDatabaseForm(
     };
     take("name", name, next.name);
     take("username", username, next.username);
-    take("script", script, next.script);
     take("dbHost", dbHost, next.dbHost);
     take("dbPort", dbPort, String(next.dbPort || 3306));
-    if (!byHand.has("mode") && mode !== modeOf(next)) {
-      mode = modeOf(next);
-      drawMode();
-    }
+    take("script", script, next.script);
   };
   mine.timer = window.setInterval(() => void reload(), periodMs("databaseProfiles", WATCH_MS));
 }

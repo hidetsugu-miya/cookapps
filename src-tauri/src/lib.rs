@@ -4,6 +4,7 @@ pub mod auth;
 pub mod calendar;
 pub mod claude;
 pub mod claude_auth;
+pub mod claude_code;
 pub mod database;
 mod disk_cache;
 pub mod fonts;
@@ -209,6 +210,7 @@ pub fn run() {
         .manage(orca_stream::OrcaStream::default())
         .manage(database::script::Scripts::default())
         .manage(database::session::Sessions::default())
+        .manage(claude_code::ClaudeCode::default())
         .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
@@ -411,6 +413,10 @@ pub fn run() {
             update::check_update,
             update::install_update,
             update::restart_app,
+            claude_code::claude_code_start,
+            claude_code::claude_code_input,
+            claude_code::claude_code_resize,
+            claude_code::claude_code_close,
             set_badge
         ])
         .build(tauri::generate_context!())
@@ -418,6 +424,7 @@ pub fn run() {
         .run(|app, event| {
             // The open connections of the database screen, and their scripts (a process group each), and the language servers of the Orca editor (A-34): close them with the app.
             if let tauri::RunEvent::Exit = event {
+                app.state::<claude_code::ClaudeCode>().close_all();
                 let servers = app.state::<lsp::server::LspServers>();
                 tauri::async_runtime::block_on(servers.close_all());
                 let sessions = app.state::<database::session::Sessions>();

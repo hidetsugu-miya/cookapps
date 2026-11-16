@@ -1,6 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -35,8 +35,6 @@ const pickFromMenu = async (id: string, item: 1 | 2 | 3) => {
   await $(`.menu button[role="menuitem"]:nth-child(${item})`).click();
 };
 const field = (name: string) => $(`#database-form [name="${name}"]`);
-// The way tab of the edit pane (直接 or スクリプト経由).
-const way = (id: "direct" | "script") => $(`#database-form .database-tab[data-mode="${id}"]`);
 // The profile that the edit pane sends when it is filled in as a connection with no script.
 const typed = { id: "", name: "Example new", username: "reader", script: "", dbHost: "db.example.com", dbPort: 3306 };
 const fillDirect = async () => {
@@ -114,7 +112,7 @@ describe("database", () => {
 });
 
 describe("database: register", () => {
-  it("takes the place of the work pane from the plus, with the fields of a connection, the way 直接 selected and the port 3306", async () => {
+  it("takes the place of the work pane from the plus, with the fields of a connection (the host, the port 3306 and the script all shown) and no tab", async () => {
     await openDatabase([]);
     await pressAdd();
     await expect($("#database-edit")).toBeDisplayed();
@@ -125,37 +123,29 @@ describe("database: register", () => {
     await expect($("#database-form h1")).toHaveText("接続を追加");
     expect(await textsOf("#database-form .database-edit-actions button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
     expect(await count(".scrim")).toBe(0);
-    expect(await textsOf("#database-form .database-tab")).toEqual(["直接", "スクリプト経由"]);
-    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
-    await expect(way("script")).toHaveAttribute("aria-selected", "false");
+    expect(await count("#database-form .database-tab")).toBe(0);
+    expect(await count('#database-form [role="tablist"]')).toBe(0);
     await expect(field("dbHost")).toBeDisplayed();
+    await expect(field("dbHost")).toHaveValue("");
     await expect(field("dbPort")).toBeDisplayed();
     await expect(field("dbPort")).toHaveValue("3306");
-    await expect(field("script")).not.toBeDisplayed();
+    await expect(field("script")).toBeDisplayed();
+    await expect(field("script")).toHaveValue("");
     expect(await browser.execute(() => document.activeElement?.getAttribute("name"))).toBe("name");
     expect(await count("#database-form [placeholder]")).toBe(0);
     await expect($("#database-form .status")).not.toExist();
     expect(await browser.execute(() => document.getElementById("content")!.inert)).toBe(false);
   });
 
-  it("shows the script field in place of the host and the port on スクリプト経由, and back on 直接, keeping what was typed", async () => {
+  it("lists the fields in order, the host and the port before the optional script, and keeps what was typed in each", async () => {
     await openDatabase([]);
     await $("#database-add").click();
-    await field("dbHost").setValue("db.example.com");
-    await way("script").click();
-    await expect(way("script")).toHaveAttribute("aria-selected", "true");
-    await expect(way("direct")).toHaveAttribute("aria-selected", "false");
-    await expect(field("script")).toBeDisplayed();
-    await expect(field("script")).toHaveValue("");
-    await expect($("#database-form label.database-field:has([name=script]) .database-label")).toHaveText("事前スクリプト");
-    await expect(field("dbHost")).not.toBeDisplayed();
-    await expect(field("dbPort")).not.toBeDisplayed();
+    expect(await textsOf("#database-form label.database-field .database-label")).toEqual(["接続名", "ユーザー名", "パスワード", "DB のホスト", "ポート", "事前スクリプト"]);
+    await field("dbHost").setValue("127.0.0.1");
+    await field("dbPort").setValue("3307");
     await field("script").setValue("exec forward-port $COOKAPPS_PORT");
-    await way("direct").click();
-    await expect(field("dbHost")).toBeDisplayed();
-    await expect(field("dbHost")).toHaveValue("db.example.com");
-    await expect(field("script")).not.toBeDisplayed();
-    await way("script").click();
+    await expect(field("dbHost")).toHaveValue("127.0.0.1");
+    await expect(field("dbPort")).toHaveValue("3307");
     await expect(field("script")).toHaveValue("exec forward-port $COOKAPPS_PORT");
   });
 
@@ -175,33 +165,19 @@ describe("database: register", () => {
     expect(await names()).toEqual(["Example direct", "Example new"]);
   });
 
-  it("sends the script as typed, with its line breaks, and no host and no port, on スクリプト経由", async () => {
+  it("sends the script as typed, with its line breaks, together with the host and the port as typed", async () => {
     await openDatabase([]);
     const save = await mock("database_profile_save", databaseProfile("p3", "Example new"));
     await mock("database_profiles", [databaseProfile("p3", "Example new")]);
     await $("#database-add").click();
     await fillDirect();
     await field("dbPort").setValue("3307");
-    await way("script").click();
     await field("script").setValue("#!/bin/sh\nexec forward-port $COOKAPPS_PORT");
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
-      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $COOKAPPS_PORT", dbHost: "", dbPort: 0 }, password: "" },
+      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $COOKAPPS_PORT", dbPort: 3307 }, password: "" },
     ]);
     await expect($("#database-form")).not.toExist();
-  });
-
-  it("sends no script on 直接, also when one was typed before the way was changed back", async () => {
-    await openDatabase([]);
-    const save = await mock("database_profile_save", databaseProfile("p3", "Example new"));
-    await mock("database_profiles", [databaseProfile("p3", "Example new")]);
-    await $("#database-add").click();
-    await fillDirect();
-    await way("script").click();
-    await field("script").setValue("exec forward-port $COOKAPPS_PORT");
-    await way("direct").click();
-    await $("#database-form button[type=submit]").click();
-    expect(await waitForCalls(save)).toEqual([{ profile: typed, password: "" }]);
   });
 
   it("sends an empty or non-numeric port as 0, which Rust refuses", async () => {
@@ -282,7 +258,7 @@ describe("database: register", () => {
 });
 
 describe("database: edit", () => {
-  it("opens the edit pane from the menu of a row with the fields filled, スクリプト経由 selected for a connection with a script, and a saved password shown as a status, not the password", async () => {
+  it("opens the edit pane from the menu of a row with the fields filled, the host, the port and the script of a connection with a script, and a saved password shown as a status, not the password", async () => {
     await openDatabase();
     await pickFromMenu("p2", 1);
     await expect($("#database-form")).toHaveAttribute("aria-label", "接続を編集");
@@ -292,20 +268,29 @@ describe("database: edit", () => {
     await expect(field("username")).toHaveValue("reader");
     await expect(field("password")).toHaveValue("");
     await expect($("#database-form .status.ok")).toHaveText("保存済み");
-    await expect(way("script")).toHaveAttribute("aria-selected", "true");
     await expect(field("script")).toBeDisplayed();
     await expect(field("script")).toHaveValue('exec forward-port "$COOKAPPS_PORT"');
-    await expect(field("dbHost")).not.toBeDisplayed();
-    await expect(field("dbPort")).not.toBeDisplayed();
+    await expect(field("dbHost")).toBeDisplayed();
+    await expect(field("dbHost")).toHaveValue("db.internal.example.com");
+    await expect(field("dbPort")).toBeDisplayed();
+    await expect(field("dbPort")).toHaveValue("3306");
   });
 
-  it("selects 直接 for a connection with no script, with its host and port", async () => {
+  it("shows the host and the port and an empty script for a connection with no script", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
-    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
     await expect(field("dbHost")).toHaveValue("db.example.com");
     await expect(field("dbPort")).toHaveValue("3306");
-    await expect(field("script")).not.toBeDisplayed();
+    await expect(field("script")).toBeDisplayed();
+    await expect(field("script")).toHaveValue("");
+  });
+
+  it("shows the port 3306 and an empty host for a connection saved with a script and no host and no port", async () => {
+    await openDatabase([databaseProfile("p4", "Example old", { script: "exec forward-port", dbHost: "", dbPort: 0 })]);
+    await pickFromMenu("p4", 1);
+    await expect(field("script")).toHaveValue("exec forward-port");
+    await expect(field("dbHost")).toHaveValue("");
+    await expect(field("dbPort")).toHaveValue("3306");
   });
 
   it("shows no saved-password status for a connection with none", async () => {
@@ -324,7 +309,7 @@ describe("database: edit", () => {
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
       {
-        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "", dbPort: 0 },
+        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", dbPort: 3306 },
         password: "",
       },
     ]);
@@ -345,18 +330,27 @@ describe("database: edit", () => {
   });
 });
 
-describe("database: edit pane, terminal and reload", () => {
+describe("database: edit pane, Claude Code and reload", () => {
   const toggle = () => $("#database-edit-terminal");
   const fast = timers({ databaseProfiles: 250 });
+  const pane = () => $("#database-claude");
+  // The commands of the Orca terminals (D-7) and of the choice of a worktree, none of which the Claude Code pane calls.
+  const orcaCommands = ["orca_terminal_create", "orca_stream_terminal", "orca_terminal_read", "orca_stream_input"];
+  const noOrca = async () => {
+    for (const command of orcaCommands) expect(await callsOf(command)).toEqual([]);
+    await expect($('.pop[role="dialog"]')).not.toExist();
+  };
 
-  it("has an icon button with no text at the right end of the header of the edit pane, and the pane closed", async () => {
+  it("has an icon button with no text at the right end of the header of the edit pane, and the pane closed with no process", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-label", "ターミナル");
+    await expect(toggle()).toHaveAttribute("aria-label", "Claude Code");
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
     expect((await toggle().getText()).trim()).toBe("");
     await expect(toggle().$("svg")).toExist();
-    await expect($("#database-terminal")).not.toBeDisplayed();
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-claude-split")).not.toBeDisplayed();
+    expect(await callsOf("claude_code_start")).toEqual([]);
     const atEnd = await browser.execute(() => {
       const head = document.querySelector(".database-edit-head")!.getBoundingClientRect();
       const button = document.getElementById("database-edit-terminal")!.getBoundingClientRect();
@@ -368,40 +362,103 @@ describe("database: edit pane, terminal and reload", () => {
     expect(atEnd.gap).toBeLessThanOrEqual(32);
   });
 
-  it("opens the terminal pane at the right of the edit pane and closes it with a second press, and the icon of the work pane follows", async () => {
+  it("opens the Claude Code pane at the right of the edit pane, started with this screen's id and the built-in tools, and no Orca command or worktree choice", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
     await toggle().click();
     await expect(toggle()).toHaveAttribute("aria-pressed", "true");
-    await expect($("#database-terminal")).toBeDisplayed();
-    await expect($("#database-terminal-split")).toBeDisplayed();
+    await expect(pane()).toBeDisplayed();
+    await expect($("#database-claude-split")).toBeDisplayed();
     await expect($("#database-form")).toBeDisplayed();
+    await expect($("#database-terminal")).not.toBeDisplayed();
     const order = await browser.execute(() => {
       const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
-      return left("database-edit") < left("database-terminal-split") && left("database-terminal-split") < left("database-terminal");
+      return left("database-edit") < left("database-claude-split") && left("database-claude-split") < left("database-claude");
     });
     expect(order).toBe(true);
-    await $("#database-form").$("button=キャンセル").click();
-    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
-    await expect($("#database-terminal")).toBeDisplayed();
-    await $("#database-terminal-toggle").click();
-    await expect($("#database-terminal")).not.toBeDisplayed();
-    await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await toggle().click();
-    await toggle().click();
-    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await expect($("#database-terminal")).not.toBeDisplayed();
-    await expect($("#database-terminal-split")).not.toBeDisplayed();
-    await expect($("#database-form")).toBeDisplayed();
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "database-edit", builtinTools: true, skill: null });
+    await expect($("#database-claude-body.claude-code-pane")).toBeDisplayed();
+    await noOrca();
   });
 
-  it("starts pressed when the terminal pane was open before the edit pane", async () => {
+  it("shows the pane again with the next press after Claude Code ended, and starts it again", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "output", data: "old screen" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await toggle().click();
+    await expect(pane()).not.toBeDisplayed();
+    await toggle().click();
+    await expect(pane()).toBeDisplayed();
+    expect((await waitForCalls("claude_code_start", 2)).length).toBe(2);
+    await noOrca();
+  });
+
+  it("hides the pane with a second press and shows it again with a third, starting the process once and ending nothing", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-claude-split")).not.toBeDisplayed();
+    await expect($("#database-form")).toBeDisplayed();
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await expect(pane()).toBeDisplayed();
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+    await noOrca();
+  });
+
+  it("ends the process when the edit pane is closed, and the next edit pane starts with the pane closed", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#database-form").$("button=キャンセル").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-edit", launch: 1 }]);
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-claude-split")).not.toBeDisplayed();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+  });
+
+  it("ends the process when the screen is left", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#nav-mail").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-edit", launch: 1 }]);
+    await $("#nav-database").click();
+    await expect($("#database-pane")).toBeDisplayed();
+    await expect(pane()).not.toBeDisplayed();
+  });
+
+  it("leaves the terminal pane of the work pane (D-7) alone: its icon does not follow, and it does not start Claude Code", async () => {
     await openDatabase();
     await $("#database-terminal-toggle").click();
-    await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
     await expect($("#database-terminal")).toBeDisplayed();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-terminal")).toBeDisplayed();
+    await toggle().click();
+    await expect(pane()).toBeDisplayed();
+    await toggle().click();
+    await expect($("#database-terminal")).toBeDisplayed();
+    await $("#database-form").$("button=キャンセル").click();
+    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect((await callsOf("claude_code_start")).length).toBe(1);
   });
 
   it("takes what was saved elsewhere into the fields that were not changed by hand, and leaves the ones that were", async () => {
@@ -413,26 +470,23 @@ describe("database: edit pane, terminal and reload", () => {
     await expect(field("dbHost")).toHaveValue("db2.example.com");
     await expect(field("dbPort")).toHaveValue("3307");
     await expect(field("name")).toHaveValue("Typed by hand");
-    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
     await expect($('#database-side-feed [data-key="p1"]')).toHaveText("Saved elsewhere");
   });
 
-  it("selects スクリプト経由 and fills the script when a script was saved elsewhere, unless the way was chosen by hand", async () => {
+  it("fills the script when a script was saved elsewhere, unless the script was typed by hand", async () => {
     await openDatabase([direct, tunnel], fast);
     await pickFromMenu("p1", 1);
-    await mock("database_profiles", [databaseProfile("p1", "Example direct", { script: 'exec forward-port "$COOKAPPS_PORT"', dbHost: "", dbPort: 0 }), tunnel]);
-    await expect(way("script")).toHaveAttribute("aria-selected", "true");
+    await mock("database_profiles", [databaseProfile("p1", "Example direct", { script: 'exec forward-port "$COOKAPPS_PORT"' }), tunnel]);
     await expect(field("script")).toHaveValue('exec forward-port "$COOKAPPS_PORT"');
-    await expect(field("script")).toBeDisplayed();
+    await expect(field("dbHost")).toHaveValue("db.example.com");
     await expect(field("dbPort")).toHaveValue("3306");
 
     await $("#database-form").$("button=キャンセル").click();
     await pickFromMenu("p2", 1);
-    await way("direct").click();
+    await field("script").setValue("exec typed-by-hand");
     await mock("database_profiles", [direct, { ...tunnel, script: "exec other-forward" }]);
-    await expect(field("script")).toHaveValue("exec other-forward");
-    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
-    await expect(field("script")).not.toBeDisplayed();
+    await browser.pause(300);
+    await expect(field("script")).toHaveValue("exec typed-by-hand");
   });
 
   it("stops reading when the connection is gone from the list, and keeps the pane as it is", async () => {
@@ -560,7 +614,7 @@ describe("database: test the connection", () => {
     await probe().click();
     expect(await waitForCalls(test)).toEqual([
       {
-        profile: { id: "p2", name: "Example tunnel", username: "reader", script: "exec other-forward", dbHost: "", dbPort: 0 },
+        profile: { id: "p2", name: "Example tunnel", username: "reader", script: "exec other-forward", dbHost: "db.internal.example.com", dbPort: 3306 },
         password: "",
       },
     ]);

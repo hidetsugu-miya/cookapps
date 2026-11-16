@@ -13,9 +13,13 @@
 // A program that asks for the clipboard with OSC 52 (Claude Code does, for what is selected while it tracks the mouse) gets it, as in Orca's own terminal: a write is made only from what the terminal prints live, not from a snapshot or a mirror frame drawn again, and a read ("?") is never answered.
 // The request comes by the stream, outside a user action, and WKWebView may refuse the write: the latest text is then held, and the next copy event (⌘C or Edit > Copy) puts it in the clipboard when xterm.js has no selection.
 // Option+drag selects in xterm.js while a program tracks the mouse (`macOptionClickForcesSelection`, as Orca sets it).
+// A pane of Claude Code (A-36, `ts/claude-code.ts`) is a terminal of the kind "pty": cookapps runs the process itself in a pseudo terminal, and its output comes by one channel for as long as the pane holds it, shown or not (a hidden pane keeps drawing into its box in the stash).
+// Its keys and its size go to Rust (`claude_code_input`, `claude_code_resize`), after the start has answered; the process ends when the pane forgets the terminal (`releaseTerminal`), not when the pane is hidden.
 // The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
 import type { Appearance } from "./bindings/Appearance";
+import type { ClaudeCodeEvent } from "./bindings/ClaudeCodeEvent";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
+import type { SkillScreen } from "./bindings/SkillScreen";
 import type { TerminalColors } from "./bindings/TerminalColors";
 import type { TerminalSettings } from "./bindings/TerminalSettings";
 import type { TextKeybind } from "./bindings/TextKeybind";
@@ -51,13 +55,15 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 // What a link in the text is: it starts with http:// or https:// and ends before a space, a quote, a bracket, or a full-width punctuation mark or bracket (U+3000 to U+303F and U+FF00 to U+FFEF), so a URL in a Japanese sentence is cut where the sentence goes on.
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
-// Where a terminal comes from: the stream of a saved environment, or a mirror (of this machine, or of a saved environment that is not streamed).
-// `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10).
+// Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that cookapps opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
+// `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
+// `pty` is what a pty is started with: whether Claude Code keeps its own tools, and the saved skill it is given.
 export interface TermSource {
-  kind: "stream" | "mirror";
+  kind: "stream" | "mirror" | "pty";
   handle: string;
   path: string;
   environment: string | null;
+  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null };
 }
 
 // A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
@@ -77,7 +83,7 @@ interface Instance {
   // The owner that showed it last, kept while it waits in the stash: only the Orca screen's own are pruned with the list of Orca.
   owner: string;
   // The channel of its stream, null when it has none: an event of another channel is not drawn.
-  channel: { onmessage: (event: OrcaTermEvent) => void } | null;
+  channel: { onmessage: (event: never) => void } | null;
   // The number of the showing of its stream: Rust ends a showing only by a close of the same number, whatever order the calls arrive in.
   generation: number;
   // The mirror: its timer, the last frame drawn, and a read on its way.
@@ -92,6 +98,9 @@ interface Instance {
   // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
   copy: string | null;
   copyQueued: boolean;
+  // A pty: the answer of its start (the keys and the size wait for it), which is the number of the start that `claude_code_close` takes, or null when it could not start, and whether its process has ended or could not start (the keys typed are dropped).
+  ready: Promise<number | null>;
+  ended: boolean;
 }
 
 const instances = new Map<string, Instance>();
@@ -295,7 +304,7 @@ function newInstance(source: TermSource, owner: string): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
+  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -336,8 +345,14 @@ function fitInstance(instance: Instance) {
   if (!instance.host || instance.host.hidden) return;
   const { cols, rows } = instance.term;
   instance.fit.fit();
-  if (instance.source.kind === "stream" && instance.channel !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
-    invoke("orca_stream_viewport", { handle: instance.source.handle, viewport: { cols: instance.term.cols, rows: instance.term.rows } }).catch(() => {});
+  if (instance.channel !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
+    const viewport = { cols: instance.term.cols, rows: instance.term.rows };
+    if (instance.source.kind === "stream") invoke("orca_stream_viewport", { handle: instance.source.handle, viewport }).catch(() => {});
+    else if (instance.source.kind === "pty") {
+      void instance.ready.then(() => {
+        if (!instance.ended) invoke("claude_code_resize", { id: instance.source.handle, viewport }).catch(() => {});
+      });
+    }
   }
 }
 
@@ -359,7 +374,10 @@ async function sendKeys(instance: Instance) {
   instance.pending = instance.pending.slice(text.length);
   instance.sending = true;
   try {
-    if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
+    if (instance.source.kind === "pty") {
+      await instance.ready;
+      if (!instance.ended) await invoke("claude_code_input", { id: instance.source.handle, text });
+    } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
   } catch (e) {
     onError(e);
@@ -386,7 +404,7 @@ function runsOf(files: { text: string; bracketed: boolean }[]) {
 // Puts the files pasted or dropped on the terminal shown in its worktree and types their paths in it, as Orca's own terminal does. A file that cannot be read is refused with the message.
 async function attach(host: HTMLElement, files: File[]) {
   const instance = shownInstances().find((i) => i.host === host);
-  if (!instance) return;
+  if (!instance || instance.source.kind === "pty") return;
   const read = await readFiles(files);
   if (read.message !== null) onError(read.message);
   if (!read.files.length) return;
@@ -483,14 +501,54 @@ function stopStream(instance: Instance) {
   invoke("orca_stream_terminal_close", { handle: instance.source.handle, generation: instance.generation }).catch(() => {});
 }
 
-// Starts what a shown terminal needs: its stream, or its mirror's reads.
+// ---- the pseudo terminal of Claude Code (A-36) ----
+
+function drawPty(instance: Instance, event: ClaudeCodeEvent) {
+  if (event.kind === "output") {
+    instance.term.write(event.data);
+  } else {
+    instance.ended = true;
+    instance.term.write(`\r\n\x1b[2m${event.message}\x1b[0m`);
+  }
+}
+
+// A pty whose process ended, or could not start, and that is shown again begins anew: its screen is cleared and `startPty` starts a process (a hide and a show of a living one starts nothing).
+function restartPty(instance: Instance) {
+  instance.channel = null;
+  instance.ended = false;
+  instance.term.reset();
+}
+
+// Starts the process of a pty terminal, once: it goes on while the pane is hidden, so a show after a hide starts nothing. A start that fails draws its message in the terminal.
+function startPty(instance: Instance) {
+  if (document.hidden || instance.channel !== null || instance.ended) return;
+  const channel = new window.__TAURI__.core.Channel<ClaudeCodeEvent>();
+  instance.channel = channel;
+  channel.onmessage = (event) => {
+    if (instance.channel === channel) drawPty(instance, event);
+  };
+  instance.fit.fit();
+  const viewport = { cols: instance.term.cols, rows: instance.term.rows };
+  const { handle, pty } = instance.source;
+  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, channel }).then(
+    (launch) => launch,
+    (e) => {
+      if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e) });
+      return null;
+    },
+  );
+}
+
+// Starts what a shown terminal needs: its stream, its mirror's reads, or its process.
 function start(instance: Instance) {
   if (instance.source.kind === "stream") startStream(instance);
+  else if (instance.source.kind === "pty") startPty(instance);
   else startMirror(instance);
 }
 
-// Stops the reads or the stream of a terminal. The keys not sent yet stay: they go to the terminal they were typed in, shown or not (A-12).
+// Stops the reads or the stream of a terminal. The keys not sent yet stay: they go to the terminal they were typed in, shown or not (A-12). A pty has nothing to stop: its process goes with the terminal (`dropTerminal`).
 function stop(instance: Instance) {
+  if (instance.source.kind === "pty") return;
   stopMirror(instance);
   stopStream(instance);
 }
@@ -576,6 +634,7 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
     resizes.unobserve(host);
   }
   for (const instance of fresh) {
+    if (instance.source.kind === "pty" && instance.ended) restartPty(instance);
     fitInstance(instance);
     start(instance);
   }
@@ -604,6 +663,15 @@ function dropTerminal(id: string) {
   const instance = instances.get(id);
   if (!instance) return;
   stop(instance);
+  if (instance.source.kind === "pty") {
+    // The pane forgot it: its process ends, and nothing it prints is drawn.
+    instance.channel = null;
+    instance.ended = true;
+    // After the start has answered: a close that came first would find no process, and the start would then make one nobody ends. It names the start, so a pane of the same id that started since is not ended by it.
+    void instance.ready.then((launch) => {
+      if (launch !== null) invoke("claude_code_close", { id, launch }).catch(() => {});
+    });
+  }
   // The terminal left Orca's list: the keys not sent yet have nowhere to go.
   instance.pending = "";
   shown.delete(id);
