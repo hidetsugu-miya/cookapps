@@ -629,8 +629,12 @@ async function watchThread(m: TimelineMessage) {
   if (!timeline) return;
   const ts = m.threadTs ?? m.ts;
   const same = (x: TimelineMessage) => x.teamId === m.teamId && x.channel === m.channel && (x.threadTs ?? x.ts) === ts;
-  // A watched thread has no unread replies (S-14): "新しい返信" counts for it from here on.
-  dropReplies(timeline.messages.filter(same));
+  // The unread messages that leave the list, and a watched thread's unread replies (S-14: "新しい返信" counts for it from here on), go off the badge at once.
+  const gone = timeline.messages.filter(same);
+  const unread = gone.filter((x) => x.unread).length;
+  unreadCount = Math.max(0, unreadCount - unread);
+  lowerSide(m.teamId, m.channel, unread);
+  dropReplies(gone);
   timeline.messages = timeline.messages.filter((x) => !same(x));
   timeline.watched = [{ ...m, ts, threadTs: null, watch: { newReplies: 0, uncounted: false, status: "ok", unreadTo: m.unread ? m.ts : null }, unreadReplies: null }, ...timeline.watched];
   drawBadge();

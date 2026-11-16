@@ -199,14 +199,21 @@ describe("footer", () => {
         await waitForCount("#unread-pane-list li", 4);
       };
 
-      it("shows a mail's trash and archive and a Slack message's 既読にする and ウォッチ, only while the pointer is on the row", async () => {
+      // :hover and :focus never match in the E2E window (the driver dispatches pointer events from JS and the window is hidden): the hidden state is the computed style, and the rule that shows the buttons is read from the stylesheet to say that the pointer or the focus in the row lifts it.
+      it("draws a mail's trash and archive and a Slack message's 既読にする and ウォッチ, hidden until the pointer or the focus is in the row", async () => {
         await start();
         expect(await labelsOf(0)).toEqual(["ゴミ箱へ移動", "アーカイブ"]);
         expect(await labelsOf(1)).toEqual(["既読にする", "ウォッチ"]);
         expect(await visibility(0)).toBe("hidden");
-        await rowAt(0).moveTo();
-        expect(await visibility(0)).toBe("visible");
         expect(await visibility(1)).toBe("hidden");
+        const showing = await browser.execute(() => {
+          for (const sheet of document.styleSheets)
+            for (const rule of sheet.cssRules)
+              if (rule instanceof CSSStyleRule && rule.selectorText.includes(".unread-actions .icon-btn") && rule.style.visibility === "visible") return rule.selectorText;
+          return null;
+        });
+        expect(showing).toContain(".unread-item:hover");
+        expect(showing).toContain(".unread-item:focus-within");
       });
 
       it("draws no 既読にする for a Slack message when the token cannot write the position, as the popup has none", async () => {
@@ -230,6 +237,9 @@ describe("footer", () => {
         await expect($("#thread")).not.toBeDisplayed();
         await expect($(".toast")).toHaveText(expect.stringContaining("ゴミ箱へ移動しました"));
         await expect($(".toast button")).toHaveText("元に戻す");
+        // A press on the notice's button is not a press outside the pane: the pane stays open.
+        await browser.execute(() => document.querySelector(".toast button")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+        await expect($("#unread-pane")).toBeDisplayed();
         await $(".toast button").click();
         expect(await waitForCalls(untrash)).toEqual([{ account, id: "t1" }]);
         await waitForCount("#unread-pane-list li", 4);

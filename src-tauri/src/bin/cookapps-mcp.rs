@@ -199,8 +199,8 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "Save a connection of the database screen with its script: a new one without id, or the one of that id replaced. The password is not handled here: it is typed in the app, and a new connection has none. Answers the connection as saved. Try it with db_test.",
-        annotations(idempotent_hint = true, destructive_hint = false)
+        description = "Save a connection of the database screen with its script: a new one without id, or the one of that id replaced. The password is not handled here: it is typed in the app, and a new connection has none. Answers the connection as saved. Try it with db_test. The script is run by db_test and by the app, and a change of the user, the script or the host and port deletes the saved password.",
+        annotations(destructive_hint = true)
     )]
     async fn db_profile_save(
         &self,
@@ -217,7 +217,8 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "Test a saved connection as the database screen does: run its script, log in to MySQL with the saved password, read the version and end the script. Answers {ok: true, version} or {ok: false, error}, where error holds the last lines of the standard error of the script when it ended. It can take up to two minutes."
+        description = "Test a saved connection as the database screen does: run its script, log in to MySQL with the saved password, read the version and end the script. Answers {ok: true, version} or {ok: false, error}, where error holds the last lines of the standard error of the script when it ended. It can take up to two minutes.",
+        annotations(destructive_hint = true, open_world_hint = true)
     )]
     async fn db_test(&self, Parameters(a): Parameters<DbTestArgs>) -> Result<String, String> {
         db_test_answer(database::test_saved(&self.dir, &Keychain, &Scripts::default(), &a.id).await)
@@ -240,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir, db_test_answer, DbProfileSaveArgs};
+    use super::{config_dir, db_test_answer, Cookapps, DbProfileSaveArgs};
 
     #[test]
     fn config_dir_is_the_apps_folder_under_the_users_config_dir() {
@@ -286,5 +287,25 @@ mod tests {
         let ok: serde_json::Value =
             serde_json::from_str(&db_test_answer(Ok("8.0.36".into())).unwrap()).unwrap();
         assert_eq!(ok, serde_json::json!({"ok": true, "version": "8.0.36"}));
+    }
+
+    #[test]
+    fn the_tools_that_run_a_script_or_change_a_connection_ask_for_a_check_each_time() {
+        let tools = Cookapps::tool_router().list_all();
+        let hints = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.annotations.clone())
+                .unwrap_or_else(|| panic!("{name} has no annotations"))
+        };
+        let save = hints("db_profile_save");
+        assert_eq!(save.destructive_hint, Some(true));
+        assert_eq!(save.idempotent_hint, None);
+        assert_eq!(save.read_only_hint, None);
+        let test = hints("db_test");
+        assert_eq!(test.destructive_hint, Some(true));
+        assert_eq!(test.open_world_hint, Some(true));
+        assert_eq!(hints("db_profiles").read_only_hint, Some(true));
     }
 }

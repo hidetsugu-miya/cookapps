@@ -278,7 +278,7 @@ async fn supervise(
         .iter()
         .cloned()
         .collect();
-    let _ = std::fs::remove_dir_all(&folder);
+    let _ = tokio::fs::remove_dir_all(&folder).await;
     let _ = done.send(Some(Exit {
         code: status.and_then(|s| s.code()),
         tail: lines,
@@ -288,6 +288,8 @@ async fn supervise(
 /// A script that is running and ready.
 pub struct Script {
     pub port: u16,
+    /// The process group of the script (0 when its id could not be read: no signal is sent then).
+    pgid: i32,
     done: watch::Receiver<Option<Exit>>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
@@ -316,6 +318,16 @@ impl Script {
     }
 }
 
+impl Drop for Script {
+    /// A `Script` that is dropped while its group may still run (the runtime ended before `supervise` could end it, as when `cookapps-mcp` ends while `db_test` waits) kills the group,
+    /// because `kill_on_drop` reaches only the first process and a child of the script (a `session-manager-plugin`, for instance) would stay. After `supervise` has ended the group (`done` is set) nothing is sent, as the id may be another process's by then.
+    fn drop(&mut self) {
+        if self.pgid > 0 && self.done.borrow().is_none() {
+            signal_group(self.pgid, KILL);
+        }
+    }
+}
+
 /// Starts the script `body` with a port that is free now, written in a folder of `dir`, and answers when it is ready, or why it is not.
 pub async fn start(dir: &Path, body: &str, timing: Timing) -> Result<Script, String> {
     start_on(dir, body, pick_port()?, timing).await
@@ -323,8 +335,14 @@ pub async fn start(dir: &Path, body: &str, timing: Timing) -> Result<Script, Str
 
 /// `start` with the port given.
 pub async fn start_on(dir: &Path, body: &str, port: u16, timing: Timing) -> Result<Script, String> {
-    let folder =
-        make_folder(dir, body).map_err(|e| format!("スクリプトのファイルを作れません: {e}"))?;
+    let folder = {
+        let (dir, body) = (dir.to_owned(), body.to_owned());
+        tokio::task::spawn_blocking(move || make_folder(&dir, &body))
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|made| made)
+            .map_err(|e| format!("スクリプトのファイルを作れません: {e}"))?
+    };
     let mut command = Command::new(folder.join(SCRIPT_FILE));
     command
         .current_dir(&folder)
@@ -338,7 +356,7 @@ pub async fn start_on(dir: &Path, body: &str, port: u16, timing: Timing) -> Resu
     let mut child = match spawn(&mut command).await {
         Ok(child) => child,
         Err(e) => {
-            let _ = std::fs::remove_dir_all(&folder);
+            let _ = tokio::fs::remove_dir_all(&folder).await;
             return Err(format!("スクリプトを起動できません: {e}"));
         }
     };
@@ -362,6 +380,7 @@ pub async fn start_on(dir: &Path, body: &str, port: u16, timing: Timing) -> Resu
     ));
     let mut script = Script {
         port,
+        pgid,
         done,
         stop: Some(stop),
         task,
@@ -740,6 +759,29 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(10));
             assert!(gone(pid).await);
             assert_eq!(dir.leftovers(), 0);
+        }
+
+        #[test]
+        fn a_script_dropped_after_its_runtime_ended_takes_its_children_with_it() {
+            let dir = Dir::new("drop");
+            let (_listener, port) = listening();
+            let pid_file = dir.file("pid");
+            let body = format!("sleep 300 &\necho $! > '{}'\nwait", pid_file.display());
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let script = runtime
+                .block_on(start_on(&dir.0, &body, port, quick(10_000)))
+                .unwrap();
+            let child = runtime.block_on(read_pid(&pid_file));
+            assert!(alive(child));
+            // The runtime ends with the task that would end the group: only the first process dies with it (`kill_on_drop`).
+            drop(runtime);
+            assert!(alive(child), "the child of the script outlives the runtime");
+            drop(script);
+            let ended = (0..100).any(|_| {
+                std::thread::sleep(Duration::from_millis(50));
+                !alive(child)
+            });
+            assert!(ended, "the Drop of the script kills its group");
         }
 
         #[tokio::test]

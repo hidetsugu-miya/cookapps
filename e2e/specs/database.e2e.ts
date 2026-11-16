@@ -14,6 +14,8 @@ async function openDatabase(profiles = [direct, tunnel], fixtures: Record<string
 }
 
 const names = () => textsOf("#database-side-feed .database-btn");
+// The plus pressed in the page: the driver's click focuses the element it clicked after the handler ran, which would take the focus from the first field that the edit pane gives it (a real press focuses the plus before the handler runs).
+const pressAdd = () => browser.execute((once) => window.__e2e_once__(once) && document.getElementById("database-add")!.click(), onceId());
 // The page's own right button on the row of `id`, at `at` (the pointer; the middle of the row when none).
 const rightPress = (id: string, at?: { x: number; y: number }) =>
   browser.execute(
@@ -114,7 +116,7 @@ describe("database", () => {
 describe("database: register", () => {
   it("takes the place of the work pane from the plus, with the fields of a connection, the way 直接 selected and the port 3306", async () => {
     await openDatabase([]);
-    await $("#database-add").click();
+    await pressAdd();
     await expect($("#database-edit")).toBeDisplayed();
     await expect($("#database-form")).toBeDisplayed();
     await expect($("#database-pane")).not.toBeDisplayed();
@@ -259,7 +261,7 @@ describe("database: register", () => {
     await expect($("#database-form")).not.toExist();
     await expect($("#database-edit")).not.toBeDisplayed();
     await expect($("#database-pane")).toBeDisplayed();
-    await $("#database-add").click();
+    await pressAdd();
     await expect(field("name")).toHaveValue("");
     await browser.keys("Escape");
     await expect($("#database-form")).not.toExist();

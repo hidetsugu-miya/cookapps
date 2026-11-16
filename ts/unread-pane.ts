@@ -144,14 +144,14 @@ function slackItem(m: TimelineMessage): Item {
 export function drawUnreadPane() {
   if (!isOpen()) return;
   $("unread-pane-title").textContent = `未読 ${count}`;
+  const messages = unreadMessages();
   const items = [
     ...[...rows].filter(([key, r]) => r.t.unread && !pending.has(key)).map(([, r]) => mailItem(r.t)),
-    ...unreadMessages().map(slackItem),
+    ...messages.map(slackItem),
   ].sort((a, b) => b.ms - a.ms);
   const key = JSON.stringify(items.map((i) => i.key));
   if (key === drawnKey) return;
   drawnKey = key;
-  const messages = unreadMessages();
   $("unread-pane-list").replaceChildren(...items.map((i) => i.node()));
   // The icons not fetched yet come later and are painted onto the avatars in the page.
   loadIcons(messages.map((m) => m.iconUrl));
@@ -164,10 +164,10 @@ export function initUnreadPane() {
   });
   $("footer-bell").onclick = toggle;
   $("unread-pane-close").onclick = close;
-  // A press outside the pane (the bell excepted, which toggles it) closes it.
+  // A press outside the pane (the bell excepted, which toggles it, and the notice of a trash or an archive from a row, whose 元に戻す is pressed with the pane open) closes it.
   document.addEventListener("mousedown", (e) => {
-    const target = e.target as Node;
-    if (isOpen() && !$("unread-pane").contains(target) && !$("footer-bell").contains(target)) close();
+    const target = e.target as Element;
+    if (isOpen() && !$("unread-pane").contains(target) && !$("footer-bell").contains(target) && !target.closest(".toast")) close();
   });
   // The inbox's unread rows change with every load, sync, removal and read toggle.
   new MutationObserver(drawUnreadPane).observe($("unread-threads"), { childList: true });

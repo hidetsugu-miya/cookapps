@@ -15,7 +15,7 @@ pub mod session;
 pub mod sql;
 pub mod structure;
 
-use std::{path::Path, sync::Mutex};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -203,11 +203,60 @@ fn new_id() -> Result<String, String> {
 /// Where the passwords are kept, by the id of a profile.
 pub trait PasswordStore {
     fn exists(&self, id: &str) -> Result<bool, String>;
+    /// `exists` for a list that is read again and again: `login` (`login_key`) is what the password was saved for, so a store that remembers the answer may keep it while the login is the same. The default asks every time.
+    fn exists_for(&self, id: &str, _login: &str) -> Result<bool, String> {
+        self.exists(id)
+    }
     /// The saved password; none when there is none.
     fn get(&self, id: &str) -> Result<Option<String>, String>;
     fn set(&self, id: &str, password: &str) -> Result<(), String>;
     /// A missing password counts as deleted.
     fn delete(&self, id: &str) -> Result<(), String>;
+}
+
+/// What the keychain said about each password, with the login it was said for (`login_key`), so that the list, which the edit pane reads every 2 seconds, does not read every password out of the keychain each time (#721 review).
+/// A password is written and deleted here (`Keychain::set` and `delete` change the answer), and by `save_without_password` of `cookapps-mcp`, which deletes it only when the login of the connection changes:
+/// the login of the file then differs from the one remembered, and the keychain is read again.
+#[derive(Default)]
+struct Presence(Mutex<HashMap<String, (String, bool)>>);
+
+impl Presence {
+    /// The remembered answer for `id` when it was got for `login`; else `read` is asked and its answer is remembered.
+    fn get(
+        &self,
+        id: &str,
+        login: &str,
+        read: impl FnOnce() -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        {
+            let seen = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((was, present)) = seen.get(id) {
+                if was == login {
+                    return Ok(*present);
+                }
+            }
+        }
+        let present = read()?;
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_owned(), (login.to_owned(), present));
+        Ok(present)
+    }
+
+    fn forget(&self, id: &str) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    }
+}
+
+static PRESENCE: std::sync::LazyLock<Presence> = std::sync::LazyLock::new(Presence::default);
+
+/// What a password was saved for: the fields of `same_login`.
+fn login_key(profile: &DatabaseProfile) -> String {
+    format!(
+        "{}\0{}\0{}\0{}",
+        profile.username, profile.script, profile.db_host, profile.db_port
+    )
 }
 
 /// The OS keychain.
@@ -226,6 +275,10 @@ impl PasswordStore for Keychain {
         }
     }
 
+    fn exists_for(&self, id: &str, login: &str) -> Result<bool, String> {
+        PRESENCE.get(id, login, || self.exists(id))
+    }
+
     fn get(&self, id: &str) -> Result<Option<String>, String> {
         match password_entry(id)?.get_password() {
             Ok(password) => Ok(Some(password)),
@@ -235,12 +288,14 @@ impl PasswordStore for Keychain {
     }
 
     fn set(&self, id: &str, password: &str) -> Result<(), String> {
+        PRESENCE.forget(id);
         password_entry(id)?
             .set_password(password)
             .map_err(|e| format!("資格情報の保存に失敗: {e}"))
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
+        PRESENCE.forget(id);
         delete_entry(&password_entry(id)?)
     }
 }
@@ -250,7 +305,7 @@ fn view(
     profile: DatabaseProfile,
 ) -> Result<DatabaseProfileView, String> {
     Ok(DatabaseProfileView {
-        password_saved: passwords.exists(&profile.id)?,
+        password_saved: passwords.exists_for(&profile.id, &login_key(&profile))?,
         profile,
     })
 }
@@ -286,13 +341,25 @@ pub fn save(
     view(passwords, saved)
 }
 
-/// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never handles its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
+/// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
+/// The saved password is kept only while the connection logs in as the saved one does (`same_login`); an edit of the user, the script, or the host and the port of a connection with no script deletes it first,
+/// so that a test of the connection never sends it to another place than the one it was saved for (D-2). The input is checked before the deletion, so a refused save deletes nothing.
 pub fn save_without_password(
     dir: &Path,
     passwords: &impl PasswordStore,
     profile: DatabaseProfile,
 ) -> Result<DatabaseProfileView, String> {
     let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    let profiles = load(dir)?;
+    let checked = check(profile.clone(), &profiles)?;
+    if let Some(saved) = profiles
+        .iter()
+        .find(|p| !checked.id.is_empty() && p.id == checked.id)
+    {
+        if !same_login(saved, &checked) {
+            passwords.delete(&checked.id)?;
+        }
+    }
     save(dir, passwords, profile, None)
 }
 
@@ -1413,19 +1480,155 @@ mod tests {
         assert_eq!(passwords.get(&first.profile.id), None);
         passwords.set(&first.profile.id, "secret").unwrap();
         let edited = DatabaseProfile {
-            username: "other".to_owned(),
+            name: "b".to_owned(),
             ..first.profile.clone()
         };
         let second = save_without_password(&dir, &passwords, edited).unwrap();
         assert!(second.password_saved);
-        assert_eq!(second.profile.username, "other");
+        assert_eq!(second.profile.name, "b");
         assert_eq!(passwords.get(&first.profile.id).as_deref(), Some("secret"));
         assert_eq!(list(&dir, &passwords).unwrap(), vec![second]);
         // Only the checks of a save: a name another connection has is refused, and nothing is written.
-        let taken = save_without_password(&dir, &passwords, direct("a")).unwrap_err();
-        assert_eq!(taken, "同じ名前の接続があります: a");
+        let taken = save_without_password(&dir, &passwords, direct("b")).unwrap_err();
+        assert_eq!(taken, "同じ名前の接続があります: b");
         assert_eq!(list(&dir, &passwords).unwrap().len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A saved password and the connection that holds it, saved without a password.
+    fn saved_with_password(
+        name: &str,
+        profile: DatabaseProfile,
+    ) -> (PathBuf, Memory, DatabaseProfileView) {
+        let dir = temp_dir(name);
+        let passwords = Memory::default();
+        let saved = save_without_password(&dir, &passwords, profile).unwrap();
+        passwords.set(&saved.profile.id, "secret").unwrap();
+        (dir, passwords, saved)
+    }
+
+    #[test]
+    fn a_save_without_a_password_deletes_the_saved_one_when_the_login_goes_elsewhere() {
+        type Edit = fn(&mut DatabaseProfile);
+        let edits: [(&str, Edit); 4] = [
+            ("user", |p| p.username = "other".to_owned()),
+            ("host", |p| p.db_host = "db.elsewhere.example".to_owned()),
+            ("port", |p| p.db_port = 3307),
+            ("script", |p| p.script = "echo hi".to_owned()),
+        ];
+        for (what, edit) in edits {
+            let (dir, passwords, saved) =
+                saved_with_password(&format!("mcp-away-{what}"), direct("a"));
+            let mut moved = saved.profile.clone();
+            edit(&mut moved);
+            let after = save_without_password(&dir, &passwords, moved).unwrap();
+            assert!(!after.password_saved, "{what}");
+            assert_eq!(passwords.get(&saved.profile.id), None, "{what}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_save_without_a_password_of_a_script_connection_deletes_it_for_another_script_only() {
+        let (dir, passwords, saved) = saved_with_password("mcp-away-script", scripted("a"));
+        // The host and the port of a connection with a script are not where it logs in.
+        let same = DatabaseProfile {
+            name: "renamed".to_owned(),
+            db_host: "ignored.example".to_owned(),
+            db_port: 9,
+            ..saved.profile.clone()
+        };
+        assert!(
+            save_without_password(&dir, &passwords, same)
+                .unwrap()
+                .password_saved
+        );
+        let other = DatabaseProfile {
+            script: "exec other-forward".to_owned(),
+            ..saved.profile.clone()
+        };
+        assert!(
+            !save_without_password(&dir, &passwords, other)
+                .unwrap()
+                .password_saved
+        );
+        assert_eq!(passwords.get(&saved.profile.id), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_refused_save_without_a_password_deletes_nothing() {
+        let (dir, passwords, saved) = saved_with_password("mcp-away-refused", direct("a"));
+        let refused = DatabaseProfile {
+            username: String::new(),
+            ..saved.profile.clone()
+        };
+        assert_eq!(
+            save_without_password(&dir, &passwords, refused).unwrap_err(),
+            "ユーザー名を入力してください"
+        );
+        assert_eq!(passwords.get(&saved.profile.id).as_deref(), Some("secret"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_keychain_is_asked_again_only_when_the_login_changed() {
+        let presence = Presence::default();
+        let reads = std::cell::Cell::new(0);
+        let reads = &reads;
+        let read = |present: bool| {
+            move || {
+                reads.set(reads.get() + 1);
+                Ok(present)
+            }
+        };
+        assert!(presence.get("a", "login-1", read(true)).unwrap());
+        assert!(presence.get("a", "login-1", read(false)).unwrap());
+        assert_eq!(reads.get(), 1);
+        // The login changed (cookapps-mcp deleted the password): read again.
+        assert!(!presence.get("a", "login-2", read(false)).unwrap());
+        assert_eq!(reads.get(), 2);
+        // Another id has its own answer, and a forgotten one is read again.
+        assert!(presence.get("b", "login-2", read(true)).unwrap());
+        presence.forget("b");
+        assert!(!presence.get("b", "login-2", read(false)).unwrap());
+        assert_eq!(reads.get(), 4);
+        // A read that fails is not remembered.
+        assert!(presence.get("c", "x", || Err("locked".to_owned())).is_err());
+        assert!(presence.get("c", "x", read(true)).unwrap());
+        assert_eq!(reads.get(), 5);
+    }
+
+    #[test]
+    fn the_login_key_follows_the_fields_that_decide_where_a_password_goes() {
+        let a = direct("a");
+        assert_eq!(
+            login_key(&a),
+            login_key(&DatabaseProfile {
+                name: "z".to_owned(),
+                ..a.clone()
+            })
+        );
+        for other in [
+            DatabaseProfile {
+                username: "x".to_owned(),
+                ..a.clone()
+            },
+            DatabaseProfile {
+                script: "x".to_owned(),
+                ..a.clone()
+            },
+            DatabaseProfile {
+                db_host: "x".to_owned(),
+                ..a.clone()
+            },
+            DatabaseProfile {
+                db_port: 1,
+                ..a.clone()
+            },
+        ] {
+            assert_ne!(login_key(&a), login_key(&other));
+        }
     }
 
     #[tokio::test]
