@@ -359,6 +359,11 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
 // The unread messages held, for the pane of the footer (A-35).
 export const unreadMessages = () => (timeline?.messages ?? []).filter((m) => m.unread);
 
+// What the buttons of a row of the pane of the footer do (A-35): the same as the popup's "既読にする" and "ウォッチ" (S-17), and whether "既読にする" changes something.
+export const readableMessage = (m: TimelineMessage) => readable(m);
+export const readUnreadMessage = (m: TimelineMessage) => readOne(m);
+export const watchUnreadMessage = (m: TimelineMessage) => watchThread(m);
+
 // What the pane of the footer does for a message (A-35): the same as the popup's "スレッドを開く" (S-17), and as pressing the row, which also closes the popup.
 export function openUnreadMessage(m: TimelineMessage) {
   closeSlackChannel();

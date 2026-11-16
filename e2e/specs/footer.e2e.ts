@@ -1,4 +1,4 @@
-import { account, boot, callsOf, claudeReady, inbox, mock, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace } from "../support";
+import { account, boot, callsOf, claudeReady, holds, inbox, mock, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace } from "../support";
 
 // `unread` unread messages of the Slack list, each in a channel of its own.
 const heap = (unread: number) => Array.from({ length: unread }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` }));
@@ -178,6 +178,131 @@ describe("footer", () => {
       expect(await lines()).toEqual(["Mail third"]);
       await expect($("#unread-pane-title")).toHaveText("未読 1");
       expect(await textsOf("#unread-pane-list li b")).toEqual(["Alice"]);
+    });
+
+    describe("the buttons of a row", () => {
+      // Mail newest (t1, 2 minutes), Slack A (4, channel C1), Mail third (t2, 6), Slack B (8, channel C2): each Slack message has a channel of its own, so that reading one reads no other.
+      const slackIn = (minutes: number, channel: string, name: string, text: string) => timelineMessage(slackTs(minutes), name, "dev", text, { unread: true, channel });
+      const slackA = () => slackIn(4, "C1", "Slack A", "text A");
+      const slackB = () => slackIn(8, "C2", "Slack B", "text B");
+      const lackingWrite = [{ teamId: workspace.teamId, team: workspace.team, scopes: ["channels:write"] }];
+      const rowAt = (i: number) => $$("#unread-pane-list li")[i];
+      const labelsOf = (i: number) => browser.execute((n) => [...document.querySelectorAll("#unread-pane-list li")[n].querySelectorAll(".unread-actions .icon-btn")].map((b) => b.getAttribute("aria-label")), i);
+      const visibility = (i: number) => browser.execute((n) => getComputedStyle(document.querySelectorAll("#unread-pane-list li")[n].querySelector(".unread-actions .icon-btn")!).visibility, i);
+      const pressed = async (i: number, label: string) => {
+        await rowAt(i).moveTo();
+        await rowAt(i).$(`button[aria-label="${label}"]`).click();
+      };
+      const start = async (slack = timeline([slackA(), slackB()])) => {
+        await panes(slack);
+        await open();
+        await waitForCount("#unread-pane-list li", 4);
+      };
+
+      it("shows a mail's trash and archive and a Slack message's 既読にする and ウォッチ, only while the pointer is on the row", async () => {
+        await start();
+        expect(await labelsOf(0)).toEqual(["ゴミ箱へ移動", "アーカイブ"]);
+        expect(await labelsOf(1)).toEqual(["既読にする", "ウォッチ"]);
+        expect(await visibility(0)).toBe("hidden");
+        await rowAt(0).moveTo();
+        expect(await visibility(0)).toBe("visible");
+        expect(await visibility(1)).toBe("hidden");
+      });
+
+      it("draws no 既読にする for a Slack message when the token cannot write the position, as the popup has none", async () => {
+        await start(timeline([slackA(), slackB()], { missing: lackingWrite }));
+        expect(await labelsOf(1)).toEqual(["ウォッチ"]);
+        expect(await labelsOf(3)).toEqual(["ウォッチ"]);
+        expect(await labelsOf(0)).toEqual(["ゴミ箱へ移動", "アーカイブ"]);
+      });
+
+      it("trashes a mail with the list's command: the row and the count go at once, no thread opens, and 元に戻す brings it back through untrash", async () => {
+        await start();
+        const trash = await mock("trash", true);
+        const untrash = await mock("untrash", true);
+        await pressed(0, "ゴミ箱へ移動");
+        expect(await waitForCalls(trash)).toEqual([{ account, id: "t1" }]);
+        await waitForCount("#unread-pane-list li", 3);
+        expect(await lines()).toEqual(["text A", "Mail third", "text B"]);
+        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await waitForText("#footer-bell .footer-count", "3");
+        await expect($("#unread-pane")).toBeDisplayed();
+        await expect($("#thread")).not.toBeDisplayed();
+        await expect($(".toast")).toHaveText(expect.stringContaining("ゴミ箱へ移動しました"));
+        await expect($(".toast button")).toHaveText("元に戻す");
+        await $(".toast button").click();
+        expect(await waitForCalls(untrash)).toEqual([{ account, id: "t1" }]);
+        await waitForCount("#unread-pane-list li", 4);
+        expect((await lines())[0]).toBe("Mail newest");
+        await expect($("#unread-pane-title")).toHaveText("未読 4");
+      });
+
+      it("archives a mail with the list's command, and offers 元に戻す", async () => {
+        await start();
+        const archive = await mock("archive", true);
+        await pressed(2, "アーカイブ");
+        expect(await waitForCalls(archive)).toEqual([{ account, id: "t2" }]);
+        await waitForCount("#unread-pane-list li", 3);
+        expect(await lines()).toEqual(["Mail newest", "text A", "text B"]);
+        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await waitForText("#footer-bell .footer-count", "3");
+        await expect($(".toast")).toHaveText(expect.stringContaining("アーカイブしました"));
+        await expect($(".toast button")).toHaveText("元に戻す");
+      });
+
+      it("puts the mail back in the pane and the count, and says so, when trash fails", async () => {
+        await start();
+        await mock("trash", rejects("失敗しました"));
+        await pressed(0, "ゴミ箱へ移動");
+        await waitForCalls("trash");
+        await expect($("#error")).toHaveText(expect.stringContaining("失敗しました"));
+        await waitForCount("#unread-pane-list li", 4);
+        expect((await lines())[0]).toBe("Mail newest");
+        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await waitForText("#footer-bell .footer-count", "4");
+      });
+
+      it("reads a Slack message with 既読にする as the popup's check does: slack_mark_read is called, and the row and the count go without opening a thread", async () => {
+        await start();
+        const mark = await mock("slack_mark_read", true);
+        await mock("slack_timeline", timeline([slackB()]));
+        await pressed(1, "既読にする");
+        expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
+        await waitForCount("#unread-pane-list li", 3);
+        expect(await lines()).toEqual(["Mail newest", "Mail third", "text B"]);
+        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await waitForText("#footer-bell .footer-count", "3");
+        await expect($("#unread-pane")).toBeDisplayed();
+        await expect($("#slack-thread")).not.toBeDisplayed();
+      });
+
+      it("puts the Slack message back, with the list made again from Rust's cache, and says so, when slack_mark_read fails", async () => {
+        await start();
+        await mock("slack_mark_read", rejects("失敗しました"));
+        const fresh = await mock("slack_timeline", timeline([slackA(), slackB()]));
+        await pressed(1, "既読にする");
+        await expect($("#error")).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
+        expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
+        await waitForCount("#unread-pane-list li", 4);
+        await expect($("#unread-pane-title")).toHaveText("未読 4");
+      });
+
+      it("watches the thread of a Slack message with ウォッチ as the popup does: slack_watch is called with the thread's ts, and the row and the count go at once without opening a thread", async () => {
+        await start();
+        const watch = await mock("slack_watch", holds);
+        const mark = await mock("slack_mark_read", true);
+        await mock("slack_timeline", timeline([slackB()]));
+        await pressed(1, "ウォッチ");
+        expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
+        await waitForCount("#unread-pane-list li", 3);
+        expect(await lines()).toEqual(["Mail newest", "Mail third", "text B"]);
+        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await expect($("#slack-thread")).not.toBeDisplayed();
+        expect(await callsOf(mark)).toEqual([]);
+        await release(watch, true);
+        await waitForCalls("slack_timeline");
+        await expect($("#unread-pane-title")).toHaveText("未読 3");
+      });
     });
   });
 });

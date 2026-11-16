@@ -75,7 +75,11 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .unread-channel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-time { flex: none; margin-left: auto; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--fs)); color: var(--muted); }
-.unread-item .text-btn { grid-column: 3; justify-self: end; height: 28px; margin-top: 6px; }
+.unread-actions { grid-column: 3; display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 6px; }
+.unread-actions .text-btn { order: 1; height: 28px; }
+.unread-actions .icon-btn { width: 28px; height: 28px; visibility: hidden; }
+.unread-actions .icon-btn svg { width: 16px; height: 16px; }
+.unread-item:hover .unread-actions .icon-btn, .unread-item:focus-within .unread-actions .icon-btn { visibility: visible; }
 .footer-count { box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--dot); color: var(--on-accent); font-size: calc(11px * var(--fs)); font-weight: bold; line-height: 16px; text-align: center; }
 header { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
 h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

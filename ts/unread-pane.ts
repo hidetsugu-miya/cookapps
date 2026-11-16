@@ -1,15 +1,17 @@
 // The pane of the unread (A-35): the count in the footer opens it from the right, over the screen and down to the footer, and it lists the unread threads of the inbox and the unread messages of the Slack list, mixed, the newest first.
-// A row says which of the two it is by its icon, then the sender's avatar and name, the channel (Slack), the time and one line (the subject, or the text). Its button does what pressing the row of the inbox or of the Slack list does.
+// A row says which of the two it is by its icon, then the sender's avatar and name, the channel (Slack), the time and one line (the subject, or the text). Its text button does what pressing the row of the inbox or of the Slack list does.
+// While the pointer is on a row or the focus is in it, its icon buttons show: a mail's trash and archive (M-3, M-4: the list's `removeRow`), a Slack message's "既読にする" (only where it changes something) and "ウォッチ" (what the popups of S-17 do). The row goes from the pane and the count of the footer falls.
 // It draws what the inbox and the Slack list hold, with no call of its own, and it is drawn again where either changes (the inbox's unread rows, `drawUnreadPane` of slack-list.ts and the count of the footer). Everything is drawn as text.
 import type { ThreadItem } from "./bindings/ThreadItem";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { $, el, span, tag } from "./dom.js";
 import { watchFooterCount } from "./footer.js";
 import { avatarColor, formatDate, initials } from "./format.js";
-import { MAIL_SVG, SLACK_SVG } from "./icons.js";
+import { BOOKMARK_SVG, CHECK_SVG, MAIL_SVG, SLACK_SVG, TRASH_SVG } from "./icons.js";
+import { removeRow } from "./inbox.js";
 import { pending, rowKey, rows } from "./inbox-rows.js";
 import { setScreen } from "./nav.js";
-import { openUnreadMessage, unreadMessages } from "./slack-list.js";
+import { openUnreadMessage, readableMessage, readUnreadMessage, unreadMessages, watchUnreadMessage } from "./slack-list.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
 import { openThread } from "./thread.js";
 
@@ -36,7 +38,24 @@ function toggle() {
 // One unread item as the pane draws it, in the order of `ms`.
 type Item = { ms: number; key: string; node: () => HTMLLIElement };
 
-function line(avatar: HTMLElement, who: HTMLElement, text: string, icon: string, label: string, open: () => void) {
+// An icon button of a row: its press does `run` and does not reach the row, which would open the thread. The second click of a double click, which lands on the row that moved under the pointer, does nothing.
+const DOUBLE_CLICK_MS = 500;
+let lastActionAt = 0;
+function iconButton(label: string, svg: string, run: () => void) {
+  const button = tag("button", "icon-btn");
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  button.innerHTML = svg;
+  button.onclick = (e) => {
+    e.stopPropagation();
+    if (e.detail > 1 && Date.now() - lastActionAt < DOUBLE_CLICK_MS) return;
+    lastActionAt = Date.now();
+    run();
+  };
+  return button;
+}
+
+function line(avatar: HTMLElement, who: HTMLElement, text: string, icon: string, label: string, open: () => void, actions: HTMLButtonElement[]) {
   const li = tag("li", "unread-item");
   const kind = span("unread-kind", "");
   kind.innerHTML = icon;
@@ -44,8 +63,11 @@ function line(avatar: HTMLElement, who: HTMLElement, text: string, icon: string,
   body.append(who, span("unread-line", text));
   const button = tag("button", "text-btn", label);
   button.type = "button";
-  li.append(kind, avatar, body, button);
-  // The button's press reaches the row, so the row alone opens it, once.
+  // The text button comes first in the document, so that the focus reaches the row before its icon buttons, which show only while the row has the pointer or the focus.
+  const buttons = el("unread-actions");
+  buttons.append(button, ...actions);
+  li.append(kind, avatar, body, buttons);
+  // The text button's press reaches the row, so the row alone opens it, once.
   li.onclick = () => {
     close();
     open();
@@ -65,12 +87,24 @@ function mailItem(t: ThreadItem): Item {
       avatar.style.background = avatarColor(name);
       const who = el("unread-who");
       who.append(tag("b", "", name), span("unread-time", formatDate(ms)));
-      const li = line(avatar, who, subject, MAIL_SVG, "詳細を開く", () => {
-        // The row the list holds now, which a sync may have made again since the pane was drawn.
+      // The row the list holds now, which a sync may have made again since the pane was drawn: the list's own removal takes it out, with the notice and the way back on a failure.
+      const remove = (command: "trash" | "archive") => () => {
         const now = rows.get(rowKey(t));
-        setScreen("mail");
-        openThread(now?.t ?? t, now?.li ?? null);
-      });
+        if (now) removeRow(command, t.account, t.id, now.li);
+      };
+      const li = line(
+        avatar,
+        who,
+        subject,
+        MAIL_SVG,
+        "詳細を開く",
+        () => {
+          const now = rows.get(rowKey(t));
+          setScreen("mail");
+          openThread(now?.t ?? t, now?.li ?? null);
+        },
+        [iconButton("ゴミ箱へ移動", TRASH_SVG, remove("trash")), iconButton("アーカイブ", CHECK_SVG, remove("archive"))],
+      );
       li.dataset.kind = "mail";
       return li;
     },
@@ -83,9 +117,11 @@ const lineOf = (m: TimelineMessage) => m.text.trim() || (m.hasFiles ? "（添付
 function slackItem(m: TimelineMessage): Item {
   const ms = slackMs(m.ts);
   const text = lineOf(m);
+  // Pressing the check changes nothing for a message whose channel the token cannot write the position of (S-17): the row has no check then.
+  const readable = readableMessage(m);
   return {
     ms,
-    key: JSON.stringify(["slack", m.teamId, m.channel, m.ts, m.name, m.channelName, m.iconUrl, text, m.team]),
+    key: JSON.stringify(["slack", m.teamId, m.channel, m.ts, m.name, m.channelName, m.iconUrl, text, m.team, readable]),
     node: () => {
       const avatar = tag("span", "avatar feed-avatar");
       decorateAvatar(avatar, m.name, m.iconUrl);
@@ -95,7 +131,9 @@ function slackItem(m: TimelineMessage): Item {
       avatar.append(dot);
       const who = el("unread-who");
       who.append(tag("b", "", m.name), span("unread-channel", `#${m.channelName}`), span("unread-time", formatDate(ms)));
-      const li = line(avatar, who, text, SLACK_SVG, "スレッドを開く", () => openUnreadMessage(m));
+      const actions = [iconButton("ウォッチ", BOOKMARK_SVG, () => watchUnreadMessage(m))];
+      if (readable) actions.unshift(iconButton("既読にする", CHECK_SVG, () => readUnreadMessage(m)));
+      const li = line(avatar, who, text, SLACK_SVG, "スレッドを開く", () => openUnreadMessage(m), actions);
       li.dataset.kind = "slack";
       return li;
     },
