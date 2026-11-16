@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.81.2
+
+A-37: the orchestrator can start children in a saved Orca environment as well as on this Mac (#809, #810, #811). Its new tool `formation_environments` lists this Mac and each saved environment with their repositories, and `formation_launch` and `formation_plan` take the environment with the repository, refusing a repository that the environment does not have and naming the ones it has. Before it starts or plans a child, the orchestrator checks there where the project you named is, and asks you when it is in no environment or in more than one. The state of each child and its terminal on the screen are read from the Orca of its environment; one environment that cannot be read leaves its children as working and the others as read. A child of a saved environment is closed only after that environment's Orca has confirmed that its worktree has no change, no untracked file and no commit missing from its upstream, and a child whose environment was removed from Orca is taken off the list without deleting anything.
+
 ## v0.81.1
 
 A-37: the orchestration mode is two panes, the orchestrator at the left and the flow at the right, half and half (#801, #803). Until the orchestrator has recorded a child (a planned one too), the orchestrator alone takes the width. The flow pane has the tree above, with one branch from the orchestrator's card to a frame that holds the children's cards side by side, and the terminal of the selected child below. Pressing a child's card selects it and gives its terminal the keys, in place of the tabs of the middle column, which is gone, and so is the button that closed and opened the flow pane. 「自動で追う」 is at the right end of the flow's heading, and brings the card it moves to into view.
