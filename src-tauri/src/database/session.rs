@@ -21,6 +21,7 @@ use super::{
     script::Scripts,
     sql::{self, DatabaseSqlResult},
     structure::{self, DatabaseStructure},
+    Login,
 };
 
 /// One query on an open session. A query that is past it leaves the stream in an unknown state, so the session is closed.
@@ -109,6 +110,8 @@ fn to_table((name, engine, rows, data, index): TableRow) -> DatabaseTable {
 }
 
 struct Session {
+    /// The login the session was opened with (not the saved file's, which `cookapps-mcp` may change meanwhile): what the script of the session listens for.
+    login: Login,
     /// The script to end with the session; none when the connection goes straight to its host.
     script: Option<u64>,
     /// None once closed. A query holds the lock for its whole run, so two queries never share the stream.
@@ -131,6 +134,12 @@ impl Sessions {
         self.open.lock().await.contains_key(id)
     }
 
+    /// The login the open session of `id` was opened with; none when it is not open.
+    pub async fn opened_login(&self, scripts: &Scripts, id: &str) -> Option<Login> {
+        self.reap(scripts).await;
+        self.open.lock().await.get(id).map(|s| s.login.clone())
+    }
+
     /// The ids of the connections that are open, in order.
     pub async fn ids(&self, scripts: &Scripts) -> Vec<String> {
         self.reap(scripts).await;
@@ -145,6 +154,7 @@ impl Sessions {
         scripts: &Scripts,
         id: &str,
         script: Option<u64>,
+        login: Login,
         connection: MySqlConnection,
     ) {
         let mut open = self.open.lock().await;
@@ -159,6 +169,7 @@ impl Sessions {
         open.insert(
             id.to_owned(),
             Arc::new(Session {
+                login,
                 script,
                 connection: Mutex::new(Some(connection)),
             }),
@@ -494,6 +505,7 @@ mod tests {
 
     fn empty_session() -> Arc<Session> {
         Arc::new(Session {
+            login: Login::default(),
             script: None,
             connection: Mutex::new(None),
         })
@@ -600,6 +612,7 @@ mod tests {
             sessions.open.lock().await.insert(
                 id.to_owned(),
                 Arc::new(Session {
+                    login: Login::default(),
                     script: Some(script),
                     connection: Mutex::new(None),
                 }),

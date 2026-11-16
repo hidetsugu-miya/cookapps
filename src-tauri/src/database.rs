@@ -323,13 +323,31 @@ pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<()
     store(dir, &profiles)
 }
 
+/// Whom a connection logs in as and where: the user, and the place, which is its script, its host and its port, with a script or without one. The name is not part of it.
+/// A session keeps the login it was opened with (`Sessions::opened_login`), and the saved password is the one for one login and for no other (`same_login`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Login {
+    username: String,
+    script: String,
+    db_host: String,
+    db_port: u32,
+}
+
+impl Login {
+    pub fn of(profile: &DatabaseProfile) -> Self {
+        Self {
+            username: profile.username.clone(),
+            script: profile.script.clone(),
+            db_host: profile.db_host.clone(),
+            db_port: profile.db_port,
+        }
+    }
+}
+
 /// Whether `typed` logs in as the same user at the same place as `saved`: the saved password is the one for that login and for no other.
 /// The place of a connection is its script, its host and its port, with a script or without one: any of them changed is another place.
 fn same_login(saved: &DatabaseProfile, typed: &DatabaseProfile) -> bool {
-    saved.username == typed.username
-        && saved.script == typed.script
-        && saved.db_host == typed.db_host
-        && saved.db_port == typed.db_port
+    Login::of(saved) == Login::of(typed)
 }
 
 /// The password a test of `profile` (already checked) logs in with: the one typed, else the one saved for its id, but only when the profile still logs in as the saved one does (`same_login`),
@@ -396,26 +414,23 @@ pub async fn test_connection(
     tested
 }
 
-/// How a test of `typed` reaches MySQL, given whether its connection is open in the app (`open`) and the connection as saved (`saved`).
+/// How a test of `typed` reaches MySQL, given the login its connection was opened with in the app (`opened`; none when it is not open).
 #[derive(Debug, PartialEq)]
 enum TestWay {
     /// Starts the script of the profile (when it has one) and ends it again.
     OwnScript,
-    /// The connection is open and logs in as the saved one does: its script already listens on the port, so the test logs in there and runs nothing.
+    /// The connection is open and logs in as the typed one does: its script already listens on the port, so the test logs in there and runs nothing.
     OpenWay,
 }
 
 /// The way a test of `typed` goes (D-2). An open connection holds the port of its script, so a test that started the script again would meet its own connection's script on that port.
+/// What is open is the session, not the saved file: `cookapps-mcp` may have saved another script, host or port since it was opened, and the saved file then says nothing of what listens.
 /// A typed connection with no script has no script to start, so it is tested as any other.
-fn test_way(
-    open: bool,
-    saved: Option<&DatabaseProfile>,
-    typed: &DatabaseProfile,
-) -> Result<TestWay, String> {
-    if !open {
+fn test_way(opened: Option<&Login>, typed: &DatabaseProfile) -> Result<TestWay, String> {
+    let Some(opened) = opened else {
         return Ok(TestWay::OwnScript);
-    }
-    if saved.is_some_and(|saved| same_login(saved, typed)) {
+    };
+    if *opened == Login::of(typed) {
         return Ok(TestWay::OpenWay);
     }
     if typed.script.is_empty() {
@@ -490,7 +505,9 @@ async fn open_session(
             return Err(e);
         }
     };
-    sessions.add(scripts, &profile.id, script, connection).await;
+    sessions
+        .add(scripts, &profile.id, script, Login::of(profile), connection)
+        .await;
     Ok(())
 }
 
@@ -538,7 +555,11 @@ pub async fn database_test(
 ) -> Result<String, String> {
     let dir = config_dir(&app)?;
     let profile = check(profile, &[])?;
-    let open = !profile.id.is_empty() && sessions.has(&scripts, &profile.id).await;
+    let opened = if profile.id.is_empty() {
+        None
+    } else {
+        sessions.opened_login(&scripts, &profile.id).await
+    };
     let tested = profile.clone();
     let (password, way) = tokio::task::spawn_blocking(move || {
         let saved = if profile.id.is_empty() {
@@ -546,13 +567,7 @@ pub async fn database_test(
         } else {
             load(&dir)?
         };
-        let way = test_way(
-            open,
-            saved
-                .iter()
-                .find(|p| !profile.id.is_empty() && p.id == profile.id),
-            &profile,
-        )?;
+        let way = test_way(opened.as_ref(), &profile)?;
         let password = test_password(&Keychain, &saved, &profile, password.as_deref())?;
         Ok::<_, String>((password, way))
     })
@@ -1550,23 +1565,22 @@ mod tests {
 
     #[test]
     fn a_test_of_an_open_connection_uses_its_open_way_or_is_refused() {
-        let saved = DatabaseProfile {
+        // What the session was opened with.
+        let opened_with = DatabaseProfile {
             id: "a".to_owned(),
             ..scripted("a")
         };
+        let opened = Login::of(&opened_with);
         // The name alone is not the login.
         let renamed = DatabaseProfile {
             name: "renamed".to_owned(),
-            ..saved.clone()
+            ..opened_with.clone()
         };
-        assert_eq!(test_way(true, Some(&saved), &renamed), Ok(TestWay::OpenWay));
-        // Not open: the script is started as before, and the saved one is not read.
-        assert_eq!(
-            test_way(false, Some(&saved), &saved),
-            Ok(TestWay::OwnScript)
-        );
-        assert_eq!(test_way(false, None, &saved), Ok(TestWay::OwnScript));
-        // Open, and the user, the script, the host or the port is not the saved one's: the script would meet the open connection's.
+        assert_eq!(test_way(Some(&opened), &renamed), Ok(TestWay::OpenWay));
+        // Not open: the script is started as before.
+        assert_eq!(test_way(None, &opened_with), Ok(TestWay::OwnScript));
+        // Open, and the user, the script, the host or the port is not the open one's: the script would meet the open connection's.
+        // This includes a file that `cookapps-mcp` saved after the session was opened, with the pane reading it and the test going out as typed (#720): the typed login is the saved one, and not the open one.
         let moved: [fn(&mut DatabaseProfile); 4] = [
             |p| p.username = "other".to_owned(),
             |p| p.script = "exec other-forward".to_owned(),
@@ -1574,19 +1588,19 @@ mod tests {
             |p| p.db_port = 3307,
         ];
         for edit in moved {
-            let mut typed = saved.clone();
+            let mut typed = opened_with.clone();
             edit(&mut typed);
             assert_eq!(
-                test_way(true, Some(&saved), &typed),
+                test_way(Some(&opened), &typed),
                 Err("この接続は開いています。切断してからテストしてください".to_owned())
             );
+            // The same typed login with no script has nothing to start, so the open connection is no obstacle.
+            let plain = DatabaseProfile {
+                script: String::new(),
+                ..typed
+            };
+            assert_eq!(test_way(Some(&opened), &plain), Ok(TestWay::OwnScript));
         }
-        // No script typed: nothing is started, so the open connection is no obstacle.
-        let plain = DatabaseProfile {
-            script: String::new(),
-            ..saved.clone()
-        };
-        assert_eq!(test_way(true, Some(&saved), &plain), Ok(TestWay::OwnScript));
     }
 
     #[cfg(unix)]
