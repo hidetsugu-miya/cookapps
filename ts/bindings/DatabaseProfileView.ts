@@ -9,14 +9,15 @@ export type DatabaseProfileView = { passwordSaved: boolean,
  */
 id: string, name: string, username: string, 
 /**
- * Whether the connection goes through an AWS Systems Manager port forward. When it does not, only the host and the port are used.
+ * The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets a free port as `COOKAPPS_PORT` and listens there.
+ * Empty when the connection goes straight to the host and the port. Old files have none (`default`).
  */
-useSsm: boolean, awsProfile: string, region: string, 
+script: string, 
 /**
- * The `Name` tag of the instance to forward through.
+ * The host of a connection with no script. A connection with a script does not use it: the script opens the way, so `check` leaves it empty.
  */
-bastionName: string, dbHost: string, 
+dbHost: string, 
 /**
- * A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese.
+ * A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese. 0 for a connection with a script.
  */
 dbPort: number, };

@@ -1,6 +1,6 @@
 // The database screen (D-1, D-3 to D-6): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure, SQL) of the table that was pressed.
-// This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
-// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
+// This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the edit pane (database-form.ts) only asks for the fields.
+// Rust holds the open connections (the session and its script); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
@@ -139,19 +139,21 @@ const draw = () => {
   drawDatabaseWork(workState(), workActions);
 };
 
-// Reads the connections from Rust (the file and the keychain are the only copy) and draws them.
-async function load() {
+// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the edit pane's, at an interval) shows no error.
+async function load(quiet = false): Promise<DatabaseProfileView[] | null> {
   const seq = ++loadSeq;
   try {
     const list = await invoke("database_profiles");
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq) return null;
     profiles = list;
     // A connection that is gone from the list has nothing open any more (Rust closed it with the delete).
     for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
     if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
     draw();
+    return list;
   } catch (e) {
-    if (seq === loadSeq) showError(e);
+    if (seq === loadSeq && !quiet) showError(e);
+    return null;
   }
 }
 
@@ -184,12 +186,12 @@ async function save(profile: DatabaseProfile, password: string) {
   if (profile.id !== "") await dropClosed();
   await load();
   if (failure === null) return;
-  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the popup would save it again as a new one. It closes, and the error is shown on the screen.
+  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and the error is shown on the screen.
   if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showError(failure);
   throw failure;
 }
 
-// The version that the server of the connection as typed answers; Rust opens the tunnel, logs in, reads it and closes the tunnel.
+// The version that the server of the connection as typed answers; Rust starts the script of the connection, logs in, reads it and ends the script.
 const test = (profile: DatabaseProfile, password: string) => invoke("database_test", { profile, password });
 
 async function remove(profile: DatabaseProfileView, anchor: Element) {
@@ -411,7 +413,7 @@ const actions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
-  edit: (profile) => openDatabaseForm(profile, save, test),
+  edit: (profile) => openDatabaseForm(profile, save, test, () => load(true)),
   disconnect: async (profile) => {
     connections.delete(profile.id);
     if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
@@ -436,7 +438,7 @@ export function showDatabase() {
 export function initDatabase() {
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
-  add.onclick = () => openDatabaseForm(null, save, test);
+  add.onclick = () => openDatabaseForm(null, save, test, () => load(true));
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
   initDatabaseTerminal();
 }

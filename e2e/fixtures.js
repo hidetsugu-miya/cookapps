@@ -54,7 +54,7 @@ const answers = {
   todoist_comments: [],
   todoist_picked_due: null,
   slack_load: { workspaces: [], recent: [] },
-  slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, unreadChannels: [], arrived: [], side: [] },
+  slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, unreadChannels: [], side: [] },
   slack_mark_read: true,
   slack_channel_history: [],
   slack_watch: true,

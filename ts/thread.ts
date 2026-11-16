@@ -4,9 +4,8 @@ import type { ThreadDetail } from "./bindings/ThreadDetail";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, formatDetailDate, initials, unescapeHtml } from "./format.js";
 import { PERSON_SVG, RETURN_SVG } from "./icons.js";
-import { dismiss } from "./arrivals.js";
 import { applySync, load, removeRow } from "./inbox.js";
-import { rowKey, rows, setReadState, updateBadge } from "./inbox-rows.js";
+import { rows, setReadState, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, linkTextUrls, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
@@ -183,7 +182,6 @@ async function markRead(account: string, id: string) {
     const r = rows.get(`${account}/${id}`);
     if (done && r) {
       setReadState(r.t, r.li, true);
-      dismiss(rowKey(r.t));
     }
   } catch (e) {
     showError(e);
@@ -307,7 +305,6 @@ export async function openThread(
   origin: "mail" | "todo" = "mail",
 ) {
   $("error").hidden = true;
-  dismiss(rowKey({ id, account }));
   const seq = ++openCount;
   // Until the thread arrives nothing is open: no button acts on the thread that was open before.
   opened.current = null;

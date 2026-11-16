@@ -4,10 +4,10 @@
 //! The session is made read only at once (`SET SESSION TRANSACTION READ ONLY`), so that MySQL itself refuses a write.
 //! TLS is the one the app already has (rustls with `aws_lc_rs`, the feature `tls-rustls-aws-lc-rs` of sqlx): it is used when the server offers it (`MySqlSslMode::Preferred`),
 //! which is also what carries the password of `caching_sha2_password`; the RSA path of sqlx (the crate `rsa`) is not built in.
-//! A connection that goes over a network (no tunnel, and a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
+//! A connection that goes over a network (no script, and a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
 //! The time zone and the `sql_mode` of the session are the server's own: sqlx's defaults (`time_zone='+00:00'`, `PIPES_AS_CONCAT`, `NO_ENGINE_SUBSTITUTION`) are turned off, so a TIMESTAMP and `NOW()` read as any other client reads them and `||` is OR.
 //! The decisions (what an error of sqlx or of the server is, and what the screen is told for it) are pure functions.
-//! A tunnel that opened while MySQL does not answer (the bastion does not reach the DB) is a failure of its own and never reads as a refused login.
+//! A script that was ready while MySQL does not answer (what it opened does not reach the DB) is a failure of its own and never reads as a refused login.
 
 use std::time::Duration;
 
@@ -16,18 +16,28 @@ use sqlx::{
     ConnectOptions, Connection, Executor,
 };
 
-use super::ssm::shorten;
-
 /// From the start of the connection to the answer of the first query, TLS and login included.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
+const ERROR_MAX: usize = 300;
 
-/// Where the MySQL server is reached. `tunneled` is true when `host` and `port` are the local end of a tunnel, which changes what a failure is told as.
+/// `text` trimmed and cut to `ERROR_MAX` characters, with an ellipsis when it was longer: what an error shows of a message that comes from outside.
+pub(super) fn shorten(text: &str) -> String {
+    let mut chars = text.trim().chars();
+    let head: String = chars.by_ref().take(ERROR_MAX).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// Where the MySQL server is reached. `scripted` is true when `host` and `port` are the port that the script of the connection opened (D-1), which changes what a failure is told as.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Endpoint {
     pub host: String,
     pub port: u16,
-    pub tunneled: bool,
+    pub scripted: bool,
 }
 
 /// Why a session could not be opened. `message` (with the endpoint) is what the screen shows.
@@ -55,8 +65,8 @@ impl Failure {
     fn message(&self, endpoint: &Endpoint) -> String {
         let at = format!("{}:{}", endpoint.host, endpoint.port);
         match self {
-            Self::NoAnswer | Self::Refused if endpoint.tunneled => TUNNEL_SILENT.to_owned(),
-            Self::Timeout if endpoint.tunneled => TUNNEL_SILENT.to_owned(),
+            Self::NoAnswer | Self::Refused if endpoint.scripted => TUNNEL_SILENT.to_owned(),
+            Self::Timeout if endpoint.scripted => TUNNEL_SILENT.to_owned(),
             Self::NoAnswer => format!("{at} の MySQL が応えません"),
             Self::Refused => format!("{at} が接続を拒否しました。ホストとポートを確かめてください"),
             Self::Timeout => format!("{at} への接続が時間内に終わりませんでした"),
@@ -78,8 +88,8 @@ impl Failure {
     }
 }
 
-/// The tunnel is open and nothing of MySQL comes through it: the bastion does not reach the DB host and port (the security group of the DB does not let the bastion in, or the host is wrong).
-const TUNNEL_SILENT: &str = "トンネルは開きましたが、MySQL が応えません。踏み台から DB のホストとポートに届くか（DB のセキュリティグループが踏み台からの接続を許しているか）を確かめてください";
+/// The script was ready and nothing of MySQL comes through its port: what the script opened does not reach the DB.
+const TUNNEL_SILENT: &str = "スクリプトの準備はできましたが、MySQL が応えません。スクリプトが開いたポートの先に MySQL が届いているかを確かめてください";
 
 /// What an error that MySQL answered (its number and message) is.
 fn from_server(number: u16, message: &str) -> Failure {
@@ -126,7 +136,7 @@ fn classify(error: &sqlx::Error) -> Failure {
     }
 }
 
-/// How TLS is asked for. A tunnel ends at `127.0.0.1` and is encrypted by SSM already; a host that is the machine itself (`localhost`, a loopback address) goes nowhere on the network.
+/// How TLS is asked for. The port of a script is on `127.0.0.1`; a host that is the machine itself (`localhost`, a loopback address) goes nowhere on the network.
 /// Any other host is reached over a network, and TLS is required there: with `Preferred` an attacker on the way could make the server look as if it had no TLS, and the password would go in plain text.
 fn ssl_mode_of(endpoint: &Endpoint) -> MySqlSslMode {
     let loopback = endpoint.host.eq_ignore_ascii_case("localhost")
@@ -134,7 +144,7 @@ fn ssl_mode_of(endpoint: &Endpoint) -> MySqlSslMode {
             .host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback());
-    if endpoint.tunneled || loopback {
+    if endpoint.scripted || loopback {
         MySqlSslMode::Preferred
     } else {
         MySqlSslMode::Required
@@ -249,15 +259,15 @@ mod tests {
         Endpoint {
             host: "db.example.com".to_owned(),
             port: 3306,
-            tunneled: false,
+            scripted: false,
         }
     }
 
-    fn tunneled() -> Endpoint {
+    fn scripted() -> Endpoint {
         Endpoint {
             host: "127.0.0.1".to_owned(),
             port: 50123,
-            tunneled: true,
+            scripted: true,
         }
     }
 
@@ -317,19 +327,20 @@ mod tests {
     }
 
     #[test]
-    fn a_tunnel_that_opened_and_a_server_that_is_silent_is_told_apart_from_a_login_that_failed() {
-        let silent = tunneled();
+    fn a_script_that_was_ready_and_a_server_that_is_silent_is_told_apart_from_a_login_that_failed()
+    {
+        let silent = scripted();
         for failure in [Failure::NoAnswer, Failure::Timeout, Failure::Refused] {
             let text = failure.message(&silent);
             assert!(
-                text.starts_with("トンネルは開きましたが、MySQL が応えません"),
+                text.starts_with("スクリプトの準備はできましたが、MySQL が応えません"),
                 "{text}"
             );
-            assert!(text.contains("セキュリティグループ"));
+            assert!(text.contains("MySQL が届いているか"));
             assert!(!text.contains("ログイン"));
         }
         let auth = Failure::Auth("Access denied for user".to_owned()).message(&silent);
-        assert!(auth.contains("ログインに失敗") && !auth.contains("トンネル"));
+        assert!(auth.contains("ログインに失敗") && !auth.contains("スクリプト"));
         assert_ne!(Failure::NoAnswer.message(&silent), auth);
     }
 
@@ -343,7 +354,7 @@ mod tests {
             .message(&direct)
             .contains("db.example.com:3306"));
         assert!(Failure::Timeout.message(&direct).contains("時間内"));
-        assert!(!Failure::NoAnswer.message(&direct).contains("トンネル"));
+        assert!(!Failure::NoAnswer.message(&direct).contains("スクリプト"));
     }
 
     #[test]
@@ -441,7 +452,7 @@ mod tests {
         let endpoint = Endpoint {
             host: "127.0.0.1".to_owned(),
             port,
-            tunneled: true,
+            scripted: true,
         };
         (endpoint, task)
     }
@@ -455,7 +466,7 @@ mod tests {
         assert_eq!(failure, Failure::NoAnswer);
         assert!(failure
             .message(&endpoint)
-            .starts_with("トンネルは開きましたが"));
+            .starts_with("スクリプトの準備はできましたが"));
     }
 
     #[tokio::test]
@@ -467,7 +478,7 @@ mod tests {
         assert_eq!(failure, Failure::Timeout);
         assert!(failure
             .message(&endpoint)
-            .starts_with("トンネルは開きましたが"));
+            .starts_with("スクリプトの準備はできましたが"));
     }
 
     #[tokio::test]
@@ -479,7 +490,9 @@ mod tests {
             "{failure:?}"
         );
         let text = failure.message(&endpoint);
-        assert!(text.contains("ログインに失敗") && !text.contains("トンネルは開きましたが"));
+        assert!(
+            text.contains("ログインに失敗") && !text.contains("スクリプトの準備はできましたが")
+        );
         assert!(!text.contains("pw"));
     }
 
@@ -491,7 +504,7 @@ mod tests {
         let endpoint = Endpoint {
             host: "127.0.0.1".to_owned(),
             port,
-            tunneled: false,
+            scripted: false,
         };
         let failure = open(&endpoint, "reader", "", SECOND).await.unwrap_err();
         assert_eq!(failure, Failure::Refused);
@@ -521,16 +534,25 @@ mod tests {
         }
     }
 
-    fn at(host: &str, tunneled: bool) -> MySqlSslMode {
+    #[test]
+    fn cuts_a_long_message() {
+        let long = "x".repeat(ERROR_MAX + 10);
+        let cut = shorten(&long);
+        assert_eq!(cut.chars().count(), ERROR_MAX + 1);
+        assert!(cut.ends_with('…'));
+        assert_eq!(shorten("  short \n"), "short");
+    }
+
+    fn at(host: &str, scripted: bool) -> MySqlSslMode {
         ssl_mode_of(&Endpoint {
             host: host.to_owned(),
             port: 3306,
-            tunneled,
+            scripted,
         })
     }
 
     #[test]
-    fn a_connection_over_a_network_requires_tls_and_one_to_this_machine_or_through_a_tunnel_does_not(
+    fn a_connection_over_a_network_requires_tls_and_one_to_this_machine_or_to_the_port_of_a_script_does_not(
     ) {
         for host in [
             "db.example.com",
@@ -543,7 +565,7 @@ mod tests {
         for host in ["127.0.0.1", "127.1.2.3", "::1", "localhost", "LocalHost"] {
             assert!(matches!(at(host, false), MySqlSslMode::Preferred), "{host}");
         }
-        // The local end of a tunnel is 127.0.0.1; the tunnel is encrypted by SSM.
+        // The port of a script is on 127.0.0.1.
         assert!(matches!(at("127.0.0.1", true), MySqlSslMode::Preferred));
         assert!(matches!(
             at("db.example.com", true),

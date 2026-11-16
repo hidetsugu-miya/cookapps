@@ -206,7 +206,7 @@ export interface Commands {
   };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
-  // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `unreadChannels` the channels with something unread, each with its number of unread messages, the newest one (`to`) that "既読にする" sets the position to, and its threads with unread replies, `arrived` the unread messages this read found that the one before did not hold (newest first, none at the first read after the start). Messages are kept in memory only.
+  // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `unreadChannels` the channels with something unread, each with its number of unread messages, the newest one (`to`) that "既読にする" sets the position to, and its threads with unread replies. Messages are kept in memory only.
   // With `cached` true nothing is asked of Slack: the list is made again from what Rust holds (after a channel was hidden or put back).
   slack_timeline: { args: { cached: boolean } | undefined; result: Timeline };
   // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
@@ -450,9 +450,9 @@ export interface Commands {
   // Saves a connection (a new one with an empty `id`); an empty `password` leaves the saved one as it is. Answers it as saved.
   database_profile_save: { args: { profile: DatabaseProfile; password: string }; result: DatabaseProfileView };
   database_profile_delete: { args: { id: string }; result: null };
-  // Tries the connection as typed (D-2): opens the tunnel when it uses SSM, logs in read only, reads `SELECT VERSION()`, closes the tunnel. An empty `password` is the saved one of `profile.id`. Answers the version.
+  // Tries the connection as typed (D-2): starts its script when it has one, logs in read only, reads `SELECT VERSION()`, ends the script. An empty `password` is the saved one of `profile.id`. Answers the version.
   database_test: { args: { profile: DatabaseProfile; password: string }; result: string };
-  // D-3: opens the connection `id` when it is not open (the tunnel, then a read only session) and answers the names of its databases. Called at every opening of its row: an open connection is reused.
+  // D-3: opens the connection `id` when it is not open (its script when it has one, then a read only session) and answers the names of its databases. Called at every opening of its row: an open connection is reused.
   database_connect: { args: { id: string }; result: string[] };
   // D-3: the tables of a database of the open connection `id`, each with its estimated rows, size and engine as text.
   database_tables: { args: { id: string; database: string }; result: DatabaseTable[] };
@@ -462,7 +462,7 @@ export interface Commands {
   database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null; typed?: string }; result: DatabaseRecords };
   // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is MySQL's error (the session is read only).
   database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
-  // D-3: closes the connection `id` and its tunnel.
+  // D-3: closes the connection `id` and ends its script.
   database_disconnect: { args: { id: string }; result: null };
   // D-3: the ids of the connections that are open now.
   database_connections: { args: undefined; result: string[] };

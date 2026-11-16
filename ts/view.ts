@@ -1,5 +1,6 @@
 // Which part of the window is shown, the error line, and the counts on the sidebar buttons (and their sum on the Dock).
 import { $ } from "./dom.js";
+import { setFooterCount } from "./footer.js";
 import { invoke } from "./ipc.js";
 import { toast } from "./toast.js";
 
@@ -79,7 +80,7 @@ export async function copyText(text: string, done: string) {
   return true;
 }
 
-// The counts of the sidebar buttons (inbox, Todo, Slack, Orca) by id, the due moments (epoch milliseconds) of the open tasks still ahead, and what was last sent to the Dock badge.
+// The counts of the sidebar buttons (inbox, Todo, Slack, Orca) by id (the footer's bell shows the sum of the inbox's and Slack's, A-35), the due moments (epoch milliseconds) of the open tasks still ahead, and what was last sent to the Dock badge.
 const navCounts: Record<string, number> = {};
 let upcoming: number[] = [];
 let sentToDock = "0:";
@@ -101,4 +102,5 @@ export function setNavCount(id: string, count: number, name: string, kind: strin
   badge.hidden = count === 0;
   badge.textContent = count > cap ? `${cap}+` : String(count);
   b.setAttribute("aria-label", count === 0 ? name : `${name}（${kind} ${count} 件）`);
+  if (id === "nav-mail" || id === "nav-slack") setFooterCount((navCounts["nav-mail"] ?? 0) + (navCounts["nav-slack"] ?? 0));
 }

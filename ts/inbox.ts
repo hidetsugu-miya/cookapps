@@ -3,13 +3,13 @@ import type { Inbox } from "./bindings/Inbox";
 import type { Sync } from "./bindings/Sync";
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { renderAccounts } from "./accounts.js";
-import { announceArrival } from "./arrivals.js";
 import { $, composing, isMac, tag } from "./dom.js";
 import { markAllRead, place, pending, row, rowKey, rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
 import { opened } from "./thread.js";
 import { hideToast, toast } from "./toast.js";
+import { initUnreadPane } from "./unread-pane.js";
 import { show, showError } from "./view.js";
 
 // What the last archive / trash did, for "元に戻す" and Cmd+Z (Ctrl+Z off macOS): the command that reverses it and the thread data to put back.
@@ -269,8 +269,6 @@ export function applyChanges(threads: ThreadItem[], removedKeys: string[]) {
 export function applySync(account: string, r: Sync) {
   if (r.kind === "changed") {
     applyChanges(r.threads, r.removed.map((id) => `${account}/${id}`));
-    // New mail (M-9) is told by a popup, which never changes the screen; a row being removed meanwhile has none.
-    for (const t of r.threads) if (r.arrived.includes(t.id) && !pending.has(rowKey(t))) announceArrival(t);
   } else if (r.kind === "reloaded") {
     const keep = new Set(r.threads.map(rowKey));
     applyChanges(r.threads, [...rows.keys()].filter((k) => k.startsWith(`${account}/`) && !keep.has(k)));
@@ -334,6 +332,7 @@ async function syncAll() {
 
 export function initInbox() {
   $("mail-mark-all").onclick = markAllRead;
+  initUnreadPane();
   // Whether there are rows changes with every load, sync, removal and read toggle.
   const watch = new MutationObserver(drawInboxState);
   watch.observe($("unread-threads"), { childList: true });

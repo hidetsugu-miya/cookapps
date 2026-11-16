@@ -56,6 +56,31 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .tooltip { position: fixed; z-index: 20; pointer-events: none; padding: 4px 8px; border-radius: 6px; background: var(--side); color: var(--on-accent); font-size: calc(12px * var(--fs)); white-space: nowrap; }
 
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* A-35: a low footer under every screen, the bell at its right end; the count is the unread of the inbox and of the Slack list added up. */
+#footer { flex: none; box-sizing: border-box; height: 28px; display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; border-top: 1px solid var(--line); background: var(--bar); }
+.footer-btn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
+.footer-btn:hover { background: var(--soft); }
+.footer-btn svg { width: 15px; height: 15px; }
+/* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
+#unread-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: 28px; box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
+#unread-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#unread-pane-list { flex: 1; min-height: 0; margin: 0; padding: 8px; list-style: none; overflow-y: auto; }
+.unread-item { display: grid; grid-template-columns: 16px 32px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
+.unread-item:hover { background: var(--hover); }
+.unread-kind { padding-top: 7px; color: var(--muted); }
+.unread-kind svg { width: 16px; height: 16px; }
+.unread-body { min-width: 0; display: flex; flex-direction: column; }
+.unread-who { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.unread-who b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unread-channel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.unread-time { flex: none; margin-left: auto; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.unread-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--fs)); color: var(--muted); }
+.unread-actions { grid-column: 3; display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 6px; }
+.unread-actions .text-btn { order: 1; height: 28px; }
+.unread-actions .icon-btn { width: 28px; height: 28px; visibility: hidden; }
+.unread-actions .icon-btn svg { width: 16px; height: 16px; }
+.unread-item:hover .unread-actions .icon-btn, .unread-item:focus-within .unread-actions .icon-btn { visibility: visible; }
+.footer-count { box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--dot); color: var(--on-accent); font-size: calc(11px * var(--fs)); font-weight: bold; line-height: 16px; text-align: center; }
 header { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
 h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
@@ -346,23 +371,6 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 /* The toast stacks above the update popup while it shows (ts/update.ts sets --toast-bottom). */
 .toast { position: fixed; right: 24px; bottom: var(--toast-bottom, 24px); z-index: 20; padding: 10px 16px; border-radius: 10px; background: var(--side); color: var(--on-accent); font-size: calc(13px * var(--fs)); }
 .toast button { margin-left: 12px; padding: 0; border: 0; background: transparent; color: var(--side-fg); font: inherit; cursor: pointer; }
-/* The new-mail popups (ts/arrivals.ts) stack at the bottom right above the toast, which in turn is above the update popup. */
-.arrivals { position: fixed; right: 24px; bottom: calc(var(--toast-bottom, 24px) + 56px); z-index: 12; width: 320px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.arrival { pointer-events: auto; padding: 12px 12px 8px 16px; display: flex; flex-direction: column; gap: 8px; }
-/* The card is a .pop for its frame; these put back what .pop would change (it is fixed, 13px, and shrinks the text buttons). */
-.arrival.pop { position: static; z-index: auto; width: auto; font-size: inherit; line-height: normal; }
-.arrival.pop .text-btn { height: 32px; padding: 0 16px; font-size: revert; }
-.arrival-head { display: flex; align-items: flex-start; gap: 12px; }
-.arrival-head .avatar { flex: none; }
-.arrival-head .icon-btn { flex: none; width: 28px; height: 28px; margin-left: auto; }
-.arrival-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.arrival-text b, .arrival-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.arrival-subject { font-size: calc(13px * var(--fs)); color: var(--muted); }
-.arrival-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
-/* The Slack cards (S-17): the name and the channel on one line, the sender's avatar with the workspace's dot as the list draws it. */
-.arrival-who { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.arrival-who b { flex: none; max-width: 60%; }
-.arrival-channel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
 #todo { flex: 1; min-height: 0; display: flex; }
 #projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 0 12px 20px; box-sizing: border-box; overflow-y: auto; }
 #projects h3 { font-size: calc(12px * var(--fs)); color: #888; font-weight: normal; margin: 16px 8px 4px; }
@@ -1671,7 +1679,7 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #st-reply, #sc-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
 #st-error, #sc-error { margin: 0 0 8px; }
 
-/* D-1, D-3: the database screen is the column of connections (like #slack-side, with its divider), which open into databases and tables, and the work pane, which holds the tables of the database that was pressed last. The popup that registers or edits a connection is in the middle of a dimmed screen. */
+/* D-1, D-3: the database screen is the column of connections (like #slack-side, with its divider), which open into databases and tables, and the work pane, which holds the tables of the database that was pressed last. The edit pane that registers or edits a connection takes the place of the work pane. */
 #database { flex: 1; min-height: 0; display: flex; }
 #database-side { flex: none; width: clamp(15%, var(--side-w, 20%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #database-side-split { flex: none; }
@@ -1762,18 +1770,28 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .database-cell[data-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .database-cell[data-kind="null"], .database-cell[data-kind="binary"] { color: var(--muted); font-style: italic; }
-.scrim.scrim-center { justify-content: center; align-items: center; }
-.database-form { width: 420px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow-y: auto; box-sizing: border-box; padding: 20px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); display: flex; flex-direction: column; gap: 12px; }
-.database-form h2 { flex: none; font-size: calc(15px * var(--fs)); }
+/* D-1: the edit pane of a connection takes the place of the work pane: its header has the title and the buttons, and under it are the fields. */
+#database-edit { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#database-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.database-edit-head { flex: none; display: flex; align-items: center; gap: 12px; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+.database-edit-head h1 { min-width: 0; }
+.database-edit-actions { display: flex; gap: 8px; margin-left: auto; }
+.database-edit-actions .text-btn:disabled { opacity: .4; cursor: default; }
+.database-edit-actions .text-btn:disabled:hover { background: var(--surface); }
+#database-edit-terminal { flex: none; width: var(--header-btn); height: var(--header-btn); }
+#database-edit-terminal svg { width: var(--header-ic); height: var(--header-ic); }
+#database-edit-terminal:hover:not(:disabled) { background: var(--hover); }
+#database-edit-terminal[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.database-edit-body { flex: 1; min-height: 0; overflow-y: auto; box-sizing: border-box; width: 100%; max-width: 560px; padding: 16px 24px; font-size: calc(13px * var(--fs)); display: flex; flex-direction: column; gap: 12px; }
 .database-field { display: flex; flex-direction: column; gap: 4px; }
 .database-label { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--muted); }
-.database-form input:not([type="checkbox"]) { height: 32px; min-width: 0; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
-.database-form input:not([type="checkbox"]):focus { outline: 2px solid var(--accent); border-color: transparent; }
-.database-check { display: flex; align-items: center; gap: 8px; }
-.database-check input { margin: 0; accent-color: var(--accent); }
-.database-ssm { display: flex; flex-direction: column; gap: 12px; }
-.database-form .err { margin: 0; font-size: calc(12px * var(--fs)); }
-.database-form .database-test { margin: 0; }
+.database-edit-body input { height: 32px; min-width: 0; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
+.database-edit-body input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-way { display: flex; flex-direction: column; gap: 12px; }
+.database-script-text { box-sizing: border-box; width: 100%; min-height: 200px; resize: vertical; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); line-height: 1.5; }
+.database-script-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-edit-body .database-tabs { margin-bottom: 0; }
+.database-edit-body .err { margin: 0; font-size: calc(12px * var(--fs)); }
+.database-edit-body .database-test { margin: 0; }
 .database-test.status { align-self: flex-start; }
-.database-test.err { font-size: calc(12px * var(--fs)); }
-.database-form .popup-actions { justify-content: flex-end; }
+.database-test.err { font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }

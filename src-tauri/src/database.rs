@@ -4,14 +4,15 @@
 //! The password of a profile is in the OS keychain (service `KEYRING_SERVICE`, user the profile's id), never in the file and never in the answer of a command:
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
-//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the tunnel, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and its tunnel.
+//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
+//! `cookapps-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod mysql;
 pub mod records;
+pub mod script;
 pub mod session;
 pub mod sql;
-pub mod ssm;
 pub mod structure;
 
 use std::{path::Path, sync::Mutex};
@@ -43,14 +44,13 @@ pub struct DatabaseProfile {
     pub id: String,
     pub name: String,
     pub username: String,
-    /// Whether the connection goes through an AWS Systems Manager port forward. When it does not, only the host and the port are used.
-    pub use_ssm: bool,
-    pub aws_profile: String,
-    pub region: String,
-    /// The `Name` tag of the instance to forward through.
-    pub bastion_name: String,
+    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets a free port as `COOKAPPS_PORT` and listens there.
+    /// Empty when the connection goes straight to the host and the port. Old files have none (`default`).
+    #[serde(default)]
+    pub script: String,
+    /// The host of a connection with no script. A connection with a script does not use it: the script opens the way, so `check` leaves it empty.
     pub db_host: String,
-    /// A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese.
+    /// A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese. 0 for a connection with a script.
     pub db_port: u32,
 }
 
@@ -92,7 +92,8 @@ fn has_control(text: &str) -> bool {
 }
 
 /// `profile` trimmed and checked against the other profiles of `profiles` (the ones with another id), or the first reason, in Japanese.
-/// A connection that does not use SSM keeps no AWS profile, region or bastion.
+/// The script is trimmed and its line breaks are `\n`; a control character in it is refused, but line feeds and tabs are not.
+/// A connection with a script needs no host and no port (the script opens the way, D-1): they are not checked and are saved as an empty host and the port 0.
 fn check(
     profile: DatabaseProfile,
     profiles: &[DatabaseProfile],
@@ -101,9 +102,7 @@ fn check(
     let mut p = DatabaseProfile {
         name: trim(&profile.name),
         username: trim(&profile.username),
-        aws_profile: trim(&profile.aws_profile),
-        region: trim(&profile.region),
-        bastion_name: trim(&profile.bastion_name),
+        script: trim(&profile.script).replace("\r\n", "\n"),
         db_host: trim(&profile.db_host),
         ..profile
     };
@@ -119,42 +118,31 @@ fn check(
     if p.username.is_empty() {
         return Err("ユーザー名を入力してください".to_owned());
     }
-    if p.db_host.is_empty() {
-        return Err("DB のホストを入力してください".to_owned());
-    }
-    if p.db_host.chars().any(char::is_whitespace) {
-        return Err("DB のホストに空白は使えません".to_owned());
-    }
-    if !(1..=PORT_MAX).contains(&p.db_port) {
-        return Err(format!("ポートは 1 から {PORT_MAX} の間で入力してください"));
-    }
-    if p.use_ssm {
-        if p.aws_profile.is_empty() {
-            return Err("AWS のプロファイル名を入力してください".to_owned());
+    if p.script.is_empty() {
+        if p.db_host.is_empty() {
+            return Err("DB のホストを入力してください".to_owned());
         }
-        if p.region.is_empty() {
-            return Err("リージョンを入力してください".to_owned());
+        if p.db_host.chars().any(char::is_whitespace) {
+            return Err("DB のホストに空白は使えません".to_owned());
         }
-        if p.bastion_name.is_empty() {
-            return Err("踏み台の名前を入力してください".to_owned());
+        if !(1..=PORT_MAX).contains(&p.db_port) {
+            return Err(format!("ポートは 1 から {PORT_MAX} の間で入力してください"));
         }
     } else {
-        p.aws_profile.clear();
-        p.region.clear();
-        p.bastion_name.clear();
+        p.db_host.clear();
+        p.db_port = 0;
     }
-    if [
-        &p.name,
-        &p.username,
-        &p.aws_profile,
-        &p.region,
-        &p.bastion_name,
-        &p.db_host,
-    ]
-    .into_iter()
-    .any(|s| has_control(s))
+    if [&p.name, &p.username, &p.db_host]
+        .into_iter()
+        .any(|s| has_control(s))
     {
         return Err("制御文字は使えません".to_owned());
+    }
+    if p.script
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err("スクリプトに使えない制御文字があります".to_owned());
     }
     Ok(p)
 }
@@ -298,6 +286,28 @@ pub fn save(
     view(passwords, saved)
 }
 
+/// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
+/// The saved password is kept only while the connection logs in as the saved one does (`same_login`); an edit of the user, the script, or the host and the port of a connection with no script deletes it first,
+/// so that a test of the connection never sends it to another place than the one it was saved for (D-2). The input is checked before the deletion, so a refused save deletes nothing.
+pub fn save_without_password(
+    dir: &Path,
+    passwords: &impl PasswordStore,
+    profile: DatabaseProfile,
+) -> Result<DatabaseProfileView, String> {
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    let profiles = load(dir)?;
+    let checked = check(profile.clone(), &profiles)?;
+    if let Some(saved) = profiles
+        .iter()
+        .find(|p| !checked.id.is_empty() && p.id == checked.id)
+    {
+        if !same_login(saved, &checked) {
+            passwords.delete(&checked.id)?;
+        }
+    }
+    save(dir, passwords, profile, None)
+}
+
 /// Deletes a connection and its password. The password goes first: a failure then leaves the connection, and no password is left that no connection shows.
 /// An id that is not saved is already deleted.
 pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<(), String> {
@@ -311,14 +321,12 @@ pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<()
 }
 
 /// Whether `typed` logs in as the same user at the same place as `saved`: the saved password is the one for that login and for no other.
+/// The place of a connection with a script is its script; the host and the port are not where it logs in, so they are not compared (a file saved before they were dropped may still hold them).
 fn same_login(saved: &DatabaseProfile, typed: &DatabaseProfile) -> bool {
     saved.username == typed.username
-        && saved.use_ssm == typed.use_ssm
-        && saved.aws_profile == typed.aws_profile
-        && saved.region == typed.region
-        && saved.bastion_name == typed.bastion_name
-        && saved.db_host == typed.db_host
-        && saved.db_port == typed.db_port
+        && saved.script == typed.script
+        && (!typed.script.is_empty()
+            || (saved.db_host == typed.db_host && saved.db_port == typed.db_port))
 }
 
 /// The password a test of `profile` (already checked) logs in with: the one typed, else the one saved for its id, but only when the profile still logs in as the saved one does (`same_login`),
@@ -344,73 +352,64 @@ fn test_password(
     Ok(passwords.get(&profile.id)?.unwrap_or_default())
 }
 
-/// Where a test connects: the local end of the tunnel when there is one (`tunnel_port`), else the host and the port of the profile.
-fn endpoint_of(host: &str, port: u16, tunnel_port: Option<u16>) -> mysql::Endpoint {
-    match tunnel_port {
+/// Where MySQL is reached: the port of the connection's script when it has one (`script_port`), else the host and the port of the profile.
+fn endpoint_of(host: &str, port: u16, script_port: Option<u16>) -> mysql::Endpoint {
+    match script_port {
         Some(local) => mysql::Endpoint {
             host: "127.0.0.1".to_owned(),
             port: local,
-            tunneled: true,
+            scripted: true,
         },
         None => mysql::Endpoint {
             host: host.to_owned(),
             port,
-            tunneled: false,
+            scripted: false,
         },
     }
 }
 
-/// What a test answers: the version of the server, or what went wrong, and the tunnel it opened is closed either way.
-/// A tunnel that cannot be closed after a test that passed is told too, because its session is then left at AWS.
-fn test_outcome(
-    tested: Result<String, String>,
-    closed: Option<Result<(), String>>,
-) -> Result<String, String> {
-    match (tested, closed) {
-        (Ok(version), Some(Err(e))) => Err(format!(
-            "MySQL {version} に接続できましたが、トンネルを閉じられませんでした: {e}"
-        )),
-        (tested, _) => tested,
-    }
-}
-
-/// Opens the tunnel of `profile` when it uses SSM, and answers where MySQL is reached and the id of the tunnel to close (none when there is no tunnel).
+/// Starts the script of `profile` when it has one (D-1), and answers where MySQL is reached and the id of the script to end (none when there is no script).
+/// The test of a connection (D-2) and the opening of one (D-3) both go through this.
 async fn open_endpoint(
-    tunnels: &ssm::Tunnels,
+    scripts: &script::Scripts,
     profile: &DatabaseProfile,
 ) -> Result<(mysql::Endpoint, Option<u64>), String> {
-    let port = u16::try_from(profile.db_port).map_err(|_| "ポートが範囲外です".to_owned())?;
-    let opened = if profile.use_ssm {
-        let target = ssm::Target {
-            aws_profile: profile.aws_profile.clone(),
-            region: profile.region.clone(),
-            bastion_name: profile.bastion_name.clone(),
-            db_host: profile.db_host.clone(),
-            db_port: port,
-        };
-        Some(tunnels.open(&target).await?)
+    // The port of a connection with a script is not used, so it is not checked.
+    let (port, opened) = if profile.script.is_empty() {
+        let port = u16::try_from(profile.db_port).map_err(|_| "ポートが範囲外です".to_owned())?;
+        (port, None)
     } else {
-        None
+        (0, Some(scripts.open(&profile.script).await?))
     };
     let endpoint = endpoint_of(&profile.db_host, port, opened.map(|o| o.port));
     Ok((endpoint, opened.map(|o| o.id)))
 }
 
-/// Tests `profile` as typed (not as saved): opens the tunnel when it uses SSM, logs in, reads `SELECT VERSION()` and closes the tunnel.
+/// Tests `profile` as typed (not as saved): starts its script when it has one, logs in, reads `SELECT VERSION()` and ends the script.
 /// `profile` goes through the same checks as a save, apart from the name's being another connection's.
 pub async fn test_connection(
-    tunnels: &ssm::Tunnels,
+    scripts: &script::Scripts,
     profile: DatabaseProfile,
     password: &str,
 ) -> Result<String, String> {
     let profile = check(profile, &[])?;
-    let (endpoint, tunnel) = open_endpoint(tunnels, &profile).await?;
+    let (endpoint, script) = open_endpoint(scripts, &profile).await?;
     let tested = mysql::server_version(&endpoint, &profile.username, password).await;
-    let closed = match tunnel {
-        Some(id) => Some(tunnels.close(id).await),
-        None => None,
-    };
-    test_outcome(tested, closed)
+    if let Some(id) = script {
+        scripts.close(id).await;
+    }
+    tested
+}
+
+/// Tests the connection of `id` as saved, with the password saved for it (D-8), through `test_connection`, the function of the test of D-2.
+pub async fn test_saved(
+    dir: &Path,
+    passwords: &impl PasswordStore,
+    scripts: &script::Scripts,
+    id: &str,
+) -> Result<String, String> {
+    let (profile, password) = saved_login(dir, passwords, id)?;
+    test_connection(scripts, profile, &password).await
 }
 
 /// The saved connection of `id` and the password saved for it (none is an empty password, as in a test), or the reason it cannot be opened.
@@ -440,30 +439,25 @@ fn login_unchanged(
     }
 }
 
-/// Opens the tunnel and the read only session of `profile` and keeps it in `sessions`. A tunnel opened for a session that cannot be logged in to is closed again.
+/// Starts the script and opens the read only session of `profile` and keeps it in `sessions`. A script started for a session that cannot be logged in to is ended again.
 async fn open_session(
     sessions: &session::Sessions,
-    tunnels: &ssm::Tunnels,
+    scripts: &script::Scripts,
     profile: &DatabaseProfile,
     password: &str,
 ) -> Result<(), String> {
-    let (endpoint, tunnel) = open_endpoint(tunnels, profile).await?;
+    let (endpoint, script) = open_endpoint(scripts, profile).await?;
     let connection = match mysql::connect(&endpoint, &profile.username, password).await {
         Ok(connection) => connection,
         Err(e) => {
-            if let Some(id) = tunnel {
-                let _ = tunnels.close(id).await;
+            if let Some(id) = script {
+                scripts.close(id).await;
             }
             return Err(e);
         }
     };
-    sessions.add(tunnels, &profile.id, tunnel, connection).await;
+    sessions.add(scripts, &profile.id, script, connection).await;
     Ok(())
-}
-
-/// The result of a close that comes after a change that was made: a tunnel that cannot be closed is told, because its session is then left at AWS.
-fn after_close(closed: Result<(), String>, done: &str) -> Result<(), String> {
-    closed.map_err(|e| format!("{done}が、トンネルを閉じられませんでした: {e}"))
 }
 
 /// The saved connections, each with whether its password is saved.
@@ -481,7 +475,7 @@ pub async fn database_profiles(app: AppHandle) -> Result<Vec<DatabaseProfileView
 pub async fn database_profile_save(
     app: AppHandle,
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     profile: DatabaseProfile,
     password: Option<String>,
 ) -> Result<DatabaseProfileView, String> {
@@ -494,10 +488,7 @@ pub async fn database_profile_save(
     .await
     .map_err(|e| e.to_string())??;
     if !id.is_empty() {
-        after_close(
-            sessions.disconnect(&tunnels, &id).await,
-            "接続は保存しました",
-        )?;
+        sessions.disconnect(&scripts, &id).await;
     }
     Ok(saved)
 }
@@ -506,7 +497,7 @@ pub async fn database_profile_save(
 #[tauri::command]
 pub async fn database_test(
     app: AppHandle,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     profile: DatabaseProfile,
     password: Option<String>,
 ) -> Result<String, String> {
@@ -523,7 +514,7 @@ pub async fn database_test(
     })
     .await
     .map_err(|e| e.to_string())??;
-    test_connection(&tunnels, tested, &password).await
+    test_connection(&scripts, tested, &password).await
 }
 
 /// Deletes a connection and its password. A connection that is open is closed first (D-3).
@@ -531,11 +522,11 @@ pub async fn database_test(
 pub async fn database_profile_delete(
     app: AppHandle,
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
 ) -> Result<(), String> {
     let dir = config_dir(&app)?;
-    let closed = sessions.disconnect(&tunnels, &id).await;
+    sessions.disconnect(&scripts, &id).await;
     let again = id.clone();
     tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
@@ -544,27 +535,27 @@ pub async fn database_profile_delete(
     .await
     .map_err(|e| e.to_string())??;
     // A connection that began to open before the delete may have put its session in meanwhile; it checks the file when it has opened, and this closes what it put in before that.
-    let closed = closed.and(sessions.disconnect(&tunnels, &again).await);
-    after_close(closed, "接続は削除しました")
+    sessions.disconnect(&scripts, &again).await;
+    Ok(())
 }
 
-/// Opens the connection of `id` when it is not open (the tunnel, then the read only session with the saved password) and answers the names of its databases.
+/// Opens the connection of `id` when it is not open (the script, then the read only session with the saved password) and answers the names of its databases.
 /// A connection whose databases cannot be read is closed again.
 #[tauri::command]
 pub async fn database_connect(
     app: AppHandle,
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
 ) -> Result<Vec<String>, String> {
-    if !sessions.has(&id).await {
+    if !sessions.has(&scripts, &id).await {
         let dir = config_dir(&app)?;
         let wanted = id.clone();
         let (profile, password) =
             tokio::task::spawn_blocking(move || saved_login(&dir, &Keychain, &wanted))
                 .await
                 .map_err(|e| e.to_string())??;
-        open_session(&sessions, &tunnels, &profile, &password).await?;
+        open_session(&sessions, &scripts, &profile, &password).await?;
         // A save or a delete that came while it opened found no session to close: look again, and close what was opened with a login that is gone.
         let dir = config_dir(&app)?;
         let wanted = id.clone();
@@ -575,15 +566,14 @@ pub async fn database_connect(
         .await
         .map_err(|e| e.to_string())?;
         if let Err(why) = login_unchanged(&(profile, password), &now) {
-            let closed = sessions.disconnect(&tunnels, &id).await;
-            after_close(closed, "接続は閉じました")?;
+            sessions.disconnect(&scripts, &id).await;
             return Err(why);
         }
     }
-    match sessions.databases(&tunnels, &id).await {
+    match sessions.databases(&scripts, &id).await {
         Ok(databases) => Ok(databases),
         Err(e) => {
-            let _ = sessions.disconnect(&tunnels, &id).await;
+            sessions.disconnect(&scripts, &id).await;
             Err(e)
         }
     }
@@ -593,11 +583,11 @@ pub async fn database_connect(
 #[tauri::command]
 pub async fn database_tables(
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
     database: String,
 ) -> Result<Vec<session::DatabaseTable>, String> {
-    sessions.tables(&tunnels, &id, &database).await
+    sessions.tables(&scripts, &id, &database).await
 }
 
 /// One page of the records of `table` in `database` on the open connection `id` (D-4): `page` counts from 0, and each value is already text.
@@ -607,7 +597,7 @@ pub async fn database_tables(
 #[allow(clippy::too_many_arguments)]
 pub async fn database_records(
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
     database: String,
     table: String,
@@ -617,7 +607,7 @@ pub async fn database_records(
 ) -> Result<records::DatabaseRecords, String> {
     let page = typed.as_deref().map_or(page, records::page_of_input);
     sessions
-        .records(&tunnels, &id, &database, &table, page, estimate)
+        .records(&scripts, &id, &database, &table, page, estimate)
         .await
 }
 
@@ -625,42 +615,44 @@ pub async fn database_records(
 #[tauri::command]
 pub async fn database_structure(
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
     database: String,
     table: String,
 ) -> Result<structure::DatabaseStructure, String> {
-    sessions.structure(&tunnels, &id, &database, &table).await
+    sessions.structure(&scripts, &id, &database, &table).await
 }
 
 /// The text `sql` run as one statement in `database` on the open connection `id` (D-6): at most 1,000 rows, each value already text, and the line with the rows and the time.
 #[tauri::command]
 pub async fn database_sql(
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
     database: String,
     sql: String,
 ) -> Result<sql::DatabaseSqlResult, String> {
-    sessions.sql(&tunnels, &id, &database, &sql).await
+    sessions.sql(&scripts, &id, &database, &sql).await
 }
 
-/// Closes the connection of `id` and its tunnel. A connection that is not open is closed already.
+/// Closes the connection of `id` and ends its script. A connection that is not open is closed already.
 #[tauri::command]
 pub async fn database_disconnect(
     sessions: tauri::State<'_, session::Sessions>,
-    tunnels: tauri::State<'_, ssm::Tunnels>,
+    scripts: tauri::State<'_, script::Scripts>,
     id: String,
 ) -> Result<(), String> {
-    sessions.disconnect(&tunnels, &id).await
+    sessions.disconnect(&scripts, &id).await;
+    Ok(())
 }
 
 /// The ids of the connections that are open now.
 #[tauri::command]
 pub async fn database_connections(
     sessions: tauri::State<'_, session::Sessions>,
+    scripts: tauri::State<'_, script::Scripts>,
 ) -> Result<Vec<String>, String> {
-    Ok(sessions.ids().await)
+    Ok(sessions.ids(&scripts).await)
 }
 
 #[cfg(test)]
@@ -720,21 +712,15 @@ mod tests {
             id: String::new(),
             name: name.to_owned(),
             username: "reader".to_owned(),
-            use_ssm: false,
-            aws_profile: String::new(),
-            region: String::new(),
-            bastion_name: String::new(),
+            script: String::new(),
             db_host: "127.0.0.1".to_owned(),
             db_port: 3306,
         }
     }
 
-    fn ssm(name: &str) -> DatabaseProfile {
+    fn scripted(name: &str) -> DatabaseProfile {
         DatabaseProfile {
-            use_ssm: true,
-            aws_profile: "dev".to_owned(),
-            region: "ap-northeast-1".to_owned(),
-            bastion_name: "dev-ecs".to_owned(),
+            script: "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\"".to_owned(),
             db_host: "db.cluster.example".to_owned(),
             ..direct(name)
         }
@@ -756,7 +742,10 @@ mod tests {
         assert_eq!(checked.name, "開発");
         assert_eq!(checked.username, "reader");
         assert_eq!(checked.db_host, "127.0.0.1");
-        assert_eq!(check(ssm("本番"), &[]).unwrap().bastion_name, "dev-ecs");
+        assert_eq!(
+            check(scripted("本番"), &[]).unwrap().script,
+            "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\""
+        );
     }
 
     #[test]
@@ -841,38 +830,105 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_through_ssm_needs_the_profile_the_region_and_the_bastion() {
-        type Blank = fn(&mut DatabaseProfile);
-        let cases: [(Blank, &str); 3] = [
-            (
-                |p| p.aws_profile = "  ".to_owned(),
-                "AWS のプロファイル名を入力してください",
-            ),
-            (|p| p.region = String::new(), "リージョンを入力してください"),
-            (
-                |p| p.bastion_name = String::new(),
-                "踏み台の名前を入力してください",
-            ),
-        ];
-        for (blank, message) in cases {
-            let mut p = ssm("a");
-            blank(&mut p);
-            assert_eq!(reason(p, &[]), message);
+    fn a_connection_with_a_script_needs_no_host_and_no_port_and_saves_neither() {
+        for (host, port) in [("", 0), ("db host", 99999), ("db.cluster.example", 3306)] {
+            let p = DatabaseProfile {
+                db_host: host.to_owned(),
+                db_port: port,
+                ..scripted("a")
+            };
+            let checked = check(p, &[]).unwrap();
+            assert_eq!((checked.db_host.as_str(), checked.db_port), ("", 0));
+        }
+        // A blank script is none: the host and the port are needed again.
+        let blank = DatabaseProfile {
+            script: " \n".to_owned(),
+            db_host: String::new(),
+            db_port: 0,
+            ..scripted("a")
+        };
+        assert_eq!(reason(blank, &[]), "DB のホストを入力してください");
+    }
+
+    #[test]
+    fn the_save_of_the_mcp_server_takes_a_connection_with_a_script_and_no_host() {
+        let dir = temp_dir("mcp-script");
+        let passwords = Memory::default();
+        let input = DatabaseProfile {
+            db_host: String::new(),
+            db_port: 0,
+            ..scripted("a")
+        };
+        let saved = save_without_password(&dir, &passwords, input).unwrap();
+        assert_eq!(
+            (saved.profile.db_host.as_str(), saved.profile.db_port),
+            ("", 0)
+        );
+        assert_eq!(list(&dir, &passwords).unwrap(), vec![saved]);
+    }
+
+    #[test]
+    fn a_connection_with_a_script_is_saved_without_a_host_and_a_port() {
+        let (profiles, saved) = upsert(
+            Vec::new(),
+            DatabaseProfile {
+                db_host: String::new(),
+                db_port: 0,
+                ..scripted("a")
+            },
+            "id-a",
+        )
+        .unwrap();
+        assert_eq!((saved.db_host.as_str(), saved.db_port), ("", 0));
+        assert_eq!(profiles, vec![saved]);
+    }
+
+    #[test]
+    fn a_script_is_trimmed_and_its_line_breaks_are_line_feeds_and_a_blank_one_is_none() {
+        let p = DatabaseProfile {
+            script: "\n  #!/bin/bash\r\nexec forward-port\r\n\t\n ".to_owned(),
+            ..direct("a")
+        };
+        assert_eq!(
+            check(p, &[]).unwrap().script,
+            "#!/bin/bash\nexec forward-port"
+        );
+        for blank in ["", "  ", "\n\t\r\n"] {
+            let p = DatabaseProfile {
+                script: blank.to_owned(),
+                ..scripted("a")
+            };
+            assert_eq!(check(p, &[]).unwrap().script, "", "{blank:?}");
         }
     }
 
     #[test]
-    fn a_connection_without_ssm_drops_what_is_left_of_ssm() {
+    fn a_script_may_have_line_feeds_and_tabs_but_no_other_control_character() {
         let p = DatabaseProfile {
-            use_ssm: false,
-            ..ssm("a")
+            script: "a\n\tb".to_owned(),
+            ..direct("a")
         };
-        let checked = check(p, &[]).unwrap();
-        assert_eq!(
-            (checked.aws_profile, checked.region, checked.bastion_name),
-            (String::new(), String::new(), String::new())
-        );
-        assert_eq!(checked.db_host, "db.cluster.example");
+        assert!(check(p, &[]).is_ok());
+        for bad in ["a\u{0}b", "a\u{7}b", "a\rb", "a\u{1b}[0m"] {
+            let p = DatabaseProfile {
+                script: bad.to_owned(),
+                ..direct("a")
+            };
+            assert_eq!(
+                reason(p, &[]),
+                "スクリプトに使えない制御文字があります",
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_of_the_old_form_has_no_script_and_its_ssm_fields_are_dropped() {
+        let text = r#"{"profiles":[{"id":"x","name":"a","username":"u","useSsm":true,"awsProfile":"dev","region":"r","bastionName":"b","dbHost":"h","dbPort":3306}]}"#;
+        let profiles = parse(text).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].script, "");
+        assert!(!render(&profiles).unwrap().contains("Ssm"));
     }
 
     #[test]
@@ -883,8 +939,8 @@ mod tests {
         };
         assert_eq!(reason(p, &[]), "制御文字は使えません");
         let p = DatabaseProfile {
-            region: "ap\u{7}".to_owned(),
-            ..ssm("a")
+            db_host: "h\u{7}".to_owned(),
+            ..direct("a")
         };
         assert_eq!(reason(p, &[]), "制御文字は使えません");
     }
@@ -937,7 +993,7 @@ mod tests {
         let profiles = vec![
             DatabaseProfile {
                 id: "x".to_owned(),
-                ..ssm("a")
+                ..scripted("a")
             },
             DatabaseProfile {
                 id: "y".to_owned(),
@@ -945,7 +1001,7 @@ mod tests {
             },
         ];
         let text = render(&profiles).unwrap();
-        assert!(text.contains("\"dbPort\": 3306") && text.contains("\"useSsm\": true"));
+        assert!(text.contains("\"dbPort\": 3306") && text.contains("\"script\": "));
         assert_eq!(parse(&text).unwrap(), profiles);
     }
 
@@ -974,7 +1030,7 @@ mod tests {
         let saved = save(
             &dir,
             &passwords,
-            ssm("開発"),
+            scripted("開発"),
             Some("s3cret-value".to_owned()),
         )
         .unwrap();
@@ -1045,7 +1101,7 @@ mod tests {
                 ..direct("b")
             },
             DatabaseProfile {
-                use_ssm: true,
+                script: "a\u{0}".to_owned(),
                 ..direct("c")
             },
             DatabaseProfile {
@@ -1123,7 +1179,7 @@ mod tests {
         passwords.set("a", "saved").unwrap();
         let stored = DatabaseProfile {
             id: "a".to_owned(),
-            ..ssm("a")
+            ..scripted("a")
         };
         let saved = [stored.clone()];
         let of = |profile: &DatabaseProfile, typed: Option<&str>| {
@@ -1133,31 +1189,15 @@ mod tests {
         // Each of the fields that say where and as whom the login goes refuses the saved password.
         let changed = [
             DatabaseProfile {
-                db_host: "evil.example.com".to_owned(),
-                ..stored.clone()
-            },
-            DatabaseProfile {
-                db_port: 3307,
-                ..stored.clone()
-            },
-            DatabaseProfile {
                 username: "root".to_owned(),
                 ..stored.clone()
             },
             DatabaseProfile {
-                use_ssm: false,
+                script: String::new(),
                 ..stored.clone()
             },
             DatabaseProfile {
-                aws_profile: "other".to_owned(),
-                ..stored.clone()
-            },
-            DatabaseProfile {
-                region: "us-east-1".to_owned(),
-                ..stored.clone()
-            },
-            DatabaseProfile {
-                bastion_name: "other-bastion".to_owned(),
+                script: "exec other-forward".to_owned(),
                 ..stored.clone()
             },
         ];
@@ -1170,12 +1210,43 @@ mod tests {
             // A password typed goes where it was typed for.
             assert_eq!(of(profile, Some("typed")), Ok("typed".to_owned()));
         }
-        // The name is not where the login goes.
+        // The name is not where the login goes, and neither are the host and the port of a connection with a script.
         let renamed = DatabaseProfile {
             name: "renamed".to_owned(),
+            db_host: String::new(),
+            db_port: 0,
             ..stored
         };
         assert_eq!(of(&renamed, None), Ok("saved".to_owned()));
+    }
+
+    #[test]
+    fn the_saved_password_of_a_connection_with_no_script_is_refused_at_another_host_or_port() {
+        let passwords = Memory::default();
+        passwords.set("a", "saved").unwrap();
+        let stored = DatabaseProfile {
+            id: "a".to_owned(),
+            ..direct("a")
+        };
+        let saved = [stored.clone()];
+        let of = |profile: &DatabaseProfile| test_password(&passwords, &saved, profile, None);
+        assert_eq!(of(&stored), Ok("saved".to_owned()));
+        for profile in [
+            DatabaseProfile {
+                db_host: "evil.example.com".to_owned(),
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                db_port: 3307,
+                ..stored.clone()
+            },
+        ] {
+            assert_eq!(
+                of(&profile).unwrap_err(),
+                "接続先やユーザーを変えたときは、パスワードを入力してください",
+                "{profile:?}"
+            );
+        }
     }
 
     #[test]
@@ -1211,33 +1282,16 @@ mod tests {
     }
 
     #[test]
-    fn a_test_goes_to_the_local_end_of_the_tunnel_or_else_to_the_host_of_the_profile() {
-        let tunneled = endpoint_of("db.example.com", 3306, Some(50123));
+    fn a_test_goes_to_the_port_of_the_script_or_else_to_the_host_of_the_profile() {
+        let scripted = endpoint_of("db.example.com", 3306, Some(50123));
         assert_eq!(
-            (tunneled.host.as_str(), tunneled.port, tunneled.tunneled),
+            (scripted.host.as_str(), scripted.port, scripted.scripted),
             ("127.0.0.1", 50123, true)
         );
         let direct = endpoint_of("db.example.com", 3307, None);
         assert_eq!(
-            (direct.host.as_str(), direct.port, direct.tunneled),
+            (direct.host.as_str(), direct.port, direct.scripted),
             ("db.example.com", 3307, false)
-        );
-    }
-
-    #[test]
-    fn the_outcome_of_a_test_is_the_version_unless_the_tunnel_that_stays_open_is_to_be_told() {
-        let version = || Ok("8.0.36".to_owned());
-        assert_eq!(test_outcome(version(), None), version());
-        assert_eq!(test_outcome(version(), Some(Ok(()))), version());
-        let both = test_outcome(version(), Some(Err("timeout".to_owned()))).unwrap_err();
-        assert!(
-            both.contains("8.0.36") && both.contains("timeout"),
-            "{both}"
-        );
-        // A test that failed keeps its own reason, whatever the close says.
-        assert_eq!(
-            test_outcome(Err("denied".to_owned()), Some(Err("timeout".to_owned()))),
-            Err("denied".to_owned())
         );
     }
 
@@ -1301,20 +1355,201 @@ mod tests {
     }
 
     #[test]
-    fn a_tunnel_that_cannot_be_closed_after_a_change_is_told_with_the_change_that_was_made() {
-        assert_eq!(after_close(Ok(()), "接続は保存しました"), Ok(()));
-        let told = after_close(Err("timeout".to_owned()), "接続は削除しました").unwrap_err();
-        assert_eq!(
-            told,
-            "接続は削除しましたが、トンネルを閉じられませんでした: timeout"
-        );
-    }
-
-    #[test]
     fn the_ids_are_32_hex_digits_and_differ() {
         let (a, b) = (new_id().unwrap(), new_id().unwrap());
         assert_eq!(a.len(), 32);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn a_connection_with_no_script_goes_to_its_host_and_starts_nothing() {
+        let scripts = script::Scripts::default();
+        let profile = DatabaseProfile {
+            db_host: "db.example.com".to_owned(),
+            db_port: 3307,
+            ..direct("a")
+        };
+        let (endpoint, script) = open_endpoint(&scripts, &profile).await.unwrap();
+        assert_eq!(
+            (endpoint.host.as_str(), endpoint.port, endpoint.scripted),
+            ("db.example.com", 3307, false)
+        );
+        assert_eq!(script, None);
+        let out_of_range = DatabaseProfile {
+            db_port: 70000,
+            ..direct("a")
+        };
+        assert_eq!(
+            open_endpoint(&scripts, &out_of_range).await.unwrap_err(),
+            "ポートが範囲外です"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_test_and_the_opening_of_a_connection_both_stop_at_a_script_that_ends_before_it_is_ready(
+    ) {
+        let scripts = script::Scripts::default();
+        let profile = DatabaseProfile {
+            script: "echo no route >&2\nexit 0".to_owned(),
+            ..direct("a")
+        };
+        let expected = "接続のスクリプトが、準備ができる前に終了しました（終了コード 0）。標準エラーの最後の行: no route";
+        assert_eq!(
+            open_endpoint(&scripts, &profile).await.unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            test_connection(&scripts, profile.clone(), "pw")
+                .await
+                .unwrap_err(),
+            expected
+        );
+        let sessions = session::Sessions::default();
+        assert_eq!(
+            open_session(&sessions, &scripts, &profile, "pw")
+                .await
+                .unwrap_err(),
+            expected
+        );
+        assert_eq!(sessions.ids(&scripts).await, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_save_without_a_password_keeps_the_saved_one_and_sets_none() {
+        let dir = temp_dir("mcp-save");
+        let passwords = Memory::default();
+        let first = save_without_password(&dir, &passwords, direct("a")).unwrap();
+        assert!(!first.password_saved);
+        assert_eq!(passwords.get(&first.profile.id), None);
+        passwords.set(&first.profile.id, "secret").unwrap();
+        let edited = DatabaseProfile {
+            name: "b".to_owned(),
+            ..first.profile.clone()
+        };
+        let second = save_without_password(&dir, &passwords, edited).unwrap();
+        assert!(second.password_saved);
+        assert_eq!(second.profile.name, "b");
+        assert_eq!(passwords.get(&first.profile.id).as_deref(), Some("secret"));
+        assert_eq!(list(&dir, &passwords).unwrap(), vec![second]);
+        // Only the checks of a save: a name another connection has is refused, and nothing is written.
+        let taken = save_without_password(&dir, &passwords, direct("b")).unwrap_err();
+        assert_eq!(taken, "同じ名前の接続があります: b");
+        assert_eq!(list(&dir, &passwords).unwrap().len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A saved password and the connection that holds it, saved without a password.
+    fn saved_with_password(
+        name: &str,
+        profile: DatabaseProfile,
+    ) -> (PathBuf, Memory, DatabaseProfileView) {
+        let dir = temp_dir(name);
+        let passwords = Memory::default();
+        let saved = save_without_password(&dir, &passwords, profile).unwrap();
+        passwords.set(&saved.profile.id, "secret").unwrap();
+        (dir, passwords, saved)
+    }
+
+    #[test]
+    fn a_save_without_a_password_deletes_the_saved_one_when_the_login_goes_elsewhere() {
+        type Edit = fn(&mut DatabaseProfile);
+        let edits: [(&str, Edit); 4] = [
+            ("user", |p| p.username = "other".to_owned()),
+            ("host", |p| p.db_host = "db.elsewhere.example".to_owned()),
+            ("port", |p| p.db_port = 3307),
+            ("script", |p| p.script = "echo hi".to_owned()),
+        ];
+        for (what, edit) in edits {
+            let (dir, passwords, saved) =
+                saved_with_password(&format!("mcp-away-{what}"), direct("a"));
+            let mut moved = saved.profile.clone();
+            edit(&mut moved);
+            let after = save_without_password(&dir, &passwords, moved).unwrap();
+            assert!(!after.password_saved, "{what}");
+            assert_eq!(passwords.get(&saved.profile.id), None, "{what}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_save_without_a_password_of_a_script_connection_deletes_it_for_another_script_only() {
+        let (dir, passwords, saved) = saved_with_password("mcp-away-script", scripted("a"));
+        // The host and the port of a connection with a script are not where it logs in.
+        let same = DatabaseProfile {
+            name: "renamed".to_owned(),
+            db_host: "ignored.example".to_owned(),
+            db_port: 9,
+            ..saved.profile.clone()
+        };
+        assert!(
+            save_without_password(&dir, &passwords, same)
+                .unwrap()
+                .password_saved
+        );
+        let other = DatabaseProfile {
+            script: "exec other-forward".to_owned(),
+            ..saved.profile.clone()
+        };
+        assert!(
+            !save_without_password(&dir, &passwords, other)
+                .unwrap()
+                .password_saved
+        );
+        assert_eq!(passwords.get(&saved.profile.id), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_refused_save_without_a_password_deletes_nothing() {
+        let (dir, passwords, saved) = saved_with_password("mcp-away-refused", direct("a"));
+        let refused = DatabaseProfile {
+            username: String::new(),
+            ..saved.profile.clone()
+        };
+        assert_eq!(
+            save_without_password(&dir, &passwords, refused).unwrap_err(),
+            "ユーザー名を入力してください"
+        );
+        assert_eq!(passwords.get(&saved.profile.id).as_deref(), Some("secret"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_test_of_a_saved_connection_that_is_not_saved_is_refused() {
+        let dir = temp_dir("mcp-test-missing");
+        let scripts = script::Scripts::default();
+        let error = test_saved(&dir, &Memory::default(), &scripts, "nope")
+            .await
+            .unwrap_err();
+        assert_eq!(error, "接続が見つかりません。一覧を読み直してください");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_test_of_a_saved_connection_runs_its_script_and_tells_the_end_of_its_standard_error()
+    {
+        let dir = temp_dir("mcp-test-script");
+        let passwords = Memory::default();
+        let scripts = script::Scripts::default();
+        let saved = save_without_password(
+            &dir,
+            &passwords,
+            DatabaseProfile {
+                script: "echo no route >&2\nexit 7".to_owned(),
+                ..direct("a")
+            },
+        )
+        .unwrap();
+        let error = test_saved(&dir, &passwords, &scripts, &saved.profile.id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "接続のスクリプトが、準備ができる前に終了しました（終了コード 7）。標準エラーの最後の行: no route"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

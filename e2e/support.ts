@@ -79,9 +79,9 @@ declare global {
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 
-// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) and `arrival` the time a popup stays (10 s).
+// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) and `databaseProfiles` the read of the connections that the edit pane of the database screen does (2 s).
 // A wait for a period to pass is that period times 1.2. Put it in the fixtures of `boot`: `boot({ ...timers({ orcaMirror: 250 }) })`.
-export const timers = (periods: { orcaClock?: number; orcaMirror?: number; arrival?: number }) => ({ e2e_timers: periods });
+export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number }) => ({ e2e_timers: periods });
 
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
@@ -536,10 +536,7 @@ export const databaseProfile = (id: string, name: string, extra: Partial<Databas
   id,
   name,
   username: "reader",
-  useSsm: false,
-  awsProfile: "",
-  region: "",
-  bastionName: "",
+  script: "",
   dbHost: "db.example.com",
   dbPort: 3306,
   passwordSaved: false,
@@ -644,7 +641,7 @@ export const unreadChannelsOf = (messages: TimelineMessage[]): UnreadChannel[] =
 };
 
 // What `slack_timeline` answers; `unreadTotal` is the number of unread messages and unread replies given unless `extra` says another (it counts the messages held, not only the ones listed),
-// `unreadChannels` is what `unreadChannelsOf` makes of the rows. `watched`, `arrived` and `side` (the side menu) are empty unless `extra` gives them.
+// `unreadChannels` is what `unreadChannelsOf` makes of the rows. `watched` and `side` (the side menu) are empty unless `extra` gives them.
 export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({
   messages,
   watched: [],
@@ -654,7 +651,6 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
   pendingChannels: 0,
   unreadTotal: messages.filter((m) => m.unread).length + messages.reduce((n, m) => n + (m.unreadReplies?.share ?? 0), 0),
   unreadChannels: unreadChannelsOf(messages),
-  arrived: [],
   side: [],
   ...extra,
 });
