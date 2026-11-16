@@ -88,6 +88,15 @@ struct DbTestArgs {
     id: String,
 }
 
+/// The error of a port in use before the script, with the way out that only the app can be told of: `db_test` cannot know that cookapps holds the port with its own open connection (D-8).
+fn with_open_hint(error: String) -> String {
+    if database::script::is_in_use_text(&error) {
+        format!("{error}。cookapps でこの接続を開いているときは、切断してからテストしてください")
+    } else {
+        error
+    }
+}
+
 /// What `db_test` answers. The error is text that the script, MySQL or the app wrote: it is quoted as a JSON string and the answer says it is data.
 fn db_test_answer(tested: Result<String, String>) -> Result<String, String> {
     match tested {
@@ -219,7 +228,11 @@ impl Cookapps {
         annotations(destructive_hint = true, open_world_hint = true)
     )]
     async fn db_test(&self, Parameters(a): Parameters<DbTestArgs>) -> Result<String, String> {
-        db_test_answer(database::test_saved(&self.dir, &Keychain, &Scripts::default(), &a.id).await)
+        db_test_answer(
+            database::test_saved(&self.dir, &Keychain, &Scripts::default(), &a.id)
+                .await
+                .map_err(with_open_hint),
+        )
     }
 }
 

@@ -140,8 +140,56 @@ describe("claude code pane", () => {
     await waitForCalls("claude_code_start");
     const close = await mock("claude_code_close", null);
     await call("closeClaudeCode", "pane-1");
-    expect(await waitForCalls(close)).toEqual([{ id: "pane-1" }]);
+    expect(await waitForCalls(close)).toEqual([{ id: "pane-1", launch: 1 }]);
     await show("pane-1");
     await waitForCalls("claude_code_start", 2);
+  });
+
+  it("names the start in the close, so that a close ends only the process that start made", async () => {
+    await openHost();
+    await waitForCalls("claude_code_start");
+    await call("closeClaudeCode", "pane-1");
+    await mock("claude_code_start", 7);
+    await show("pane-1");
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await call("closeClaudeCode", "pane-1");
+    expect(await waitForCalls(close)).toEqual([{ id: "pane-1", launch: 7 }]);
+  });
+
+  it("clears the screen and starts a process again when a pane whose process ended is shown again", async () => {
+    await openHost();
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "output", data: "old screen" });
+    await shows("old screen");
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await shows("Claude Code が終わりました");
+    await call("hideClaudeCode");
+    await show("pane-1");
+    await waitForCalls("claude_code_start", 2);
+    await sendClaudeCode({ kind: "output", data: "new screen" });
+    await shows("new screen");
+    expect(await screenText()).not.toContain("old screen");
+    expect(await screenText()).not.toContain("終わりました");
+  });
+
+  it("starts again a pane whose start failed when it is shown again", async () => {
+    await boot({ inbox: inbox(), claude_code_start: rejects("cookapps-mcp が見つかりません（/app/cookapps-mcp）") });
+    await browser.execute((host) => {
+      const el = document.createElement("div");
+      el.id = host;
+      el.style.cssText = "position: fixed; left: 0; top: 0; width: 640px; height: 320px; z-index: 1000; display: flex; flex-direction: column;";
+      document.body.append(el);
+    }, HOST);
+    await show("pane-1");
+    await waitForCalls("claude_code_start");
+    await shows("cookapps-mcp が見つかりません");
+    await call("hideClaudeCode");
+    await mock("claude_code_start", 1);
+    await show("pane-1");
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "output", data: "running" });
+    await shows("running");
+    expect(await screenText()).not.toContain("見つかりません");
   });
 });

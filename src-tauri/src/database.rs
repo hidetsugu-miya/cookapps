@@ -396,6 +396,45 @@ pub async fn test_connection(
     tested
 }
 
+/// How a test of `typed` reaches MySQL, given whether its connection is open in the app (`open`) and the connection as saved (`saved`).
+#[derive(Debug, PartialEq)]
+enum TestWay {
+    /// Starts the script of the profile (when it has one) and ends it again.
+    OwnScript,
+    /// The connection is open and logs in as the saved one does: its script already listens on the port, so the test logs in there and runs nothing.
+    OpenWay,
+}
+
+/// The way a test of `typed` goes (D-2). An open connection holds the port of its script, so a test that started the script again would meet its own connection's script on that port.
+/// A typed connection with no script has no script to start, so it is tested as any other.
+fn test_way(
+    open: bool,
+    saved: Option<&DatabaseProfile>,
+    typed: &DatabaseProfile,
+) -> Result<TestWay, String> {
+    if !open {
+        return Ok(TestWay::OwnScript);
+    }
+    if saved.is_some_and(|saved| same_login(saved, typed)) {
+        return Ok(TestWay::OpenWay);
+    }
+    if typed.script.is_empty() {
+        return Ok(TestWay::OwnScript);
+    }
+    Err("この接続は開いています。切断してからテストしてください".to_owned())
+}
+
+/// Tests `profile` through the way that its open connection already holds: logs in at its host and port, reads `SELECT VERSION()`, and starts and ends nothing.
+async fn test_open_way(profile: &DatabaseProfile, password: &str) -> Result<String, String> {
+    let port = check_address(&profile.db_host, profile.db_port)?;
+    let endpoint = mysql::Endpoint {
+        host: profile.db_host.clone(),
+        port,
+        scripted: !profile.script.is_empty(),
+    };
+    mysql::server_version(&endpoint, &profile.username, password).await
+}
+
 /// Tests the connection of `id` as saved, with the password saved for it (D-8), through `test_connection`, the function of the test of D-2.
 pub async fn test_saved(
     dir: &Path,
@@ -492,24 +531,37 @@ pub async fn database_profile_save(
 #[tauri::command]
 pub async fn database_test(
     app: AppHandle,
+    sessions: tauri::State<'_, session::Sessions>,
     scripts: tauri::State<'_, script::Scripts>,
     profile: DatabaseProfile,
     password: Option<String>,
 ) -> Result<String, String> {
     let dir = config_dir(&app)?;
     let profile = check(profile, &[])?;
+    let open = !profile.id.is_empty() && sessions.has(&scripts, &profile.id).await;
     let tested = profile.clone();
-    let password = tokio::task::spawn_blocking(move || {
+    let (password, way) = tokio::task::spawn_blocking(move || {
         let saved = if profile.id.is_empty() {
             Vec::new()
         } else {
             load(&dir)?
         };
-        test_password(&Keychain, &saved, &profile, password.as_deref())
+        let way = test_way(
+            open,
+            saved
+                .iter()
+                .find(|p| !profile.id.is_empty() && p.id == profile.id),
+            &profile,
+        )?;
+        let password = test_password(&Keychain, &saved, &profile, password.as_deref())?;
+        Ok::<_, String>((password, way))
     })
     .await
     .map_err(|e| e.to_string())??;
-    test_connection(&scripts, tested, &password).await
+    match way {
+        TestWay::OpenWay => test_open_way(&tested, &password).await,
+        TestWay::OwnScript => test_connection(&scripts, tested, &password).await,
+    }
 }
 
 /// Deletes a connection and its password. A connection that is open is closed first (D-3).
@@ -1494,6 +1546,67 @@ mod tests {
             ..profile
         };
         assert!(open_endpoint(&scripts, &plain).await.is_ok());
+    }
+
+    #[test]
+    fn a_test_of_an_open_connection_uses_its_open_way_or_is_refused() {
+        let saved = DatabaseProfile {
+            id: "a".to_owned(),
+            ..scripted("a")
+        };
+        // The name alone is not the login.
+        let renamed = DatabaseProfile {
+            name: "renamed".to_owned(),
+            ..saved.clone()
+        };
+        assert_eq!(test_way(true, Some(&saved), &renamed), Ok(TestWay::OpenWay));
+        // Not open: the script is started as before, and the saved one is not read.
+        assert_eq!(
+            test_way(false, Some(&saved), &saved),
+            Ok(TestWay::OwnScript)
+        );
+        assert_eq!(test_way(false, None, &saved), Ok(TestWay::OwnScript));
+        // Open, and the user, the script, the host or the port is not the saved one's: the script would meet the open connection's.
+        let moved: [fn(&mut DatabaseProfile); 4] = [
+            |p| p.username = "other".to_owned(),
+            |p| p.script = "exec other-forward".to_owned(),
+            |p| p.db_host = "db.elsewhere.example".to_owned(),
+            |p| p.db_port = 3307,
+        ];
+        for edit in moved {
+            let mut typed = saved.clone();
+            edit(&mut typed);
+            assert_eq!(
+                test_way(true, Some(&saved), &typed),
+                Err("この接続は開いています。切断してからテストしてください".to_owned())
+            );
+        }
+        // No script typed: nothing is started, so the open connection is no obstacle.
+        let plain = DatabaseProfile {
+            script: String::new(),
+            ..saved.clone()
+        };
+        assert_eq!(test_way(true, Some(&saved), &plain), Ok(TestWay::OwnScript));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_open_way_logs_in_at_the_port_and_does_not_meet_the_port_in_use() {
+        // The connection's own script listens on this port, as the listener does: the test is not stopped for it.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let profile = DatabaseProfile {
+            script: "exit 0".to_owned(),
+            db_port: u32::from(port),
+            ..direct("a")
+        };
+        let accepting = std::thread::spawn(move || listener.accept().map(|_| ()));
+        let error = test_open_way(&profile, "pw").await.unwrap_err();
+        accepting.join().unwrap().unwrap();
+        assert!(
+            !error.contains("使われています"),
+            "the port in use is not the answer: {error}"
+        );
     }
 
     #[cfg(unix)]

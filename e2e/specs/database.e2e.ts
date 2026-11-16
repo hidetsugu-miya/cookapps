@@ -1,6 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -382,6 +382,21 @@ describe("database: edit pane, Claude Code and reload", () => {
     await noOrca();
   });
 
+  it("shows the pane again with the next press after Claude Code ended, and starts it again", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "output", data: "old screen" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await toggle().click();
+    await expect(pane()).not.toBeDisplayed();
+    await toggle().click();
+    await expect(pane()).toBeDisplayed();
+    expect((await waitForCalls("claude_code_start", 2)).length).toBe(2);
+    await noOrca();
+  });
+
   it("hides the pane with a second press and shows it again with a third, starting the process once and ending nothing", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
@@ -408,7 +423,7 @@ describe("database: edit pane, Claude Code and reload", () => {
     await waitForCalls("claude_code_start");
     const close = await mock("claude_code_close", null);
     await $("#database-form").$("button=キャンセル").click();
-    expect(await waitForCalls(close)).toEqual([{ id: "database-edit" }]);
+    expect(await waitForCalls(close)).toEqual([{ id: "database-edit", launch: 1 }]);
     await expect(pane()).not.toBeDisplayed();
     await expect($("#database-claude-split")).not.toBeDisplayed();
     await pickFromMenu("p1", 1);
@@ -423,7 +438,7 @@ describe("database: edit pane, Claude Code and reload", () => {
     await waitForCalls("claude_code_start");
     const close = await mock("claude_code_close", null);
     await $("#nav-mail").click();
-    expect(await waitForCalls(close)).toEqual([{ id: "database-edit" }]);
+    expect(await waitForCalls(close)).toEqual([{ id: "database-edit", launch: 1 }]);
     await $("#nav-database").click();
     await expect($("#database-pane")).toBeDisplayed();
     await expect(pane()).not.toBeDisplayed();

@@ -1,6 +1,7 @@
 //! A-36: the shared part of the Claude Code panes. cookapps opens a pseudo terminal itself (`portable-pty`, no Orca in between) and runs Claude Code in it; the screen draws it with xterm.js (`ts/claude-code.ts`).
 //! Claude Code runs in a folder of its own, `claude-code/` in the app config directory, which holds a launch script and the `--mcp-config` file. The script is written by the app in a fixed form
-//! (only paths the app decided are in it: nothing that comes from a mail, a message or a Todo), and it starts `claude --tools '' --strict-mcp-config --mcp-config {the file}` (the built-in tools stay on when the screen asks, as the database screen does).
+//! (only paths the app decided are in it: nothing that comes from a mail, a message or a Todo), and it starts `claude --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {the file}` (the built-in tools stay on when the screen asks, as the database screen does).
+//! `manual` asks for every tool that writes, whatever `defaultMode` the owner's settings hold, and `--setting-sources user` leaves out the project and local settings of the shared folder, so an "always allow" chosen in one pane does not reach the others.
 //! The MCP config names `cookapps-mcp` next to the app's own executable (`Contents/MacOS/` in the bundle) and nothing else; the child is started as an argument array, with no shell of ours in between except `/bin/sh` running the script.
 //! A session is a process group of its own (the pseudo terminal makes the child a session leader): closing a pane, the end of the app, and a screen that no longer takes the output stop the whole group.
 //! What the terminal prints and the keys typed are only in the channel of the pane: no log line, no error text.
@@ -91,14 +92,15 @@ fn sh_quote(text: &str) -> String {
 }
 
 /// The launch script. Only the three paths the app decided and the fixed flags are in it; what the app adds at the start (`--plugin-dir`) comes as arguments of the script, `"$@"`.
-/// `--tools ''` takes the built-in tools off, so that a text in a mail or a message cannot make Claude Code run a command; `--strict-mcp-config` leaves the MCP servers of any other file out.
+/// `--tools ''` takes the built-in tools off, so that a text in a mail or a message cannot make Claude Code run a command; `--permission-mode manual` asks the owner for every tool that writes (the `defaultMode` of the user settings does not decide it);
+/// `--setting-sources user` does not read the `.claude/settings*.json` of the shared folder, where an "always allow" would stay for every pane; `--strict-mcp-config` leaves the MCP servers of any other file out.
 fn launch_script(claude: &Path, mcp_config: &Path, builtin_tools: bool) -> String {
     let tools = if builtin_tools { "" } else { " --tools ''" };
     format!(
         "#!/bin/sh\n\
          # Written by cookapps (A-36) at each start of a Claude Code pane; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-         exec {claude}{tools} --strict-mcp-config --mcp-config {config} \"$@\"\n",
+         exec {claude}{tools} --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
         config = sh_quote(&mcp_config.to_string_lossy()),
     )
@@ -460,14 +462,14 @@ pub struct ClaudeCode {
 }
 
 impl ClaudeCode {
-    /// Starts the process of `spec` for `id` (one that `id` had is ended first); its output and its end go to `sink`.
+    /// Starts the process of `spec` for `id` (one that `id` had is ended first); its output and its end go to `sink`. The answer is the number of this start, which only a close of the same number ends.
     fn start(
         &self,
         id: &str,
         spec: &Spec,
         plugin: Option<CallPlugin>,
         sink: Sink,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let seq = self.inner.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let (session, reader) = open(spec, seq, plugin, sink)?;
         // The session is held before the reader can see the process end, so its end finds it.
@@ -478,7 +480,7 @@ impl ClaudeCode {
         let inner = self.inner.clone();
         let id = id.to_owned();
         std::thread::spawn(move || reader.run(&inner, &id, seq));
-        Ok(())
+        Ok(seq)
     }
 
     /// Types `text` into the terminal of `id`; nothing happens when it has ended.
@@ -505,9 +507,16 @@ impl ClaudeCode {
             .map_err(|e| format!("疑似端末の大きさを変えられません: {e}"))
     }
 
-    /// Ends the process group of `id` (pane closed).
-    fn close(&self, id: &str) {
-        let session = self.inner.lock().remove(id);
+    /// Ends the process group of `id` started as `launch` (pane closed). A close that comes late, after the pane started `id` again, finds another number and ends nothing.
+    fn close(&self, id: &str, launch: u64) {
+        let session = {
+            let mut sessions = self.inner.lock();
+            if sessions.get(id).is_some_and(|s| s.seq == launch) {
+                sessions.remove(id)
+            } else {
+                None
+            }
+        };
         if let Some(session) = session {
             stop_later(session.pgid, session.ended.clone());
         }
@@ -526,6 +535,14 @@ impl ClaudeCode {
 fn check_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.chars().count() > ID_LIMIT || id.chars().any(char::is_control) {
         return Err("Claude Code のペインの名前が正しくありません".to_owned());
+    }
+    Ok(())
+}
+
+/// The limit counts characters, as Orca's input does, not the bytes of UTF-8.
+fn check_input(text: &str) -> Result<(), String> {
+    if text.chars().count() > INPUT_LIMIT {
+        return Err("一度に送れる文字数を超えています".to_owned());
     }
     Ok(())
 }
@@ -565,7 +582,7 @@ fn prepare(
 }
 
 /// Starts Claude Code in a pseudo terminal for the pane `id`: its output and its end go through `channel`. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `cookapps-mcp` otherwise),
-/// and `skill` is a saved skill that it is given. A failure is the message the pane shows. An `id` that has a process is ended first.
+/// and `skill` is a saved skill that it is given. A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 pub async fn claude_code_start(
     app: AppHandle,
@@ -575,7 +592,7 @@ pub async fn claude_code_start(
     builtin_tools: bool,
     skill: Option<ClaudeCodeSkill>,
     channel: Channel<ClaudeCodeEvent>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     check_id(&id)?;
     let size = check_size(viewport)?;
     let config = crate::auth::config_dir(&app)?;
@@ -602,9 +619,7 @@ pub async fn claude_code_input(
     text: String,
 ) -> Result<(), String> {
     check_id(&id)?;
-    if text.len() > INPUT_LIMIT {
-        return Err("一度に送れる文字数を超えています".to_owned());
-    }
+    check_input(&text)?;
     sessions.input(&id, text);
     Ok(())
 }
@@ -621,11 +636,15 @@ pub async fn claude_code_resize(
     sessions.resize(&id, cols, rows)
 }
 
-/// Ends the process of the pane `id` (the pane is closed).
+/// Ends the process of the pane `id` that `launch` (the answer of `claude_code_start`) started (the pane is closed); a process that a later start made stays.
 #[tauri::command]
-pub async fn claude_code_close(sessions: State<'_, ClaudeCode>, id: String) -> Result<(), String> {
+pub async fn claude_code_close(
+    sessions: State<'_, ClaudeCode>,
+    id: String,
+    launch: u64,
+) -> Result<(), String> {
     check_id(&id)?;
-    sessions.close(&id);
+    sessions.close(&id, launch);
     Ok(())
 }
 
@@ -685,7 +704,7 @@ mod tests {
             "#!/bin/sh\n\
              # Written by cookapps (A-36) at each start of a Claude Code pane; a change here is lost.\n\
              PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-             exec '/Users/x/.local/bin/claude' --tools '' --strict-mcp-config --mcp-config '/c/app/claude-code/mcp.json' \"$@\"\n"
+             exec '/Users/x/.local/bin/claude' --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config '/c/app/claude-code/mcp.json' \"$@\"\n"
         );
     }
 
@@ -693,7 +712,22 @@ mod tests {
     fn the_script_for_the_screens_that_keep_the_tools_has_no_tools_flag() {
         let script = launch_script(Path::new("/bin/claude"), Path::new("/c/mcp.json"), true);
         assert!(!script.contains("--tools"));
-        assert!(script.contains("--strict-mcp-config --mcp-config '/c/mcp.json' \"$@\""));
+        assert!(script.contains(
+            "--permission-mode manual --setting-sources user --strict-mcp-config --mcp-config '/c/mcp.json' \"$@\""
+        ));
+    }
+
+    #[test]
+    fn both_scripts_ask_for_the_writing_tools_and_read_only_the_user_settings() {
+        for builtin_tools in [false, true] {
+            let script = launch_script(
+                Path::new("/bin/claude"),
+                Path::new("/c/mcp.json"),
+                builtin_tools,
+            );
+            assert!(script.contains(" --permission-mode manual "));
+            assert!(script.contains(" --setting-sources user "));
+        }
     }
 
     #[test]
@@ -956,7 +990,7 @@ mod tests {
         let code = ClaudeCode::default();
         code.input("none", "x".to_owned());
         assert_eq!(code.resize("none", 80, 24), Ok(()));
-        code.close("none");
+        code.close("none", 1);
     }
 
     #[cfg(unix)]
@@ -970,7 +1004,8 @@ mod tests {
     fn closing_a_pane_ends_the_processes_it_started_too() {
         let code = ClaudeCode::default();
         let (sink, rx) = collecting();
-        code.start("a", &spec("sleep 30 & echo \"child:$!\"; wait"), None, sink)
+        let launch = code
+            .start("a", &spec("sleep 30 & echo \"child:$!\"; wait"), None, sink)
             .unwrap();
         let (text, _) = until(&rx, "child:");
         let pid: i32 = text
@@ -983,7 +1018,7 @@ mod tests {
             .parse()
             .unwrap();
         assert!(alive(pid));
-        code.close("a");
+        code.close("a", launch);
         wait_for("the started process is still there", || !alive(pid));
         assert_eq!(held(&code), 0);
     }
@@ -993,16 +1028,17 @@ mod tests {
     fn a_process_that_ignores_sigterm_is_killed_after_the_grace() {
         let code = ClaudeCode::default();
         let (sink, rx) = collecting();
-        code.start(
-            "a",
-            &spec("trap '' TERM; echo \"pid:$$\"; while true; do sleep 1; done"),
-            None,
-            sink,
-        )
-        .unwrap();
+        let launch = code
+            .start(
+                "a",
+                &spec("trap '' TERM; echo \"pid:$$\"; while true; do sleep 1; done"),
+                None,
+                sink,
+            )
+            .unwrap();
         let (text, _) = until(&rx, "pid:");
         let pid: i32 = text.split("pid:").nth(1).unwrap().trim().parse().unwrap();
-        code.close("a");
+        code.close("a", launch);
         std::thread::sleep(Duration::from_millis(500));
         assert!(alive(pid), "SIGTERM alone does not end it");
         wait_for("SIGKILL after the grace did not end it", || !alive(pid));
@@ -1042,6 +1078,30 @@ mod tests {
         until(&rx, "second");
         assert_eq!(held(&code), 1);
         code.close_all();
+        assert_eq!(held(&code), 0);
+    }
+
+    #[test]
+    fn the_input_limit_counts_characters_not_bytes() {
+        assert!(check_input(&"あ".repeat(INPUT_LIMIT)).is_ok());
+        assert!(check_input(&"a".repeat(INPUT_LIMIT)).is_ok());
+        assert!(check_input(&"あ".repeat(INPUT_LIMIT + 1)).is_err());
+    }
+
+    #[test]
+    fn a_close_of_an_old_start_leaves_the_new_process_of_the_same_id() {
+        let code = ClaudeCode::default();
+        let (old_sink, _old_rx) = collecting();
+        let old = code.start("a", &spec("sleep 30"), None, old_sink).unwrap();
+        let (sink, rx) = collecting();
+        let new = code
+            .start("a", &spec("echo second; sleep 30"), None, sink)
+            .unwrap();
+        assert_ne!(old, new);
+        code.close("a", old);
+        until(&rx, "second");
+        assert_eq!(held(&code), 1);
+        code.close("a", new);
         assert_eq!(held(&code), 0);
     }
 

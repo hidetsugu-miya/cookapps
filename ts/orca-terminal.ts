@@ -98,8 +98,8 @@ interface Instance {
   // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
   copy: string | null;
   copyQueued: boolean;
-  // A pty: the answer of its start (the keys and the size wait for it), and whether its process has ended or could not start (the keys typed are dropped).
-  ready: Promise<void>;
+  // A pty: the answer of its start (the keys and the size wait for it), which is the number of the start that `claude_code_close` takes, or null when it could not start, and whether its process has ended or could not start (the keys typed are dropped).
+  ready: Promise<number | null>;
   ended: boolean;
 }
 
@@ -304,7 +304,7 @@ function newInstance(source: TermSource, owner: string): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(), ended: false };
+  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -512,6 +512,13 @@ function drawPty(instance: Instance, event: ClaudeCodeEvent) {
   }
 }
 
+// A pty whose process ended, or could not start, and that is shown again begins anew: its screen is cleared and `startPty` starts a process (a hide and a show of a living one starts nothing).
+function restartPty(instance: Instance) {
+  instance.channel = null;
+  instance.ended = false;
+  instance.term.reset();
+}
+
 // Starts the process of a pty terminal, once: it goes on while the pane is hidden, so a show after a hide starts nothing. A start that fails draws its message in the terminal.
 function startPty(instance: Instance) {
   if (document.hidden || instance.channel !== null || instance.ended) return;
@@ -524,9 +531,10 @@ function startPty(instance: Instance) {
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   const { handle, pty } = instance.source;
   instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, channel }).then(
-    () => {},
+    (launch) => launch,
     (e) => {
       if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e) });
+      return null;
     },
   );
 }
@@ -626,6 +634,7 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
     resizes.unobserve(host);
   }
   for (const instance of fresh) {
+    if (instance.source.kind === "pty" && instance.ended) restartPty(instance);
     fitInstance(instance);
     start(instance);
   }
@@ -658,8 +667,10 @@ function dropTerminal(id: string) {
     // The pane forgot it: its process ends, and nothing it prints is drawn.
     instance.channel = null;
     instance.ended = true;
-    // After the start has answered: a close that came first would find no process, and the start would then make one nobody ends.
-    void instance.ready.then(() => invoke("claude_code_close", { id }).catch(() => {}));
+    // After the start has answered: a close that came first would find no process, and the start would then make one nobody ends. It names the start, so a pane of the same id that started since is not ended by it.
+    void instance.ready.then((launch) => {
+      if (launch !== null) invoke("claude_code_close", { id, launch }).catch(() => {});
+    });
   }
   // The terminal left Orca's list: the keys not sent yet have nowhere to go.
   instance.pending = "";

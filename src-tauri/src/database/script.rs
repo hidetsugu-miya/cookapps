@@ -14,6 +14,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::Write,
+    net::SocketAddr,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -42,6 +43,8 @@ const TAIL_LINES: usize = 5;
 const POLL: Duration = Duration::from_millis(100);
 /// One try of the port.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+/// The lookup of the host's name, once for a start.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the end of the script waits for the last of its standard error.
 const STDERR_WAIT: Duration = Duration::from_secs(1);
 /// `ETXTBSY`: the file is still open for writing in another thread that forked meanwhile.
@@ -136,14 +139,36 @@ fn failure_text(stage: Stage, exit: &Exit, limit: Duration) -> String {
     }
 }
 
+/// How the text of `in_use_text` ends (the part that does not hold the host and the port).
+const IN_USE_TAIL: &str = "使っているものを止めるか、別のポートにしてください";
+
 /// What the screen is told when something already answers on the port the script is to listen on.
 fn in_use_text(host: &str, port: u16) -> String {
-    format!("{host}:{port} は、スクリプトを実行する前から使われています。使っているものを止めるか、別のポートにしてください")
+    format!("{host}:{port} は、スクリプトを実行する前から使われています。{IN_USE_TAIL}")
 }
 
-/// Whether a TCP connection to `host:port` succeeds now: the port is in use before the script is run, and it is ready after.
-async fn answers(host: &str, port: u16) -> bool {
-    tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect((host, port)))
+/// Whether `text` is the error of a port that was in use before the script was run (`cookapps-mcp` adds its own hint to it).
+pub fn is_in_use_text(text: &str) -> bool {
+    text.ends_with(IN_USE_TAIL)
+}
+
+/// The addresses of `host:port`, looked up once: the probes of one start connect to them and look up no name again.
+async fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    let failed = |why: String| format!("{host} のアドレスを調べられません: {why}");
+    let found = tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((host, port)))
+        .await
+        .map_err(|_| failed("時間内に答えがありません".to_owned()))?
+        .map_err(|e| failed(e.to_string()))?;
+    let addrs: Vec<SocketAddr> = found.collect();
+    if addrs.is_empty() {
+        return Err(failed("アドレスがありません".to_owned()));
+    }
+    Ok(addrs)
+}
+
+/// Whether a TCP connection to one of `addrs` succeeds now: the port is in use before the script is run, and it is ready after.
+async fn answers(addrs: &[SocketAddr]) -> bool {
+    tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(addrs))
         .await
         .is_ok_and(|connected| connected.is_ok())
 }
@@ -339,7 +364,8 @@ pub async fn start(
     body: &str,
     timing: Timing,
 ) -> Result<Script, String> {
-    if answers(host, port).await {
+    let addrs = resolve(host, port).await?;
+    if answers(&addrs).await {
         return Err(in_use_text(host, port));
     }
     let folder = {
@@ -398,7 +424,7 @@ pub async fn start(
             let _ = script.finish().await;
             return Err(failure_text(Stage::Early, &exit, timing.ready));
         }
-        if answers(host, port).await {
+        if answers(&addrs).await {
             return Ok(script);
         }
         let now = Instant::now();
@@ -558,6 +584,12 @@ mod tests {
             failure_text(Stage::Late, &exit(Some(3), &["oops"]), limit),
             "接続のスクリプトが終了したため、接続を閉じました（終了コード 3）。標準エラーの最後の行: oops"
         );
+    }
+
+    #[test]
+    fn tells_the_text_of_a_port_in_use_from_the_other_errors() {
+        assert!(is_in_use_text(&in_use_text("127.0.0.1", 3307)));
+        assert!(!is_in_use_text("スクリプトを起動できません: x"));
     }
 
     #[test]
