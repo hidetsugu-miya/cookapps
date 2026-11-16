@@ -29,7 +29,7 @@ use crate::{
     accounts::write_atomic,
     auth::config_dir,
     orca_files::check_worktree_of_project,
-    ssh_scratch::{check_host, failure, run_process, shared_control, ssh_args, Ran, SSH, TIMEOUT},
+    ssh::{check_host, failure, run_process, shared_control, ssh_args, Ran, SSH, TIMEOUT},
 };
 
 const FILE: &str = "lsp-settings.json";
@@ -309,12 +309,7 @@ pub(crate) fn spawn_of(
         },
         Route::Ssh { host } => Spawn {
             program: SSH.to_owned(),
-            args: ssh_args(
-                host,
-                &[],
-                control,
-                &format!("sh -c {}", shell_quote(&script)),
-            ),
+            args: ssh_args(host, control, &format!("sh -c {}", shell_quote(&script))),
         },
     }
 }
@@ -443,7 +438,7 @@ fn settings_of(
         .unwrap_or_else(|| LspRepoSettings::unset(environment, project)))
 }
 
-/// A setting as it is saved: texts trimmed and an empty one taken as not set, each checked. The key (`environment`, `project`) must be real, and `ssh_host` is checked as ssh_scratch checks a host (A-30), `mount` must be an absolute path, and no text holds a control character (a command is one line).
+/// A setting as it is saved: texts trimmed and an empty one taken as not set, each checked. The key (`environment`, `project`) must be real, and `ssh_host` is checked as `ssh::check_host` checks a host, `mount` must be an absolute path, and no text holds a control character (a command is one line).
 fn clean(settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
     let key = |what: &str, text: &str| -> Result<(), String> {
         if text.is_empty() || text.chars().count() > MAX_TEXT || text.chars().any(char::is_control)
@@ -928,7 +923,7 @@ mod tests {
             "sh -c {}",
             shell_quote(&script("/w/it's", "bundle exec ruby-lsp"))
         );
-        assert_eq!(spawn.args, ssh_args("dev", &[], Some("/c"), &remote));
+        assert_eq!(spawn.args, ssh_args("dev", Some("/c"), &remote));
         assert_eq!(
             &spawn.args[spawn.args.len() - 3..],
             ["--", "dev", remote.as_str()]

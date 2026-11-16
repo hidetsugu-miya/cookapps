@@ -10,7 +10,7 @@ use super::{check_worktree, plan_for, run_on, shell_quote, spawn_of, LspLaunch, 
 use crate::{
     auth::config_dir,
     orca_files::check_worktree_of_project,
-    ssh_scratch::{failure, run_process, shared_control, Ran},
+    ssh::{failure, run_process, shared_control, Ran},
 };
 
 /// Longer than the reads of the worktree: `docker compose up -d` may pull an image or wait for a health check.

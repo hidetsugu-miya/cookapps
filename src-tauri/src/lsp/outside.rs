@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     orca_files::check_worktree_of_project,
-    ssh_scratch::{failure, Ran},
+    ssh::{failure, Ran},
 };
 
 /// The most bytes of a file that are read.

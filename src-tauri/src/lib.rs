@@ -38,7 +38,7 @@ mod slack_blocks;
 mod slack_emoji;
 mod slack_markdown;
 mod slack_mrkdwn;
-pub mod ssh_scratch;
+pub mod ssh;
 pub mod todoist;
 pub mod update;
 
@@ -388,12 +388,6 @@ pub fn run() {
             lsp::container::lsp_container_start,
             lsp::view::lsp_word,
             lsp::view::lsp_places,
-            ssh_scratch::ssh_scratch_list,
-            ssh_scratch::ssh_scratch_read,
-            ssh_scratch::ssh_scratch_write,
-            ssh_scratch::ssh_scratch_create,
-            ssh_scratch::ssh_scratch_rename,
-            ssh_scratch::ssh_scratch_delete,
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,
