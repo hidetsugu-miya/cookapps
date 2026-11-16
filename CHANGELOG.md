@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.80.2
+
+The app shows its name as つなぎAI: in the window title, in Finder and the Dock, and on its screens (#764). The README and the documentation use the name too. The app file, the settings folder and the identifier keep the name `tsunagiai`, so nothing moves.
+
 ## v0.80.1
 
 The app is renamed from cookapps to つなぎあい (tsunagiai) (#750, #751, #752). Its identifier is `jp.mysis.tsunagiai`. At its first start the app copies the settings folder of `jp.mysis.cookapps` into its own, and it copies each keychain item the first time it uses it; the old folder and items are kept. An update puts the new app in the place of the old one, so it stays at `/Applications/cookapps.app` until you rename it to `tsunagiai.app`.

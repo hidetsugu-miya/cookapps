@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" alt="つなぎあい" width="96" />
+  <img src="src-tauri/icons/icon.png" alt="つなぎAI" width="96" />
 </p>
 
-<h1 align="center">つなぎあい</h1>
+<h1 align="center">つなぎAI</h1>
 
 <p align="center">
   <strong>届いた連絡を、その場で Claude の仕事に。</strong><br />
@@ -20,7 +20,7 @@
   <a href="#インストール">インストール</a> ・ <a href="docs/features.md">機能</a> ・ <a href="#ドキュメント">ドキュメント</a>
 </h3>
 
-つなぎあいは、Gmail、Google カレンダー、Todoist、Slack、Notion の公式 API と、オープンソース（MIT）の Orca の公開コードでつなぐ、個人用のクライアントです。
+つなぎAIは、Gmail、Google カレンダー、Todoist、Slack、Notion の公式 API と、オープンソース（MIT）の Orca の公開コードでつなぐ、個人用のクライアントです。
 商用で使う予定はありません。
 つないでいる各サービスと、作るうえで参考にしたアプリに敬意を持って作っています。
 
@@ -76,7 +76,7 @@
 
 ## データは、あなたのマシンに
 
-- つなぎあいにサーバーはありません。Gmail や Slack とは、あなたのマシンが直接話します。
+- つなぎAIにサーバーはありません。Gmail や Slack とは、あなたのマシンが直接話します。
 - ログインの情報は OS のキーチェーンに保存します。
 - Claude に内容を送るのは、あなたがボタンを押したときだけです。
 - ソースコードはすべて公開しています。
