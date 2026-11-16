@@ -31,11 +31,12 @@ use super::{
     Workspace, HISTORY_LIMIT, USER_LOOKUPS,
 };
 use crate::{
-    auth::{config_dir, delete_entry, Auth},
+    auth::{config_dir, Auth},
     gmail::log_failure,
+    keychain,
 };
 
-const APP_TOKEN_SERVICE: &str = "jp.mysis.cookapps.slack-app";
+const APP_TOKEN_SERVICE: &str = "jp.mysis.tsunagiai.slack-app";
 /// The events the screen listens for.
 /// `EVENT_DIRTY`: the cache changed, draw the list from it. `EVENT_RESYNC`: a connection was made, read the list in full. `EVENT_STATUS`: a `SocketStatus`.
 const EVENT_DIRTY: &str = "slack-timeline-dirty";
@@ -555,31 +556,17 @@ impl SocketHub {
     }
 }
 
-fn app_entry(team_id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(APP_TOKEN_SERVICE, team_id).map_err(|e| e.to_string())
-}
-
 /// The App-Level Token of the workspace. `None` means none is stored.
 async fn read_app_secret(team_id: String) -> Result<Option<String>, String> {
-    blocking(move || match app_entry(&team_id)?.get_password() {
-        Ok(t) => Ok(Some(t)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-    })
-    .await
+    blocking(move || keychain::read(APP_TOKEN_SERVICE, &team_id)).await
 }
 
 async fn write_app_secret(team_id: String, token: String) -> Result<(), String> {
-    blocking(move || {
-        app_entry(&team_id)?
-            .set_password(&token)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))
-    })
-    .await
+    blocking(move || keychain::write(APP_TOKEN_SERVICE, &team_id, &token)).await
 }
 
 async fn delete_app_secret(team_id: String) -> Result<(), String> {
-    blocking(move || delete_entry(&app_entry(&team_id)?)).await
+    blocking(move || keychain::delete(APP_TOKEN_SERVICE, &team_id)).await
 }
 
 /// rustls needs a process-wide crypto provider when it is not told one, and more than one is built in (reqwest's and the updater's).
@@ -1090,6 +1077,14 @@ pub fn slack_socket_status(state: State<'_, SlackState>) -> Vec<SocketStatus> {
 mod tests {
     use super::*;
     use crate::slack::{name_in, raw_from};
+
+    #[test]
+    fn the_token_service_has_an_old_one_to_move_from() {
+        assert_eq!(
+            keychain::old_service(APP_TOKEN_SERVICE).as_deref(),
+            Some("jp.mysis.cookapps.slack-app")
+        );
+    }
 
     fn at(secs: u64) -> Instant {
         // One fixed origin per test is enough: the checks use the differences.

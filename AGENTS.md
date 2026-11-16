@@ -50,6 +50,7 @@ A new requirement gets a section there and an entry here.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
+- The identifier is `jp.mysis.tsunagiai`. The config directory and the keychain services of the old identifier `jp.mysis.cookapps` are moved to the new ones by the app (`requirements/constraints.md`, "Settings files").
 - If the OAuth consent screen is "External" and in "Testing", refresh tokens expire after 7 days.
   - Use an "Internal" consent screen, or publish an "External" one.
 

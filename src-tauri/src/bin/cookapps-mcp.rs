@@ -6,18 +6,11 @@ use cookapps_lib::{
     auth::Auth,
     calendar,
     database::{self, script::Scripts, DatabaseProfile, Keychain},
-    gmail,
+    gmail, identity,
 };
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, transport::stdio, ServiceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Tauri's `app_config_dir` for the app's identifier: `dirs::config_dir()` (as Tauri resolves it) joined with the identifier.
-fn config_dir() -> Result<PathBuf, String> {
-    dirs::config_dir()
-        .map(|dir| dir.join("jp.mysis.cookapps"))
-        .ok_or_else(|| "設定フォルダの場所を特定できません".to_string())
-}
 
 fn relogin(account: &str) -> String {
     format!("{account} は再ログインが必要です。cookapps アプリで再ログインしてください")
@@ -239,7 +232,7 @@ impl Cookapps {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Cookapps {
         auth: Auth::new(),
-        dir: config_dir()?,
+        dir: identity::config_dir()?,
     };
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -252,14 +245,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir, db_test_answer, Cookapps, DbProfileSaveArgs};
-
-    #[test]
-    fn config_dir_is_the_apps_folder_under_the_users_config_dir() {
-        let dir = config_dir().unwrap();
-        assert!(dir.is_absolute());
-        assert!(dir.ends_with("jp.mysis.cookapps"));
-    }
+    use super::{db_test_answer, Cookapps, DbProfileSaveArgs};
 
     #[test]
     fn a_save_without_an_id_is_a_new_connection_and_the_script_is_kept_as_given() {

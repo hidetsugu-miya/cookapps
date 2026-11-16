@@ -81,7 +81,7 @@ export const thread = (id: string, subject: string): ThreadItem => ({ id, accoun
 
 ### Cut E2E runs off from the owner's environment
 
-`src-tauri/tauri.e2e.conf.json` sets the identifier to `jp.mysis.cookapps.e2e` and the window to `visible: false`.
+`src-tauri/tauri.e2e.conf.json` sets the identifier to `jp.mysis.tsunagiai.e2e` and the window to `visible: false`.
 A build with the `e2e` feature replaces keyring with an in-memory mock, and on macOS it does not take the Dock or the focus.
 This keeps the everyday cookapps settings folder, keychain and screen out of it.
 

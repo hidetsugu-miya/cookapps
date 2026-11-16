@@ -22,13 +22,10 @@ use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{
-    accounts::write_atomic,
-    auth::{config_dir, delete_entry},
-};
+use crate::{accounts::write_atomic, auth::config_dir, keychain};
 
 const FILE: &str = "database-profiles.json";
-const KEYRING_SERVICE: &str = "jp.mysis.cookapps.database";
+const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai.database";
 const NAME_MAX: usize = 100;
 const PORT_MAX: u32 = 65535;
 /// A save reads the file, changes it and writes it again by a temporary name beside it: two at once would lose a change.
@@ -216,35 +213,21 @@ pub trait PasswordStore {
 /// The OS keychain.
 pub struct Keychain;
 
-fn password_entry(id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, id).map_err(|e| e.to_string())
-}
-
 impl PasswordStore for Keychain {
     fn exists(&self, id: &str) -> Result<bool, String> {
-        match password_entry(id)?.get_password() {
-            Ok(_) => Ok(true),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-        }
+        Ok(keychain::read(KEYRING_SERVICE, id)?.is_some())
     }
 
     fn get(&self, id: &str) -> Result<Option<String>, String> {
-        match password_entry(id)?.get_password() {
-            Ok(password) => Ok(Some(password)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-        }
+        keychain::read(KEYRING_SERVICE, id)
     }
 
     fn set(&self, id: &str, password: &str) -> Result<(), String> {
-        password_entry(id)?
-            .set_password(password)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))
+        keychain::write(KEYRING_SERVICE, id, password)
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
-        delete_entry(&password_entry(id)?)
+        keychain::delete(KEYRING_SERVICE, id)
     }
 }
 
@@ -721,6 +704,14 @@ pub async fn database_connections(
 mod tests {
     use super::*;
     use std::{collections::HashMap, path::PathBuf};
+
+    #[test]
+    fn the_password_service_has_an_old_one_to_move_from() {
+        assert_eq!(
+            keychain::old_service(KEYRING_SERVICE).as_deref(),
+            Some("jp.mysis.cookapps.database")
+        );
+    }
 
     /// The passwords in memory, so that no test reaches the keychain.
     #[derive(Default)]

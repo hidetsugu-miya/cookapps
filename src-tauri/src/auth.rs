@@ -22,13 +22,14 @@ use crate::{
     calendar::{self, CalendarCache},
     disk_cache,
     gmail::{self, HeldThreads, InlineCache, SyncState},
+    keychain,
 };
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
-// Existing refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json.
-const KEYRING_SERVICE: &str = "jp.mysis.cookapps";
+// The refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json. The old name is read by `keychain`.
+pub(crate) const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -119,11 +120,8 @@ impl Auth {
         if !is_registered(&self.accounts(dir)?, account) {
             return Ok(None);
         }
-        let entry = keyring_entry(account)?;
-        let refresh_token = match entry.get_password() {
-            Ok(p) => p,
-            Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) => return Err(format!("資格情報の読み取りに失敗: {e}")),
+        let Some(refresh_token) = keychain::read(KEYRING_SERVICE, account)? else {
+            return Ok(None);
         };
         let client = load_client(dir)?;
         match self.refresh_access(&client, &refresh_token).await? {
@@ -136,7 +134,7 @@ impl Auth {
             }
             None => {
                 self.access.lock().unwrap().remove(account);
-                delete_entry(&entry)?;
+                keychain::delete(KEYRING_SERVICE, account)?;
                 Ok(None)
             }
         }
@@ -153,17 +151,12 @@ impl Auth {
         if !is_registered(&list, account) {
             return Err("登録されていないアカウントです".into());
         }
-        let entry = keyring_entry(account)?;
-        match entry.get_password() {
-            Ok(token) => {
-                if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
-                    eprintln!("cookapps: revoke account={account} status=- error={e}");
-                }
+        if let Some(token) = keychain::read(KEYRING_SERVICE, account)? {
+            if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
+                eprintln!("cookapps: revoke account={account} status=- error={e}");
             }
-            Err(keyring::Error::NoEntry) => {}
-            Err(e) => return Err(format!("資格情報の読み取りに失敗: {e}")),
         }
-        delete_entry(&entry)?;
+        keychain::delete(KEYRING_SERVICE, account)?;
         self.access.lock().unwrap().remove(account);
         // Under the cache lock, so a save that began before cannot write this account's data back after the delete.
         disk_cache::exclusive(|| {
@@ -230,9 +223,7 @@ impl Auth {
             .ok_or("リフレッシュトークンが返されませんでした")?;
         let access = access_token_of(res)?;
         let email = self.fetch_email(&access).await?;
-        keyring_entry(&email)?
-            .set_password(&refresh_token)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))?;
+        keychain::write(KEYRING_SERVICE, &email, &refresh_token)?;
         accounts::save(&dir, &accounts::with_account(existing, &email))?;
         self.access.lock().unwrap().insert(email.clone(), access);
         Ok(email)
@@ -365,22 +356,6 @@ fn access_token_of(res: TokenResponse) -> Result<String, String> {
 
 fn is_registered(list: &[String], account: &str) -> bool {
     list.iter().any(|a| a == account)
-}
-
-pub(crate) fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| e.to_string())
-}
-
-/// A missing entry counts as deleted, so a repeated or concurrent run ends in the same state.
-pub(crate) fn delete_entry(entry: &keyring::Entry) -> Result<(), String> {
-    ignore_missing(entry.delete_credential())
-}
-
-fn ignore_missing(result: Result<(), keyring::Error>) -> Result<(), String> {
-    match result {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("資格情報の削除に失敗: {e}")),
-    }
 }
 
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -516,30 +491,6 @@ mod tests {
             code_from_request(line, "xyz", "Google"),
             Err("認可コードがありません".into())
         );
-    }
-
-    #[test]
-    fn deleting_a_missing_entry_succeeds() {
-        assert_eq!(ignore_missing(Ok(())), Ok(()));
-        assert_eq!(ignore_missing(Err(keyring::Error::NoEntry)), Ok(()));
-        let err = ignore_missing(Err(keyring::Error::Invalid("k".into(), "v".into())));
-        assert!(err.unwrap_err().contains("資格情報の削除に失敗"));
-    }
-
-    /// Writes, reads and deletes a real Windows Credential Manager entry under a service name only this test uses.
-    #[cfg(windows)]
-    #[test]
-    fn credential_manager_round_trip() {
-        let user = format!("round-trip-{}", std::process::id());
-        let entry = keyring::Entry::new("jp.mysis.cookapps.test", &user).unwrap();
-        let written = entry.set_password("secret-value");
-        let read = entry.get_password();
-        // Deleted before any assertion, so a failed assertion leaves nothing behind.
-        let deleted = entry.delete_credential();
-        written.unwrap();
-        assert_eq!(read.unwrap(), "secret-value");
-        deleted.unwrap();
-        assert!(matches!(entry.get_password(), Err(keyring::Error::NoEntry)));
     }
 
     /// Answers one request with `response`, then hands back the request it received.

@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_atomic, auth::delete_entry};
+use crate::{accounts::write_atomic, keychain};
 
 const AUTH_FILE: &str = "claude-auth.json";
-const KEY_SERVICE: &str = "jp.mysis.cookapps.claude";
+const KEY_SERVICE: &str = "jp.mysis.tsunagiai.claude";
 const KEY_USER: &str = "api-key";
 /// The host the key is checked against; `check_key` takes it as an argument so a test can use a local port.
 pub const API_BASE: &str = "https://api.anthropic.com";
@@ -139,17 +139,9 @@ pub fn load_connection(dir: &Path) -> Result<Connection, String> {
     connection_of(method, key)
 }
 
-fn key_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEY_SERVICE, KEY_USER).map_err(|e| e.to_string())
-}
-
 /// The stored key. `None` means none is stored.
 pub fn read_key() -> Result<Option<String>, String> {
-    match key_entry()?.get_password() {
-        Ok(key) => Ok(Some(key)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-    }
+    keychain::read(KEY_SERVICE, KEY_USER)
 }
 
 /// The stored key; none stored is an error.
@@ -158,13 +150,11 @@ pub fn require_key() -> Result<String, String> {
 }
 
 pub fn write_key(key: &str) -> Result<(), String> {
-    key_entry()?
-        .set_password(key)
-        .map_err(|e| format!("資格情報の保存に失敗: {e}"))
+    keychain::write(KEY_SERVICE, KEY_USER, key)
 }
 
 pub fn delete_key() -> Result<(), String> {
-    delete_entry(&key_entry()?)
+    keychain::delete(KEY_SERVICE, KEY_USER)
 }
 
 /// The key the user pasted, cleaned and checked before anything is sent: surrounding whitespace is dropped,

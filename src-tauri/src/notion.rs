@@ -19,7 +19,8 @@ use url::Url;
 
 use crate::{
     accounts,
-    auth::{self, config_dir, delete_entry},
+    auth::{self, config_dir},
+    keychain,
 };
 
 const AUTH_URL: &str = "https://mcp.notion.com/authorize";
@@ -28,7 +29,7 @@ const REGISTER_URL: &str = "https://mcp.notion.com/register";
 const MCP_URL: &str = "https://mcp.notion.com/mcp";
 /// The redirect the client is registered with. Notion accepts any port on `127.0.0.1` for it (RFC 8252), and the path must match.
 const REGISTERED_REDIRECT: &str = "http://127.0.0.1/";
-const KEYRING_SERVICE: &str = "jp.mysis.cookapps.notion";
+const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai.notion";
 const FILE: &str = "notion-accounts.json";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// An access token this close to its end is refreshed before it is used.
@@ -425,7 +426,7 @@ async fn write_stored_async(workspace: &str, stored: &Stored) -> Result<(), Stri
 
 async fn delete_stored_async(workspace: &str) -> Result<(), String> {
     let workspace = workspace.to_owned();
-    blocking(move || delete_entry(&entry(&workspace)?)).await
+    blocking(move || keychain::delete(KEYRING_SERVICE, &workspace)).await
 }
 
 /// The workspaces of the file, each with whether it needs a new connection (`held`: the ones with a token in memory).
@@ -669,24 +670,15 @@ fn load_file(dir: &Path) -> Result<NotionFile, String> {
     }
 }
 
-fn entry(workspace: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, workspace).map_err(|e| e.to_string())
-}
-
 /// `None` for no entry, and for one that is not a pair (a new connection replaces it).
 fn read_stored(workspace: &str) -> Result<Option<Stored>, String> {
-    match entry(workspace)?.get_password() {
-        Ok(text) => Ok(serde_json::from_str(&text).ok()),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-    }
+    Ok(keychain::read(KEYRING_SERVICE, workspace)?
+        .and_then(|text| serde_json::from_str(&text).ok()))
 }
 
 fn write_stored(workspace: &str, stored: &Stored) -> Result<(), String> {
     let text = serde_json::to_string(stored).map_err(|e| e.to_string())?;
-    entry(workspace)?
-        .set_password(&text)
-        .map_err(|e| format!("資格情報の保存に失敗: {e}"))
+    keychain::write(KEYRING_SERVICE, workspace, &text)
 }
 
 /// Posts a form to the token endpoint. An error answer is in the reply (`error`), not an `Err`; an answer that is no JSON is an `Err`.

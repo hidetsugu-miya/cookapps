@@ -16,10 +16,10 @@ cookapps アプリが起動していなくても使えます。
 - macOS か Windows で動かすこと。
 - cookapps アプリで、使いたいアカウントにログイン済みであること。
   - `cookapps-mcp` は、アプリと同じ設定フォルダの `client_secret.json` と `accounts.json` を読みます。
-    macOS では `~/Library/Application Support/jp.mysis.cookapps/`、Windows では `%APPDATA%\jp.mysis.cookapps\` です。
-  - リフレッシュトークンもアプリと同じ OS の資格情報の保管場所の項目（サービス名 `jp.mysis.cookapps`。macOS ではキーチェーン、Windows では資格情報マネージャー）から読みます。
+    macOS では `~/Library/Application Support/jp.mysis.tsunagiai/`、Windows では `%APPDATA%\jp.mysis.tsunagiai\` です。
+  - リフレッシュトークンもアプリと同じ OS の資格情報の保管場所の項目（サービス名 `jp.mysis.tsunagiai`。macOS ではキーチェーン、Windows では資格情報マネージャー）から読みます。
 - `cookapps-mcp` はログインを行いません。アカウントの追加と再ログインは、アプリで行います。
-- データベースの接続のツールは、アプリと同じ設定フォルダの `database-profiles.json` を読み書きし、パスワードはアプリと同じ資格情報の保管場所の項目（サービス名 `jp.mysis.cookapps.database`）から読みます（接続先やユーザーを変える保存では、その項目を消します）。パスワードを登録するのは、アプリの接続の編集ペインだけです。
+- データベースの接続のツールは、アプリと同じ設定フォルダの `database-profiles.json` を読み書きし、パスワードはアプリと同じ資格情報の保管場所の項目（サービス名 `jp.mysis.tsunagiai.database`）から読みます（接続先やユーザーを変える保存では、その項目を消します）。パスワードを登録するのは、アプリの接続の編集ペインだけです。
 - `~/.cargo/bin`（Windows では `%USERPROFILE%\.cargo\bin`）が `PATH` に入っていること。
 
 ## 手順

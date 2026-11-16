@@ -1,5 +1,5 @@
 {
-  "identifier": "jp.mysis.cookapps.e2e",
+  "identifier": "jp.mysis.tsunagiai.e2e",
   "build": {
     "frontendDist": "../e2e/dist"
   },

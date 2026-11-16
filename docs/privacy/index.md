@@ -297,12 +297,15 @@ API キーに切り替えると、本アプリは `claude auth logout` を実行
 Gmail のメールそのものは消えません。
 
 本アプリへのアクセス権は、Google アカウントの「[サードパーティ製のアプリとサービス](https://myaccount.google.com/connections)」からいつでも取り消せます。
-保存したリフレッシュトークンは、macOS ではキーチェーンアクセスで「jp.mysis.cookapps」の項目を、Windows では資格情報マネージャーの「Windows 資格情報」で名前が「jp.mysis.cookapps」で終わる項目を削除すると消せます。
-Todoist のトークンは、設定画面の「Todoist の接続を解除」か、同じ場所で「jp.mysis.cookapps.todoist」の項目（Windows では名前がそれで終わる項目）を削除すると消せます。
-Slack のトークンは、設定画面の「接続を解除」か、同じ場所で「jp.mysis.cookapps.slack」の項目（ワークスペースごと。Windows では名前がそれで終わる項目）を削除すると消せます。
-データベースの画面のパスワードは、その接続を削除するか、同じ場所で「jp.mysis.cookapps.database」の項目（接続ごと。Windows では名前がそれで終わる項目）を削除すると消せます。
-Slack の App-Level Token は、設定画面の「リアルタイム更新」の削除ボタンか、ワークスペースの「接続を解除」か、同じ場所で「jp.mysis.cookapps.slack-app」の項目（ワークスペースごと。Windows では名前がそれで終わる項目）を削除すると消せます。
+保存したリフレッシュトークンは、macOS ではキーチェーンアクセスで「jp.mysis.tsunagiai」の項目を、Windows では資格情報マネージャーの「Windows 資格情報」で名前が「jp.mysis.tsunagiai」で終わる項目を削除すると消せます。
+Todoist のトークンは、設定画面の「Todoist の接続を解除」か、同じ場所で「jp.mysis.tsunagiai.todoist」の項目（Windows では名前がそれで終わる項目）を削除すると消せます。
+Slack のトークンは、設定画面の「接続を解除」か、同じ場所で「jp.mysis.tsunagiai.slack」の項目（ワークスペースごと。Windows では名前がそれで終わる項目）を削除すると消せます。
+データベースの画面のパスワードは、その接続を削除するか、同じ場所で「jp.mysis.tsunagiai.database」の項目（接続ごと。Windows では名前がそれで終わる項目）を削除すると消せます。
+Slack の App-Level Token は、設定画面の「リアルタイム更新」の削除ボタンか、ワークスペースの「接続を解除」か、同じ場所で「jp.mysis.tsunagiai.slack-app」の項目（ワークスペースごと。Windows では名前がそれで終わる項目）を削除すると消せます。
 キーチェーンアクセスや資格情報マネージャーで消した場合は、設定フォルダの `todoist-cache.json`（最後に取得したタスクの控え）が残るので、手で消してください。
+識別子が「jp.mysis.cookapps」だった版の本アプリを使っていた場合は、新しい版が最初の起動で、その設定フォルダ（macOS では `~/Library/Application Support/jp.mysis.cookapps`、Windows では `%APPDATA%\jp.mysis.cookapps`）の中身と、同じ場所の「jp.mysis.cookapps」で始まる項目の値を新しい名前へ写します。
+古い設定フォルダと古い項目は残るので、不要なら手で消してください（設定画面の接続解除やアカウントの削除は、古い項目も消します）。
+
 v0.14.6 以前（旧名 cookup）の本アプリを使っていた場合は、同じ場所の「jp.mysis.cookup」で始まる項目と、旧設定フォルダ（macOS では `~/Library/Application Support/jp.mysis.cookup`、Windows では `%APPDATA%\jp.mysis.cookup`）も手で消してください。旧名の項目のアクセス権は、上の「サードパーティ製のアプリとサービス」から取り消せます。
 
 ## お問い合わせ

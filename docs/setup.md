@@ -16,8 +16,8 @@ title: セットアップと起動
 1. Google Cloud で Gmail API と Google Calendar API を有効にし、OAuth 同意画面を設定します。
 2. 種類「デスクトップアプリ」の OAuth クライアントを作り、JSON をダウンロードします。
 3. JSON を `client_secret.json` という名前で、Tauri の `app_config_dir` に置きます。
-   - macOS では `~/Library/Application Support/jp.mysis.cookapps/client_secret.json` です。
-   - Windows では `%APPDATA%\jp.mysis.cookapps\client_secret.json`（`C:\Users\{ユーザー名}\AppData\Roaming\jp.mysis.cookapps\client_secret.json`）です。
+   - macOS では `~/Library/Application Support/jp.mysis.tsunagiai/client_secret.json` です。
+   - Windows では `%APPDATA%\jp.mysis.tsunagiai\client_secret.json`（`C:\Users\{ユーザー名}\AppData\Roaming\jp.mysis.tsunagiai\client_secret.json`）です。
    - ファイルが無いと、ログイン時に配置先の絶対パス付きでエラーが出ます。
 
 要求するスコープは `gmail.modify` と `calendar.readonly` です。
@@ -86,4 +86,4 @@ npx tauri build --bundles nsis --config '{"version":"0.55.2"}'
 
 インストーラーは `src-tauri/target/release/bundle/nsis/` に `cookapps_{バージョン}_x64-setup.exe` として出ます。
 コード署名はしていないので、実行すると Windows の SmartScreen が警告を出すことがあります。
-`client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.cookapps\`）に置きます。
+`client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.tsunagiai\`）に置きます。

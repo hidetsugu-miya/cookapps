@@ -20,10 +20,11 @@ use url::Url;
 
 use crate::{
     accounts::write_atomic,
-    auth::{config_dir, delete_entry, Auth},
+    auth::{config_dir, Auth},
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
     images::{fetch_slack_files, run_limited, SlackFileCache},
+    keychain,
     slack_blocks::{
         image_urls, mentioned_users, message_attachments, message_blocks, message_plain,
         unfurled_urls, ThreadAttachment, ThreadBlock,
@@ -35,7 +36,7 @@ use crate::{
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
 const API_URL: &str = "https://slack.com/api";
-const TOKEN_SERVICE: &str = "jp.mysis.cookapps.slack";
+const TOKEN_SERVICE: &str = "jp.mysis.tsunagiai.slack";
 /// The keychain user name of v0.11.0's single token; a token now has its `team_id` as the user name.
 const LEGACY_USER: &str = "slack";
 const WORKSPACES_FILE: &str = "slack-workspaces.json";
@@ -954,31 +955,17 @@ async fn blocking<T: Send + 'static>(
         .and_then(|r| r)
 }
 
-fn entry(user: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(TOKEN_SERVICE, user).map_err(|e| e.to_string())
-}
-
 /// The token stored under `user`. `None` means none is stored.
 async fn read_secret(user: String) -> Result<Option<String>, String> {
-    blocking(move || match entry(&user)?.get_password() {
-        Ok(t) => Ok(Some(t)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-    })
-    .await
+    blocking(move || keychain::read(TOKEN_SERVICE, &user)).await
 }
 
 async fn write_secret(user: String, token: String) -> Result<(), String> {
-    blocking(move || {
-        entry(&user)?
-            .set_password(&token)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))
-    })
-    .await
+    blocking(move || keychain::write(TOKEN_SERVICE, &user, &token)).await
 }
 
 async fn delete_secret(user: String) -> Result<(), String> {
-    blocking(move || delete_entry(&entry(&user)?)).await
+    blocking(move || keychain::delete(TOKEN_SERVICE, &user)).await
 }
 
 /// The token of a workspace.
@@ -7173,6 +7160,14 @@ pub async fn slack_icons(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_token_service_has_an_old_one_to_move_from() {
+        assert_eq!(
+            keychain::old_service(TOKEN_SERVICE).as_deref(),
+            Some("jp.mysis.cookapps.slack")
+        );
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
