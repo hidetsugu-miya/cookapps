@@ -3,7 +3,9 @@
 auth  : by the owner, in front of the Mac Studio. Client ID and Client Secret come from the clipboard (the clipboard is emptied after each read),
         the browser asks for the owner's consent (OAuth 2.0 Authorization Code Flow with PKCE, S256), and the three values go to the keychain.
 check : reads the text of a post from a file or stdin and checks it mechanically. Exit 0, or exit 1 with one reason per line on stderr.
-send  : the same check, then refreshes the access token, writes the new refresh token back to the keychain, and posts. Exit 2 on a failure of a token or of the post.
+send  : `send file tag`. Refuses a tag that is not newer than .claude/x-posted of the main checkout (and a night run when that file is missing), before any network. Then the same check,
+        refreshes the access token, writes the new refresh token back to the keychain, posts, and writes tag into .claude/x-posted. Exit 2 on a failure of a token or of the post,
+        exit 3 when the post got no answer (it may have been made; tag is written and the post is not sent again).
 
 Sources (read on 2026-11-16):
   OAuth 2.0 Authorization Code Flow with PKCE (authorize URL, token endpoint, Basic authentication of a confidential client, refresh token):
@@ -21,6 +23,7 @@ import hashlib
 import hmac
 import http.server
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -41,6 +44,7 @@ ME_URL = "https://api.x.com/2/users/me"
 SCOPE = "tweet.read tweet.write users.read offline.access"
 CALLBACK_WAIT_SECONDS = 300
 HERE = Path(__file__).resolve().parent
+TAG_RE = re.compile(r"v0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
 # twitter-text config/v3.json
 MAX_WEIGHTED = 280
@@ -142,14 +146,18 @@ def repo_slug():
     return (m.group(1), m.group(2)) if m else None
 
 
-def guard_public_lines(text):
-    """The line numbers (of the text) where guard-public.sh finds a forbidden word. Its stderr names the word, so only the numbers are kept."""
+def main_checkout():
     common = subprocess.run(
         ["git", "-C", str(HERE), "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True
     )
     if common.returncode != 0:
         raise Fail("メインのチェックアウトを求められない", 1)
-    guard = Path(common.stdout.strip()).parent / ".claude" / "hooks" / "guard-public.sh"
+    return Path(common.stdout.strip()).parent
+
+
+def guard_public_lines(text):
+    """The line numbers (of the text) where guard-public.sh finds a forbidden word. Its stderr names the word, so only the numbers are kept."""
+    guard = main_checkout() / ".claude" / "hooks" / "guard-public.sh"
     run = subprocess.run([str(guard), "text"], input=text, capture_output=True, text=True)
     if run.returncode == 0:
         return []
@@ -224,11 +232,21 @@ def keychain_set(account, value):
 # ---- HTTP ------------------------------------------------------------------
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 30x is a failure: urllib would send the Authorization header to the place it points to."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
+
+
 def request_json(method, url, headers, body=None):
     """(status, parsed JSON or None). Status 0 is a failure before any answer."""
     request = urllib.request.Request(url, data=body, method=method, headers={"User-Agent": "tsunagiai-x-post", **headers})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with OPENER.open(request, timeout=30) as response:
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read()
@@ -368,8 +386,50 @@ def auth():
 # ---- send ------------------------------------------------------------------
 
 
+def posted_file():
+    return main_checkout() / ".claude" / "x-posted"
+
+
+def parse_tag(text):
+    m = TAG_RE.fullmatch(text)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def check_tag(tag):
+    """Refuses, before any network, a tag that is not newer than the last posted one, and a night run with no record of it."""
+    new = parse_tag(tag)
+    if new is None:
+        raise Fail("タグが v0.{minor}.{patch} の形でない", 1)
+    path = posted_file()
+    try:
+        last = parse_tag(path.read_text(encoding="utf-8").strip())
+    except FileNotFoundError:
+        if os.environ.get("NIGHTLY_DEADLINE_EPOCH"):
+            raise Fail(".claude/x-posted がない夜間実行は投稿しない（初回はオーナーが端末で send を手で実行する）", 1)
+        return
+    except (OSError, UnicodeDecodeError):
+        raise Fail(".claude/x-posted を読めない", 1)
+    if last is None:
+        raise Fail(".claude/x-posted が v0.{minor}.{patch} の 1 行でない", 1)
+    if new <= last:
+        raise Fail(f"{tag} は .claude/x-posted の版より新しくない", 1)
+
+
+def record_posted(tag, state):
+    """Writes the tag through a temporary file and mv. state says what is known of the post, for the message of a failure."""
+    path = posted_file()
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(tag + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        raise Fail(f"{state}が、.claude/x-posted に {tag} を書けなかった。X で確かめて、手で書く", 2)
+
+
 def send(args):
-    text = read_text(args)
+    file, tag = args
+    check_tag(tag)
+    text = read_text([file])
     reasons = check_text(text)
     if reasons:
         raise Fail("\n".join(reasons), 1)
@@ -387,20 +447,27 @@ def send(args):
     status, data = request_json(
         "POST", POST_URL, {"Authorization": f"Bearer {access}", "Content-Type": "application/json"}, json.dumps({"text": text}).encode()
     )
+    if status == 0:
+        # no answer: the post may have been made, so it is recorded and never sent again
+        record_posted(tag, "投稿の応答がなく、投稿されたかもしれない")
+        raise Fail(f"投稿の応答がなかった。投稿されたかもしれないので、{tag} を .claude/x-posted に書いた。再送しない。X で投稿を確かめる", 3)
     if status != 201:
         fail_http("投稿", status, data)
     post_id = data.get("data", {}).get("id") if data and isinstance(data.get("data"), dict) else None
-    if not isinstance(post_id, str) or not re.fullmatch(r"[0-9]+", post_id):
+    has_id = isinstance(post_id, str) and re.fullmatch(r"[0-9]+", post_id) is not None
+    if has_id:
+        print(f"https://x.com/i/web/status/{post_id}")
+    record_posted(tag, "投稿は済んでいる")
+    if not has_id:
         raise Fail("投稿は受け付けられたが、応答に投稿の ID がなかった。X で確かめる", 2)
-    print(f"https://x.com/i/web/status/{post_id}")
 
 
-USAGE = "使い方: x-post.sh auth | check [file] | send [file]   （file を省くと標準入力から文面を読む）"
+USAGE = "使い方: x-post.sh auth | check [file] | send file tag   （check は file を省くと標準入力から文面を読む。tag は v0.{minor}.{patch}）"
 
 
 def main(argv):
     cmd = argv[0] if argv else ""
-    if (cmd == "auth" and len(argv) != 1) or (cmd in ("check", "send") and len(argv) > 2) or cmd not in ("auth", "check", "send"):
+    if (cmd == "auth" and len(argv) != 1) or (cmd == "check" and len(argv) > 2) or (cmd == "send" and len(argv) != 3) or cmd not in ("auth", "check", "send"):
         print(USAGE, file=sys.stderr)
         return 64
     try:
