@@ -15,7 +15,9 @@ use serde_json::{json, Map, Value};
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts, auth::config_dir, orca};
+use crate::{
+    accounts, auth::config_dir, orca, orca_attach::worktree_params, orca_link::Connection,
+};
 
 const FOLDER: &str = "formation";
 const CHILDREN_FILE: &str = "children.json";
@@ -858,6 +860,11 @@ fn is_listed(ps: &Value, path: &str) -> bool {
         .any(|w| w.path == path && !w.is_main)
 }
 
+/// Whether `ps` (`orca worktree ps`, its `result`) has a worktree at `path` or may lack one only because the page was cut (`truncated`): a saved environment's worktree is taken for gone only when the list was read whole and has none.
+fn is_known(ps: &Value, path: &str) -> bool {
+    ps["truncated"] == true || orca::worktrees_of(ps).iter().any(|w| w.path == path)
+}
+
 /// Whether `ps` (`orca worktree ps`, its `result`) lists an agent of the pane `pane_key` under the worktree at `path`: what confirms that a terminal is the child's.
 fn has_agent_at(ps: &Value, path: &str, pane_key: &str) -> bool {
     ps["worktrees"]
@@ -874,11 +881,93 @@ fn has_remote(remotes: &str) -> bool {
     !remotes.trim().is_empty()
 }
 
+/// The answers of `git.status` and `git.history` (their `result`), or why they could not be had.
+type GitAnswers = Result<(Value, Value), String>;
+
+/// What Orca's runtime says of the git of the worktree at `path` in a saved environment: `git.status` (the changed and untracked files, and the state of the upstream) and `git.history` (its `remoteRef`, the upstream as Orca names it), over one connection. The CLI of Orca has no read of them, and a worktree of another machine is out of reach of `git`. They are the calls of Orca's own window, as `orca_files.rs` makes them, and not a public interface. From a thread of `spawn_blocking`.
+fn orca_git_of(environment: &str, path: &str) -> GitAnswers {
+    tokio::runtime::Handle::current().block_on(async {
+        let mut connection = Connection::open(Some(environment.to_owned())).await?;
+        let status = connection
+            .call("git.status", worktree_params(path, None, json!({})))
+            .await
+            .map_err(|e| e.shown)?;
+        let history = connection
+            .call(
+                "git.history",
+                worktree_params(path, None, json!({"limit": 1})),
+            )
+            .await
+            .map_err(|e| e.shown)?;
+        Ok((status, history))
+    })
+}
+
+/// The git of a worktree of a saved environment as `close_refusal` takes it, the text of `git status --porcelain` and the text of `git rev-list HEAD --not --remotes`, from `git.status` and `git.history` (their `result`). Each file of `entries` is a line (its `status` and its `path`); the commits are one line that says how many the branch has that its upstream lacks.
+/// What this cannot tell is an error and not an empty text, so that nothing is removed on a guess: the answer lacks the list of files or the state of the upstream; the branch has no upstream (Orca cannot tell a repository with no remote from a branch that was never pushed); the upstream is not named by `git.history` as a branch of a remote (a local branch that is the upstream would say that it has no commit to push).
+/// A branch with no commit that its upstream lacks has no commit that no remote has, since the upstream is a remote branch; one with commits that its upstream lacks may have them in another remote branch, and is refused all the same.
+fn remote_git_text(status: &Value, history: &Value) -> Result<(String, String), String> {
+    let entries = status["entries"]
+        .as_array()
+        .ok_or("Orca の答えに、変更したファイルの一覧がありません")?;
+    let changes = entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} {}",
+                orca::text_of(entry, "status").unwrap_or("?"),
+                orca::text_of(entry, "path").unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let upstream = &status["upstreamStatus"];
+    match upstream["hasUpstream"].as_bool() {
+        Some(true) => {}
+        Some(false) => {
+            return Err(
+                "このブランチには上流ブランチが無く、どのリモートにも届いているか確かめられません"
+                    .into(),
+            )
+        }
+        None => return Err("Orca の答えに、上流ブランチの状態がありません".into()),
+    }
+    let (Some(name), Some(ahead)) = (
+        orca::text_of(upstream, "upstreamName"),
+        upstream["ahead"].as_u64(),
+    ) else {
+        return Err(
+            "Orca の答えに、上流ブランチの名前か、それより先にあるコミットの数がありません".into(),
+        );
+    };
+    let remote = &history["remoteRef"];
+    if orca::text_of(remote, "name") != Some(name)
+        || !orca::text_of(remote, "id").is_some_and(|id| id.starts_with("refs/remotes/"))
+    {
+        return Err(format!(
+            "上流ブランチ「{name}」が、リモートのブランチと確かめられません"
+        ));
+    }
+    let unpushed = if ahead > 0 {
+        format!("{name} より {ahead} 件先にあります")
+    } else {
+        String::new()
+    };
+    Ok((changes, unpushed))
+}
+
 /// Closes a child: its terminal and its worktree with its branch, and its entry of the record. A worktree with a change, an untracked file or a commit no remote has is not removed, and so is nothing else. A child that is only planned is dropped from the record.
-/// A worktree that is gone from the disk (the owner removed it in Orca) has only its terminal closed, when `orca worktree ps` lists an agent of the recorded pane under the recorded path, and its entry dropped.
-/// The record is not trusted: the path and the handle must be well formed, and `orca worktree ps` must list a worktree of that path that is not the repository's own folder, or nothing is deleted.
+/// Every command of Orca goes to the child's environment. A child of a saved environment has its git read through that environment's Orca (`orca_git_of`, `remote_git_text`) and not through `git` on this Mac; what that cannot tell stops the close.
+/// A worktree that is gone (the owner removed it in Orca) has only its terminal closed, when `orca worktree ps` lists an agent of the recorded pane under the recorded path, and its entry dropped. This Mac's worktree is gone when the folder is not on the disk; a saved environment's, which this Mac cannot see, when its `orca worktree ps` was read whole and lists no worktree of that path.
+/// The record is not trusted: the path and the handle must be well formed, the environment must be this Mac or exactly one saved environment, and `orca worktree ps` of it must list a worktree of that path that is not the repository's own folder, or nothing is deleted.
 pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
-    close_with(config, name, &orca_read, &|args| orca::write(args))
+    close_with(
+        config,
+        name,
+        &orca_read,
+        &|args| orca::write(args),
+        &orca_git_of,
+    )
 }
 
 fn close_with(
@@ -886,6 +975,7 @@ fn close_with(
     name: &str,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
+    git_of: &dyn Fn(&str, &str) -> GitAnswers,
 ) -> Result<Value, Refusal> {
     let child = read_record(config)?
         .into_iter()
@@ -896,13 +986,6 @@ fn close_with(
         dropped()?;
         return Ok(json!({ "name": name, "planned": true, "dropped": true }));
     };
-    if child.environment != LOCAL {
-        return Err(Refusal::from(format!(
-            "「{name}」は保存した環境「{}」の子です。保存した環境の子はまだ終えられません。何も消していません",
-            child.environment
-        )));
-    }
-    let environment = child.environment.as_str();
     let path = launch.path.as_str();
     orca::check_path(path)
         .and_then(|()| orca::check_handle(&launch.handle))
@@ -911,10 +994,31 @@ fn close_with(
                 "{e}（children.json の記録が正しくないので、何も消していません）"
             ))
         })?;
-    if !Path::new(path).is_dir() {
+    let environment = if child.environment == LOCAL {
+        LOCAL.to_owned()
+    } else {
+        // The record is a file the orchestrator can write: only this Mac or exactly one saved environment reaches the CLI and the connection.
+        let saved = read(&environment_list_args())
+            .map(|result| environments_listed(&result))
+            .map_err(|e| Refusal::failed(STEP_ENVIRONMENTS, e).saying("何も消していません"))?;
+        resolve_environment(&saved, &child.environment).map_err(|e| {
+            Refusal::from(format!(
+                "{e}（children.json の記録が正しくないので、何も消していません）"
+            ))
+        })?
+    };
+    let environment = environment.as_str();
+    let ps = read(&orca::ps_args(Some(environment)));
+    let gone = if environment == LOCAL {
+        !Path::new(path).is_dir()
+    } else {
+        ps.as_ref().is_ok_and(|ps| !is_known(ps, path))
+    };
+    if gone {
         // The handle is closed only when Orca's list says the terminal is the child's; a list that cannot be read or does not say so leaves every terminal alone.
-        let confirmed = read(&orca::ps_args(Some(environment)))
-            .is_ok_and(|ps| has_agent_at(&ps, path, &launch.pane_key));
+        let confirmed = ps
+            .as_ref()
+            .is_ok_and(|ps| has_agent_at(ps, path, &launch.pane_key));
         let terminal = confirmed.then(|| write(&terminal_close_args(&launch.handle, environment)));
         dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
         return Ok(json!({
@@ -924,8 +1028,7 @@ fn close_with(
             "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
         }));
     }
-    let ps =
-        read(&orca::ps_args(Some(environment))).map_err(|e| Refusal::failed(STEP_LISTED, e))?;
+    let ps = ps.map_err(|e| Refusal::failed(STEP_LISTED, e))?;
     if !is_listed(&ps, path) {
         return Err(Refusal::from(
             "記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです。何も消していません。children.json の記録を確かめてください"
@@ -933,12 +1036,22 @@ fn close_with(
         )
         .with("path", path));
     }
-    let status = git(&git_status_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
-    let remotes = git(&git_remote_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
-    let unpushed = if has_remote(&remotes) {
-        git(&git_unpushed_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?
+    let (status, unpushed) = if environment == LOCAL {
+        let status = git(&git_status_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
+        let remotes = git(&git_remote_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
+        let unpushed = if has_remote(&remotes) {
+            git(&git_unpushed_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?
+        } else {
+            String::new()
+        };
+        (status, unpushed)
     } else {
-        String::new()
+        git_of(environment, path)
+            .and_then(|(status, history)| remote_git_text(&status, &history))
+            .map_err(|e| {
+                Refusal::failed(STEP_GIT, e)
+                    .saying("確かめられないので、何も消していません。消してよいか、オーナーに確かめてください")
+            })?
     };
     if let Some((error, data)) = close_refusal(&status, &unpushed) {
         return Err(Refusal {
@@ -1856,6 +1969,11 @@ mod tests {
         }
     }
 
+    /// The git of a saved environment, which a child of this Mac never asks for.
+    fn no_remote_git(_: &str, _: &str) -> GitAnswers {
+        panic!("the git of a saved environment is read only for a child of a saved environment")
+    }
+
     fn recorded(config: &Path, path: &str, handle: &str, branch: &str) {
         let mut child = launched("a", "x");
         let launch = child.launch.as_mut().unwrap();
@@ -1873,9 +1991,13 @@ mod tests {
         // `launched` records the pane `tab-a:leaf`.
         let listed = json!({"worktrees": [{"path": gone, "agents": [{"paneKey": "tab-a:leaf"}]}]});
         let orca = Calls::new();
-        let done = close_with(&config, "a", &|_| Ok(listed.clone()), &|args| {
-            orca.run(args)
-        })
+        let done = close_with(
+            &config,
+            "a",
+            &|_| Ok(listed.clone()),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
         .unwrap();
         assert_eq!(done["worktreeGone"], true);
         assert_eq!(done["name"], "a");
@@ -1902,8 +2024,14 @@ mod tests {
         for (i, listed) in cases.into_iter().enumerate() {
             recorded(&config, gone, "term_a", "me/a");
             let orca = Calls::new();
-            let done =
-                close_with(&config, "a", &|_| listed.clone(), &|args| orca.run(args)).unwrap();
+            let done = close_with(
+                &config,
+                "a",
+                &|_| listed.clone(),
+                &|args| orca.run(args),
+                &no_remote_git,
+            )
+            .unwrap();
             assert_eq!(done["worktreeGone"], true, "{i}");
             assert_eq!(done["terminalClosed"], false, "{i}");
             assert!(orca.0.borrow().is_empty(), "{i}");
@@ -1938,9 +2066,13 @@ mod tests {
         for (p, handle, branch, listed) in cases {
             recorded(&config, p, handle, branch);
             let orca = Calls::new();
-            let err = close_with(&config, "a", &|_| Ok(listed.clone()), &|args| {
-                orca.run(args)
-            })
+            let err = close_with(
+                &config,
+                "a",
+                &|_| Ok(listed.clone()),
+                &|args| orca.run(args),
+                &no_remote_git,
+            )
             .unwrap_err();
             assert!(
                 answer(Err(err)).contains("何も消していません"),
@@ -1957,6 +2089,7 @@ mod tests {
             "a",
             &|_| Err("orca が答えません".into()),
             &|args| orca.run(args),
+            &no_remote_git,
         )
         .unwrap_err();
         assert_eq!(err.step, Some(STEP_LISTED));
@@ -2414,42 +2547,358 @@ mod tests {
         assert_eq!(report["environments"][0]["error"], "no orca");
     }
 
+    // ---- a child of a saved environment is closed through that environment's Orca ----
+
+    const REMOTE_PATH: &str = "/srv/work/a";
+
+    /// A child of the saved environment `mac-studio` (id `env-1`), recorded at a path this Mac does not have.
+    fn recorded_saved(config: &Path, environment: &str) {
+        recorded(config, REMOTE_PATH, "term_a", "me/a");
+        let mut children = read_children(config);
+        children[1].environment = environment.into();
+        write_children(config, &children).unwrap();
+    }
+
+    fn ps_with(worktree: Value) -> Value {
+        json!({"worktrees": [worktree], "truncated": false})
+    }
+
+    fn remote_child() -> Value {
+        json!({"path": REMOTE_PATH, "agents": [{"paneKey": "tab-a:leaf"}]})
+    }
+
+    /// What `git.status` and `git.history` answer for a branch whose upstream is `origin/me/a`, with the files changed and the commits ahead.
+    fn git_answers(entries: Value, ahead: u64) -> (Value, Value) {
+        (
+            json!({
+                "entries": entries,
+                "upstreamStatus": {"hasUpstream": true, "upstreamName": "origin/me/a", "ahead": ahead, "behind": 0},
+            }),
+            json!({"remoteRef": {"id": "refs/remotes/origin/me/a", "name": "origin/me/a"}}),
+        )
+    }
+
+    /// A stand-in for the Orca of the saved environments: the list of environments, `worktree ps` of `mac-studio`, and the reads it was given.
+    struct Saved {
+        ps: Result<Value, String>,
+        reads: std::cell::RefCell<Vec<Vec<String>>>,
+    }
+
+    impl Saved {
+        fn new(ps: Result<Value, String>) -> Self {
+            Self {
+                ps,
+                reads: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn read(&self, args: &[String]) -> Result<Value, String> {
+            self.reads.borrow_mut().push(args.to_vec());
+            if args == environment_list_args() {
+                return Ok(
+                    json!({"environments": [{"id": "env-1", "name": "mac-studio"}, {"id": "env-2", "name": "lab"}]}),
+                );
+            }
+            assert_eq!(args, orca::ps_args(Some("mac-studio")), "{args:?}");
+            self.ps.clone()
+        }
+
+        fn reads(&self) -> Vec<String> {
+            self.reads
+                .borrow()
+                .iter()
+                .map(|a| a[..2].join(" "))
+                .collect()
+        }
+    }
+
+    /// What closing a child of a saved environment did: the result, the writes to Orca, the reads of Orca and the places `git` was asked for.
+    struct Closed {
+        done: Result<Value, Refusal>,
+        writes: Vec<Vec<String>>,
+        reads: Vec<String>,
+        asked: Vec<String>,
+    }
+
+    /// Closes the child `a` of a saved environment with these answers of Orca.
+    fn close_saved(config: &Path, ps: Result<Value, String>, git: GitAnswers) -> Closed {
+        let saved = Saved::new(ps);
+        let orca = Calls::new();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let done = close_with(
+            config,
+            "a",
+            &|args| saved.read(args),
+            &|args| orca.run(args),
+            &|environment, path| {
+                asked.borrow_mut().push(format!("{environment} {path}"));
+                git.clone()
+            },
+        );
+        let writes = orca.0.borrow().clone();
+        Closed {
+            done,
+            writes,
+            reads: saved.reads(),
+            asked: asked.into_inner(),
+        }
+    }
+
     #[test]
-    fn a_child_of_a_saved_environment_is_not_closed_yet_and_nothing_is_touched() {
+    fn a_child_of_a_saved_environment_is_closed_in_that_environment_when_its_git_is_clean() {
         let config = temp_dir("close-saved");
-        let there = temp_dir("close-saved-worktree");
-        std::fs::create_dir_all(&there).unwrap();
-        let path = there.to_string_lossy().into_owned();
-        recorded(&config, &path, "term_a", "me/a");
-        let mut children = read_children(&config);
-        children[1].environment = "mac-studio".into();
-        write_children(&config, &children).unwrap();
+        for recorded_as in ["mac-studio", "env-1"] {
+            recorded_saved(&config, recorded_as);
+            let closed = close_saved(
+                &config,
+                Ok(ps_with(remote_child())),
+                Ok(git_answers(json!([]), 0)),
+            );
+            let done = closed.done.unwrap();
+            assert_eq!(done["name"], "a", "{recorded_as}");
+            assert_eq!(done["path"], REMOTE_PATH);
+            assert_eq!(done["terminalClosed"], true);
+            // The terminal, then the worktree with its branch, both in the environment (the id of the record is its name); the disk of this Mac is never looked at.
+            assert_eq!(
+                closed.writes,
+                [
+                    terminal_close_args("term_a", "mac-studio"),
+                    worktree_rm_args(REMOTE_PATH, "mac-studio"),
+                ],
+                "{recorded_as}"
+            );
+            assert_eq!(closed.writes[0].last().unwrap(), "--environment=mac-studio");
+            assert_eq!(closed.reads, ["environment list", "worktree ps"]);
+            assert_eq!(closed.asked, [format!("mac-studio {REMOTE_PATH}")]);
+            assert_eq!(names(&read_children(&config)), ["p"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_of_a_saved_environment_with_a_change_a_new_file_or_a_commit_ahead_is_kept() {
+        let config = temp_dir("close-saved-dirty");
+        let entries = json!([
+            {"path": "src/a.rs", "status": "modified", "area": "unstaged"},
+            {"path": "new.txt", "status": "untracked", "area": "untracked"},
+        ]);
+        let cases = [
+            (git_answers(entries.clone(), 0), vec!["status"]),
+            (git_answers(json!([]), 2), vec!["unpushedCommits"]),
+            (git_answers(entries, 2), vec!["status", "unpushedCommits"]),
+        ];
+        for (git, keys) in cases {
+            recorded_saved(&config, "mac-studio");
+            let closed = close_saved(&config, Ok(ps_with(remote_child())), Ok(git));
+            let said: Value = serde_json::from_str(&answer(Err(closed.done.unwrap_err()))).unwrap();
+            assert_eq!(said["ok"], false);
+            assert_eq!(said["step"], STEP_GIT);
+            assert!(said["error"]
+                .as_str()
+                .unwrap()
+                .contains("消さずに残しました"));
+            for key in keys {
+                assert!(said["data"][key].is_array(), "{key}");
+            }
+            if said["data"]["status"].is_array() {
+                assert_eq!(
+                    said["data"]["status"],
+                    json!(["modified src/a.rs", "untracked new.txt"])
+                );
+            }
+            // Nothing is closed or removed, and the entry stays.
+            assert!(closed.writes.is_empty());
+            assert_eq!(names(&read_children(&config)), ["p", "a"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_of_a_saved_environment_whose_git_cannot_be_read_is_kept_with_the_reason() {
+        let config = temp_dir("close-saved-unknown");
+        let (status, history) = git_answers(json!([]), 0);
+        let cases: Vec<(GitAnswers, &str)> = vec![
+            (Err("接続先が時間内に応答しませんでした".into()), "時間内"),
+            (
+                Ok((
+                    json!({"upstreamStatus": status["upstreamStatus"]}),
+                    history.clone(),
+                )),
+                "一覧がありません",
+            ),
+            (
+                Ok((
+                    json!({"entries": [], "upstreamStatus": {"hasUpstream": false}}),
+                    history.clone(),
+                )),
+                "上流ブランチが無く",
+            ),
+            (
+                Ok((json!({"entries": []}), history.clone())),
+                "状態がありません",
+            ),
+            (
+                Ok((
+                    json!({"entries": [], "upstreamStatus": {"hasUpstream": true, "ahead": 0}}),
+                    history.clone(),
+                )),
+                "名前か",
+            ),
+            (Ok((status.clone(), json!({}))), "確かめられません"),
+        ];
+        for (git, reason) in cases {
+            recorded_saved(&config, "mac-studio");
+            let closed = close_saved(&config, Ok(ps_with(remote_child())), git);
+            let err = closed.done.unwrap_err();
+            assert_eq!(err.step, Some(STEP_GIT));
+            let said = answer(Err(err));
+            assert!(said.contains(reason), "{reason}: {said}");
+            assert!(said.contains("何も消していません"), "{said}");
+            assert!(closed.writes.is_empty());
+            assert_eq!(names(&read_children(&config)), ["p", "a"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_git_of_a_saved_environment_is_clean_only_when_every_part_says_so() {
+        let (status, history) = git_answers(json!([]), 0);
+        assert_eq!(
+            remote_git_text(&status, &history),
+            Ok((String::new(), String::new()))
+        );
+        let (ahead, ahead_history) = git_answers(
+            json!([{"path": "a", "status": "modified"}, {"status": "untracked"}, {}]),
+            3,
+        );
+        let (changes, unpushed) = remote_git_text(&ahead, &ahead_history).unwrap();
+        assert_eq!(changes, "modified a\nuntracked ?\n? ?");
+        assert_eq!(unpushed, "origin/me/a より 3 件先にあります");
+        // The upstream that git.history names must be a branch of a remote, and the one of the status.
+        for remote in [
+            json!({"id": "refs/heads/origin/me/a", "name": "origin/me/a"}),
+            json!({"id": "refs/remotes/origin/other", "name": "origin/other"}),
+            json!({"name": "origin/me/a"}),
+            json!(null),
+        ] {
+            let err = remote_git_text(&status, &json!({"remoteRef": remote})).unwrap_err();
+            assert!(err.contains("確かめられません"), "{err}");
+        }
+        for broken in [
+            json!({"entries": {}, "upstreamStatus": status["upstreamStatus"]}),
+            json!({"entries": [], "upstreamStatus": {"hasUpstream": true, "upstreamName": "origin/me/a", "ahead": "0"}}),
+            json!({"entries": [], "upstreamStatus": {"hasUpstream": "yes"}}),
+        ] {
+            assert!(remote_git_text(&broken, &history).is_err(), "{broken}");
+        }
+    }
+
+    #[test]
+    fn a_child_of_a_saved_environment_that_orca_does_not_list_is_gone_and_only_its_entry_is_dropped(
+    ) {
+        let config = temp_dir("close-saved-gone");
+        recorded_saved(&config, "mac-studio");
+        let other =
+            ps_with(json!({"path": "/srv/work/other", "agents": [{"paneKey": "tab-a:leaf"}]}));
+        let closed = close_saved(&config, Ok(other), Ok(git_answers(json!([]), 0)));
+        let done = closed.done.unwrap();
+        assert_eq!(done["worktreeGone"], true);
+        assert_eq!(done["terminalClosed"], false);
+        assert_eq!(done["path"], REMOTE_PATH);
+        // Nothing is closed or removed: no terminal of the list is the child's, and git is not asked.
+        assert!(closed.writes.is_empty());
+        assert!(closed.asked.is_empty());
+        assert_eq!(closed.reads, ["environment list", "worktree ps"]);
+        assert_eq!(names(&read_children(&config)), ["p"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_list_of_a_saved_environment_that_cannot_say_the_worktree_is_gone_keeps_the_child() {
+        let config = temp_dir("close-saved-unlisted");
+        let cut = json!({"worktrees": [], "truncated": true});
+        let main = ps_with(json!({"path": REMOTE_PATH, "isMainWorktree": true}));
+        let cases: Vec<(Result<Value, String>, Option<&'static str>)> = vec![
+            // The list was cut, so the worktree may be on the page that was not read.
+            (Ok(cut), None),
+            // The list could not be read.
+            (Err("orca が答えません".into()), Some(STEP_LISTED)),
+            // The repository's own folder is never a child's.
+            (Ok(main), None),
+        ];
+        for (ps, step) in cases {
+            recorded_saved(&config, "mac-studio");
+            let closed = close_saved(&config, ps, Ok(git_answers(json!([]), 0)));
+            let err = closed.done.unwrap_err();
+            assert_eq!(err.step, step);
+            if step.is_none() {
+                assert!(answer(Err(err)).contains("何も消していません"));
+            }
+            assert!(closed.writes.is_empty());
+            assert!(closed.asked.is_empty());
+            assert_eq!(names(&read_children(&config)), ["p", "a"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_record_with_an_environment_that_is_not_saved_deletes_nothing_and_reaches_no_orca_of_it() {
+        let config = temp_dir("close-saved-forged");
+        for environment in ["elsewhere", "", "lab; rm -rf", "--force"] {
+            recorded_saved(&config, environment);
+            let closed = close_saved(
+                &config,
+                Ok(ps_with(remote_child())),
+                Ok(git_answers(json!([]), 0)),
+            );
+            let said = answer(Err(closed.done.unwrap_err()));
+            assert!(said.contains("何も消していません"), "{environment}: {said}");
+            assert!(closed.writes.is_empty(), "{environment}");
+            assert!(closed.asked.is_empty(), "{environment}");
+            // Only the list of the saved environments was read.
+            assert_eq!(closed.reads, ["environment list"], "{environment}");
+            assert_eq!(names(&read_children(&config)), ["p", "a"], "{environment}");
+        }
+        // The list of the saved environments cannot be read.
+        recorded_saved(&config, "mac-studio");
         let orca = Calls::new();
         let err = close_with(
             &config,
             "a",
-            &|_| Ok(json!({"worktrees": [{"path": path}]})),
+            &|_| Err("orca が答えません".into()),
             &|args| orca.run(args),
+            &no_remote_git,
         )
         .unwrap_err();
-        let said = answer(Err(err));
-        assert!(
-            said.contains("まだ終えられません") && said.contains("mac-studio"),
-            "{said}"
-        );
+        assert_eq!(err.step, Some(STEP_ENVIRONMENTS));
+        assert!(answer(Err(err)).contains("何も消していません"));
         assert!(orca.0.borrow().is_empty());
-        assert!(there.is_dir());
+        // A path that is not absolute and a handle that is not one are refused before any read.
+        for (path, handle) in [("relative/path", "term_a"), (REMOTE_PATH, "--force")] {
+            recorded(&config, path, handle, "me/a");
+            let mut children = read_children(&config);
+            children[1].environment = "mac-studio".into();
+            write_children(&config, &children).unwrap();
+            let err = close_with(
+                &config,
+                "a",
+                &|_| panic!("nothing is read for a record that is not well formed"),
+                &|args| orca.run(args),
+                &no_remote_git,
+            )
+            .unwrap_err();
+            assert!(answer(Err(err)).contains("何も消していません"));
+        }
         assert_eq!(names(&read_children(&config)), ["p", "a"]);
         // A child that is only planned has nothing in Orca, so it is dropped as any.
         write_children(
             &config,
-            &[in_environment(planned("q", "web"), "mac-studio")],
+            &[in_environment(planned("a", "web"), "mac-studio")],
         )
         .unwrap();
-        assert_eq!(close(&config, "q").unwrap()["dropped"], true);
+        assert_eq!(close(&config, "a").unwrap()["dropped"], true);
         assert!(read_children(&config).is_empty());
         std::fs::remove_dir_all(&config).unwrap();
-        std::fs::remove_dir_all(&there).unwrap();
     }
 
     // ---- the state of each child, read in its own environment ----
