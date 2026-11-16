@@ -209,6 +209,7 @@ pub fn run() {
         .manage(orca_stream::OrcaStream::default())
         .manage(database::ssm::Tunnels::default())
         .manage(database::session::Sessions::default())
+        .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
@@ -362,6 +363,10 @@ pub fn run() {
             lsp::lsp_settings,
             lsp::lsp_settings_set,
             lsp::lsp_launch,
+            lsp::server::lsp_start,
+            lsp::server::lsp_stop,
+            lsp::server::lsp_status,
+            lsp::server::lsp_definition,
             ssh_scratch::ssh_scratch_list,
             ssh_scratch::ssh_scratch_read,
             ssh_scratch::ssh_scratch_write,
@@ -406,8 +411,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build tauri application")
         .run(|app, event| {
-            // The open connections of the database screen, and their port forwards (a plugin process and an SSM session each): close them with the app.
+            // The open connections of the database screen, and their port forwards (a plugin process and an SSM session each), and the language servers of the Orca editor (A-34): close them with the app.
             if let tauri::RunEvent::Exit = event {
+                let servers = app.state::<lsp::server::LspServers>();
+                tauri::async_runtime::block_on(servers.close_all());
                 let sessions = app.state::<database::session::Sessions>();
                 tauri::async_runtime::block_on(sessions.close_all());
                 let tunnels = app.state::<database::ssm::Tunnels>();

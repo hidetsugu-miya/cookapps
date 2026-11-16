@@ -1,9 +1,13 @@
 //! A-34: how ruby-lsp is started for a worktree of the Orca screen, and the settings of each repository that say otherwise.
 //!
 //! The way is decided from what the worktree holds, in this order: a service of `docker compose config --format json` that bind mounts the worktree (`docker compose exec -T {service} bundle exec ruby-lsp`, the path of the worktree there being the mount's target), else a `Gemfile.lock` that lists `ruby-lsp` (`bundle exec ruby-lsp` on the host), else none. `decide` is a pure function of the two texts.
-//! The texts are read by one command each, run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (A-34, later) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
+//! The texts are read by one command each, run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
+//! The server itself is in `server` (the processes that stay, one for each worktree, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
 //! The settings of a repository are saved in `lsp-settings.json` in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list.
 //! Nothing of a file of a worktree is kept: the answers of the two commands are used and dropped.
+
+mod protocol;
+pub mod server;
 
 use std::{path::Path, sync::Mutex};
 
@@ -503,14 +507,14 @@ fn check_worktree(worktree: &str) -> Result<(), String> {
     }
 }
 
-/// The way ruby-lsp is started for `worktree`, read from it by `run` (a command, its folder's route and the most bytes to keep).
-fn launch_for(
+/// The route to `worktree` and the way ruby-lsp is started in it, read from it by `run` (a command, its folder's route and the most bytes to keep).
+fn plan_for(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     worktree: &str,
     mut run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
-) -> Result<LspLaunch, String> {
+) -> Result<(Route, LspLaunch), String> {
     check_worktree(worktree)?;
     let settings = settings_of(dir, environment, project)?;
     let route = route_of(environment, project, &settings)?;
@@ -520,7 +524,19 @@ fn launch_for(
         inputs.compose.as_deref(),
         inputs.gemfile_lock.as_deref(),
     )?;
-    Ok(resolve(launch, &settings, worktree))
+    let launch = resolve(launch, &settings, worktree);
+    Ok((route, launch))
+}
+
+/// The way ruby-lsp is started for `worktree`, read from it by `run` (a command, its folder's route and the most bytes to keep).
+fn launch_for(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+    worktree: &str,
+    run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
+) -> Result<LspLaunch, String> {
+    plan_for(dir, environment, project, worktree, run).map(|(_, launch)| launch)
 }
 
 /// The settings of the project `project` of `environment` (`None`: this machine): the saved ones, else the unset ones (A-34).
