@@ -5,7 +5,7 @@ The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
 ## v0.80.2
 
-The title of the README is つなぎAI.
+The app shows its name as つなぎAI: in the window title, in Finder and the Dock, and on its screens (#764). The README and the documentation use the name too. The app file, the settings folder and the identifier keep the name `tsunagiai`, so nothing moves.
 
 ## v0.80.1
 

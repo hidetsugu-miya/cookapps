@@ -62,7 +62,7 @@ scripts/install-app.sh
 ```
 
 スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/tsunagiai.app` に置きます。
-つなぎあいが起動中のときは、終了してからやり直します。
+つなぎAIが起動中のときは、終了してからやり直します。
 古い版はゴミ箱へ移します。
 署名の証明書は、キーチェーンの最初の Apple Development 証明書を使います。
 別の証明書を使うときは、環境変数 `APPLE_SIGNING_IDENTITY` に証明書の名前かハッシュを渡します。
