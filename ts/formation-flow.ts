@@ -26,7 +26,8 @@ let reading = false;
 let treeKey = "";
 
 async function read() {
-  if (reading) return;
+  // A hidden window reads nothing, as the Orca list does; it reads once when it is shown again (initFormationFlow).
+  if (reading || document.hidden) return;
   reading = true;
   try {
     children = await invoke("formation_children");
@@ -119,7 +120,9 @@ function draw() {
   // The tree is drawn again in place: the scroll and the focus stay where they were.
   const body = $("formation-flow-body");
   const top = body.scrollTop;
-  const focused = (document.activeElement as HTMLElement | null)?.dataset?.child;
+  const list = $("formation-flow-list");
+  // The tab of the same child carries the same name, so only a focus inside this list is put back.
+  const focused = list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.child : undefined;
   $("formation-flow-list").replaceChildren(...children.map((c) => card(c, now)));
   body.scrollTop = top;
   if (focused) $("formation-flow-list").querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
@@ -140,5 +143,8 @@ export function initFormationFlow() {
     $(id).onclick = toggleFlow;
   }
   initFormationTabs(draw);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && watching !== null) void read();
+  });
   draw();
 }

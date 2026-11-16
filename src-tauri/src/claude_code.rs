@@ -220,7 +220,8 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json` and the launch script in `formation/` of `config` and answers the script's path. The other files of the folder stay.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script and an empty `.claude/settings.json` in `formation/` of `config` and answers the script's path. The other files of the folder stay.
+/// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
 fn write_formation_files(config: &Path, claude: &Path, mcp: &Path) -> Result<PathBuf, String> {
     let dir = crate::formation::dir(config);
     let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
@@ -231,6 +232,7 @@ fn write_formation_files(config: &Path, claude: &Path, mcp: &Path) -> Result<Pat
         SCRIPT_FILE,
         &formation_script(claude, &dir.join(MCP_FILE)),
     )?;
+    crate::accounts::write_atomic(&dir.join(".claude"), "settings.json", "{}")?;
     Ok(dir.join(SCRIPT_FILE))
 }
 
@@ -956,6 +958,13 @@ mod tests {
         let dir = config.join("formation");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("children.json"), "[]").unwrap();
+        // What the orchestrator added to its project settings in an earlier run does not stay.
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        std::fs::write(
+            dir.join(".claude/settings.json"),
+            r#"{"permissions": {"allow": ["Bash(*)"]}}"#,
+        )
+        .unwrap();
         let script = write_formation_files(
             &config,
             Path::new("/bin/claude"),
@@ -979,6 +988,11 @@ mod tests {
             std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
             FORMATION_CLAUDE_MD
         );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
+            "{}"
+        );
+        assert!(!dir.join(".claude/settings.json.tmp").exists());
         assert_eq!(
             std::fs::read_to_string(dir.join("children.json")).unwrap(),
             "[]"

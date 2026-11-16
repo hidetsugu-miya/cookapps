@@ -28,6 +28,11 @@ export function showFormation() {
 // The mode or the screen is left: the terminals are hidden (the orchestrator's process goes on, the children's mirrors stop), and the flow is no longer read.
 export function hideFormation() {
   stopFlow();
+  hidePanes();
+}
+
+// Only the terminals are hidden: the count of the waiting children, when it is the read in hand, goes on.
+export function hidePanes() {
   hideTabs();
   hideClaudeCode(OWNER);
 }

@@ -41,6 +41,7 @@ const STEP_IDLE: &str = "claude の立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
+const STEP_LISTED: &str = "worktree の一覧の読み取り";
 
 /// `formation/` in the config directory: the folder the orchestrator runs in, with its `CLAUDE.md`, `mcp.json` and `children.json`.
 pub fn dir(config: &Path) -> PathBuf {
@@ -89,6 +90,24 @@ pub fn read_children(config: &Path) -> Vec<Child> {
         .children
 }
 
+/// The children of `children.json` for a change of it: a missing file is none, but a file that is there and cannot be read is an error, so that the change does not write over the record of the children already launched.
+fn read_record(config: &Path) -> Result<Vec<Child>, String> {
+    let path = dir(config).join(CHILDREN_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
+    };
+    serde_json::from_str::<Record>(&text)
+        .map(|record| record.children)
+        .map_err(|_| {
+            format!(
+                "{} の形式が正しくありません。子の記録を上書きしないよう、何も書いていません",
+                path.display()
+            )
+        })
+}
+
 fn write_children(config: &Path, children: &[Child]) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&Record {
         children: children.to_vec(),
@@ -105,7 +124,7 @@ fn update(
     change: impl FnOnce(Vec<Child>) -> Result<Vec<Child>, String>,
 ) -> Result<Vec<Child>, String> {
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    let children = change(read_children(config))?;
+    let children = change(read_record(config)?)?;
     write_children(config, &children)?;
     Ok(children)
 }
@@ -188,10 +207,17 @@ pub fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The first instruction is 1 to 20,000 characters, not only blanks, and has no NUL (an argument cannot).
-pub fn check_prompt(prompt: &str) -> Result<(), String> {
-    let count = prompt.chars().count();
-    if prompt.trim().is_empty() {
+/// The first instruction as it is sent: 1 to 20,000 characters, not only blanks, and with no NUL (an argument cannot hold one). The characters that are hidden or act as controls in a terminal are taken out first, as A-9 does for a card (`orca_handoff::without_hidden`: C0 controls other than the line break and the tab, DEL, zero-width, bidi and tag characters) and the C1 controls (U+0080 to U+009F) too, so the text typed into the child's terminal holds no escape or hidden text.
+pub fn check_prompt(prompt: &str) -> Result<String, String> {
+    if prompt.contains('\0') {
+        return Err("最初の指示に NUL は使えません".into());
+    }
+    let clean: String = crate::orca_handoff::without_hidden(prompt)
+        .chars()
+        .filter(|c| !('\u{80}'..='\u{9f}').contains(c))
+        .collect();
+    let count = clean.chars().count();
+    if clean.trim().is_empty() {
         return Err("最初の指示を書いてください".into());
     }
     if count > PROMPT_LIMIT {
@@ -199,10 +225,7 @@ pub fn check_prompt(prompt: &str) -> Result<(), String> {
             "最初の指示は {PROMPT_LIMIT} 文字までです（今は {count} 文字）"
         ));
     }
-    if prompt.contains('\0') {
-        return Err("最初の指示に NUL は使えません".into());
-    }
-    Ok(())
+    Ok(clean)
 }
 
 /// A repository of `orca repo list`.
@@ -296,7 +319,7 @@ fn check_submitted(result: &Value) -> Result<(), String> {
     }
 }
 
-/// Why a worktree is not removed, from what git printed: `git status --porcelain` (not empty: a file that is changed or not tracked) and `git rev-list HEAD --not --remotes` (not empty: a commit no remote has). `None` when both are empty. The data holds the first lines of each.
+/// Why a worktree is not removed, from what git printed: `git status --porcelain` (not empty: a file that is changed or not tracked) and `git rev-list HEAD --not --remotes` (not empty: a commit no remote has; it is not asked of a repository with no remote). `None` when both are empty. The data holds the first lines of each.
 fn close_refusal(status: &str, unpushed: &str) -> Option<(String, Value)> {
     let mut reasons = Vec::new();
     let mut data = Map::new();
@@ -411,6 +434,10 @@ fn git_status_args(path: &str) -> Vec<String> {
     ]
 }
 
+fn git_remote_args(path: &str) -> Vec<String> {
+    vec!["-C".into(), path.into(), "remote".into()]
+}
+
 fn git_unpushed_args(path: &str) -> Vec<String> {
     ["rev-list", "HEAD", "--not", "--remotes"].into_iter().fold(
         vec!["-C".into(), path.to_owned()],
@@ -509,18 +536,14 @@ fn repos() -> Result<Vec<Repo>, Refusal> {
         .map_err(|e| Refusal::failed(STEP_REPOS, e))
 }
 
-/// The repository `wanted` names, among the ones Orca lists now.
-fn chosen_repo(wanted: &str) -> Result<Repo, Refusal> {
-    let mut repos = repos()?;
-    let at = resolve_repo(&repos, wanted)
-        .map(|r| repos.iter().position(|o| o.id == r.id))
-        .map_err(|message| {
-            Refusal::from(message).with(
-                "repos",
-                repos.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
-            )
-        })?;
-    Ok(repos.swap_remove(at.unwrap_or_default()))
+/// The repository `wanted` names, among the ones Orca lists (`repos()`, read once for a whole call).
+fn chosen_repo<'a>(repos: &'a [Repo], wanted: &str) -> Result<&'a Repo, Refusal> {
+    resolve_repo(repos, wanted).map_err(|message| {
+        Refusal::from(message).with(
+            "repos",
+            repos.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+        )
+    })
 }
 
 fn now_ms() -> u64 {
@@ -540,15 +563,16 @@ pub fn plan(config: &Path, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
             return Err(format!("「{}」が予定に 2 回あります", child.name).into());
         }
     }
-    let known = read_children(config);
+    let known = read_record(config)?;
     if let Some(taken) = wanted.iter().find(|c| is_launched(&known, &c.name)) {
         return Err(already_launched(&taken.name).into());
     }
+    let list = repos()?;
     let mut planned = Vec::new();
     for child in wanted {
         planned.push(PlannedChild {
             name: child.name.clone(),
-            repo: chosen_repo(&child.repo)?.name,
+            repo: chosen_repo(&list, &child.repo)?.name.clone(),
         });
     }
     let children = update(config, |old| with_planned(old, &planned))?;
@@ -558,11 +582,12 @@ pub fn plan(config: &Path, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
 /// Launches a child: a worktree in the repository, a terminal with `claude -n {name}` in it, the first instruction, and the record. A step that fails after the worktree was made says which, and leaves the worktree.
 pub fn launch(config: &Path, repo: &str, name: &str, prompt: &str) -> Result<Value, Refusal> {
     check_name(name)?;
-    check_prompt(prompt)?;
-    if is_launched(&read_children(config), name) {
+    let prompt = check_prompt(prompt)?;
+    if is_launched(&read_record(config)?, name) {
         return Err(already_launched(name).into());
     }
-    let repo = chosen_repo(repo)?;
+    let list = repos()?;
+    let repo = chosen_repo(&list, repo)?;
     let made = orca::write(&orca::create_worktree_args(
         &repo.id, name, None, None, None,
     ))
@@ -604,7 +629,7 @@ pub fn launch(config: &Path, repo: &str, name: &str, prompt: &str) -> Result<Val
                 .ok_or_else(|| "claude が時間内に入力待ちになりませんでした".to_owned())
         });
     idle.map_err(|e| recorded(STEP_IDLE, e))?;
-    orca::write(&terminal_send_args(&handle, prompt))
+    orca::write(&terminal_send_args(&handle, &prompt))
         .and_then(|result| check_submitted(&result))
         .map_err(|e| recorded(STEP_SEND, e))?;
     Ok(json!({
@@ -646,9 +671,32 @@ fn git(args: &[String]) -> Result<String, String> {
         .map_or_else(|| "git が失敗しました".to_owned(), str::to_owned))
 }
 
+/// Whether the worktree the record names is one of `orca worktree ps` (its `result`): the path is the same and so is its git branch. The record is a file the orchestrator can write, so nothing is removed on its word alone.
+fn is_listed(ps: &Value, path: &str, branch: &str) -> bool {
+    orca::worktrees_of(ps)
+        .iter()
+        .any(|w| w.path == path && w.git_branch == branch)
+}
+
+/// Whether the repository has a remote (`git remote` printed a name): a repository with none has no commit that a remote lacks to ask for.
+fn has_remote(remotes: &str) -> bool {
+    !remotes.trim().is_empty()
+}
+
 /// Closes a child: its terminal and its worktree with its branch, and its entry of the record. A worktree with a change, an untracked file or a commit no remote has is not removed, and so is nothing else. A child that is only planned is dropped from the record.
+/// A worktree that is gone from the disk (the owner removed it in Orca) has only its terminal closed and its entry dropped.
+/// The record is not trusted: the path and the handle must be well formed, and `orca worktree ps` must list a worktree of that path on that branch, or nothing is deleted.
 pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
-    let child = read_children(config)
+    close_with(config, name, &orca_read, &|args| orca::write(args))
+}
+
+fn close_with(
+    config: &Path,
+    name: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<Value, Refusal> {
+    let child = read_record(config)?
         .into_iter()
         .find(|c| c.name == name)
         .ok_or_else(|| Refusal::from(format!("「{name}」という子は記録にありません")))?;
@@ -658,8 +706,39 @@ pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
         return Ok(json!({ "name": name, "planned": true, "dropped": true }));
     };
     let path = launch.path.as_str();
+    orca::check_path(path)
+        .and_then(|()| orca::check_handle(&launch.handle))
+        .map_err(|e| {
+            Refusal::from(format!(
+                "{e}（children.json の記録が正しくないので、何も消していません）"
+            ))
+        })?;
+    if !Path::new(path).is_dir() {
+        let terminal = write(&terminal_close_args(&launch.handle));
+        dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
+        return Ok(json!({
+            "name": name,
+            "path": path,
+            "worktreeGone": true,
+            "terminalClosed": terminal.is_ok(),
+        }));
+    }
+    let ps = read(&orca::ps_args(None)).map_err(|e| Refusal::failed(STEP_LISTED, e))?;
+    if !is_listed(&ps, path, &launch.branch) {
+        return Err(Refusal::from(
+            "記録にある worktree が Orca の一覧になく、またはブランチが記録と違います。何も消していません。children.json の記録を確かめてください"
+                .to_owned(),
+        )
+        .with("path", path)
+        .with("branch", launch.branch.as_str()));
+    }
     let status = git(&git_status_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
-    let unpushed = git(&git_unpushed_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
+    let remotes = git(&git_remote_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
+    let unpushed = if has_remote(&remotes) {
+        git(&git_unpushed_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?
+    } else {
+        String::new()
+    };
     if let Some((error, data)) = close_refusal(&status, &unpushed) {
         return Err(Refusal {
             error,
@@ -668,8 +747,8 @@ pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
         });
     }
     // The owner may have closed the tab already: the worktree is removed all the same.
-    let terminal = orca::write(&terminal_close_args(&launch.handle));
-    orca::write(&worktree_rm_args(path)).map_err(|e| Refusal::failed(STEP_REMOVE, e))?;
+    let terminal = write(&terminal_close_args(&launch.handle));
+    write(&worktree_rm_args(path)).map_err(|e| Refusal::failed(STEP_REMOVE, e))?;
     dropped().map_err(|e| {
         Refusal::from(e).saying("worktree は消しましたが、記録から外せませんでした")
     })?;
@@ -1306,6 +1385,171 @@ mod tests {
         assert_eq!(read_children(&config), vec![planned("b", "x")]);
         assert!(close(&config, "a").is_err());
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_prompt_is_sent_without_hidden_text_or_controls_and_keeps_its_lines() {
+        let sent = check_prompt(
+            "一行目\n\t二行目\u{1b}[31m\u{200b}x\u{202e}y\u{7f}\u{85}\u{9b}z\u{e0041}",
+        )
+        .unwrap();
+        assert_eq!(sent, "一行目\n\t二行目[31mxyz");
+        assert_eq!(check_prompt("  go  ").unwrap(), "  go  ");
+        // A text that is only hidden is blank.
+        for blank in ["\u{1b}", "\u{85}\u{200b}", " \u{9f} "] {
+            assert!(
+                check_prompt(blank).unwrap_err().contains("書いてください"),
+                "{blank:?}"
+            );
+        }
+        // The limit counts what is sent.
+        assert!(check_prompt(&format!("{}\u{1b}", "あ".repeat(20_000))).is_ok());
+    }
+
+    #[test]
+    fn a_broken_record_is_not_written_over_by_a_change() {
+        let config = temp_dir("update-broken");
+        // No file: the change starts from none.
+        update(&config, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
+        for text in ["", "not json", "[1]", r#"{"children": "x"}"#] {
+            std::fs::write(dir(&config).join(CHILDREN_FILE), text).unwrap();
+            let err = update(&config, |old| with_planned(old, &[wanted("b", "x")])).unwrap_err();
+            assert!(err.contains("何も書いていません"), "{text:?}");
+            assert_eq!(
+                std::fs::read_to_string(dir(&config).join(CHILDREN_FILE)).unwrap(),
+                text
+            );
+            assert!(plan(&config, &[wanted("b", "x")]).is_err());
+            assert!(close(&config, "a").is_err());
+        }
+        // The screen still reads it as none.
+        assert!(read_children(&config).is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_repository_with_no_remote_has_no_unpushed_commits_to_ask_for() {
+        assert!(has_remote("origin\n"));
+        assert!(has_remote("upstream\norigin"));
+        assert!(!has_remote(""));
+        assert!(!has_remote(" \n"));
+        assert_eq!(git_remote_args("/w/a"), ["-C", "/w/a", "remote"]);
+    }
+
+    #[test]
+    fn a_worktree_is_listed_when_its_path_and_its_branch_are_the_records() {
+        let ps = json!({"worktrees": [
+            {"path": "/w/a", "branch": "refs/heads/me/a", "displayName": "a"},
+            {"path": "/w/b", "branch": "refs/heads/me/b"},
+            {"path": "/w/detached"},
+            {"branch": "refs/heads/me/nopath"},
+        ]});
+        assert!(is_listed(&ps, "/w/a", "me/a"));
+        assert!(is_listed(&ps, "/w/b", "me/b"));
+        assert!(is_listed(&ps, "/w/detached", ""));
+        for (path, branch) in [
+            ("/w/a", "me/b"),
+            ("/w/a", ""),
+            ("/w/a", "refs/heads/me/a"),
+            ("/w/c", "me/a"),
+            ("/w", "me/a"),
+        ] {
+            assert!(!is_listed(&ps, path, branch), "{path} {branch}");
+        }
+        assert!(!is_listed(&Value::Null, "/w/a", "me/a"));
+    }
+
+    /// The calls of a stand-in Orca, in order, and what it answers to `worktree ps`.
+    struct Calls(std::cell::RefCell<Vec<Vec<String>>>);
+
+    impl Calls {
+        fn new() -> Self {
+            Self(std::cell::RefCell::new(Vec::new()))
+        }
+        fn run(&self, args: &[String]) -> Result<Value, String> {
+            self.0.borrow_mut().push(args.to_vec());
+            Ok(json!({}))
+        }
+        fn names(&self) -> Vec<String> {
+            self.0.borrow().iter().map(|a| a[..2].join(" ")).collect()
+        }
+    }
+
+    fn recorded(config: &Path, path: &str, handle: &str, branch: &str) {
+        let mut child = launched("a", "x");
+        let launch = child.launch.as_mut().unwrap();
+        launch.path = path.into();
+        launch.handle = handle.into();
+        launch.branch = branch.into();
+        write_children(config, &[planned("p", "x"), child]).unwrap();
+    }
+
+    #[test]
+    fn a_child_whose_worktree_is_gone_has_its_terminal_closed_and_its_entry_dropped() {
+        let config = temp_dir("close-gone");
+        recorded(&config, "/nonexistent-tsunagiai/w/a", "term_a", "me/a");
+        let orca = Calls::new();
+        let done =
+            close_with(&config, "a", &|args| orca.run(args), &|args| orca.run(args)).unwrap();
+        assert_eq!(done["worktreeGone"], true);
+        assert_eq!(done["name"], "a");
+        // Only the terminal is closed: no list is read and nothing is removed.
+        assert_eq!(orca.names(), ["terminal close"]);
+        assert_eq!(orca.0.borrow()[0], terminal_close_args("term_a"));
+        assert_eq!(names(&read_children(&config)), ["p"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_record_that_is_not_what_orca_lists_deletes_nothing_and_stays() {
+        let config = temp_dir("close-forged");
+        let there = temp_dir("close-forged-worktree");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        let ps = |branch: &str, at: &str| json!({"worktrees": [{"path": at, "branch": format!("refs/heads/{branch}")}]});
+        let cases = [
+            // A path that is not absolute, and a handle that is not one.
+            (
+                "relative/path",
+                "term_a",
+                "me/a",
+                ps("me/a", "relative/path"),
+            ),
+            (path.as_str(), "--force", "me/a", ps("me/a", &path)),
+            (path.as_str(), "term_a x", "me/a", ps("me/a", &path)),
+            // Orca lists another worktree, or this one on another branch.
+            (path.as_str(), "term_a", "me/a", ps("me/a", "/w/other")),
+            (path.as_str(), "term_a", "me/a", ps("me/other", &path)),
+            (path.as_str(), "term_a", "me/a", json!({})),
+        ];
+        for (p, handle, branch, listed) in cases {
+            recorded(&config, p, handle, branch);
+            let orca = Calls::new();
+            let err = close_with(&config, "a", &|_| Ok(listed.clone()), &|args| {
+                orca.run(args)
+            })
+            .unwrap_err();
+            assert!(
+                answer(Err(err)).contains("何も消していません"),
+                "{p} {handle}"
+            );
+            assert!(orca.0.borrow().is_empty(), "{p} {handle}");
+            assert_eq!(names(&read_children(&config)), ["p", "a"], "{p} {handle}");
+        }
+        // A list that cannot be read stops the close too.
+        recorded(&config, &path, "term_a", "me/a");
+        let orca = Calls::new();
+        let err = close_with(
+            &config,
+            "a",
+            &|_| Err("orca が答えません".into()),
+            &|args| orca.run(args),
+        )
+        .unwrap_err();
+        assert_eq!(err.step, Some(STEP_LISTED));
+        assert!(orca.0.borrow().is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
     }
 
     // ---- the list the screen draws ----

@@ -325,6 +325,22 @@ describe("orchestration mode: the flow pane", () => {
     await waitForCalls("formation_children", afterScreen + 1);
   });
 
+  it("reads nothing while the window is hidden, and reads once when it is shown again", async () => {
+    await openFlow(mixed());
+    await waitForCalls("formation_children", 1);
+    const setHidden = (hidden: boolean) =>
+      browser.execute((h) => {
+        Object.defineProperty(document, "hidden", { configurable: true, get: () => h });
+        if (!h) document.dispatchEvent(new Event("visibilitychange"));
+      }, hidden);
+    await setHidden(true);
+    await mock("formation_children", mixed());
+    await browser.pause(WAIT * 3);
+    expect(await callsOf("formation_children")).toEqual([]);
+    await setHidden(false);
+    await waitForCalls("formation_children", 1);
+  });
+
   it("is open at first, with its button at the right end of the heading", async () => {
     await openFlow(mixed());
     await expect($("#formation-flow")).toBeDisplayed();
@@ -501,6 +517,23 @@ describe("orchestration mode: the children's tabs", () => {
     expect(await selectedTab()).toBe("batch-update");
   });
 
+  it("keeps the focus in the list it was in when both lists are drawn again", async () => {
+    await openTabs(mixed());
+    const focusIn = (selector: string) => browser.execute((s) => document.querySelector<HTMLElement>(s)!.focus(), selector);
+    const focusedIn = (id: string) => browser.execute((i) => ({ inside: document.getElementById(i)!.contains(document.activeElement), child: (document.activeElement as HTMLElement).dataset.child }), id);
+    // A press turns 自動で追う off, so the selection stays where it is while the states change.
+    await browser.execute(() => document.querySelector<HTMLElement>('#formation-tabs [data-child="batch-update"]')!.click());
+    const states = (state: "working" | "waiting") => [...mixed().slice(0, 2), formationChild("batch-update", state), ...mixed().slice(3)];
+    await focusIn('#formation-flow-list [data-child="batch-update"]');
+    await mock("formation_children", states("waiting"));
+    await browser.waitUntil(async () => (await $('#formation-tabs [data-child="batch-update"]').getAttribute("data-state")) === "waiting");
+    expect(await focusedIn("formation-flow-list")).toEqual({ inside: true, child: "batch-update" });
+    await focusIn('#formation-tabs [data-child="batch-update"]');
+    await mock("formation_children", states("working"));
+    await browser.waitUntil(async () => (await $('#formation-tabs [data-child="batch-update"]').getAttribute("data-state")) === "working");
+    expect(await focusedIn("formation-tabs")).toEqual({ inside: true, child: "batch-update" });
+  });
+
   it("mirrors the terminal of the selected tab, and reads the one shown only", async () => {
     await openTabs(mixed());
     const [first] = await waitForCalls("orca_terminal_read");
@@ -628,6 +661,17 @@ describe("orchestration mode: the count on the footer's icon", () => {
     expect((await callsOf("formation_children")).length).toBeLessThanOrEqual(4);
     await $("#footer-mode-orca").click();
     await expect(badge()).toHaveText("2");
+  });
+
+  it("does not read again when the 開発 button is pressed on the development screen", async () => {
+    await boot({ inbox: inbox(), formation_children: waitingKids(1), ...timers({ orcaClock: 5000 }) });
+    await $("#nav-orca").click();
+    await expect(badge()).toHaveText("1");
+    await mock("formation_children", waitingKids(1));
+    await $("#nav-orca").click();
+    await browser.pause(500);
+    expect(await callsOf("formation_children")).toEqual([]);
+    await expect(badge()).toHaveText("1");
   });
 
   it("reads nothing and shows no number once the development screen is left", async () => {

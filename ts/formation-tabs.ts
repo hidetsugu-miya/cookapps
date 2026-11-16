@@ -62,7 +62,8 @@ function drawStrip() {
   // The strip is drawn again in place: its scroll and the focus stay where they were.
   const strip = $("formation-tabs");
   const left = strip.scrollLeft;
-  const focused = (document.activeElement as HTMLElement | null)?.dataset?.child;
+  // The card of the same child carries the same name, so only a focus inside this strip is put back.
+  const focused = strip.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.child : undefined;
   strip.replaceChildren(...tabs.map(tabNode));
   strip.scrollLeft = left;
   if (focused) strip.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });

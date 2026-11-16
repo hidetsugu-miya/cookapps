@@ -6,7 +6,7 @@ import { closeDetail } from "./calendar-detail.js";
 import { showDatabase } from "./database.js";
 import { closeDatabaseForm } from "./database-form.js";
 import { drawDevSwitch } from "./footer.js";
-import { devMode, hideFormation, setDevMode, showFormation, watchFormation, type DevMode } from "./formation.js";
+import { devMode, hideFormation, hidePanes, setDevMode, showFormation, watchFormation, type DevMode } from "./formation.js";
 import { closeHint } from "./hint.js";
 import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
@@ -104,7 +104,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
     if (devMode() === "formation") {
       showFormation();
     } else {
-      hideFormation();
+      hidePanes();
       showOrca();
       watchFormation();
     }
