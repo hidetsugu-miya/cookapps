@@ -297,21 +297,22 @@ describe("footer", () => {
         await expect($("#unread-pane-title")).toHaveText("未読 4");
       });
 
-      it("watches the thread of a Slack message with ウォッチ as the popup does: slack_watch is called with the thread's ts, and the row and the count go at once without opening a thread", async () => {
+      it("watches the thread of a Slack message with ウォッチ as the popup does: slack_watch is called with the thread's ts, and the row goes at once and the count stays, without opening a thread", async () => {
         await start();
         const watch = await mock("slack_watch", holds);
         const mark = await mock("slack_mark_read", true);
-        await mock("slack_timeline", timeline([slackB()]));
+        await mock("slack_timeline", timeline([slackB()], { unreadTotal: 2 }));
         await pressed(1, "ウォッチ");
         expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
         await waitForCount("#unread-pane-list li", 3);
         expect(await lines()).toEqual(["Mail newest", "Mail third", "text B"]);
-        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await expect($("#unread-pane-title")).toHaveText("未読 4");
         await expect($("#slack-thread")).not.toBeDisplayed();
         expect(await callsOf(mark)).toEqual([]);
         await release(watch, true);
         await waitForCalls("slack_timeline");
-        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await waitForText("#footer-bell .footer-count", "4");
       });
     });
   });
