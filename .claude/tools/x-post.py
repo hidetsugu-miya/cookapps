@@ -21,11 +21,13 @@ the keychain is written through the stdin of `security -i`, and HTTP goes throug
 import base64
 import hashlib
 import hmac
+import http.client
 import http.server
 import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import time
@@ -243,14 +245,19 @@ OPENER = urllib.request.build_opener(NoRedirect)
 
 
 def request_json(method, url, headers, body=None):
-    """(status, parsed JSON or None). Status 0 is a failure before any answer."""
+    """(status, parsed JSON or None). Status -1: the request never left (no name, connection refused). Status 0: no answer after it may have left."""
     request = urllib.request.Request(url, data=body, method=method, headers={"User-Agent": "tsunagiai-x-post", **headers})
     try:
         with OPENER.open(request, timeout=30) as response:
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as e:
-        status, raw = e.code, e.read()
-    except (urllib.error.URLError, TimeoutError, OSError):
+        try:
+            status, raw = e.code, e.read()
+        except (OSError, http.client.HTTPException):
+            status, raw = e.code, b""
+    except urllib.error.URLError as e:
+        return (-1 if isinstance(e.reason, (socket.gaierror, ConnectionRefusedError)) else 0), None
+    except (TimeoutError, OSError, http.client.HTTPException):
         return 0, None
     try:
         data = json.loads(raw)
@@ -267,7 +274,7 @@ def fail_http(what, status, data):
             if isinstance(data.get(key), str):
                 kind = re.sub(r"[^A-Za-z0-9_:/. -]", "", data[key])[:100]
                 break
-    if status == 0:
+    if status <= 0:
         raise Fail(f"{what}に失敗した: 通信できなかった", 2)
     raise Fail(f"{what}に失敗した: HTTP {status}" + (f"（{kind}）" if kind else ""), 2)
 
