@@ -76,7 +76,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .unread-who b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unread-channel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-time { flex: none; margin-left: auto; font-size: calc(12px * var(--fs)); color: var(--muted); }
-.unread-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(13px * var(--fs)); color: var(--muted); }
+.unread-line { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; white-space: pre-line; overflow-wrap: anywhere; font-size: calc(13px * var(--fs)); color: var(--muted); }
 .unread-actions { grid-column: 3; display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 6px; }
 .unread-actions .text-btn { order: 1; height: 28px; }
 .unread-actions .icon-btn { width: 28px; height: 28px; visibility: hidden; }
