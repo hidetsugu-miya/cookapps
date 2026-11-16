@@ -13,6 +13,18 @@ Good: add the description of a feature to docs/features.md
 Bad:  write the description of a feature only in a commit message
 ```
 
+### Treat a post to X as public material
+
+The night run of `ship` posts the new releases to X (`x-post.sh`, `harness.md`), and a post is as public as the repository: it cannot be taken back once read.
+Its text holds no personal information, none of the words that `guard-public.sh` forbids, and not the name of the mail app this replaces (see below).
+Write no personal value in a rule or a skill for it either: not the name of the account that posts, nor a personal address or path.
+`x-post.sh check` runs the same word list (`guard-public.sh text`) before every `send`.
+
+```text
+Good: "つなぎあい v{version} を公開しました。" with the Releases URL, from the entries of CHANGELOG.md
+Bad:  a post that names the account or the organization of the owner
+```
+
 ## What is private
 
 ### Write personal information only in the gitignored rules
