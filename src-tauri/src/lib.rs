@@ -367,6 +367,7 @@ pub fn run() {
             lsp::server::lsp_stop,
             lsp::server::lsp_status,
             lsp::server::lsp_definition,
+            lsp::outside::lsp_read_outside,
             ssh_scratch::ssh_scratch_list,
             ssh_scratch::ssh_scratch_read,
             ssh_scratch::ssh_scratch_write,

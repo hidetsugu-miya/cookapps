@@ -4,8 +4,10 @@
 //! The texts are read by one command each, run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
 //! The server itself is in `server` (the processes that stay, one for each worktree, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
 //! The settings of a repository are saved in `lsp-settings.json` in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list.
+//! A file outside the worktree that the server gave as a definition is read, read only, by the same route (`outside`).
 //! Nothing of a file of a worktree is kept: the answers of the two commands are used and dropped.
 
+pub mod outside;
 mod protocol;
 pub mod server;
 

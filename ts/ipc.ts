@@ -25,6 +25,7 @@ import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspLocation } from "./bindings/LspLocation";
+import type { LspOutsideFile } from "./bindings/LspOutsideFile";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { MailSummary } from "./bindings/MailSummary";
@@ -358,6 +359,8 @@ export interface Commands {
   lsp_status: { args: { environment: string | null; worktree: string }; result: LspStatus };
   // A-34: the places of the definition of the name at `line` and `character` (UTF-16 units, the index of a JavaScript string) of the file `relative` of `worktree`, whose text `text` is sent as the whole text of the file. A place inside the worktree has its path from the worktree; one outside has the absolute path on the server's side and `outside`. Nothing found is an empty list.
   lsp_definition: { args: { environment: string | null; worktree: string; relative: string; text: string; line: number; character: number }; result: LspLocation[] };
+  // A-34: the text, read only, of the file `path` outside `worktree` (an absolute path on the server's side) that the server of that worktree gave as a definition with `outside`; any other path is an error. It is read the way the server is started (cat on this machine, `docker compose exec -T` in its service, ssh in front for a saved environment). A file over 1 MiB, one that is not UTF-8 and one that cannot be read are errors.
+  lsp_read_outside: { args: { environment: string | null; project: string; worktree: string; path: string }; result: LspOutsideFile };
   // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/cookapps/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
   ssh_scratch_list: { args: { host: string }; result: string[] };
   // A-30: the text of the scratchpad file `name` of the SSH host, as `orca_file_read` answers it (the signature is of the bytes on the host). A missing file, one over 384 KiB, one that is not UTF-8 and one with mixed line ends are errors.
