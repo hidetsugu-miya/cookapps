@@ -1,8 +1,14 @@
 //! The OS keychain, in one place: every module reads, writes and deletes its secrets through here.
 //! The services are named after the identifier (`jp.mysis.tsunagiai`, `jp.mysis.tsunagiai.claude`, ...), and the ones of the old identifier (`jp.mysis.cookapps...`) are moved on the first read:
 //! a read that finds nothing under the new service reads the same user under the old service, and copies what it finds to the new one. The old item is kept.
-//! A delete removes the item under both services, or the next read would copy the old one back.
+//! The old service is asked once for each item in a process (when it held nothing, the answer is remembered), and one read at a time, so a permission prompt of the OS is not asked twice.
+//! A delete removes the item under both services, the old one first, or the next read would copy the old one back; a read that copied reads the old item once more, and takes its copy back when a delete took the old one meanwhile.
 //! A secret is in no log, error text or `Debug` here: an error carries the keychain's own message only.
+
+use std::{
+    collections::BTreeSet,
+    sync::{Mutex, PoisonError},
+};
 
 use crate::identity::{IDENTIFIER, OLD_IDENTIFIER};
 
@@ -43,9 +49,14 @@ impl Store for Os {
     }
 }
 
+/// The items (new service, user) whose old service held nothing when it was asked. It is also the lock of the read of an old service.
+type Asked = Mutex<BTreeSet<(String, String)>>;
+
+static ASKED: Asked = Mutex::new(BTreeSet::new());
+
 /// The secret under `service` and `user`; `None` means none is stored. An item that only the old service has is copied to the new one.
 pub(crate) fn read(service: &str, user: &str) -> Result<Option<String>, String> {
-    read_in(&Os, service, user)
+    read_in(&Os, &ASKED, service, user)
 }
 
 /// Stores the secret under the new service only.
@@ -53,7 +64,7 @@ pub(crate) fn write(service: &str, user: &str, value: &str) -> Result<(), String
     Os.set(service, user, value)
 }
 
-/// Deletes the item under the new service and under the old one.
+/// Deletes the item under the old service and under the new one.
 pub(crate) fn delete(service: &str, user: &str) -> Result<(), String> {
     delete_in(&Os, service, user)
 }
@@ -65,38 +76,46 @@ pub(crate) fn old_service(service: &str) -> Option<String> {
         .map(|rest| format!("{OLD_IDENTIFIER}{rest}"))
 }
 
-/// What a read does with the two items.
-struct Migration {
-    value: Option<String>,
-    /// Write `value` to the new service.
-    copy: bool,
-}
-
-fn migration(new: Option<String>, old: Option<String>) -> Migration {
-    Migration {
-        copy: new.is_none() && old.is_some(),
-        value: new.or(old),
+fn read_in(
+    store: &impl Store,
+    asked: &Asked,
+    service: &str,
+    user: &str,
+) -> Result<Option<String>, String> {
+    if let Some(value) = store.get(service, user)? {
+        return Ok(Some(value));
     }
-}
-
-fn read_in(store: &impl Store, service: &str, user: &str) -> Result<Option<String>, String> {
-    let new = store.get(service, user)?;
-    let old = match (&new, old_service(service)) {
-        (None, Some(old_service)) => store.get(&old_service, user)?,
-        _ => None,
+    let Some(old_service) = old_service(service) else {
+        return Ok(None);
     };
-    let found = migration(new, old);
-    if let (true, Some(value)) = (found.copy, &found.value) {
-        store.set(service, user, value)?;
+    // One read of the old service at a time: the reads that wait find the item copied, or the answer remembered.
+    let mut asked = asked.lock().unwrap_or_else(PoisonError::into_inner);
+    let key = (service.to_owned(), user.to_owned());
+    if asked.contains(&key) {
+        return Ok(None);
     }
-    Ok(found.value)
+    if let Some(value) = store.get(service, user)? {
+        return Ok(Some(value));
+    }
+    let Some(value) = store.get(&old_service, user)? else {
+        asked.insert(key);
+        return Ok(None);
+    };
+    store.set(service, user, &value)?;
+    // A delete (the app and `tsunagiai-mcp` are two processes) takes the old item first and the new one after, so an old item that is gone now was deleted while this read copied it.
+    if store.get(&old_service, user)?.is_none() {
+        store.delete(service, user)?;
+        return Ok(None);
+    }
+    Ok(Some(value))
 }
 
-/// Both deletes run even when the first fails, so a failure leaves the old item no later than the new one.
+/// Both deletes run even when the first fails, and the error of either is returned.
+/// The old one goes first, so a read that copies the old item to the new service while a delete runs finds the old item gone when it looks again.
 fn delete_in(store: &impl Store, service: &str, user: &str) -> Result<(), String> {
-    let new = store.delete(service, user);
     let old = old_service(service).map_or(Ok(()), |old| store.delete(&old, user));
-    new.and(old)
+    let new = store.delete(service, user);
+    old.and(new)
 }
 
 #[cfg(test)]
@@ -106,6 +125,15 @@ mod tests {
 
     const NEW: &str = "jp.mysis.tsunagiai.slack";
     const OLD: &str = "jp.mysis.cookapps.slack";
+
+    /// A read with nothing remembered, as the first read of a process.
+    fn read_in_fresh(
+        store: &impl Store,
+        service: &str,
+        user: &str,
+    ) -> Result<Option<String>, String> {
+        read_in(store, &Mutex::new(BTreeSet::new()), service, user)
+    }
 
     /// Items in a map, with the calls that fail named.
     #[derive(Default)]
@@ -175,34 +203,22 @@ mod tests {
     }
 
     #[test]
-    fn the_new_item_wins_and_nothing_is_copied() {
-        let m = migration(Some("new".into()), Some("old".into()));
-        assert_eq!((m.value.as_deref(), m.copy), (Some("new"), false));
-    }
-
-    #[test]
-    fn only_the_old_item_is_copied() {
-        let m = migration(None, Some("old".into()));
-        assert_eq!((m.value.as_deref(), m.copy), (Some("old"), true));
-    }
-
-    #[test]
-    fn neither_item_is_none_and_copies_nothing() {
-        let m = migration(None, None);
-        assert_eq!((m.value, m.copy), (None, false));
-    }
-
-    #[test]
     fn a_read_finding_the_new_item_does_not_touch_the_old_one() {
         let store = Memory::with(&[(NEW, "u", "new"), (OLD, "u", "old")]);
-        assert_eq!(read_in(&store, NEW, "u").unwrap().as_deref(), Some("new"));
+        assert_eq!(
+            read_in_fresh(&store, NEW, "u").unwrap().as_deref(),
+            Some("new")
+        );
         assert_eq!(store.item(OLD, "u").as_deref(), Some("old"));
     }
 
     #[test]
     fn a_read_copies_the_old_item_to_the_new_service_and_keeps_the_old_one() {
         let store = Memory::with(&[(OLD, "u", "old"), (OLD, "other", "x")]);
-        assert_eq!(read_in(&store, NEW, "u").unwrap().as_deref(), Some("old"));
+        assert_eq!(
+            read_in_fresh(&store, NEW, "u").unwrap().as_deref(),
+            Some("old")
+        );
         assert_eq!(store.item(NEW, "u").as_deref(), Some("old"));
         assert_eq!(store.item(OLD, "u").as_deref(), Some("old"));
         assert_eq!(store.item(NEW, "other"), None);
@@ -211,32 +227,35 @@ mod tests {
     #[test]
     fn a_read_finding_nothing_writes_nothing() {
         let store = Memory::default();
-        assert_eq!(read_in(&store, NEW, "u").unwrap(), None);
+        assert_eq!(read_in_fresh(&store, NEW, "u").unwrap(), None);
         assert!(store.items.borrow().is_empty());
     }
 
     #[test]
     fn a_service_outside_the_identifier_has_no_old_one() {
         let store = Memory::with(&[("other.service", "u", "x")]);
-        assert_eq!(read_in(&store, "another.service", "u").unwrap(), None);
+        assert_eq!(read_in_fresh(&store, "another.service", "u").unwrap(), None);
         assert!(store.item("another.service", "u").is_none());
     }
 
     #[test]
     fn a_delete_removes_both_so_the_old_item_is_not_copied_back() {
         let store = Memory::with(&[(OLD, "u", "old")]);
-        assert_eq!(read_in(&store, NEW, "u").unwrap().as_deref(), Some("old"));
+        assert_eq!(
+            read_in_fresh(&store, NEW, "u").unwrap().as_deref(),
+            Some("old")
+        );
         delete_in(&store, NEW, "u").unwrap();
         assert_eq!(store.item(NEW, "u"), None);
         assert_eq!(store.item(OLD, "u"), None);
-        assert_eq!(read_in(&store, NEW, "u").unwrap(), None);
+        assert_eq!(read_in_fresh(&store, NEW, "u").unwrap(), None);
     }
 
     #[test]
     fn a_delete_of_an_item_only_the_old_service_has_removes_it() {
         let store = Memory::with(&[(OLD, "u", "old"), (OLD, "keep", "k")]);
         delete_in(&store, NEW, "u").unwrap();
-        assert_eq!(read_in(&store, NEW, "u").unwrap(), None);
+        assert_eq!(read_in_fresh(&store, NEW, "u").unwrap(), None);
         assert_eq!(store.item(OLD, "keep").as_deref(), Some("k"));
     }
 
@@ -254,10 +273,86 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_delete_of_the_old_item_still_deletes_the_new_one() {
+        let mut store = Memory::with(&[(NEW, "u", "new"), (OLD, "u", "old")]);
+        store.failing_service = Some(OLD);
+        assert_eq!(delete_in(&store, NEW, "u"), Err("locked".to_owned()));
+        assert_eq!(store.item(NEW, "u"), None);
+    }
+
+    #[test]
+    fn the_old_service_is_asked_once_for_an_item_it_does_not_hold() {
+        struct Counting(Memory, RefCell<Vec<String>>);
+        impl Store for Counting {
+            fn get(&self, s: &str, u: &str) -> Result<Option<String>, String> {
+                self.1.borrow_mut().push(s.to_owned());
+                self.0.get(s, u)
+            }
+            fn set(&self, s: &str, u: &str, v: &str) -> Result<(), String> {
+                self.0.set(s, u, v)
+            }
+            fn delete(&self, s: &str, u: &str) -> Result<(), String> {
+                self.0.delete(s, u)
+            }
+        }
+        let store = Counting(Memory::default(), RefCell::default());
+        let asked = Mutex::new(BTreeSet::new());
+        for _ in 0..3 {
+            assert_eq!(read_in(&store, &asked, NEW, "u").unwrap(), None);
+        }
+        let old_reads = store.1.borrow().iter().filter(|s| *s == OLD).count();
+        assert_eq!(old_reads, 1);
+        // Another item of the same service is asked on its own.
+        assert_eq!(read_in(&store, &asked, NEW, "other").unwrap(), None);
+        assert_eq!(store.1.borrow().iter().filter(|s| *s == OLD).count(), 2);
+    }
+
+    #[test]
+    fn an_item_that_was_copied_is_not_remembered_as_missing() {
+        // Only an item that the old service did not hold is remembered, so the item is copied again once the new one is gone.
+        let asked = Mutex::new(BTreeSet::new());
+        let store = Memory::with(&[(OLD, "u", "old")]);
+        assert_eq!(
+            read_in(&store, &asked, NEW, "u").unwrap().as_deref(),
+            Some("old")
+        );
+        store
+            .items
+            .borrow_mut()
+            .remove(&(NEW.to_owned(), "u".to_owned()));
+        assert_eq!(
+            read_in(&store, &asked, NEW, "u").unwrap().as_deref(),
+            Some("old")
+        );
+    }
+
+    #[test]
+    fn a_delete_that_lands_between_the_read_and_the_copy_does_not_bring_the_item_back() {
+        // Another process deletes the item after this read found the old one and before it writes the new one.
+        struct DeleteBeforeSet(Memory);
+        impl Store for DeleteBeforeSet {
+            fn get(&self, s: &str, u: &str) -> Result<Option<String>, String> {
+                self.0.get(s, u)
+            }
+            fn set(&self, s: &str, u: &str, v: &str) -> Result<(), String> {
+                delete_in(&self.0, s, u)?;
+                self.0.set(s, u, v)
+            }
+            fn delete(&self, s: &str, u: &str) -> Result<(), String> {
+                self.0.delete(s, u)
+            }
+        }
+        let store = DeleteBeforeSet(Memory::with(&[(OLD, "u", "old")]));
+        assert_eq!(read_in_fresh(&store, NEW, "u").unwrap(), None);
+        assert_eq!(store.0.item(NEW, "u"), None);
+        assert_eq!(store.0.item(OLD, "u"), None);
+    }
+
+    #[test]
     fn a_failed_read_of_the_new_service_is_an_error_and_the_old_one_is_not_read() {
         let mut store = Memory::with(&[(OLD, "u", "old")]);
         store.failing_service = Some(NEW);
-        assert_eq!(read_in(&store, NEW, "u"), Err("locked".to_owned()));
+        assert_eq!(read_in_fresh(&store, NEW, "u"), Err("locked".to_owned()));
         assert_eq!(store.item(NEW, "u"), None);
     }
 
@@ -277,7 +372,7 @@ mod tests {
             }
         }
         let store = NoWrite(Memory::with(&[(OLD, "u", "old")]));
-        assert_eq!(read_in(&store, NEW, "u"), Err("full".to_owned()));
+        assert_eq!(read_in_fresh(&store, NEW, "u"), Err("full".to_owned()));
     }
 
     /// Writes, reads and deletes a real Windows Credential Manager entry under a service name only this test uses.

@@ -34,6 +34,22 @@ const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// The refresh token of `account`, read off the async workers: the keychain may wait for the OS to ask for permission.
+async fn blocking_read(account: &str) -> Result<Option<String>, String> {
+    let account = account.to_owned();
+    tokio::task::spawn_blocking(move || keychain::read(KEYRING_SERVICE, &account))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Deletes the refresh token of `account`, off the async workers as `blocking_read` does.
+async fn blocking_delete(account: &str) -> Result<(), String> {
+    let account = account.to_owned();
+    tokio::task::spawn_blocking(move || keychain::delete(KEYRING_SERVICE, &account))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[derive(Deserialize)]
 struct ClientFile {
     installed: Client,
@@ -120,7 +136,7 @@ impl Auth {
         if !is_registered(&self.accounts(dir)?, account) {
             return Ok(None);
         }
-        let Some(refresh_token) = keychain::read(KEYRING_SERVICE, account)? else {
+        let Some(refresh_token) = blocking_read(account).await? else {
             return Ok(None);
         };
         let client = load_client(dir)?;
@@ -134,7 +150,7 @@ impl Auth {
             }
             None => {
                 self.access.lock().unwrap().remove(account);
-                keychain::delete(KEYRING_SERVICE, account)?;
+                blocking_delete(account).await?;
                 Ok(None)
             }
         }
@@ -151,12 +167,12 @@ impl Auth {
         if !is_registered(&list, account) {
             return Err("登録されていないアカウントです".into());
         }
-        if let Some(token) = keychain::read(KEYRING_SERVICE, account)? {
+        if let Some(token) = blocking_read(account).await? {
             if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
                 eprintln!("tsunagiai: revoke account={account} status=- error={e}");
             }
         }
-        keychain::delete(KEYRING_SERVICE, account)?;
+        blocking_delete(account).await?;
         self.access.lock().unwrap().remove(account);
         // Under the cache lock, so a save that began before cannot write this account's data back after the delete.
         disk_cache::exclusive(|| {

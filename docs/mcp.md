@@ -119,6 +119,18 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 「常に許可」を選びます。
 `tsunagiai-mcp` を入れ直すと、また求められることがあります。
 
+## 旧名の cookapps-mcp から移る
+
+つなぎあいの前の名前（cookapps）で `cookapps-mcp` を登録していた場合は、更新後に次を行います。
+古い `cookapps-mcp` は、古い設定フォルダ（`jp.mysis.cookapps`）を読み続けるので、そのままでは新しいつなぎあいの状態と食い違います。
+
+1. Claude Code の登録を消します。ユーザーのスコープで登録していたなら、`claude mcp remove cookapps --scope user` を実行します。
+2. `cargo uninstall cookapps` で、古い `cookapps-mcp` を消します。
+3. 「1. インストールする」と「2. Claude Code に登録する」を行い、`tsunagiai-mcp` を入れて登録し直します。
+4. 「3. 読み取りのツールだけを許可する」の `permissions.allow` に `mcp__cookapps__` で始まる行があれば、`mcp__tsunagiai__` に書き換えます。
+5. Claude Desktop に登録していたなら、`mcpServers` の名前を `tsunagiai` に、`command` を `tsunagiai-mcp` の絶対パスに書き換えます。
+   アプリに同梱の `/Applications/cookapps.app/Contents/MacOS/cookapps-mcp` は、更新後は起動できません。
+
 ## ツール
 
 | ツール | 引数 | 内容 | 種類 |

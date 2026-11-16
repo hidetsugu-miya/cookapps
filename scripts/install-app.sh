@@ -41,13 +41,16 @@ if [ "${1:-}" = "--no-install" ]; then
 fi
 
 dest=/Applications/tsunagiai.app
-if pgrep -x tsunagiai >/dev/null; then
-  echo "tsunagiai が起動中です。終了してからやり直してください。" >&2
+if pgrep -x tsunagiai >/dev/null || pgrep -x cookapps >/dev/null; then
+  echo "tsunagiai（旧名 cookapps）が起動中です。終了してからやり直してください。" >&2
   exit 1
 fi
-# 古い版は削除せずゴミ箱へ移す。
+# 古い版は削除せずゴミ箱へ移す。旧名の cookapps.app が残っていれば、それも移す。
 if [ -e "$dest" ]; then
   mv "$dest" "$HOME/.Trash/tsunagiai-$(date +%Y%m%d%H%M%S).app"
+fi
+if [ -e /Applications/cookapps.app ]; then
+  mv /Applications/cookapps.app "$HOME/.Trash/cookapps-$(date +%Y%m%d%H%M%S).app"
 fi
 ditto "$app" "$dest"
 echo "インストールしました: $dest"

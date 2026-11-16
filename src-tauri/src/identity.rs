@@ -55,14 +55,20 @@ pub fn migrate_config_dir(new: &Path) -> Result<(), String> {
 }
 
 /// Copies `from` to `to` (which must not exist), files and folders, following symbolic links, keeping the modes.
+/// An entry that is no file or folder (a link to nothing, a socket) is skipped, so one of them does not stop the move of the rest.
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir(to)?;
     for item in fs::read_dir(from)? {
         let item = item?;
         let (src, dst) = (item.path(), to.join(item.file_name()));
-        if fs::metadata(&src)?.is_dir() {
+        let kind = match fs::metadata(&src) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if kind.is_dir() {
             copy_dir(&src, &dst)?;
-        } else {
+        } else if kind.is_file() {
             fs::copy(&src, &dst)?;
         }
     }
@@ -122,6 +128,22 @@ mod tests {
         assert!(old.join("accounts.json").is_file());
         let left: Vec<_> = fs::read_dir(&parent).unwrap().collect();
         assert_eq!(left.len(), 2, "no staging folder is left");
+        fs::remove_dir_all(&parent).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_cannot_be_copied_is_skipped_and_the_rest_is_moved() {
+        let parent = parent("broken-link");
+        let old = make_old(&parent);
+        std::os::unix::fs::symlink(old.join("gone"), old.join("broken")).unwrap();
+        std::os::unix::fs::symlink(old.join("claude-plugin"), old.join("linked-dir")).unwrap();
+        let new = parent.join(IDENTIFIER);
+        migrate_config_dir(&new).unwrap();
+        assert!(new.join("accounts.json").is_file());
+        assert!(new.join("claude-plugin/skills/SKILL.md").is_file());
+        assert!(new.join("linked-dir/skills/SKILL.md").is_file());
+        assert!(new.join("broken").symlink_metadata().is_err());
         fs::remove_dir_all(&parent).unwrap();
     }
 
