@@ -79,7 +79,7 @@ Unit tests (`cargo test`) are those of `app_log.rs`: the cleaning of the text (s
 
 ## A-35 Footer with the unread count
 
-Every screen has a low footer at the bottom of the window, to the right of the green icon column (`#footer`, the last child of `#content`, 28px high, with a line above it). It is shown on every screen, and nothing in it moves with the screen. At its right end is a button with the icon of a bell (`#footer-bell`, `aria-label` 「通知」). Pressing it opens the pane of the unread (below).
+Every screen has a low footer at the bottom of the window, to the right of the green icon column (`#footer`, the last child of `#content`, 36px high (`--footer-h`, which the pane of the unread also stops at), with a line above it). It is shown on every screen, and nothing in it moves with the screen. At its right end is a button with the icon of a bell (`#footer-bell`, `aria-label` 「通知」). Pressing it opens the pane of the unread (below).
 
 Why. The unread of the inbox and of the Slack list were told by two counts on the green icon column, and nowhere in one number. The owner wanted one place that sums them up, and that the later parts can use (#723, issue #725).
 
