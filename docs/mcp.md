@@ -7,6 +7,7 @@ title: Claude との連携（MCP）
 `cookapps-mcp` は、Claude Code から cookapps の受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
 stdio で動き、ネットワークのポートは開きません。
 cookapps アプリが起動していなくても使えます。
+データベースの画面の Claude Code のペインでは、アプリが自分の中の `cookapps-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
 
 この文書は AI に読ませて設定を任せられるように、手順と確認方法を順に書いています。
 
@@ -129,8 +130,8 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 | `set_read` | `account`、`id`、`read` | スレッドを既読（`true`）または未読（`false`）にする | 書き込み |
 | `trash` | `account`、`id` | スレッドをゴミ箱へ移す。Gmail から元に戻せる | 書き込み |
 | `db_profiles` | なし | データベースの画面の接続を返す（`id`、`name`、`username`、`script`、`dbHost`、`dbPort`、`passwordSaved`）。パスワードは返さない | 読み取り |
-| `db_profile_save` | `id`（新しい接続では省く）、`name`、`username`、`script`、`dbHost`、`dbPort`（`script` があるときは `dbHost` と `dbPort` を省ける） | 接続を保存し、保存した内容を返す。確かめ方と断り方はアプリの保存と同じ。パスワードは設定しない。ユーザー名、`script`、スクリプトの無い接続のホストとポートを変えると、保存したパスワードを消す | 書き込み |
-| `db_test` | `id` | 保存した接続を、保存したパスワードで、アプリの「接続をテスト」と同じようにテストする（事前スクリプトを動かし、MySQL にログインして版を読み、スクリプトを止める）。`{"ok": true, "version": …}` か `{"ok": false, "error": …, "note": …}` を返す。最長 2 分ほどかかる | 書き込み |
+| `db_profile_save` | `id`（新しい接続では省く）、`name`、`username`、`script`（無いときは空の文字列）、`db_host`、`db_port`（`script` の有無によらず、どちらも要る） | 接続を保存し、保存した内容を返す。確かめ方と断り方はアプリの保存と同じ。パスワードは設定しない。ユーザー名、`script`、ホスト、ポートを変えると、`script` の有無によらず、保存したパスワードを消す | 書き込み |
+| `db_test` | `id` | 保存した接続を、保存したパスワードで、アプリの「接続をテスト」と同じようにテストする（事前スクリプトがあれば動かし、接続のホストとポートで MySQL にログインして版を読み、スクリプトを止める。スクリプトを動かす前からそのポートが使われているときは失敗にし、cookapps でその接続を開いているなら切断してからテストするよう、`error` に添える）。`{"ok": true, "version": …}` か `{"ok": false, "error": …, "note": …}` を返す。最長 2 分ほどかかる | 書き込み |
 
 `account` と `id` には、`list_inbox` が返した値を使います。
 `db_profile_save` と `db_test` の `id` には、`db_profiles` か `db_profile_save` が返した値を使います。
