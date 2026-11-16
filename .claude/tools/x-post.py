@@ -1,10 +1,10 @@
 """The logic of x-post.sh: the X (Twitter) release post, in three commands (issue #754). Run through x-post.sh, which runs `python3 -I`.
 
-auth  : by the owner, in front of the Mac Studio. Client ID and Client Secret come from the clipboard (the clipboard is emptied after each read),
-        the browser asks for the owner's consent (OAuth 2.0 Authorization Code Flow with PKCE, S256), and the three values go to the keychain.
+auth  : by the owner, in front of the Mac Studio. Client ID and Client Secret come from the secret item, the browser asks for the owner's consent
+        (OAuth 2.0 Authorization Code Flow with PKCE, S256), and the refresh token goes to the keychain.
 check : reads the text of a post from a file or stdin and checks it mechanically. Exit 0, or exit 1 with one reason per line on stderr.
 send  : `send file tag`. Refuses a tag that is not newer than .claude/x-posted of the main checkout (and a night run when that file is missing), before any network. Then the same check,
-        refreshes the access token, writes the new refresh token back to the keychain, posts, and writes tag into .claude/x-posted. Exit 2 on a failure of a token or of the post,
+        refreshes the access token, writes the new refresh token back to the keychain, posts, and writes tag into .claude/x-posted. Exit 2 on a failure of the config, the secret item or the keychain, or of a token or of the post,
         exit 3 when the post got no answer (it may have been made; tag is written and the post is not sent again).
 
 Sources (read on 2026-11-16):
@@ -14,11 +14,16 @@ Sources (read on 2026-11-16):
   POST /2/tweets: https://docs.x.com/x-api/posts/creation-of-a-post.md      GET /2/users/me: https://docs.x.com/x-api/users/get-my-user.md
   Weighted length: https://github.com/twitter/twitter-text/blob/master/config/v3.json
 
-A secret (client secret, refresh token, access token, authorization code) is never printed and never put in an argument of a command:
-the keychain is written through the stdin of `security -i`, and HTTP goes through urllib (publishing.md, "Do not show secrets on screen or in logs").
+Where each value is: Client ID and Client Secret only in the secret item, which `op` reads with a service account (read only; the service account cannot write the vault); the refresh token, which X
+replaces at every use, only in the keychain (service jp.mysis.tsunagiai.x, account refresh_token). Where the service account token, the vault and the item are is in .claude/x-post.json of the main checkout
+(gitignored, publishing.md): {"op_token_keychain_service": ..., "op_vault": ..., "op_item": ...}. The service account token goes to `op` in OP_SERVICE_ACCOUNT_TOKEN.
+
+A secret (service account token, client secret, refresh token, access token, authorization code) is never printed and never put in an argument of a command:
+`op` gets the token in its environment, the keychain is written through the stdin of `security -i`, and HTTP goes through urllib (publishing.md, "Do not show secrets on screen or in logs").
 """
 
 import base64
+import getpass
 import hashlib
 import hmac
 import http.client
@@ -38,6 +43,10 @@ import urllib.request
 from pathlib import Path
 
 SERVICE = "jp.mysis.tsunagiai.x"
+CONFIG_KEYS = ("op_token_keychain_service", "op_vault", "op_item")
+LABEL_CLIENT_ID = "クライアントID"
+LABEL_CLIENT_SECRET = "クライアントシークレット"
+OP_TIMEOUT_SECONDS = 60
 REDIRECT_URI = "http://127.0.0.1:8765/callback"
 AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
@@ -206,7 +215,77 @@ def read_text(args):
         raise Fail("文面を読めない（ファイルがないか、UTF-8 でない）", 1)
 
 
-# ---- keychain --------------------------------------------------------------
+# ---- secret store (op) -----------------------------------------------------
+
+
+def op_config():
+    """The three names of .claude/x-post.json. A missing file or a wrong shape ends with exit 2, before any network."""
+    path = main_checkout() / ".claude" / "x-post.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise Fail(".claude/x-post.json を読めない（ファイルがないか、JSON でない）。メインのチェックアウトに置く", 2)
+    if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data[k] for k in CONFIG_KEYS):
+        raise Fail(".claude/x-post.json の形が違う（" + ", ".join(CONFIG_KEYS) + " の 3 つの文字列が要る）", 2)
+    return {k: data[k] for k in CONFIG_KEYS}
+
+
+def op_environment(config):
+    """The environment of `op`: the service account token read from the keychain. It is in no argument and in no output."""
+    run = subprocess.run(
+        ["security", "find-generic-password", "-a", getpass.getuser(), "-s", config["op_token_keychain_service"], "-w"], capture_output=True, text=True
+    )
+    token = run.stdout.rstrip("\n")
+    if run.returncode != 0 or not token:
+        raise Fail("キーチェーンからサービスアカウントトークンを読めなかった", 2)
+    return {**os.environ, "OP_SERVICE_ACCOUNT_TOKEN": token}
+
+
+def op_run(config, args):
+    """Runs `op` and returns its stdout. Its stderr is dropped: a failure is only its exit code."""
+    try:
+        run = subprocess.run(["op", *args], capture_output=True, text=True, env=op_environment(config), timeout=OP_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        raise Fail("op コマンドが見つからない", 2)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Fail("op を実行できなかった（または応答がなかった）", 2)
+    if run.returncode != 0:
+        raise Fail(f"op が失敗した（exit {run.returncode}）", 2)
+    return run.stdout
+
+
+def op_item(config):
+    """The secret item as the JSON of `op item get`."""
+    out = op_run(config, ["item", "get", config["op_item"], "--vault", config["op_vault"], "--format", "json"])
+    try:
+        item = json.loads(out)
+    except ValueError:
+        raise Fail("op item get の出力が JSON でない", 2)
+    if not isinstance(item, dict) or not isinstance(item.get("fields"), list):
+        raise Fail("op item get の出力に fields がない", 2)
+    return item
+
+
+def field_value(item, label):
+    """The value of the first field with the label, or None when there is none or it is empty."""
+    for field in item["fields"]:
+        if isinstance(field, dict) and field.get("label") == label:
+            value = field.get("value")
+            return value if isinstance(value, str) and value else None
+    return None
+
+
+def op_client(config):
+    """(client ID, client secret) of the item; a missing one ends with exit 2."""
+    item = op_item(config)
+    client_id, client_secret = field_value(item, LABEL_CLIENT_ID), field_value(item, LABEL_CLIENT_SECRET)
+    missing = [label for label, value in ((LABEL_CLIENT_ID, client_id), (LABEL_CLIENT_SECRET, client_secret)) if not value]
+    if missing:
+        raise Fail("アイテムに X の認証情報がない（" + ", ".join(missing) + "）", 2)
+    return client_id, client_secret
+
+
+# ---- keychain (the refresh token) ------------------------------------------
 
 
 def keychain_get(account):
@@ -295,15 +374,6 @@ def token_request(client_id, client_secret, fields, what):
 # ---- auth ------------------------------------------------------------------
 
 
-def clipboard_secret(label):
-    input(f"X の開発者コンソールで {label} をコピーして、Enter を押す: ")
-    value = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout.strip()
-    subprocess.run(["pbcopy"], input=b"")
-    if not value or re.search(r"\s", value):
-        raise Fail(f"クリップボードの内容が {label} の形でない（空か、空白を含む）", 1)
-    return value
-
-
 def wait_for_callback(state):
     """Takes the one request of /callback and returns its code. Nothing of the request is logged: its query holds the code."""
     result = {}
@@ -344,8 +414,8 @@ def wait_for_callback(state):
 
 
 def auth():
-    client_id = clipboard_secret("Client ID")
-    client_secret = clipboard_secret("Client Secret")
+    config = op_config()
+    client_id, client_secret = op_client(config)
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(32)
@@ -362,8 +432,10 @@ def auth():
         },
         quote_via=urllib.parse.quote,
     )
-    print("ブラウザで X の許可画面を開く。許可を押す。")
-    subprocess.run(["open", f"{AUTHORIZE_URL}?{query}"], check=True)
+    url = f"{AUTHORIZE_URL}?{query}"
+    print("ブラウザで X の許可画面を開く。許可を押す。開かないときは次の URL を開く。")
+    print(url)
+    subprocess.run(["open", url], check=True)
     deadline = time.monotonic() + CALLBACK_WAIT_SECONDS
     while not result and time.monotonic() < deadline:
         server.handle_request()
@@ -380,8 +452,6 @@ def auth():
         "トークンの取得",
     )
     keychain_set("refresh_token", refresh)
-    keychain_set("client_id", client_id)
-    keychain_set("client_secret", client_secret)
     status, data = request_json("GET", ME_URL, {"Authorization": f"Bearer {access}"})
     user = data.get("data", {}).get("username") if data and isinstance(data.get("data"), dict) else None
     if isinstance(user, str) and re.fullmatch(r"[A-Za-z0-9_]{1,15}", user):
@@ -440,13 +510,12 @@ def send(args):
     reasons = check_text(text)
     if reasons:
         raise Fail("\n".join(reasons), 1)
-    creds = {a: keychain_get(a) for a in ("client_id", "client_secret", "refresh_token")}
-    missing = [a for a, v in creds.items() if not v]
-    if missing:
-        raise Fail("キーチェーンに X の認証情報がない（" + ", ".join(missing) + "）。auth を実行する", 2)
-    access, refresh = token_request(
-        creds["client_id"], creds["client_secret"], {"grant_type": "refresh_token", "refresh_token": creds["refresh_token"]}, "アクセストークンの取り直し"
-    )
+    config = op_config()
+    old_refresh = keychain_get("refresh_token")
+    if not old_refresh:
+        raise Fail("キーチェーンに X の refresh_token がない。auth を実行する", 2)
+    client_id, client_secret = op_client(config)
+    access, refresh = token_request(client_id, client_secret, {"grant_type": "refresh_token", "refresh_token": old_refresh}, "アクセストークンの取り直し")
     try:
         keychain_set("refresh_token", refresh)
     except Fail:
