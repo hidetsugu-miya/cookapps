@@ -108,6 +108,17 @@ const answers = {
     mono: { family: null, size: 14, ghostty: false },
   },
   font_families: ["Hiragino Sans", "Menlo", "Times New Roman"],
+  // #676: the sidebar's first order, all six screens shown; a spec that saves a change mocks `side_menu_settings_set`.
+  side_menu_settings: {
+    items: [
+      { screen: "mail", enabled: true },
+      { screen: "calendar", enabled: true },
+      { screen: "todo", enabled: true },
+      { screen: "slack", enabled: true },
+      { screen: "orca", enabled: true },
+      { screen: "database", enabled: true },
+    ],
+  },
   // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
   editor_settings: { autosaveMs: 1000, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 },
   orca_stream_open: null,

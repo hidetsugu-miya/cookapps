@@ -33,6 +33,8 @@ import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
+import type { MenuEntry } from "./bindings/MenuEntry";
+import type { MenuSettings } from "./bindings/MenuSettings";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
@@ -423,6 +425,10 @@ export interface Commands {
   font_families: { args: undefined; result: string[] };
   // A-20: saves the font of one place (`family` null is the app's own; `ghostty` only for orcaWork) and answers the settings saved. A family this Mac lacks is an error; a size is brought into 8 to 32 px in steps of 0.5.
   font_settings_set: { args: { area: FontArea; family: string | null; size: number; ghostty: boolean }; result: FontSettings };
+  // #676: the order and the on and off of the six screens of the sidebar, as saved. A file that is missing or broken gives the first order, all shown.
+  side_menu_settings: { args: undefined; result: MenuSettings };
+  // #676: saves the whole list and answers the settings saved. A list that is not each screen once, or that turns the inbox off, is an error and nothing is written.
+  side_menu_settings_set: { args: { items: MenuEntry[] }; result: MenuSettings };
   // The skills (`claude-plugin/skills/{name}/SKILL.md` in the config folder), by name. A folder that is not a skill is left out.
   skill_list: { args: undefined; result: Skill[] };
   // One skill by its name; an error when there is none or the name is not a valid one.
