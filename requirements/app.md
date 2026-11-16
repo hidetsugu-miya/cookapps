@@ -39,7 +39,7 @@ Unit tests (`cargo test`) cover the first values (the app, the pane of Orca and 
 
 The window has no title bar: every screen reaches the top edge of the window, and the traffic lights (close, minimize, zoom) of macOS sit on the top of the green icon column (`#sidebar`). The window is set in `app.windows` of `src-tauri/tauri.conf.json` (`titleBarStyle` `Overlay`, `hiddenTitle` true and `trafficLightPosition`), the permission to move the window is `src-tauri/capabilities/default.json`, and the frontend is `src/index.html` and `src/style.css`.
 
-Why. The gray title bar took a band of height off every screen and showed a title (つなぎあい) the owner does not need. The owner asked for the screens to fill the window to the top (issue #314, part of #222; Discussion #221).
+Why. The gray title bar took a band of height off every screen and showed a title (つなぎAI) the owner does not need. The owner asked for the screens to fill the window to the top (issue #314, part of #222; Discussion #221).
 
 The icon column. The traffic lights are at the top of `#sidebar`, at `trafficLightPosition` x 9 and y 20 (the column is 78px wide, and the three buttons are 60pt wide, 9pt from each side; measured on macOS 27.2.1, where macOS puts the close button at x 9 itself, and x 6 had put the edge of the window over the buttons, #421), and the icons start 48px from the top, below them. Apart from the width of the column, which moves the screens to its right by the same amount, nothing else moves: the header of the list, the reload of the Orca screen and the bands of the other screens keep their places.
 
