@@ -43,7 +43,7 @@ use super::{
 use crate::{
     auth::config_dir,
     orca_files::check_worktree_of_project,
-    ssh_scratch::{failure, shared_control, Ran},
+    ssh::{failure, shared_control, Ran},
 };
 
 /// The event that tells the screen each change of a state (`LspStatusEvent`).

@@ -146,7 +146,7 @@ pub struct OrcaTerminal {
     pub environment: Option<String>,
 }
 
-/// A row of the project list (A-8): a repository of this machine (`key` is its id), or an SSH host (`key` is `ssh:{id}`, and only what its worktrees show: its name comes from `OrcaSshTarget`).
+/// A row of the project list (A-8): a repository of this machine or of a saved environment (`key` is its id).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -164,16 +164,6 @@ pub struct OrcaProject {
     /// Where it is: `None` for this machine, else the name of the saved environment.
     #[cfg_attr(test, ts(optional = nullable))]
     pub environment: Option<String>,
-}
-
-/// A host of `~/.ssh/config` that Orca knows (`ssh.listEditableTargets` of this machine), for its row in the project list.
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-#[serde(rename_all = "camelCase")]
-pub struct OrcaSshTarget {
-    pub id: String,
-    pub label: String,
 }
 
 /// A worktree a launch can start an agent or a terminal in.
@@ -247,12 +237,8 @@ pub struct OrcaOverview {
     pub worktrees: Vec<OrcaWorktree>,
     /// The repositories of this machine (A-8), newest activity first.
     pub projects: Vec<OrcaProject>,
-    /// What the worktrees of each SSH host show (A-8), by `ssh:{id}`.
-    pub hosts: Vec<OrcaProject>,
     /// The plain terminals (A-8).
     pub terminals: Vec<OrcaTerminal>,
-    /// The SSH hosts of this machine, whatever the target is (A-8). Read only with the environments: a read that does not say what the target is leaves the ones the screen held (`known`).
-    pub ssh: Vec<OrcaSshTarget>,
     /// Whether this read says what the target and the environments are. A poll of the screen or of the badge does not read them, and a failed `environment list` cannot: the screen then keeps the ones it had.
     pub known: bool,
     /// This machine's lists, read at the same time when `target` is a saved environment (`None` when `target` is this machine, whose lists are the ones above). Its state is its own: a failed read of one side does not stop the other. Every item of it has no `environment`, and every item above has the target's name.
@@ -270,7 +256,6 @@ pub struct OrcaLocal {
     pub rows: Vec<OrcaRow>,
     pub worktrees: Vec<OrcaWorktree>,
     pub projects: Vec<OrcaProject>,
-    pub hosts: Vec<OrcaProject>,
     pub terminals: Vec<OrcaTerminal>,
 }
 
@@ -282,7 +267,6 @@ impl From<OrcaOverview> for OrcaLocal {
             rows: view.rows,
             worktrees: view.worktrees,
             projects: view.projects,
-            hosts: view.hosts,
             terminals: view.terminals,
         }
     }
@@ -298,9 +282,7 @@ impl OrcaOverview {
             rows: Vec::new(),
             worktrees: Vec::new(),
             projects: Vec::new(),
-            hosts: Vec::new(),
             terminals: Vec::new(),
-            ssh: Vec::new(),
             known: true,
             local: None,
         }
@@ -616,7 +598,7 @@ fn host_of(worktree: &Value) -> &str {
     text_of(worktree, "hostId").unwrap_or(LOCAL_HOST)
 }
 
-/// The project a worktree belongs to: its repository on this machine, `ssh:{id}` on an SSH host; `None` when a repository has no id.
+/// The project a worktree belongs to: its repository on this machine, `ssh:{id}` on an SSH host (which no list draws); `None` when a repository has no id.
 fn project_key_of(worktree: &Value) -> Option<String> {
     match host_of(worktree) {
         LOCAL_HOST => text_of(worktree, "repoId").map(str::to_owned),
@@ -635,7 +617,7 @@ fn working_subagents(agent: &Value) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
-/// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first.
+/// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first. The worktrees of an SSH host have no row (A-6 counts none of their sessions).
 /// A field that is absent or of another type is left out, not an error.
 pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
     // The pane of an agent is "{tabId}:{leafId}" of its terminal. A terminal that lost its tab is orphaned and still runs:
@@ -671,7 +653,12 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
         }))
         .collect();
     let mut rows: Vec<(i64, OrcaRow)> = Vec::new();
-    for worktree in ps["worktrees"].as_array().into_iter().flatten() {
+    for worktree in ps["worktrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|w| host_of(w) == LOCAL_HOST)
+    {
         for agent in worktree["agents"].as_array().into_iter().flatten() {
             if !agent["parentPaneKey"].is_null()
                 || agent["hasLivePty"] != true
@@ -769,13 +756,15 @@ pub fn environments_of(result: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The worktrees that count in the project list: not archived, with a path and a project.
+/// The worktrees that count in the project list: not archived, with a path and a project, and not on an SSH host.
 fn live_worktrees(ps: &Value) -> impl Iterator<Item = (&Value, String)> {
     ps["worktrees"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|w| w["isArchived"] != true && text_of(w, "path").is_some())
+        .filter(|w| {
+            w["isArchived"] != true && text_of(w, "path").is_some() && host_of(w) == LOCAL_HOST
+        })
         .filter_map(|w| Some((w, project_key_of(w)?)))
 }
 
@@ -812,13 +801,9 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Ve
         .collect()
 }
 
-/// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories of this machine (the working ones first, then the rest, each newest activity first), and apart from them what the worktrees of each SSH host show (newest activity first).
+/// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories (the working ones first, then the rest, each newest activity first). The worktrees of an SSH host make no project.
 /// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals (a green dot), and as sessions its Claude rows and plain terminals.
-pub fn projects_of(
-    ps: &Value,
-    rows: &[OrcaRow],
-    plain: &[OrcaTerminal],
-) -> (Vec<OrcaProject>, Vec<OrcaProject>) {
+pub fn projects_of(ps: &Value, rows: &[OrcaRow], plain: &[OrcaTerminal]) -> Vec<OrcaProject> {
     let mut projects: Vec<OrcaProject> = Vec::new();
     for (worktree, key) in live_worktrees(ps) {
         let mut status = worktree_status(worktree);
@@ -833,14 +818,9 @@ pub fn projects_of(
             project.at_ms = project.at_ms.max(at_ms);
             continue;
         }
-        let name = if key.starts_with("ssh:") {
-            host_of(worktree)
-        } else {
-            text_of(worktree, "repo").unwrap_or_default()
-        };
         projects.push(OrcaProject {
             key,
-            name: name.to_owned(),
+            name: text_of(worktree, "repo").unwrap_or_default().to_owned(),
             status,
             sessions: 0,
             at_ms,
@@ -860,30 +840,9 @@ pub fn projects_of(
     }
     // Newest first; a stable sort keeps the CLI's order between equal times.
     projects.sort_by_key(|p| std::cmp::Reverse(p.at_ms));
-    let (mut repos, hosts): (Vec<_>, Vec<_>) = projects
-        .into_iter()
-        .partition(|p| !p.key.starts_with("ssh:"));
-    // The working projects first; the stable sort keeps the newest-first order inside each part. The SSH hosts keep theirs.
-    repos.sort_by_key(|p| p.status != OrcaStatus::Working);
-    (repos, hosts)
-}
-
-/// The SSH hosts of `ssh.listEditableTargets` (its `result`), in its order: the first line of the label, else the `configHost`. A target with no id or no name is dropped.
-pub fn ssh_targets_of(result: &Value) -> Vec<OrcaSshTarget> {
-    result["targets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| {
-            let label = text_of(t, "label")
-                .and_then(first_line)
-                .or_else(|| text_of(t, "configHost").and_then(first_line))?;
-            Some(OrcaSshTarget {
-                id: text_of(t, "id")?.to_owned(),
-                label,
-            })
-        })
-        .collect()
+    // The working projects first; the stable sort keeps the newest-first order inside each part.
+    projects.sort_by_key(|p| p.status != OrcaStatus::Working);
+    projects
 }
 
 /// The lines of a screen read (`orca terminal read --screen` or `terminal.read` with `screen: true`; its `result`): `terminal.tail`, an array of lines with no colors.
@@ -1114,9 +1073,9 @@ fn check_worktree(worktrees: &[OrcaWorktree], path: &str) -> Result<(), String> 
     }
 }
 
-/// The project of a new worktree must be a repository of this machine or the saved environment in the list read just now (`ssh:` hosts are not repositories).
+/// The project of a new worktree must be a repository of this machine or the saved environment in the list read just now.
 fn check_project(ps: &Value, project: &str) -> Result<(), String> {
-    if !project.starts_with("ssh:") && live_worktrees(ps).any(|(_, key)| key == project) {
+    if live_worktrees(ps).any(|(_, key)| key == project) {
         Ok(())
     } else {
         Err("worktree を作るプロジェクトが見つかりません。一覧を読み直してください".into())
@@ -1479,26 +1438,24 @@ fn assemble(
             let mut rows = rows_of(&ps, &terminals);
             let mut worktrees = worktrees_of(&ps);
             // The count alone is wanted by a `Badge` read: its terminals and projects would not be drawn.
-            let (mut plain, mut projects, mut hosts) = if scope == OrcaScope::Badge {
-                (Vec::new(), Vec::new(), Vec::new())
+            let (mut plain, mut projects) = if scope == OrcaScope::Badge {
+                (Vec::new(), Vec::new())
             } else {
                 let plain = plain_terminals_of(&ps, &terminals, &rows);
-                let (projects, hosts) = projects_of(&ps, &rows, &plain);
-                (plain, projects, hosts)
+                let projects = projects_of(&ps, &rows, &plain);
+                (plain, projects)
             };
             let place = target.as_deref();
             place_in(&mut rows, place);
             place_in(&mut worktrees, place);
             place_in(&mut plain, place);
             place_in(&mut projects, place);
-            place_in(&mut hosts, place);
             OrcaOverview {
                 target,
                 environments,
                 rows,
                 worktrees,
                 projects,
-                hosts,
                 terminals: plain,
                 known,
                 ..OrcaOverview::empty(OrcaState::Ready)
@@ -2035,14 +1992,6 @@ fn check_input(
     check_mirrored(mirror, handle, environment)
 }
 
-/// The SSH hosts of this machine's Orca, from its runtime (not a public interface: it was written against Orca 1.4.248). A failure is an empty list.
-pub(crate) async fn local_ssh_targets() -> Vec<OrcaSshTarget> {
-    crate::orca_link::local_call("ssh.listEditableTargets", serde_json::json!({}))
-        .await
-        .map(|result| ssh_targets_of(&result))
-        .unwrap_or_default()
-}
-
 pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, String> {
@@ -2059,19 +2008,7 @@ pub async fn orca_overview(
     target: Option<String>,
 ) -> Result<OrcaOverview, String> {
     let dir = config_dir(&app)?;
-    if scope != OrcaScope::Full {
-        return blocking(move || overview(&dir, scope, target)).await;
-    }
-    // The SSH hosts are read with the environments only, side by side with the CLI.
-    let (view, ssh) = tokio::join!(
-        blocking(move || overview(&dir, scope, target)),
-        local_ssh_targets()
-    );
-    let mut view = view?;
-    if view.known {
-        view.ssh = ssh;
-    }
-    Ok(view)
+    blocking(move || overview(&dir, scope, target)).await
 }
 
 /// A-9: the lists of the destination the side pane chose (`None`: this machine, else a saved environment's name, which is checked against the saved ones). It does not touch the target the Orca screen holds.
@@ -3384,7 +3321,7 @@ mod tests {
         (Ok(ps), Ok(terminals))
     }
 
-    /// The place of every item of the target's lists, in the order rows, worktrees, projects, hosts, terminals.
+    /// The place of every item of the target's lists, in the order rows, worktrees, projects, terminals.
     fn places_of(view: &OrcaOverview) -> Vec<Option<&str>> {
         [
             view.rows
@@ -3396,10 +3333,6 @@ mod tests {
                 .map(|i| i.environment.as_deref())
                 .collect(),
             view.projects
-                .iter()
-                .map(|i| i.environment.as_deref())
-                .collect(),
-            view.hosts
                 .iter()
                 .map(|i| i.environment.as_deref())
                 .collect(),
@@ -3421,8 +3354,8 @@ mod tests {
             lists_with_a_host(),
         );
         let places = places_of(&view);
-        // The row, the two worktrees, the project, the host and the plain terminal.
-        assert_eq!(places.len(), 6);
+        // The row, the two worktrees, the project and the plain terminal.
+        assert_eq!(places.len(), 5);
         assert!(places.iter().all(|p| *p == Some("Lab")), "{places:?}");
         let here = assemble(
             None,
@@ -3431,7 +3364,7 @@ mod tests {
             OrcaScope::Screen,
             lists_with_a_host(),
         );
-        assert_eq!(places_of(&here).len(), 6);
+        assert_eq!(places_of(&here).len(), 5);
         assert!(places_of(&here).iter().all(Option::is_none));
     }
 
@@ -3459,7 +3392,6 @@ mod tests {
         assert_eq!(local.rows.len(), 1);
         assert_eq!(local.worktrees.len(), 2);
         assert_eq!(local.projects.len(), 1);
-        assert_eq!(local.hosts.len(), 1);
         assert_eq!(local.terminals.len(), 1);
         let none = |places: Vec<Option<&String>>| places.iter().all(Option::is_none);
         assert!(none(
@@ -3478,9 +3410,6 @@ mod tests {
                 .iter()
                 .map(|i| i.environment.as_ref())
                 .collect()
-        ));
-        assert!(none(
-            local.hosts.iter().map(|i| i.environment.as_ref()).collect()
         ));
         assert!(none(
             local
@@ -4316,11 +4245,8 @@ mod tests {
         let rows = claude_rows(&plain_doc());
         let plain = plain_terminals_of(&projects_doc(), &plain_doc(), &rows);
         let handles: Vec<_> = plain.iter().map(|t| t.handle.as_str()).collect();
-        // The one a Claude row holds, an orphaned one, the floating one, one outside a listed worktree, one with no handle, and one in an archived worktree are left out.
-        assert_eq!(
-            handles,
-            ["term_sh", "term_codex", "term_remote", "term_notitle"]
-        );
+        // The one a Claude row holds, an orphaned one, the floating one, one outside a listed worktree, one with no handle, one in an archived worktree and one of an SSH host are left out.
+        assert_eq!(handles, ["term_sh", "term_codex", "term_notitle"]);
         assert_eq!(
             plain[0],
             OrcaTerminal {
@@ -4334,9 +4260,7 @@ mod tests {
         );
         assert_eq!(plain[1].project_key, "ra");
         assert_eq!(plain[1].path, "/work/a");
-        assert_eq!(plain[2].path, "/home/e");
-        assert_eq!(plain[2].project_key, "ssh:ssh-1");
-        assert_eq!(plain[3].title, "");
+        assert_eq!(plain[2].title, "");
         assert!(plain_terminals_of(&projects_doc(), &Value::Null, &[]).is_empty());
         assert!(plain_terminals_of(&Value::Null, &plain_doc(), &rows).is_empty());
         // With no row, the terminal that Orca calls Claude's is a plain one: the kind is the row's.
@@ -4429,7 +4353,7 @@ mod tests {
         }
     }
 
-    fn project_lists(doc: &Value, plain: &Value) -> (Vec<OrcaProject>, Vec<OrcaProject>) {
+    fn project_lists(doc: &Value, plain: &Value) -> Vec<OrcaProject> {
         let rows = claude_rows(plain);
         let plain = plain_terminals_of(doc, plain, &rows);
         projects_of(doc, &rows, &plain)
@@ -4437,7 +4361,7 @@ mod tests {
 
     #[test]
     fn projects_are_the_repositories_of_this_machine_newest_first() {
-        let (projects, _) = project_lists(&projects_doc(), &Value::Null);
+        let projects = project_lists(&projects_doc(), &Value::Null);
         let names: Vec<_> = projects
             .iter()
             .map(|p| (p.key.as_str(), p.name.as_str(), p.at_ms))
@@ -4461,20 +4385,17 @@ mod tests {
             worktree("ssh-old-working", "ssh-1", "working", 2_000),
             worktree("ssh-new-idle", "ssh-2", "inactive", 8_000),
         ]});
-        let (projects, hosts) = projects_of(&doc, &[], &[]);
+        let projects = projects_of(&doc, &[], &[]);
         let names: Vec<_> = projects.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(
             names,
             ["new-working", "old-working", "newest-waiting", "new-idle"]
         );
-        // The SSH hosts keep their own order: newest activity first, whatever their status.
-        let keys: Vec<_> = hosts.iter().map(|h| h.key.as_str()).collect();
-        assert_eq!(keys, ["ssh:ssh-2", "ssh:ssh-1"]);
     }
 
     #[test]
     fn a_project_shows_the_highest_rank_of_its_agents_and_worktrees() {
-        let (projects, _) = project_lists(&projects_doc(), &Value::Null);
+        let projects = project_lists(&projects_doc(), &Value::Null);
         // alpha: a waiting agent (question) outranks a working worktree and an idle one; beta is idle.
         assert_eq!(projects[0].status, OrcaStatus::Question);
         assert_eq!(projects[1].status, OrcaStatus::Idle);
@@ -4482,7 +4403,7 @@ mod tests {
 
     #[test]
     fn a_project_counts_its_claude_rows_and_plain_terminals_and_a_terminal_makes_it_active() {
-        let (projects, _) = project_lists(&projects_doc(), &plain_doc());
+        let projects = project_lists(&projects_doc(), &plain_doc());
         // alpha: one Claude row, and the Codex and untitled terminals; beta: its shell, which makes the idle project a green dot.
         assert_eq!(
             (projects[0].sessions, projects[0].status),
@@ -4492,20 +4413,40 @@ mod tests {
             (projects[1].sessions, projects[1].status),
             (1, OrcaStatus::Done)
         );
-        let (bare, _) = project_lists(&projects_doc(), &Value::Null);
+        let bare = project_lists(&projects_doc(), &Value::Null);
         assert_eq!(bare[0].sessions, 1);
         assert_eq!(bare[1].sessions, 0);
     }
 
     #[test]
-    fn the_worktrees_of_an_ssh_host_are_its_row_apart_from_the_projects() {
-        let (projects, hosts) = project_lists(&projects_doc(), &plain_doc());
-        assert!(projects.iter().all(|p| !p.key.starts_with("ssh:")));
-        assert_eq!(hosts.len(), 1);
-        assert_eq!(hosts[0].key, "ssh:ssh-1");
-        assert_eq!(hosts[0].status, OrcaStatus::Working);
-        assert_eq!(hosts[0].sessions, 1);
-        assert_eq!(hosts[0].at_ms, 2_000);
+    fn the_sessions_of_an_ssh_host_are_no_row_no_terminal_and_no_project() {
+        let worktree = |path: &str, host: &str, pane: &str| {
+            json!({"path": path, "repo": "alpha", "repoId": "ra", "displayName": "main", "hostId": host,
+                   "isArchived": false, "sidebarStatus": "working", "lastActivityAt": 4_000,
+                   "agents": [{"paneKey": pane, "parentPaneKey": null, "hasLivePty": true, "state": "working", "agentType": "claude"}]})
+        };
+        let doc = json!({"worktrees": [
+            worktree("/work/a", "local", "t1:l1"),
+            worktree("/home/e", "box", "t2:l2"),
+        ]});
+        let terminals = json!({"terminals": [
+            {"handle": "term_a", "tabId": "t1", "leafId": "l1", "worktreePath": "/work/a"},
+            {"handle": "term_e", "tabId": "t2", "leafId": "l2", "worktreePath": "/home/e"},
+            {"handle": "term_sh", "worktreePath": "/home/e", "title": "zsh"},
+        ]});
+        // Only the agent of this machine is a row, so the count of A-6 leaves the host's session out.
+        let rows = rows_of(&doc, &terminals);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "/work/a");
+        assert_eq!(rows[0].project_key, "ra");
+        assert!(plain_terminals_of(&doc, &terminals, &rows).is_empty());
+        let projects = projects_of(&doc, &rows, &[]);
+        assert_eq!(projects.len(), 1);
+        assert_eq!((projects[0].key.as_str(), projects[0].sessions), ("ra", 1));
+        // A project of the host alone makes no project either.
+        let only = json!({"worktrees": [worktree("/home/e", "box", "t2:l2")]});
+        assert!(rows_of(&only, &terminals).is_empty());
+        assert!(projects_of(&only, &[], &[]).is_empty());
     }
 
     #[test]
@@ -4515,36 +4456,8 @@ mod tests {
             json!({}),
             json!({"worktrees": [null, 3, {"agents": "x"}]}),
         ] {
-            let (projects, hosts) = projects_of(&doc, &[], &[]);
-            assert!(projects.is_empty() && hosts.is_empty(), "{doc}");
+            assert!(projects_of(&doc, &[], &[]).is_empty(), "{doc}");
         }
-    }
-
-    #[test]
-    fn an_ssh_target_needs_an_id_and_a_name() {
-        let doc = json!({"targets": [
-            {"id": "s1", "label": "Example\nsecond", "configHost": "example-host", "host": "203.0.113.5", "username": "u", "identityFile": "/k"},
-            {"id": "s2", "configHost": "other"},
-            {"id": "s3", "label": " ", "configHost": " "},
-            {"label": "No id", "configHost": "noid"},
-            {"id": "s5"},
-            null, 5,
-        ]});
-        assert_eq!(
-            ssh_targets_of(&doc),
-            [
-                OrcaSshTarget {
-                    id: "s1".into(),
-                    label: "Example".into(),
-                },
-                OrcaSshTarget {
-                    id: "s2".into(),
-                    label: "other".into(),
-                },
-            ]
-        );
-        assert!(ssh_targets_of(&Value::Null).is_empty());
-        assert!(ssh_targets_of(&json!({"targets": "x"})).is_empty());
     }
 
     #[test]

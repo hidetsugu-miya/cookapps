@@ -434,7 +434,7 @@ pub(crate) async fn connect_environment(environment: String) -> Result<WsLink, S
     }
 }
 
-/// A call of this machine's Orca over its unix socket (A-8 asks for the SSH hosts, which the CLI cannot list, and sends the keys of a mirrored terminal, which the CLI would put in its arguments). The `result`, or a Japanese message; no token is in it.
+/// A call of this machine's Orca over its unix socket (A-8 sends the keys of a mirrored terminal, which the CLI would put in its arguments). The `result`, or a Japanese message; no token is in it.
 pub(crate) async fn local_call(method: &str, params: Value) -> Result<Value, String> {
     // The file is read off the async workers.
     let pairing = tokio::task::spawn_blocking(|| load_pairing(None))

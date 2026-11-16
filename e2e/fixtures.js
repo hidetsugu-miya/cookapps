@@ -83,8 +83,8 @@ const answers = {
   database_connections: [],
   database_disconnect: null,
   // No orca command: the Orca screen reads once and stops.
-  orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: true },
-  orca_destination: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false },
+  orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: true },
+  orca_destination: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: false },
   // The terminals of the Orca screen (A-8, A-12): this machine's mirror reads an empty screen, and a saved environment's stream sends nothing until a spec gives it events.
   orca_terminal_read: [],
   orca_terminal_input: null,

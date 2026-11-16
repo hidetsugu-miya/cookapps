@@ -18,7 +18,6 @@ import {
   isoDate,
   mock,
   orcaRow,
-  orcaSsh,
   orcaTerminal,
   para,
   plain,
@@ -159,9 +158,9 @@ const worktreeList = (): OrcaWorktree[] => [
 const INSTRUCTION = "この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。";
 // The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors. `orcaOverview` and `streamList` of `orca-support.ts` put each item in it, as Rust does.
 const ENVIRONMENT = "build-server";
-const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "ops-bastion")] });
+const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT] });
 const terminals = () => [orcaTerminal("billing-api", "zsh", { branch: "feat/csv-export", path: path("billing-api", "feat/csv-export") })];
-const overview = () => orcaOverview(rows(), worktreeList(), { terminals: [orcaTerminal("billing-api", "zsh", { branch: "fix/invoice-discount" })], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "build-server")], hosts: [{ key: "ssh:s1", name: "s1", status: "done", sessions: 1, atMs: 0 }] });
+const overview = () => orcaOverview(rows(), worktreeList(), { terminals: [orcaTerminal("billing-api", "zsh", { branch: "fix/invoice-discount" })] });
 
 // The screen of Claude Code at work on the session of billing-api, feat/csv-export, as the terminal prints it.
 const SHOT_SESSION = 2;
