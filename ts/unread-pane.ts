@@ -1,6 +1,6 @@
 // The pane of the unread (A-35): the count in the footer opens it from the right, over the screen and down to the footer, and it lists the unread threads of the inbox and the unread messages of the Slack list, mixed, the newest first.
 // A row says which of the two it is by its icon, then the sender's avatar and name, the channel (Slack), the time and one line (the subject, or the text). Its text button does what pressing the row of the inbox or of the Slack list does.
-// While the pointer is on a row or the focus is in it, its icon buttons show: a mail's trash and archive (M-3, M-4: the list's `removeRow`), a Slack message's "既読にする" (only where it changes something) and "ウォッチ" (what the popups of S-17 do). The row goes from the pane and the count of the footer falls.
+// While the pointer is on a row or the focus is in it, its icon buttons show: a mail's trash and archive (M-3, M-4: the list's `removeRow`), a Slack message's "既読にする" (only where it changes something) and "ウォッチ" (S-13). The row goes from the pane and the count of the footer falls.
 // It draws what the inbox and the Slack list hold, with no call of its own, and it is drawn again where either changes (the inbox's unread rows, `drawUnreadPane` of slack-list.ts and the count of the footer). Everything is drawn as text.
 import type { ThreadItem } from "./bindings/ThreadItem";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
@@ -117,7 +117,7 @@ const lineOf = (m: TimelineMessage) => m.text.trim() || (m.hasFiles ? "（添付
 function slackItem(m: TimelineMessage): Item {
   const ms = slackMs(m.ts);
   const text = lineOf(m);
-  // Pressing the check changes nothing for a message whose channel the token cannot write the position of (S-17): the row has no check then.
+  // Pressing the check changes nothing for a message whose channel the token cannot write the position of (S-15): the row has no check then.
   const readable = readableMessage(m);
   return {
     ms,

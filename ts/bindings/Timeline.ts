@@ -30,12 +30,6 @@ unreadTotal: number,
  */
 unreadChannels: Array<UnreadChannel>, 
 /**
- * The unread messages (S-8, as `unread` says) this read found that the one before it did not hold, newest first, `UNREAD_MAX` at most, for the pop-up of a new message.
- * Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).
- * The same message is in the answer once: a read from the cache (`cached: true`) decides it as a full read does.
- */
-arrived: Array<TimelineMessage>, 
-/**
  * The side menu (S-19): the joined channels of each workspace, from the lists kept (no new call to Slack), the ones kept off the list (S-9) left out.
  */
 side: Array<SideWorkspace>, };
