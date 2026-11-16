@@ -3,6 +3,7 @@
 //! Every command of Orca and of git is run with an argument list, never through a shell, and what they print is data: it is quoted in the answer and never read as an instruction.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, PoisonError},
@@ -317,6 +318,14 @@ fn resolve_environment(saved: &[Environment], wanted: &str) -> Result<String, St
             "「{wanted}」という環境が保存した環境に複数あります。id で指定してください"
         )),
     }
+}
+
+/// Whether no saved environment has the name or the id `wanted` (an environment that is not `local` and is in none of `saved`), as against one that fits two of them.
+fn environment_is_gone(saved: &[Environment], wanted: &str) -> bool {
+    wanted != LOCAL
+        && !saved
+            .iter()
+            .any(|e| !wanted.is_empty() && (e.name == wanted || e.id == wanted))
 }
 
 /// The repository that `wanted` names by its display name, its id or its path: exactly one of the list.
@@ -652,45 +661,71 @@ fn chosen_repo<'a>(
     })
 }
 
-/// The environments and their repositories, for `formation_environments`: this Mac first, then each saved environment, each with the repositories of its Orca, or the words of why they could not be read. An environment that cannot be read does not stop the others, and a list of saved environments that cannot be read leaves this Mac's alone, with the reason.
+/// The repositories of each of `environments`, each environment's `orca repo list` read at the same time as the others, in the order of `environments`: a slow Orca costs its own wait and not the sum of them.
+fn read_each_repos(
+    environments: &[&str],
+    read: &(dyn Fn(&str) -> Result<Vec<Repo>, String> + Sync),
+) -> Vec<Result<Vec<Repo>, String>> {
+    std::thread::scope(|scope| {
+        let started: Vec<_> = environments
+            .iter()
+            .map(|environment| scope.spawn(move || read(environment)))
+            .collect();
+        started
+            .into_iter()
+            .map(|run| {
+                run.join()
+                    .unwrap_or_else(|_| Err("Orca の読み取りが止まりました".into()))
+            })
+            .collect()
+    })
+}
+
+/// The environments and their repositories, for `formation_environments`: this Mac first, then each saved environment, each with the repositories of its Orca, or the words of why they could not be read. The Orcas are read side by side. An environment that cannot be read does not stop the others, and a list of saved environments that cannot be read leaves this Mac's alone, with the reason.
 fn environments_report(
     saved: Result<Vec<Environment>, String>,
-    read: &dyn Fn(&str) -> Result<Vec<Repo>, String>,
+    read: &(dyn Fn(&str) -> Result<Vec<Repo>, String> + Sync),
 ) -> Value {
-    let entry = |environment: &str, id: Option<&str>| {
-        let mut entry = Map::new();
-        entry.insert("environment".into(), environment.into());
-        if let Some(id) = id.filter(|id| *id != environment) {
-            entry.insert("id".into(), id.into());
-        }
-        match read(environment) {
-            Ok(repos) => {
-                entry.insert("ok".into(), true.into());
-                entry.insert(
-                    "repos".into(),
-                    repos
-                        .iter()
-                        .map(|r| json!({ "name": r.name, "path": r.path }))
-                        .collect(),
-                );
-            }
-            Err(error) => {
-                entry.insert("ok".into(), false.into());
-                entry.insert("error".into(), error.into());
-            }
-        }
-        Value::Object(entry)
-    };
-    let mut this_mac = entry(LOCAL, None);
-    this_mac["label"] = LOCAL_LABEL.into();
-    let mut environments = vec![this_mac];
     let mut report = Map::new();
-    match saved {
-        Ok(saved) => environments.extend(saved.iter().map(|e| entry(&e.name, Some(&e.id)))),
+    let mut named: Vec<(&str, Option<&str>)> = vec![(LOCAL, None)];
+    match &saved {
+        Ok(saved) => named.extend(saved.iter().map(|e| (e.name.as_str(), Some(e.id.as_str())))),
         Err(error) => {
-            report.insert("environmentListError".into(), error.into());
+            report.insert("environmentListError".into(), error.clone().into());
         }
     }
+    let wanted: Vec<&str> = named.iter().map(|(environment, _)| *environment).collect();
+    let environments: Vec<Value> = named
+        .iter()
+        .zip(read_each_repos(&wanted, read))
+        .map(|((environment, id), result)| {
+            let mut entry = Map::new();
+            entry.insert("environment".into(), (*environment).into());
+            if let Some(id) = id.filter(|id| id != environment) {
+                entry.insert("id".into(), id.into());
+            }
+            match result {
+                Ok(repos) => {
+                    entry.insert("ok".into(), true.into());
+                    entry.insert(
+                        "repos".into(),
+                        repos
+                            .iter()
+                            .map(|r| json!({ "name": r.name, "path": r.path }))
+                            .collect(),
+                    );
+                }
+                Err(error) => {
+                    entry.insert("ok".into(), false.into());
+                    entry.insert("error".into(), error.into());
+                }
+            }
+            if *environment == LOCAL {
+                entry.insert("label".into(), LOCAL_LABEL.into());
+            }
+            Value::Object(entry)
+        })
+        .collect();
     report.insert("environments".into(), environments.into());
     report.insert("note".into(), DATA_NOTE.into());
     Value::Object(report)
@@ -722,25 +757,33 @@ pub fn plan(config: &Path, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
     if let Some(taken) = wanted.iter().find(|c| is_launched(&known, &c.name)) {
         return Err(already_launched(&taken.name).into());
     }
-    // Each environment is asked for its repositories once, however many children are in it.
     let mut saved = None;
-    let mut lists: Vec<(String, Vec<Repo>)> = Vec::new();
-    let mut planned = Vec::new();
+    let mut resolved = Vec::new();
     for child in wanted {
-        let environment = chosen_environment(&mut saved, &child.environment)?;
-        let at = match lists.iter().position(|(e, _)| *e == environment) {
-            Some(at) => at,
-            None => {
-                lists.push((environment.clone(), repos(&environment)?));
-                lists.len() - 1
-            }
-        };
+        resolved.push(chosen_environment(&mut saved, &child.environment)?);
+    }
+    // Each environment is asked for its repositories once, however many children are in it, and the Orcas side by side.
+    let mut distinct: Vec<&str> = Vec::new();
+    for environment in &resolved {
+        if !distinct.contains(&environment.as_str()) {
+            distinct.push(environment);
+        }
+    }
+    let mut lists = HashMap::new();
+    for (environment, list) in distinct.iter().zip(read_each_repos(&distinct, &read_repos)) {
+        lists.insert(
+            *environment,
+            list.map_err(|e| Refusal::failed(STEP_REPOS, e))?,
+        );
+    }
+    let mut planned = Vec::new();
+    for (child, environment) in wanted.iter().zip(&resolved) {
         planned.push(PlannedChild {
             name: child.name.clone(),
-            repo: chosen_repo(&lists[at].1, &environment, &child.repo)?
+            repo: chosen_repo(&lists[environment.as_str()], environment, &child.repo)?
                 .name
                 .clone(),
-            environment,
+            environment: environment.clone(),
         });
     }
     let children = update(config, |old| with_planned(old, &planned))?;
@@ -958,6 +1001,7 @@ fn remote_git_text(status: &Value, history: &Value) -> Result<(String, String), 
 
 /// Closes a child: its terminal and its worktree with its branch, and its entry of the record. A worktree with a change, an untracked file or a commit no remote has is not removed, and so is nothing else. A child that is only planned is dropped from the record.
 /// Every command of Orca goes to the child's environment. A child of a saved environment has its git read through that environment's Orca (`orca_git_of`, `remote_git_text`) and not through `git` on this Mac; what that cannot tell stops the close.
+/// A child whose saved environment is gone (`orca environment list` was read and has no environment of the recorded name or id) has only its entry dropped, with no command of Orca: there is nothing of it to ask. A list that cannot be read, or a value that fits two saved environments, refuses as below.
 /// A worktree that is gone (the owner removed it in Orca) has only its terminal closed, when `orca worktree ps` lists an agent of the recorded pane under the recorded path, and its entry dropped. This Mac's worktree is gone when the folder is not on the disk; a saved environment's, which this Mac cannot see, when its `orca worktree ps` was read whole and lists no worktree of that path.
 /// The record is not trusted: the path and the handle must be well formed, the environment must be this Mac or exactly one saved environment, and `orca worktree ps` of it must list a worktree of that path that is not the repository's own folder, or nothing is deleted.
 pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
@@ -1001,6 +1045,15 @@ fn close_with(
         let saved = read(&environment_list_args())
             .map(|result| environments_listed(&result))
             .map_err(|e| Refusal::failed(STEP_ENVIRONMENTS, e).saying("何も消していません"))?;
+        if environment_is_gone(&saved, &child.environment) {
+            // The list was read and the environment is in none of it (the owner removed it in Orca): there is no Orca to ask, and no command is run. Only the entry goes.
+            dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
+            return Ok(json!({
+                "name": name,
+                "environmentGone": true,
+                "terminalClosed": false,
+            }));
+        }
         resolve_environment(&saved, &child.environment).map_err(|e| {
             Refusal::from(format!(
                 "{e}（children.json の記録が正しくないので、何も消していません）"
@@ -1186,56 +1239,73 @@ fn child_row(child: &Child, environment: &str, ps: Option<&Value>) -> FormationC
     row
 }
 
+/// How long the screen waits for `orca worktree ps` of a saved environment: shorter than this Mac's, because the list is drawn every few seconds and one environment that answers slowly must not hold the others back. A saved environment that does not answer in time is one that could not be read.
+const SAVED_PS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A read of Orca that waits at most the given time, as `children_view_with` takes it.
+type Read<'a> = dyn Fn(&[String], Duration) -> Result<Value, String> + Sync + 'a;
+
+fn joined(run: std::thread::ScopedJoinHandle<'_, Result<Value, String>>) -> Result<Value, String> {
+    run.join()
+        .unwrap_or_else(|_| Err("Orca の読み取りが止まりました".into()))
+}
+
 /// The list of `formation_children`. Each environment that a launched child is in is asked once for `orca worktree ps` (side by side), and only its own children are joined to the answer; a record of planned children alone, or of none, needs no Orca, and a record of this Mac's children alone does not read `orca environment list`.
-/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI.
+/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI. That list is read at the same time as this Mac's `orca worktree ps`, and each saved environment's `ps` waits `SAVED_PS_TIMEOUT` at most.
 /// An environment that cannot be read (also one whose value is refused) leaves its children working with their terminals, and the others are drawn from what was read. When no launched child could be read, the read fails with the first reason, so that the screen keeps its last list and says why.
-fn children_view_with(
-    children: &[Child],
-    read: &(dyn Fn(&[String]) -> Result<Value, String> + Sync),
-) -> Result<Vec<FormationChild>, String> {
-    let mut saved: Option<Result<Vec<Environment>, String>> = None;
-    let named: Vec<Option<Result<String, String>>> = children
-        .iter()
-        .map(|child| {
-            child.launch.as_ref()?;
-            Some(if child.environment == LOCAL {
-                Ok(LOCAL.to_owned())
-            } else {
-                saved
-                    .get_or_insert_with(|| {
-                        read(&environment_list_args())
-                            .map(|result| environments_listed(&result))
-                            .map_err(|e| format!("環境の一覧を読めません: {e}"))
-                    })
-                    .as_ref()
-                    .map_err(Clone::clone)
-                    .and_then(|list| resolve_environment(list, &child.environment))
-            })
-        })
-        .collect();
-    let mut wanted: Vec<&str> = Vec::new();
-    for name in named.iter().flatten().flatten() {
-        if !wanted.contains(&name.as_str()) {
-            wanted.push(name);
-        }
-    }
-    let reads: Vec<(&str, Result<Value, String>)> = std::thread::scope(|scope| {
-        let started: Vec<_> = wanted
+fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<FormationChild>, String> {
+    let launched_in = |local: bool| {
+        children
             .iter()
-            .map(|name| {
-                let args = orca::ps_args(Some(name));
-                (*name, scope.spawn(move || read(&args)))
+            .any(|child| child.launch.is_some() && (child.environment == LOCAL) == local)
+    };
+    let (named, reads) = std::thread::scope(|scope| {
+        let start =
+            |args: Vec<String>, timeout: Duration| scope.spawn(move || read(&args, timeout));
+        let local =
+            launched_in(true).then(|| start(orca::ps_args(Some(LOCAL)), orca::READ_TIMEOUT));
+        let list = launched_in(false).then(|| start(environment_list_args(), orca::READ_TIMEOUT));
+        let saved: Option<Result<Vec<Environment>, String>> = list.map(|run| {
+            joined(run)
+                .map(|result| environments_listed(&result))
+                .map_err(|e| format!("環境の一覧を読めません: {e}"))
+        });
+        let named: Vec<Option<Result<String, String>>> = children
+            .iter()
+            .map(|child| {
+                child.launch.as_ref()?;
+                Some(if child.environment == LOCAL {
+                    Ok(LOCAL.to_owned())
+                } else {
+                    match &saved {
+                        Some(Ok(list)) => resolve_environment(list, &child.environment),
+                        Some(Err(e)) => Err(e.clone()),
+                        None => Err("環境の一覧を読めません".to_owned()),
+                    }
+                })
             })
             .collect();
-        started
-            .into_iter()
-            .map(|(name, run)| {
-                let result = run
-                    .join()
-                    .unwrap_or_else(|_| Err("Orca の読み取りが止まりました".into()));
-                (name, result)
+        let mut wanted: Vec<&str> = Vec::new();
+        for name in named.iter().flatten().flatten() {
+            if name.as_str() != LOCAL && !wanted.contains(&name.as_str()) {
+                wanted.push(name);
+            }
+        }
+        let others: Vec<_> = wanted
+            .iter()
+            .map(|name| {
+                (
+                    (*name).to_owned(),
+                    start(orca::ps_args(Some(name)), SAVED_PS_TIMEOUT),
+                )
             })
-            .collect()
+            .collect();
+        let mut reads: Vec<(String, Result<Value, String>)> = Vec::new();
+        if let Some(run) = local {
+            reads.push((LOCAL.to_owned(), joined(run)));
+        }
+        reads.extend(others.into_iter().map(|(name, run)| (name, joined(run))));
+        (named, reads)
     });
     let mut first_failure: Option<String> = None;
     let mut launched = 0;
@@ -1282,7 +1352,9 @@ fn children_view_with(
 }
 
 fn children_view(config: &Path) -> Result<Vec<FormationChild>, String> {
-    children_view_with(&read_children(config), &orca_read)
+    children_view_with(&read_children(config), &|args, timeout| {
+        orca::call(args, timeout).map_err(orca::message_of)
+    })
 }
 
 /// The children of the orchestrator for its screen (A-37), read from `formation/children.json` and `orca worktree ps` of the environment of each child.
@@ -2842,7 +2914,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_with_an_environment_that_is_not_saved_deletes_nothing_and_reaches_no_orca_of_it() {
+    fn a_record_with_an_environment_that_is_not_saved_is_dropped_and_reaches_no_orca_of_it() {
         let config = temp_dir("close-saved-forged");
         for environment in ["elsewhere", "", "lab; rm -rf", "--force"] {
             recorded_saved(&config, environment);
@@ -2851,14 +2923,31 @@ mod tests {
                 Ok(ps_with(remote_child())),
                 Ok(git_answers(json!([]), 0)),
             );
-            let said = answer(Err(closed.done.unwrap_err()));
-            assert!(said.contains("何も消していません"), "{environment}: {said}");
+            // The environment is in no list, so there is nothing of it to close: only the entry goes, and no command of Orca and no git is run.
+            let done = closed.done.unwrap();
+            assert_eq!(done["name"], "a", "{environment}");
+            assert_eq!(done["environmentGone"], true, "{environment}");
+            assert_eq!(done["terminalClosed"], false, "{environment}");
             assert!(closed.writes.is_empty(), "{environment}");
             assert!(closed.asked.is_empty(), "{environment}");
             // Only the list of the saved environments was read.
             assert_eq!(closed.reads, ["environment list"], "{environment}");
-            assert_eq!(names(&read_children(&config)), ["p", "a"], "{environment}");
+            assert_eq!(names(&read_children(&config)), ["p"], "{environment}");
         }
+        // A value that fits two saved environments is not one of them gone: it is refused, and nothing is changed.
+        recorded_saved(&config, "dup");
+        let orca = Calls::new();
+        let err = close_with(
+            &config,
+            "a",
+            &|_| Ok(json!({"environments": [{"id": "x", "name": "dup"}, {"id": "dup", "name": "other"}]})),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap_err();
+        assert!(answer(Err(err)).contains("何も消していません"));
+        assert!(orca.0.borrow().is_empty());
+        assert_eq!(names(&read_children(&config)), ["p", "a"]);
         // The list of the saved environments cannot be read.
         recorded_saved(&config, "mac-studio");
         let orca = Calls::new();
@@ -2909,6 +2998,12 @@ mod tests {
         /// `--environment=` argument (as given to the CLI) to the `result` of `orca worktree ps`, or why it fails.
         ps: Vec<(&'static str, Result<Value, String>)>,
         calls: Mutex<Vec<Vec<String>>>,
+        /// How long each read was allowed to take, by the environment of a `ps` or `list` for the list of environments.
+        limits: Mutex<Vec<(String, Duration)>>,
+        /// Set when this Mac's `ps` has started.
+        local_started: std::sync::atomic::AtomicBool,
+        /// Whether the read of the list of environments saw this Mac's `ps` start while it was itself still running.
+        list_saw_local: std::sync::atomic::AtomicBool,
     }
 
     impl FakeOrca {
@@ -2919,13 +3014,40 @@ mod tests {
                 ),
                 ps,
                 calls: Mutex::default(),
+                limits: Mutex::default(),
+                local_started: std::sync::atomic::AtomicBool::new(false),
+                list_saw_local: std::sync::atomic::AtomicBool::new(false),
             }
         }
 
-        fn read(&self, args: &[String]) -> Result<Value, String> {
+        fn read(&self, args: &[String], limit: Duration) -> Result<Value, String> {
+            use std::sync::atomic::Ordering::SeqCst;
             self.calls.lock().unwrap().push(args.to_vec());
+            let key = if args[0] == "environment" {
+                "list".to_owned()
+            } else {
+                args.last().unwrap().clone()
+            };
+            self.limits.lock().unwrap().push((key, limit));
             if args == environment_list_args() {
+                // Wait for this Mac's `ps` to start: it does only when the two are read at the same time.
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                let local_is_read = self
+                    .ps
+                    .iter()
+                    .any(|(name, _)| *name == "--environment=local");
+                while local_is_read
+                    && !self.local_started.load(SeqCst)
+                    && std::time::Instant::now() < until
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                self.list_saw_local
+                    .store(self.local_started.load(SeqCst), SeqCst);
                 return self.saved.clone();
+            }
+            if args.last().unwrap() == "--environment=local" {
+                self.local_started.store(true, SeqCst);
             }
             assert_eq!(args[..3], ["worktree", "ps", "--limit"], "{args:?}");
             let wanted = args.last().unwrap().as_str();
@@ -2939,7 +3061,7 @@ mod tests {
         }
 
         fn view(&self, children: &[Child]) -> Result<Vec<FormationChild>, String> {
-            children_view_with(children, &|args| self.read(args))
+            children_view_with(children, &|args, limit| self.read(args, limit))
         }
 
         fn reads_of_ps(&self) -> Vec<String> {
@@ -3004,6 +3126,64 @@ mod tests {
             ["--environment=local", "--environment=mac-studio"]
         );
         assert_eq!(fake.reads_of_the_list_of_environments(), 1);
+    }
+
+    #[test]
+    fn the_list_of_environments_is_read_beside_this_macs_ps_and_a_saved_ps_waits_a_short_time() {
+        let fake = FakeOrca::new(vec![
+            ("--environment=local", Ok(ps_of(vec![]))),
+            ("--environment=mac-studio", Ok(ps_of(vec![]))),
+            ("--environment=lab", Ok(ps_of(vec![]))),
+        ]);
+        fake.view(&[
+            launched("a", "web"),
+            in_environment(launched("b", "api"), "mac-studio"),
+            in_environment(launched("c", "api"), "env-2"),
+        ])
+        .unwrap();
+        // The read of the list did not wait for this Mac's `ps` to be done before the second began.
+        assert!(fake
+            .list_saw_local
+            .load(std::sync::atomic::Ordering::SeqCst));
+        let mut limits = fake.limits.lock().unwrap().clone();
+        limits.sort();
+        assert_eq!(
+            limits,
+            [
+                ("--environment=lab".to_owned(), SAVED_PS_TIMEOUT),
+                ("--environment=local".to_owned(), orca::READ_TIMEOUT),
+                ("--environment=mac-studio".to_owned(), SAVED_PS_TIMEOUT),
+                ("list".to_owned(), orca::READ_TIMEOUT),
+            ]
+        );
+        assert!(SAVED_PS_TIMEOUT < orca::READ_TIMEOUT);
+    }
+
+    #[test]
+    fn the_orcas_of_the_environments_are_read_at_the_same_time_and_the_answers_keep_their_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let running = AtomicUsize::new(0);
+        let read = |environment: &str| {
+            running.fetch_add(1, SeqCst);
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while running.load(SeqCst) < 3 && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if running.load(SeqCst) < 3 {
+                return Err("read one after another".to_owned());
+            }
+            Ok(vec![Repo {
+                id: environment.into(),
+                name: environment.into(),
+                path: format!("/w/{environment}"),
+            }])
+        };
+        let results = read_each_repos(&["local", "b", "a"], &read);
+        let names: Vec<_> = results
+            .into_iter()
+            .map(|r| r.unwrap()[0].name.clone())
+            .collect();
+        assert_eq!(names, ["local", "b", "a"]);
     }
 
     #[test]
