@@ -43,8 +43,10 @@ const TAIL_LINES: usize = 5;
 const POLL: Duration = Duration::from_millis(100);
 /// One try of the port.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
-/// The lookup of the host's name, once for a start.
+/// One lookup of the host's name.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the addresses found are kept while the port does not answer, before the name is looked up again.
+const RELOOKUP: Duration = Duration::from_secs(2);
 /// How long the end of the script waits for the last of its standard error.
 const STDERR_WAIT: Duration = Duration::from_secs(1);
 /// `ETXTBSY`: the file is still open for writing in another thread that forked meanwhile.
@@ -152,18 +154,12 @@ pub fn is_in_use_text(text: &str) -> bool {
     text.ends_with(IN_USE_TAIL)
 }
 
-/// The addresses of `host:port`, looked up once: the probes of one start connect to them and look up no name again.
-async fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
-    let failed = |why: String| format!("{host} のアドレスを調べられません: {why}");
-    let found = tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((host, port)))
-        .await
-        .map_err(|_| failed("時間内に答えがありません".to_owned()))?
-        .map_err(|e| failed(e.to_string()))?;
-    let addrs: Vec<SocketAddr> = found.collect();
-    if addrs.is_empty() {
-        return Err(failed("アドレスがありません".to_owned()));
+/// The addresses of `host:port`; none when the name cannot be looked up (a host that only a running script makes known, such as one behind a VPN, has none yet).
+async fn resolve(host: &str, port: u16) -> Vec<SocketAddr> {
+    match tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((host, port))).await {
+        Ok(Ok(found)) => found.collect(),
+        _ => Vec::new(),
     }
-    Ok(addrs)
 }
 
 /// Whether a TCP connection to one of `addrs` succeeds now: the port is in use before the script is run, and it is ready after.
@@ -364,8 +360,9 @@ pub async fn start(
     body: &str,
     timing: Timing,
 ) -> Result<Script, String> {
-    let addrs = resolve(host, port).await?;
-    if answers(&addrs).await {
+    // A name that cannot be looked up is not in use: the script may be what makes it known.
+    let mut addrs = resolve(host, port).await;
+    if !addrs.is_empty() && answers(&addrs).await {
         return Err(in_use_text(host, port));
     }
     let folder = {
@@ -418,14 +415,31 @@ pub async fn start(
         task,
     };
     let deadline = Instant::now() + timing.ready;
+    let mut looked_up = Instant::now();
     loop {
         let ended = script.done.borrow().clone();
         if let Some(exit) = ended {
             let _ = script.finish().await;
             return Err(failure_text(Stage::Early, &exit, timing.ready));
         }
-        if answers(&addrs).await {
+        if !addrs.is_empty() && answers(&addrs).await {
             return Ok(script);
+        }
+        // The name is looked up again while it has no address, and when the addresses found do not answer (every `RELOOKUP`).
+        if addrs.is_empty() || looked_up.elapsed() >= RELOOKUP {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let lookup = tokio::select! {
+                found = resolve(host, port) => Some(found),
+                _ = script.done.changed() => None,
+                _ = tokio::time::sleep(left) => None,
+            };
+            looked_up = Instant::now();
+            if let Some(found) = lookup.filter(|found| !found.is_empty()) {
+                addrs = found;
+                if answers(&addrs).await {
+                    return Ok(script);
+                }
+            }
         }
         let now = Instant::now();
         if now >= deadline {
@@ -911,6 +925,23 @@ mod tests {
                 .await
                 .unwrap();
             script.stop().await;
+        }
+
+        #[tokio::test]
+        async fn a_name_that_cannot_be_looked_up_still_runs_the_script_and_waits_for_it() {
+            let dir = Dir::new("unresolved");
+            let host = "no-such-host.invalid";
+            assert!(resolve(host, 3307).await.is_empty());
+            let ran = dir.file("ran");
+            let body = format!("echo run > '{}'\necho waiting >&2\nsleep 30", ran.display());
+            let err = start(&dir.0, host, free_port(), &body, quick(1_500))
+                .await
+                .err()
+                .unwrap();
+            assert!(err.contains("準備できませんでした"), "{err}");
+            assert!(err.ends_with("waiting"), "{err}");
+            assert!(ran.exists(), "the script is run");
+            assert_eq!(dir.leftovers(), 0);
         }
 
         #[tokio::test]
