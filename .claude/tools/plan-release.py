@@ -10,16 +10,18 @@ Usage:
   plan-release.py release
   plan-release.py close [--dry-run]
 
-`snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), writes the
+`snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues, the fixed ones and the parents (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
-`start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out). `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
-(open, no `needs:owner`, not in hand, and no milestone): `issue-plan` applies its step 3 to each before it orders.
-`split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "milestone": "feature", "parts": [{"title", "body", "labels", "points_reason"}]}.
-It checks everything before it writes (the issue is open and the owner's, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes the milestone, `solo` and `session` when they are missing,
-creates the parts in order, each with the reason of its points as a comment, and closes the issue as not planned only when every part exists; a failure stops it with the numbers made, and a second run keeps the parts
-that are already open in the milestone under the same title. With no parts it only puts the issue in the milestone.
+`start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out).
+A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
+`unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
+(open, no `needs:owner`, not in hand, no sub-issue, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
+`split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "parts": [{"title", "body", "labels", "points_reason"}]}; a `milestone` key is refused.
+It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes `solo` and `session` when they are missing,
+creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
+a failure stops it with the numbers made, and a second run keeps the parts that are already open sub-issues of the issue under the same title. With no parts it only puts the label `whole` on the issue (a big issue kept as one).
 `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
-the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
+the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the parents (a parent is a feature, not a version) whose sub-issues are all closed and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
 import argparse
@@ -55,13 +57,13 @@ class Issue:
     title: str
     body: str
     labels: list
-    milestone: str | None
-    milestone_number: int | None
     created_at: str
     closed_at: str | None
     state: str
     state_reason: str | None = None  # "completed" or "not_planned" for a closed issue
     blocked_by: list = field(default_factory=list)  # numbers of the open blockers
+    parent: int | None = None  # the number of the parent issue, when it is in this repository
+    sub_issues: int = 0  # how many sub-issues the issue has; more than 0 makes it a parent
 
 
 # ---- pure: versions and labels ----
@@ -101,7 +103,7 @@ def quick_bug(issue):
 
 def solo(issue):
     """A member of a unit that is a release of its own: an issue of 8 points, or a part (`solo`) of a point:8 issue that `issue-plan` split.
-    The unit is that one point:8 issue, or all the `solo` parts of one milestone. Only the night run keeps a unit apart from everything else (issues.md):
+    The unit is that one point:8 issue, or all the `solo` parts of one parent. Only the night run keeps a unit apart from everything else (issues.md):
     `nightly-limit.sh` and `build_next` do so when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner does not."""
     return has(issue, "point:8") or has(issue, "solo")
 
@@ -188,9 +190,14 @@ def base_order(free):
     return lead
 
 
+def is_parent(i):
+    """The feature that its parts make: an issue with sub-issues. It is not ordered, not started and not a change (its parts are)."""
+    return i.sub_issues > 0
+
+
 def is_waiting(i):
-    """A merged change not released yet: closed as completed after the last release. An issue closed as not planned (wontfix) is no change."""
-    return i.state == "closed" and i.state_reason == "completed"
+    """A merged change not released yet: closed as completed after the last release. An issue closed as not planned (wontfix) is no change, and a parent is not one either."""
+    return i.state == "closed" and i.state_reason == "completed" and not is_parent(i)
 
 
 def release_changes(issues):
@@ -199,9 +206,9 @@ def release_changes(issues):
 
 
 def split_issues(issues, pr_closing):
-    """-> waiting, in progress, the rest. Issues closed as completed are the waiting ones."""
+    """-> waiting, in progress, the rest. Issues closed as completed are the waiting ones. An open parent is none of them."""
     waiting = sorted((i for i in issues if is_waiting(i)), key=lambda i: (i.closed_at or "", i.number))
-    open_ = [i for i in issues if i.state == "open"]
+    open_ = [i for i in issues if i.state == "open" and not is_parent(i)]
     in_progress = sorted((i for i in open_ if i.number in pr_closing), key=lambda i: (i.created_at, i.number))
     rest = [i for i in open_ if i.number not in pr_closing]
     return waiting, in_progress, rest
@@ -344,17 +351,17 @@ def blockers(plan):
     return [] if problem else sorted({b for v in blocked_by.values() for b in v})
 
 
-def prune_plan(plan, states, fixed_numbers):
-    """-> (the plan without the fixed issues and the closed ones, [(number, "fixed" | "closed")]).
+def prune_plan(plan, states, fixed_numbers, parent_numbers=frozenset()):
+    """-> (the plan without the fixed issues, the parents and the closed ones, [(number, "fixed" | "parent" | "closed")]).
     They leave order, the keys of blocked_by and the keys of reasons.
-    Only a closed issue also leaves the blockers in the lists of blocked_by (a key left with no blocker goes too): a fixed issue is still open, and its dependency is real.
+    Only a closed issue also leaves the blockers in the lists of blocked_by (a key left with no blocker goes too): a fixed issue or a parent is still open, and its dependency is real.
     A number nobody knows stays, for the validation to refuse. A plan of the wrong shape is returned as it is."""
     problem, order, blocked_by = parse_plan(plan)
     if problem:
         return plan, []
 
     def why(n):
-        return "fixed" if n in fixed_numbers else "closed" if states.get(n) == "closed" else None
+        return "fixed" if n in fixed_numbers else "parent" if n in parent_numbers else "closed" if states.get(n) == "closed" else None
 
     dropped = [(n, why(n)) for n in mentioned(plan) if why(n)]
     gone = {n for n, _ in dropped}
@@ -379,12 +386,14 @@ def diff_relations(free_numbers, current, wanted):
     return add, remove
 
 
-def result_lines(order, issues, reasons):
+def result_lines(order, issues, reasons, parents=None):
+    """`parents`: every issue by number, to give the parent of a part its title."""
     lines = []
     for k, n in enumerate(order, 1):
         line = f"{k}. #{n} {issues[n].title}"
-        if issues[n].milestone:
-            line += f" [{issues[n].milestone}]"
+        if issues[n].parent:
+            found = (parents or {}).get(issues[n].parent)
+            line += f" [#{issues[n].parent} {found.title}]" if found else f" [#{issues[n].parent}]"
         if reasons.get(str(n)):
             line += f" - {reasons[str(n)]}"
         lines.append(line)
@@ -402,7 +411,7 @@ def plan_positions(plan):
 
 def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
     """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), not in hand (`pr_closing`, `mine`),
-    and no milestone. The mark of a split issue, or of one kept whole, is its milestone, which is named for a feature."""
+    no sub-issue and not labelled `whole`. The mark of a split issue is its sub-issues, and the mark of one kept as one is the label `whole`."""
     return [
         i
         for i in issues
@@ -411,7 +420,8 @@ def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
         and not has(i, "needs:owner")
         and i.number not in pr_closing
         and i.number not in mine
-        and not i.milestone
+        and not is_parent(i)
+        and not has(i, "whole")
     ]
 
 
@@ -423,7 +433,8 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     An issue with needs:owner, and one with an open blocker, are left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
     (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
     `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included); the night run only.
-    `waiting` are the changes that wait for the release."""
+    `waiting` are the changes that wait for the release. A parent is in none of the lists: its parts are.
+    """
     position = plan_positions(plan)
     waiting = release_changes(issues)
 
@@ -447,7 +458,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
         "stop": None,
     }
     startable = []
-    for i in sorted((i for i in issues if i.state == "open"), key=lambda i: (i.created_at, i.number)):
+    for i in sorted((i for i in issues if i.state == "open" and not is_parent(i)), key=lambda i: (i.created_at, i.number)):
         if i.number in mine:
             out["in_progress"].append(brief(i))
         elif i.number in pr_closing:
@@ -543,29 +554,38 @@ def follow_up_mark(tag):
     return f"<!-- released {tag} -->"
 
 
-def done_milestones(milestones, issues):
-    """-> the open milestones to close: they hold closed issues and no open one, and none of their issues waits for the release."""
-    waiting = {i.milestone for i in issues if is_waiting(i)}
-    return [m for m in milestones if m["open_issues"] == 0 and m["closed_issues"] > 0 and m["title"] not in waiting]
+def done_parents(parents, sub_issues, issues):
+    """-> the open parents to close: every sub-issue is closed, and none of them waits for the release.
+    `sub_issues`: {parent number: the REST issues of its sub-issues}. `issues`: the owner's issues of the state, where the waiting ones are found."""
+    waiting = {i.number for i in issues if is_waiting(i)}
+    return [
+        p
+        for p in parents
+        if sub_issues.get(p.number) and all(s["state"] == "closed" and s["number"] not in waiting for s in sub_issues[p.number])
+    ]
+
+
+def close_comment():
+    return "部品がすべてリリースされたので、この機能を閉じます"
 
 
 # ---- pure: split ----
 
 SOLO_DESCRIPTION = "a part of a point:8 issue: the parts are a release of their own"
 SESSION_DESCRIPTION = "夜の実行は取らない。オーナーのセッションでまとめて実装する"
+WHOLE_DESCRIPTION = "a big issue kept as one, not split into parts"
 
 
 def parse_split(raw):
-    """-> (problems, spec). `spec` is {"issue": int, "milestone": str, "parts": [{"title", "body", "labels", "points_reason"}]} when the shape is right."""
+    """-> (problems, spec). `spec` is {"issue": int, "parts": [{"title", "body", "labels", "points_reason"}]} when the shape is right."""
     if not isinstance(raw, dict):
         return ["split: not a JSON object"], None
     problems = []
     n = raw.get("issue")
     if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
         problems.append("split.issue: must be an issue number")
-    milestone = raw.get("milestone")
-    if not isinstance(milestone, str) or not milestone.strip():
-        problems.append("split.milestone: must be the name of the feature")
+    if "milestone" in raw:
+        problems.append("split.milestone: not accepted; the parts are the sub-issues of the issue")
     parts = raw.get("parts")
     if not isinstance(parts, list):
         problems.append("split.parts: must be a list (empty when the issue cannot be split)")
@@ -589,7 +609,6 @@ def parse_split(raw):
         return problems, None
     return [], {
         "issue": n,
-        "milestone": milestone.strip(),
         "parts": [
             {"title": p["title"].strip(), "body": p["body"], "labels": list(dict.fromkeys(p["labels"])), "points_reason": p["points_reason"].strip()}
             for p in parts
@@ -597,8 +616,9 @@ def parse_split(raw):
     }
 
 
-def split_problems(spec, parent, owner, repo_labels):
-    """-> every reason the split must not start. `parent`: the issue as the REST API gives it. `repo_labels`: the names of the labels of the repository."""
+def split_problems(spec, parent, owner, repo_labels, kept):
+    """-> every reason the split must not start. `parent`: the issue as the REST API gives it. `repo_labels`: the names of the labels of the repository.
+    `kept`: {title: number} of its open sub-issues made by the owner; a second run finds its own parts there, and an issue whose sub-issues are none of the parts is already split."""
     problems = []
     n = spec["issue"]
     if parent.get("pull_request"):
@@ -607,6 +627,10 @@ def split_problems(spec, parent, owner, repo_labels):
         problems.append(f"#{n} is not open")
     if (parent.get("user") or {}).get("login") != owner:
         problems.append(f"#{n} is not an issue of the owner")
+    if parent.get("parent_issue_url"):
+        problems.append(f"#{n} already has a parent")
+    if (parent.get("sub_issues_summary") or {}).get("total", 0) > 0 and not any(p["title"] in kept for p in spec["parts"]):
+        problems.append(f"#{n} already has sub-issues that are none of these parts")
     parent_labels = [label["name"] for label in parent.get("labels", [])]
     big = "point:8" in parent_labels
     known = set(repo_labels)
@@ -682,20 +706,25 @@ class State:
     tags: list  # the names of the tags
 
 
-def to_issue(raw):
-    ms = raw.get("milestone") or {}
+def parent_number(url, repo):
+    """The number of the parent a REST issue names in `parent_issue_url`, or None when it has none or the parent is in another repository."""
+    m = re.fullmatch(r"https://api\.github\.com/repos/([^/]+/[^/]+)/issues/(\d+)", url or "")
+    return int(m.group(2)) if m and m.group(1) == repo else None
+
+
+def to_issue(raw, repo):
     return Issue(
         number=raw["number"],
         id=raw["id"],
         title=raw["title"],
         body=raw.get("body") or "",
         labels=[label["name"] for label in raw.get("labels", [])],
-        milestone=ms.get("title"),
-        milestone_number=ms.get("number"),
         created_at=raw["created_at"],
         closed_at=raw.get("closed_at"),
         state=raw["state"],
         state_reason=raw.get("state_reason"),
+        parent=parent_number(raw.get("parent_issue_url"), repo),
+        sub_issues=(raw.get("sub_issues_summary") or {}).get("total", 0),
     )
 
 
@@ -738,7 +767,7 @@ def load_state(blockers=True):
     raw = [r for r in opened if "pull_request" not in r]
     raw += [r for r in closed if "pull_request" not in r and (r.get("closed_at") or "") > since]
     skipped = sum(1 for r in raw if r["user"]["login"] != owner)
-    issues = {r["number"]: to_issue(r) for r in raw if r["user"]["login"] == owner}
+    issues = {r["number"]: to_issue(r, repo) for r in raw if r["user"]["login"] == owner}
 
     ids = {n: i.id for n, i in issues.items()}
     states = {n: i.state for n, i in issues.items()}
@@ -793,7 +822,7 @@ def issue_json(i):
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
         "points": points(i),
-        "milestone": i.milestone,
+        "parent": i.parent,
         "createdAt": i.created_at,
         "blocked_by": sorted(i.blocked_by),
     }
@@ -876,7 +905,7 @@ def cmd_apply(args):
     refuse_missing_points(state)
     states = dict(state.states)
     states.update(closed_states(state.repo, [n for n in {*mentioned(plan), *blockers(plan)} if n not in states]))
-    plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed})
+    plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed}, {n for n, i in state.issues.items() if is_parent(i)})
     for n, why in dropped:
         print(f"dropped #{n} ({why})", file=sys.stderr)
     problems = validate_plan(plan, state.free, state.fixed, state.states)
@@ -896,7 +925,7 @@ def cmd_apply(args):
             api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by", "POST", {"issue_id": state.ids[b]})
         for n, b in remove:
             api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by/{state.ids[b]}", "DELETE")
-    print("\n".join(result_lines(order, by_number, plan.get("reasons", {}))))
+    print("\n".join(result_lines(order, by_number, plan.get("reasons", {}), state.issues)))
     if not args.dry_run:
         try:
             save_plan(saved_plan_path(), plan)
@@ -915,7 +944,7 @@ def cmd_unsplit(args):
     state = load_state(blockers=False)
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
     found = [
-        {"number": i.number, "title": i.title, "points": points(i), "milestone": i.milestone}
+        {"number": i.number, "title": i.title, "points": points(i)}
         for i in unsplit(list(state.issues.values()), state.pr_closing, mine)
     ]
     print(json.dumps(found, ensure_ascii=False, indent=2))
@@ -961,11 +990,12 @@ def cmd_release(args):
 
 def cmd_close(args):
     state = load_state(blockers=False)
-    milestones = api(f"repos/{state.repo}/milestones?state=open&per_page=100", paginate=True)
-    for m in done_milestones(milestones, state.issues.values()):
+    parents = [i for i in state.issues.values() if i.state == "open" and is_parent(i)]
+    found = parallel([lambda n=p.number: api(f"repos/{state.repo}/issues/{n}/sub_issues?per_page=100", paginate=True) for p in parents])
+    for p in done_parents(parents, {p.number: subs for p, subs in zip(parents, found)}, state.issues.values()):
         if not args.dry_run:
-            api(f"repos/{state.repo}/milestones/{m['number']}", "PATCH", {"state": "closed"})
-        print(f"closed milestone {m['title']}")
+            gh("issue", "close", str(p.number), "--reason", "completed", "--comment", close_comment())
+        print(f"closed #{p.number} {p.title}")
 
 
 def cmd_split(args):
@@ -985,30 +1015,24 @@ def cmd_split(args):
     except GhError as e:
         raise PlanError([f"#{n}: {e}"])
     repo_labels = [label["name"] for label in api(f"repos/{repo}/labels?per_page=100", paginate=True)]
-    milestones = api(f"repos/{repo}/milestones?state=all&per_page=100", paginate=True)
-    found = next((m for m in milestones if m["title"] == spec["milestone"]), None)
-    problems = split_problems(spec, parent, owner, repo_labels)
-    if found and found["state"] != "open":
-        problems.append(f"the milestone '{spec['milestone']}' is closed")
-    if problems:
-        raise PlanError(problems)
     # The existing parts are read before anything is written, so that a failure here leaves nothing behind.
     kept = {}
-    if found and spec["parts"]:
-        for r in api(f"repos/{repo}/issues?milestone={found['number']}&state=open&per_page=100", paginate=True):
-            if "pull_request" not in r and r["number"] != n and r["user"]["login"] == owner:
+    if (parent.get("sub_issues_summary") or {}).get("total", 0) > 0:
+        for r in api(f"repos/{repo}/issues/{n}/sub_issues?per_page=100", paginate=True):
+            if r["state"] == "open" and r["user"]["login"] == owner:
                 kept.setdefault(r["title"], r["number"])
+    problems = split_problems(spec, parent, owner, repo_labels, kept)
+    if problems:
+        raise PlanError(problems)
 
     made = []  # the numbers of the parts, made now or found
     try:
-        if found:
-            print(f"milestone {spec['milestone']} exists")
-        else:
-            api(f"repos/{repo}/milestones", "POST", {"title": spec["milestone"], "description": f"#{n} {parent['title']}"})
-            print(f"made milestone {spec['milestone']}")
         if not spec["parts"]:
-            gh("issue", "edit", str(n), "--milestone", spec["milestone"])
-            print(f"put #{n} in the milestone; it was not split")
+            if "whole" not in repo_labels:
+                gh("label", "create", "whole", "--description", WHOLE_DESCRIPTION)
+                print("made label whole")
+            gh("issue", "edit", str(n), "--add-label", "whole")
+            print(f"labelled #{n} whole; it was not split")
             return
         if any("solo" in p["labels"] for p in spec["parts"]) and "solo" not in repo_labels:
             gh("label", "create", "solo", "--description", SOLO_DESCRIPTION)
@@ -1025,7 +1049,7 @@ def cmd_split(args):
                 if not any(c["user"]["login"] == owner and c["body"].strip() == part["points_reason"].strip() for c in comments):
                     gh("issue", "comment", str(kept[part["title"]]), "--body", part["points_reason"])
                 continue
-            args_ = ["issue", "create", "--title", part["title"], "--body", part["body"], "--milestone", spec["milestone"]]
+            args_ = ["issue", "create", "--parent", str(n), "--title", part["title"], "--body", part["body"]]
             for label in part["labels"]:
                 args_ += ["--label", label]
             printed = gh(*args_).strip().splitlines()
@@ -1036,10 +1060,12 @@ def cmd_split(args):
             made.append(int(number.group(1)))
             print(f"#{made[-1]} {part['title']}: made")
             gh("issue", "comment", str(made[-1]), "--body", part["points_reason"])
-        gh("issue", "close", str(n), "--reason", "not planned", "--comment", split_comment(made))
-        print(f"closed #{n} as not planned")
+        comment = split_comment(made)
+        if not any(c["user"]["login"] == owner and c["body"].strip() == comment for c in api(f"repos/{repo}/issues/{n}/comments?per_page=100", paginate=True)):
+            gh("issue", "comment", str(n), "--body", comment)
+        print(f"commented the parts on #{n}; it stays open as their parent")
     except GhError as e:
-        raise GhError(f"{e}\nstopped: #{n} stays open; parts so far: {', '.join(f'#{m}' for m in made) or 'none'}")
+        raise GhError(f"{e}\nstopped: parts so far: {', '.join(f'#{m}' for m in made) or 'none'}")
 
 
 def main(argv=None):

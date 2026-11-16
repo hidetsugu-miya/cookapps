@@ -23,20 +23,20 @@ sys.modules["plan_release"] = pr
 spec.loader.exec_module(pr)
 
 
-def mk(n, labels=(), milestone=None, created=None, state="open", closed=None, blocked=(), ms_number=None, reason=None):
+def mk(n, labels=(), parent=None, created=None, state="open", closed=None, blocked=(), sub=0, reason=None):
     return pr.Issue(
         number=n,
         id=1000 + n,
         title=f"issue {n}",
         body="",
         labels=list(labels),
-        milestone=milestone,
-        milestone_number=ms_number,
         created_at=created or f"2026-11-01T00:00:{n:02d}Z",
         closed_at=closed,
         state=state,
         state_reason=reason or ("completed" if state == "closed" else None),
         blocked_by=list(blocked),
+        parent=parent,
+        sub_issues=sub,
     )
 
 
@@ -158,11 +158,18 @@ class Ordering(unittest.TestCase):
         self.assertEqual(numbers(in_progress), [3])
         self.assertEqual(numbers(others), [6])
 
+    def test_an_open_parent_is_not_in_the_queue_and_a_closed_one_is_not_waiting(self):
+        parent = mk(4, ["point:5"], sub=2)
+        done = mk(5, ["point:5"], sub=2, state="closed", closed="2026-11-02T00:00:00Z")
+        waiting, in_progress, others = pr.split_issues([parent, done, mk(6)], {4})
+        self.assertEqual((numbers(waiting), numbers(in_progress), numbers(others)), ([], [], [6]))
+
     def test_urgency_importance_and_points_in_the_snapshot(self):
-        j = pr.issue_json(mk(1, ["urgency:high", "importance:low", "point:2"], milestone="Orca files"))
-        self.assertEqual((j["urgency"], j["importance"], j["points"], j["milestone"]), ("high", "low", 2, "Orca files"))
+        j = pr.issue_json(mk(1, ["urgency:high", "importance:low", "point:2"], parent=7))
+        self.assertEqual((j["urgency"], j["importance"], j["points"], j["parent"]), ("high", "low", 2, 7))
+        self.assertNotIn("milestone", j)
         j = pr.issue_json(mk(2, ["importance:high"]))
-        self.assertEqual((j["urgency"], j["importance"], j["points"]), ("normal", "high", None))
+        self.assertEqual((j["urgency"], j["importance"], j["points"], j["parent"]), ("normal", "high", None, None))
 
 
 class Validation(unittest.TestCase):
@@ -278,9 +285,10 @@ class Relations(unittest.TestCase):
 
 class Report(unittest.TestCase):
     def test_lines(self):
-        issues = {1: mk(1, milestone="Orca files"), 2: mk(2)}
-        lines = pr.result_lines([2, 1], issues, {"1": "same area as #2"})
-        self.assertEqual(lines, ["1. #2 issue 2", "2. #1 issue 1 [Orca files] - same area as #2"])
+        issues = {1: mk(1, parent=7), 2: mk(2), 3: mk(3, parent=8)}
+        parents = {7: mk(7, sub=2)}
+        lines = pr.result_lines([2, 1, 3], issues, {"1": "same area as #2"}, parents)
+        self.assertEqual(lines, ["1. #2 issue 2", "2. #1 issue 1 [#7 issue 7] - same area as #2", "3. #3 issue 3 [#8]"])
 
 
 def waiting(n, labels=(), closed="2026-11-06T10:00:00Z"):
@@ -339,13 +347,13 @@ class Next(unittest.TestCase):
         self.assertEqual(out["waiting"], [])
 
     def test_the_parts_of_a_split_point_8_issue_start_together_when_nothing_waits(self):
-        issues = [mk(1, ["point:3", "solo"], milestone="Slack thread"), mk(2, ["point:3", "solo"], milestone="Slack thread"), mk(3, ["point:2"])]
+        issues = [mk(1, ["point:3", "solo"], parent=900), mk(2, ["point:3", "solo"], parent=900), mk(3, ["point:2"])]
         out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual(sorted(i["number"] for i in out["start"]), [1, 2, 3])
         self.assertEqual(out["waits_for_release"], [])
 
     def test_a_solo_part_does_not_start_while_a_change_waits(self):
-        issues = [mk(1, ["point:3", "solo"], milestone="Slack thread"), mk(2, ["point:2"]), waiting(3, ["point:2"])]
+        issues = [mk(1, ["point:3", "solo"], parent=900), mk(2, ["point:2"]), waiting(3, ["point:2"])]
         out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual([i["number"] for i in out["start"]], [2])
         self.assertEqual(out["waits_for_release"], [1])
@@ -353,7 +361,7 @@ class Next(unittest.TestCase):
     def test_nothing_starts_while_a_part_of_a_solo_unit_waits_for_the_owner_and_the_rest_of_the_unit_waits_too(self):
         issues = [
             waiting(1, ["point:3", "solo"]),
-            mk(2, ["point:3", "solo"], milestone="Slack thread"),
+            mk(2, ["point:3", "solo"], parent=900),
             mk(3, ["point:2"]),
         ]
         out = pr.build_next(issues, set(), frozenset(), None)
@@ -367,7 +375,7 @@ class Next(unittest.TestCase):
         self.assertIn("point:8", out["stop"])
 
     def test_a_session_has_no_unit_rule(self):
-        issues = [mk(1, ["point:8"]), mk(2, ["point:3", "solo"], milestone="Slack thread"), mk(3, ["point:2"]), waiting(4, ["point:2"])]
+        issues = [mk(1, ["point:8"]), mk(2, ["point:3", "solo"], parent=900), mk(3, ["point:2"]), waiting(4, ["point:2"])]
         out = pr.build_next(issues, set(), frozenset(), None, night=False)
         self.assertEqual(sorted(i["number"] for i in out["start"]), [1, 2, 3])
         self.assertEqual(out["waits_for_release"], [])
@@ -383,7 +391,7 @@ class Next(unittest.TestCase):
         self.assertEqual(out["start"], [])
 
     def test_the_night_run_does_not_start_a_session_issue_and_lists_its_number(self):
-        issues = [mk(1, ["point:2"]), mk(2, ["point:3", "session"]), mk(3, ["point:2"], blocked=[2]), mk(4, ["point:3", "session", "solo"], milestone="Notion")]
+        issues = [mk(1, ["point:2"]), mk(2, ["point:3", "session"]), mk(3, ["point:2"], blocked=[2]), mk(4, ["point:3", "session", "solo"], parent=901)]
         out = pr.build_next(issues, set(), frozenset(), {"order": [2, 1, 3, 4]})
         self.assertEqual([i["number"] for i in out["start"]], [1])
         self.assertEqual(out["waits_for_session"], [2, 4])
@@ -398,7 +406,7 @@ class Next(unittest.TestCase):
         self.assertIsNotNone(out["stop"])
 
     def test_a_session_of_the_owner_starts_a_session_issue_in_the_order_of_the_plan(self):
-        issues = [mk(1, ["point:2"]), mk(2, ["point:3", "session"]), mk(3, ["point:3", "session", "solo"], milestone="Notion")]
+        issues = [mk(1, ["point:2"]), mk(2, ["point:3", "session"]), mk(3, ["point:3", "session", "solo"], parent=901)]
         out = pr.build_next(issues, set(), frozenset(), {"order": [2, 1, 3]}, night=False)
         self.assertEqual([i["number"] for i in out["start"]], [2, 1, 3])
         self.assertEqual(out["waits_for_session"], [])
@@ -422,6 +430,19 @@ class Next(unittest.TestCase):
         out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1, 5])
 
+    def test_a_parent_is_in_no_list_and_its_parts_start(self):
+        issues = [mk(1, ["point:5"], sub=2), mk(2, ["point:3"], parent=1), mk(3, ["point:3", "needs:owner"], sub=1), mk(4, ["point:2"])]
+        out = pr.build_next(issues, {1}, frozenset({3}), {"order": [1, 2, 4]})
+        self.assertEqual([i["number"] for i in out["start"]], [2, 4])
+        self.assertEqual((out["in_progress"], out["held"], out["needs_owner"], out["blocked"]), ([], [], [], []))
+
+    def test_a_closed_parent_is_no_change_and_does_not_stop_the_night_run(self):
+        issues = [mk(1, ["point:8"], sub=2, state="closed", closed="2026-11-06T10:00:00Z"), mk(2, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual(out["waiting"], [])
+        self.assertIsNone(out["stop"])
+        self.assertEqual([i["number"] for i in out["start"]], [2])
+
     def test_nothing_open(self):
         out = pr.build_next([], set(), frozenset(), None)
         self.assertEqual((out["start"], out["in_progress"], out["stop"]), ([], [], None))
@@ -433,16 +454,18 @@ class Next(unittest.TestCase):
 
 
 class Unsplit(unittest.TestCase):
-    def test_a_big_issue_with_no_milestone_and_no_needs_owner_is_unsplit(self):
+    def test_a_big_issue_with_no_sub_issue_no_whole_and_no_needs_owner_is_unsplit(self):
         issues = [
             mk(1, ["point:5"]),
             mk(2, ["point:8", "bug"]),
             mk(3, ["point:3"]),
             mk(4, ["point:5", "needs:owner"]),
-            mk(5, ["point:8"], milestone="Orca files", ms_number=7),
+            mk(5, ["point:8"], sub=3),
             mk(6, ["point:5"], state="closed"),
+            mk(7, ["point:5", "whole"]),
+            mk(8, ["point:5"], parent=5),
         ]
-        self.assertEqual(numbers(pr.unsplit(issues)), [1, 2])
+        self.assertEqual(numbers(pr.unsplit(issues)), [1, 2, 8])
 
     def test_an_issue_in_hand_is_not_unsplit(self):
         issues = [mk(1, ["point:5"]), mk(2, ["point:8"]), mk(3, ["point:5"]), mk(4, ["point:5"])]
@@ -485,6 +508,14 @@ class Prune(unittest.TestCase):
         plan = {"order": [1, 2], "blocked_by": {"1": [2]}, "reasons": {"1": "x"}}
         _, dropped = pr.prune_plan(plan, {1: "closed", 2: "closed"}, {1})
         self.assertEqual(dropped, [(1, "fixed"), (2, "closed")])
+
+    def test_a_parent_leaves_the_plan_and_is_reported_after_fixed_and_before_closed(self):
+        plan = {"order": [1, 2, 3, 4], "blocked_by": {"2": [1]}, "reasons": {"1": "a", "2": "b"}}
+        pruned, dropped = pr.prune_plan(plan, {1: "open", 2: "open", 3: "closed", 4: "open"}, {4}, {1, 3, 4})
+        self.assertEqual(pruned["order"], [2])
+        self.assertEqual(pruned["blocked_by"], {"2": [1]})  # a parent is open: a dependency on it is real
+        self.assertEqual(pruned["reasons"], {"2": "b"})
+        self.assertEqual(dropped, [(1, "parent"), (3, "parent"), (4, "fixed")])
 
     def test_a_plan_of_the_wrong_shape_is_returned_as_it_is(self):
         self.assertEqual(pr.prune_plan({"order": "x"}, {}, set()), ({"order": "x"}, []))
@@ -563,14 +594,15 @@ class LoadState(unittest.TestCase):
     """load_state asks for what does not depend on each other at the same time, and builds the same state as asking one by one."""
 
     def run_load(self, blockers=True):
-        def raw(n, state="open", login="owner", total=0, closed_at=None):
+        def raw(n, state="open", login="owner", total=0, closed_at=None, parent=None, subs=0):
             return {
                 "number": n,
                 "id": 1000 + n,
                 "title": f"issue {n}",
                 "body": "",
                 "labels": [{"name": "point:2"}],
-                "milestone": None,
+                "parent_issue_url": parent,
+                "sub_issues_summary": {"total": subs, "completed": 0, "percent_completed": 0},
                 "created_at": f"2026-11-01T00:00:{n:02d}Z",
                 "closed_at": closed_at,
                 "state": state,
@@ -595,7 +627,12 @@ class LoadState(unittest.TestCase):
             if path.endswith("/commits/abc"):
                 return {"commit": {"committer": {"date": "2026-11-05T00:00:00Z"}}}
             if "state=open" in path:
-                return [raw(1, total=1), raw(2, total=0), raw(3, total=2), raw(5, login="other")]
+                return [
+                    raw(1, total=1, subs=2),
+                    raw(2, total=0, parent="https://api.github.com/repos/o/r/issues/1"),
+                    raw(3, total=2, parent="https://api.github.com/repos/x/y/issues/1"),
+                    raw(5, login="other"),
+                ]
             if "state=closed" in path:
                 return [raw(6, "closed", closed_at="2026-11-06T00:00:00Z"), raw(7, "closed", closed_at="2026-11-04T00:00:00Z")]
             if path.endswith("/issues/1/dependencies/blocked_by?per_page=100"):
@@ -628,6 +665,15 @@ class LoadState(unittest.TestCase):
         self.assertEqual(state.pr_closing, {3})
         self.assertEqual(state.tags, ["v0.1.0", "v0.2.0"])
         self.assertEqual([c for c in calls if c[:2] == ["repo", "view"]], [["repo", "view", "--json", "nameWithOwner,owner"]])
+
+    def test_a_parent_and_its_sub_issues_are_read_from_the_list_and_a_parent_of_another_repository_is_none(self):
+        state, calls = self.run_load()
+        self.assertEqual((state.issues[1].parent, state.issues[1].sub_issues), (None, 2))
+        self.assertEqual((state.issues[2].parent, state.issues[2].sub_issues), (1, 0))
+        self.assertEqual(state.issues[3].parent, None)
+        self.assertEqual(numbers(state.free), [2])  # the parent #1 is neither free nor fixed
+        self.assertEqual(numbers(state.fixed), [3])
+        self.assertFalse(any("sub_issues" in c[-1] for c in calls if c[0] == "api"))
 
     def test_no_blockers_are_asked_when_not_wanted(self):
         state, calls = self.run_load(blockers=False)
@@ -673,6 +719,13 @@ class ReleaseFacts(unittest.TestCase):
         self.assertTrue(out["urgent"])
         self.assertEqual(out["release_pr"], {"number": 5, "title": "release: v0.55.3", "url": "u"})
         self.assertFalse(self.facts([waiting(1, ["documentation", "urgency:high"])])["urgent"])
+
+    def test_a_closed_parent_is_no_change_and_counts_for_no_digit_urgency_or_solo(self):
+        parent = mk(1, ["point:8", "adds:requirement", "urgency:high"], sub=3, state="closed", closed="2026-11-06T10:00:00Z")
+        out = self.facts([parent, waiting(2, ["point:2"])])
+        self.assertEqual([c["number"] for c in out["changes"]], [2])
+        self.assertEqual((out["urgent"], out["solo"], out["minor"], out["version"]), (False, False, False, "v0.55.3"))
+        self.assertEqual(self.facts([parent])["changes"], [])
 
     def test_solo(self):
         self.assertTrue(self.facts([waiting(1, ["point:8"])])["solo"])
@@ -756,19 +809,46 @@ class FollowUpDue(unittest.TestCase):
         self.assertEqual(pr.follow_up_mark("v0.55.2"), "<!-- released v0.55.2 -->")
 
 
-class DoneMilestones(unittest.TestCase):
-    def ms(self, number, title, open_issues, closed_issues):
-        return {"number": number, "title": title, "open_issues": open_issues, "closed_issues": closed_issues}
+class DoneParents(unittest.TestCase):
+    def sub(self, n, state="closed"):
+        return {"number": n, "state": state}
 
-    def test_a_milestone_is_done_when_its_issues_are_closed_and_released(self):
-        milestones = [self.ms(1, "A", 0, 3), self.ms(2, "B", 1, 2), self.ms(3, "C", 0, 0), self.ms(4, "D", 0, 2)]
-        issues = [mk(10, state="closed", closed="2026-11-06T10:00:00Z", milestone="D")]
-        self.assertEqual([m["title"] for m in pr.done_milestones(milestones, issues)], ["A"])
+    def test_a_parent_is_done_when_every_sub_issue_is_closed_and_released(self):
+        parents = [mk(1, sub=2), mk(2, sub=2), mk(3, sub=1), mk(4, sub=1)]
+        subs = {1: [self.sub(10), self.sub(11)], 2: [self.sub(12), self.sub(13, "open")], 3: [self.sub(14)], 4: []}
+        issues = [mk(14, state="closed", closed="2026-11-06T10:00:00Z", parent=3)]  # closed after the last release
+        self.assertEqual(numbers(pr.done_parents(parents, subs, issues)), [1])
 
-    def test_a_closed_issue_that_is_not_released_does_not_count_as_waiting_when_not_planned(self):
-        milestones = [self.ms(4, "D", 0, 2)]
-        issues = [mk(10, state="closed", closed="2026-11-06T10:00:00Z", milestone="D", reason="not_planned")]
-        self.assertEqual([m["title"] for m in pr.done_milestones(milestones, issues)], ["D"])
+    def test_a_sub_issue_closed_as_not_planned_is_not_waiting(self):
+        issues = [mk(14, state="closed", closed="2026-11-06T10:00:00Z", parent=3, reason="not_planned")]
+        self.assertEqual(numbers(pr.done_parents([mk(3, sub=1)], {3: [self.sub(14)]}, issues)), [3])
+
+    def test_the_close_command_closes_only_the_done_parents_as_completed(self):
+        calls = []
+
+        def fake_gh(*args):
+            calls.append(list(args))
+            if args[:2] == ("repo", "view"):
+                return json.dumps({"nameWithOwner": "o/r", "owner": {"login": "owner"}})
+            return "\n"
+
+        def fake_api(path, method="GET", fields=None, paginate=False):
+            if path.endswith("/sub_issues?per_page=100"):
+                return {"1": [self.sub(10)], "2": [self.sub(11, "open")]}[path.split("/issues/")[1].split("/")[0]]
+            raise AssertionError(path)
+
+        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, sub=1), 2: mk(2, sub=1), 3: mk(3, parent=2), 4: mk(4, sub=1, state="closed")}, [], [], set(), {}, {}, 0, [])
+        real = (pr.gh, pr.api, pr.load_state)
+        pr.gh, pr.api, pr.load_state = fake_gh, fake_api, lambda blockers=True: state
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(pr.main(["close"]), 0)
+                self.assertEqual(pr.main(["close", "--dry-run"]), 0)
+        finally:
+            pr.gh, pr.api, pr.load_state = real
+        self.assertEqual(calls, [["issue", "close", "1", "--reason", "completed", "--comment", pr.close_comment()]])
+        self.assertEqual(out.getvalue().count("closed #1 "), 2)
 
 
 class SavedPlan(unittest.TestCase):
@@ -812,27 +892,26 @@ class FakeGh:
     def __init__(self, labels=("point:1", "point:2", "point:3", "point:5", "point:8", "bug", "proposal"), fail_on=None):
         self.labels = list(labels)
         self.issues = {}  # number -> raw issue
-        self.milestones = []  # {"number", "title", "state", "description"}
+        self.parents = {}  # sub-issue number -> parent number
         self.writes = []
         self.comments = {}  # issue number -> comments written by `gh issue comment`
         self.fail_on = fail_on  # (command words, nth call of it) -> fail
         self.counts = {}
         self.next_number = 500
 
-    def add_issue(self, n, title, labels=(), user="owner", state="open", milestone=None):
+    def add_issue(self, n, title, labels=(), user="owner", state="open", parent=None):
         self.issues[n] = {
             "number": n,
             "title": title,
             "state": state,
             "user": {"login": user},
             "labels": [{"name": label} for label in labels],
-            "milestone": milestone,
         }
+        if parent:
+            self.parents[n] = parent
 
-    def milestone(self, title, state="open"):
-        m = {"number": len(self.milestones) + 1, "title": title, "state": state, "description": ""}
-        self.milestones.append(m)
-        return m
+    def children(self, n):
+        return [self.issues[c] for c, p in self.parents.items() if p == n]
 
     def written(self, *words):
         return [w for w in self.writes if w[: len(words)] == list(words)]
@@ -860,10 +939,10 @@ class FakeGh:
         if a[:2] == ["issue", "create"]:
             title = a[a.index("--title") + 1]
             labels = [a[i + 1] for i, x in enumerate(a) if x == "--label"]
-            milestone = a[a.index("--milestone") + 1]
+            parent = int(a[a.index("--parent") + 1])
             assert all(label in self.labels for label in labels), "gh refuses a label that does not exist"
             self.next_number += 1
-            self.add_issue(self.next_number, title, labels, milestone={"title": milestone})
+            self.add_issue(self.next_number, title, labels, parent=parent)
             return f"https://github.com/owner/repo/issues/{self.next_number}\n"
         if a[:2] == ["issue", "comment"]:
             self.comments.setdefault(int(a[2]), []).append({"user": {"login": "owner"}, "body": a[a.index("--body") + 1]})
@@ -872,34 +951,31 @@ class FakeGh:
             self.issues[int(a[2])]["state"] = "closed"
             return "\n"
         if a[:2] == ["issue", "edit"]:
-            self.issues[int(a[2])]["milestone"] = {"title": a[a.index("--milestone") + 1]}
+            label = a[a.index("--add-label") + 1]
+            assert label in self.labels, "gh refuses a label that does not exist"
+            self.issues[int(a[2])]["labels"].append({"name": label})
             return "\n"
         return "\n"
 
     def _api(self, a):
         path = a[0]
-        method = a[a.index("-X") + 1] if "-X" in a else "GET"
-        fields = {x.split("=", 1)[0]: x.split("=", 1)[1] for k, x in enumerate(a) if k and a[k - 1] in ("-f", "-F")}
-        if method == "POST" and path.endswith("/milestones"):
-            self._fail_if(["api", "milestones"])
-            self.writes.append(["api", "milestones", fields["title"]])
-            m = self.milestone(fields["title"])
-            m["description"] = fields["description"]
-            return json.dumps(m)
         if path.endswith("/labels?per_page=100"):
             return json.dumps([{"name": label} for label in self.labels])
-        if "/milestones?" in path:
-            return json.dumps(self.milestones)
-        if "/issues?milestone=" in path:
-            number = int(path.split("milestone=")[1].split("&")[0])
-            title = next(m["title"] for m in self.milestones if m["number"] == number)
-            return json.dumps([i for i in self.issues.values() if i["state"] == "open" and (i["milestone"] or {}).get("title") == title])
+        if "/sub_issues?" in path:
+            return json.dumps(self.children(int(path.split("/issues/")[1].split("/")[0])))
         if "/comments?" in path:
             return json.dumps(self.comments.get(int(path.split("/issues/")[1].split("/")[0]), []))
         n = int(path.rsplit("/", 1)[1])
         if n not in self.issues:
             raise pr.GhError(f"gh api {path}: Not Found")
-        return json.dumps(self.issues[n])
+        parent = self.parents.get(n)
+        return json.dumps(
+            dict(
+                self.issues[n],
+                parent_issue_url=f"https://api.github.com/repos/owner/repo/issues/{parent}" if parent else None,
+                sub_issues_summary={"total": len(self.children(n)), "completed": 0, "percent_completed": 0},
+            )
+        )
 
 
 def part(title, labels=("point:3",), reason="一つの画面だけを触る"):
@@ -926,89 +1002,90 @@ class Split(unittest.TestCase):
         fake.add_issue(438, "大きな機能", labels, user=user, state=state)
         return fake
 
-    def test_the_parts_are_made_in_order_with_the_reason_and_the_big_issue_is_closed_as_not_planned(self):
+    def test_the_parts_are_made_in_order_as_sub_issues_with_the_reason_and_the_big_issue_stays_open_as_their_parent(self):
         fake = self.big()
         fake.labels.append("adds:requirement")
-        spec = {"issue": 438, "milestone": "Slack のスレッド", "parts": [part("一つ目", ("point:3", "adds:requirement")), part("二つ目", ("point:2",), "小さい修正")]}
+        spec = {"issue": 438, "parts": [part("一つ目", ("point:3", "adds:requirement")), part("二つ目", ("point:2",), "小さい修正")]}
         code, out, err = self.run_split(fake, spec)
         self.assertEqual((code, err), (0, ""))
         creates = fake.written("issue", "create")
         self.assertEqual([c[c.index("--title") + 1] for c in creates], ["一つ目", "二つ目"])
-        self.assertEqual([c[c.index("--milestone") + 1] for c in creates], ["Slack のスレッド"] * 2)
+        self.assertEqual([c[c.index("--parent") + 1] for c in creates], ["438", "438"])
+        self.assertNotIn("--milestone", creates[0])
         self.assertEqual([creates[0][i + 1] for i, x in enumerate(creates[0]) if x == "--label"], ["point:3", "adds:requirement"])
-        self.assertEqual([c[-1] for c in fake.written("issue", "comment")], ["一つの画面だけを触る", "小さい修正"])
-        self.assertEqual(fake.written("issue", "close"), [["issue", "close", "438", "--reason", "not planned", "--comment", "部品に分けました: #501、#502"]])
-        self.assertEqual(fake.issues[438]["state"], "closed")
-        self.assertEqual(fake.written("api", "milestones"), [["api", "milestones", "Slack のスレッド"]])
-        self.assertEqual(fake.milestones[0]["description"], "#438 大きな機能")
+        self.assertEqual([(c[2], c[-1]) for c in fake.written("issue", "comment")], [("501", "一つの画面だけを触る"), ("502", "小さい修正"), ("438", "部品に分けました: #501、#502")])
+        self.assertEqual(fake.written("issue", "close"), [])
+        self.assertEqual(fake.issues[438]["state"], "open")
         self.assertEqual(fake.written("label"), [])
         kinds = [w[0] + ":" + w[1] for w in fake.writes]
-        self.assertEqual(kinds, ["api:milestones", "issue:create", "issue:comment", "issue:create", "issue:comment", "issue:close"])
+        self.assertEqual(kinds, ["issue:create", "issue:comment", "issue:create", "issue:comment", "issue:comment"])
 
     def test_a_value_with_spaces_or_dashes_reaches_gh_as_one_argument(self):
         fake = self.big()
-        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "a b", "parts": [part("--x y $(z)")]})
+        code, _, _ = self.run_split(fake, {"issue": 438, "parts": [part("--x y $(z)")]})
         self.assertEqual(code, 0)
         create = fake.written("issue", "create")[0]
         self.assertEqual(create[create.index("--title") + 1], "--x y $(z)")
 
     def test_a_failed_check_writes_nothing(self):
         one = [part("a")]
+        child = self.big()
+        child.add_issue(300, "別の親", ("point:5",))
+        child.add_issue(438, "大きな機能", ("point:5",), parent=300)
+        split_already = self.big()
+        split_already.add_issue(400, "前の部品", ("point:3",), parent=438)
         cases = {
-            "closed": (self.big(state="closed"), {"issue": 438, "milestone": "f", "parts": one}, "is not open"),
-            "other author": (self.big(user="someone"), {"issue": 438, "milestone": "f", "parts": one}, "not an issue of the owner"),
-            "no point": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("bug",))]}, "exactly one point:*"),
-            "two points": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:2", "point:3"))]}, "exactly one point:*"),
-            "too big": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:5",))]}, "more than point:3"),
-            "unknown label": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "nope"))]}, "'nope' does not exist"),
-            "same title": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a"), part("a")]}, "appears twice"),
-            "point 8 without solo": (self.big(("point:8",)), {"issue": 438, "milestone": "f", "parts": [part("a"), part("b", ("point:3", "solo"))]}, "needs the label solo"),
-            "session without session": (self.big(("point:5", "session")), {"issue": 438, "milestone": "f", "parts": [part("a"), part("b", ("point:3", "session"))]}, "needs the label session"),
-            "unknown issue": (self.big(), {"issue": 999, "milestone": "f", "parts": one}, "#999"),
-            "not a split file": (self.big(), {"issue": "x", "milestone": "", "parts": [{"title": "a"}]}, "split.issue"),
+            "closed": (self.big(state="closed"), {"issue": 438, "parts": one}, "is not open"),
+            "other author": (self.big(user="someone"), {"issue": 438, "parts": one}, "not an issue of the owner"),
+            "no point": (self.big(), {"issue": 438, "parts": [part("a", ("bug",))]}, "exactly one point:*"),
+            "two points": (self.big(), {"issue": 438, "parts": [part("a", ("point:2", "point:3"))]}, "exactly one point:*"),
+            "too big": (self.big(), {"issue": 438, "parts": [part("a", ("point:5",))]}, "more than point:3"),
+            "unknown label": (self.big(), {"issue": 438, "parts": [part("a", ("point:3", "nope"))]}, "'nope' does not exist"),
+            "same title": (self.big(), {"issue": 438, "parts": [part("a"), part("a")]}, "appears twice"),
+            "point 8 without solo": (self.big(("point:8",)), {"issue": 438, "parts": [part("a"), part("b", ("point:3", "solo"))]}, "needs the label solo"),
+            "session without session": (self.big(("point:5", "session")), {"issue": 438, "parts": [part("a"), part("b", ("point:3", "session"))]}, "needs the label session"),
+            "unknown issue": (self.big(), {"issue": 999, "parts": one}, "#999"),
+            "not a split file": (self.big(), {"issue": "x", "parts": [{"title": "a"}]}, "split.issue"),
+            "milestone key": (self.big(), {"issue": 438, "milestone": "f", "parts": one}, "split.milestone"),
+            "has a parent": (child, {"issue": 438, "parts": one}, "already has a parent"),
+            "has other sub-issues": (split_already, {"issue": 438, "parts": one}, "already has sub-issues"),
+            "has sub-issues and no parts": (split_already, {"issue": 438, "parts": []}, "already has sub-issues"),
         }
         for name, (fake, spec, text) in cases.items():
             with self.subTest(name):
+                before = len(fake.issues)
                 code, out, err = self.run_split(fake, spec)
                 self.assertEqual(code, 2)
                 self.assertIn(text, err)
                 self.assertEqual(fake.writes, [])
-                self.assertEqual(fake.milestones, [])
-
-    def test_a_closed_milestone_of_the_same_name_writes_nothing(self):
-        fake = self.big()
-        fake.milestone("f", "closed")
-        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a")]})
-        self.assertEqual(code, 2)
-        self.assertIn("is closed", err)
-        self.assertEqual(fake.writes, [])
+                self.assertEqual(len(fake.issues), before)
 
     def test_every_problem_is_listed_at_once(self):
         fake = self.big(state="closed")
-        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("bug",)), part("b", ("point:5",))]})
+        code, _, err = self.run_split(fake, {"issue": 438, "parts": [part("a", ("bug",)), part("b", ("point:5",))]})
         self.assertEqual(code, 2)
         self.assertEqual(len(err.strip().splitlines()), 3)
 
     def test_a_point_8_issue_gives_every_part_solo_and_makes_the_label_when_it_is_missing(self):
         fake = self.big(("point:8",))
-        spec = {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo")), part("b", ("point:3", "solo"))]}
+        spec = {"issue": 438, "parts": [part("a", ("point:3", "solo")), part("b", ("point:3", "solo"))]}
         code, _, err = self.run_split(fake, spec)
         self.assertEqual((code, err), (0, ""))
         self.assertEqual([w[2] for w in fake.written("label", "create")], ["solo"])
         self.assertLess(fake.writes.index(fake.written("label", "create")[0]), fake.writes.index(fake.written("issue", "create")[0]))
-        self.assertEqual(fake.issues[438]["state"], "closed")
+        self.assertEqual(fake.issues[438]["state"], "open")
         self.assertTrue(all("solo" in [x["name"] for x in fake.issues[n]["labels"]] for n in (501, 502)))
 
     def test_solo_that_exists_is_not_made_again(self):
         fake = self.big(("point:8",))
         fake.labels.append("solo")
-        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo"))]})
+        code, _, _ = self.run_split(fake, {"issue": 438, "parts": [part("a", ("point:3", "solo"))]})
         self.assertEqual(code, 0)
         self.assertEqual(fake.written("label"), [])
 
     def test_a_session_issue_gives_every_part_session_and_makes_the_label_when_it_is_missing(self):
         fake = self.big(("point:8", "session"))
-        spec = {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo", "session")), part("b", ("point:3", "solo", "session"))]}
+        spec = {"issue": 438, "parts": [part("a", ("point:3", "solo", "session")), part("b", ("point:3", "solo", "session"))]}
         code, _, err = self.run_split(fake, spec)
         self.assertEqual((code, err), (0, ""))
         self.assertEqual([w[2] for w in fake.written("label", "create")], ["solo", "session"])
@@ -1018,55 +1095,44 @@ class Split(unittest.TestCase):
     def test_session_that_exists_is_not_made_again(self):
         fake = self.big(("point:5", "session"))
         fake.labels.append("session")
-        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "session"))]})
+        code, _, _ = self.run_split(fake, {"issue": 438, "parts": [part("a", ("point:3", "session"))]})
         self.assertEqual(code, 0)
         self.assertEqual(fake.written("label"), [])
 
     def test_a_part_may_have_session_when_the_big_issue_has_none(self):
         fake = self.big()
-        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "session")), part("b")]})
+        code, _, err = self.run_split(fake, {"issue": 438, "parts": [part("a", ("point:3", "session")), part("b")]})
         self.assertEqual((code, err), (0, ""))
         self.assertEqual([w[2] for w in fake.written("label", "create")], ["session"])
 
-    def test_a_failed_part_stops_the_run_and_the_big_issue_stays_open(self):
+    def test_a_failed_part_stops_the_run_and_the_parent_gets_no_comment(self):
         fake = self.big()
         fake.fail_on = (("issue", "create"), 2)
-        code, out, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a"), part("b"), part("c")]})
+        code, out, err = self.run_split(fake, {"issue": 438, "parts": [part("a"), part("b"), part("c")]})
         self.assertEqual(code, 1)
-        self.assertIn("#501", err)
-        self.assertIn("#438 stays open", err)
+        self.assertIn("parts so far: #501", err)
         self.assertEqual(len(fake.written("issue", "create")), 1)
-        self.assertEqual(fake.written("issue", "close"), [])
-        self.assertEqual(fake.issues[438]["state"], "open")
+        self.assertNotIn(438, fake.comments)
 
     def test_a_failed_comment_stops_the_run_too(self):
         fake = self.big()
         fake.fail_on = (("issue", "comment"), 1)
-        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a"), part("b")]})
+        code, _, err = self.run_split(fake, {"issue": 438, "parts": [part("a"), part("b")]})
         self.assertEqual(code, 1)
         self.assertIn("#501", err)
-        self.assertEqual(fake.written("issue", "close"), [])
-        self.assertEqual(fake.issues[438]["state"], "open")
+        self.assertNotIn(438, fake.comments)
 
-    def test_a_failed_milestone_writes_nothing_else(self):
+    def test_a_failed_comment_on_the_parent_is_said_with_the_parts(self):
         fake = self.big()
-        fake.fail_on = (("api", "milestones"), 1)
-        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a")]})
-        self.assertEqual(code, 1)
-        self.assertIn("parts so far: none", err)
-        self.assertEqual(fake.writes, [])
-
-    def test_a_failed_close_leaves_the_parts_and_says_so(self):
-        fake = self.big()
-        fake.fail_on = (("issue", "close"), 1)
-        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a")]})
+        fake.fail_on = (("issue", "comment"), 2)
+        code, _, err = self.run_split(fake, {"issue": 438, "parts": [part("a")]})
         self.assertEqual(code, 1)
         self.assertIn("parts so far: #501", err)
         self.assertEqual(fake.issues[438]["state"], "open")
 
     def test_a_second_run_keeps_the_open_parts_of_the_same_title_and_makes_the_rest(self):
         fake = self.big()
-        spec = {"issue": 438, "milestone": "f", "parts": [part("a"), part("b"), part("c")]}
+        spec = {"issue": 438, "parts": [part("a"), part("b"), part("c")]}
         fake.fail_on = (("issue", "create"), 3)
         self.assertEqual(self.run_split(fake, spec)[0], 1)
         fake.fail_on = None
@@ -1074,49 +1140,59 @@ class Split(unittest.TestCase):
         code, out, err = self.run_split(fake, spec)
         self.assertEqual((code, err), (0, ""))
         self.assertEqual([c[c.index("--title") + 1] for c in fake.written("issue", "create")], ["c"])
-        self.assertEqual(fake.written("api", "milestones"), [])
-        self.assertEqual(fake.written("issue", "close")[0][-1], "部品に分けました: #501、#502、#503")
+        self.assertEqual(fake.comments[438][-1]["body"], "部品に分けました: #501、#502、#503")
         self.assertIn("#501 a: kept", out)
         self.assertEqual(len([i for i in fake.issues.values() if i["title"] == "a"]), 1)
 
+    def test_a_third_run_after_a_complete_one_writes_nothing(self):
+        fake = self.big()
+        spec = {"issue": 438, "parts": [part("a"), part("b")]}
+        self.assertEqual(self.run_split(fake, spec)[0], 0)
+        fake.writes.clear()
+        code, out, err = self.run_split(fake, spec)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(fake.writes, [])
+        self.assertEqual(len(fake.comments[438]), 1)
+
     def test_a_second_run_writes_the_reason_of_a_kept_part_whose_comment_failed_and_not_one_that_has_it(self):
         fake = self.big()
-        spec = {"issue": 438, "milestone": "f", "parts": [part("a", reason="理由 a"), part("b", reason="理由 b")]}
+        spec = {"issue": 438, "parts": [part("a", reason="理由 a"), part("b", reason="理由 b")]}
         fake.fail_on = (("issue", "comment"), 2)
         self.assertEqual(self.run_split(fake, spec)[0], 1)
         fake.fail_on = None
         fake.writes.clear()
         code, _, err = self.run_split(fake, spec)
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual([(c[2], c[-1]) for c in fake.written("issue", "comment")], [("502", "理由 b")])
+        self.assertEqual([(c[2], c[-1]) for c in fake.written("issue", "comment")], [("502", "理由 b"), ("438", "部品に分けました: #501、#502")])
         self.assertEqual(fake.written("issue", "create"), [])
 
-    def test_a_part_of_the_same_title_in_another_milestone_or_closed_or_of_someone_else_is_not_kept(self):
+    def test_a_part_of_the_same_title_closed_or_of_someone_else_or_under_another_parent_is_not_kept(self):
         fake = self.big()
-        fake.milestone("f")
-        fake.add_issue(300, "a", ("point:3",), milestone={"title": "other"})
-        fake.add_issue(301, "b", ("point:3",), state="closed", milestone={"title": "f"})
-        fake.add_issue(302, "a", ("point:3",), user="someone", milestone={"title": "f"})
-        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a"), part("b")]})
-        self.assertEqual(code, 0)
-        self.assertEqual(len(fake.written("issue", "create")), 2)
-
-    def test_no_parts_only_puts_the_issue_in_the_milestone(self):
-        fake = self.big()
-        code, out, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": []})
+        fake.add_issue(300, "a", ("point:3",))
+        fake.add_issue(301, "b", ("point:3",), state="closed", parent=438)
+        fake.add_issue(302, "a", ("point:3",), user="someone", parent=438)
+        fake.add_issue(303, "x", ("point:3",), parent=438)
+        code, _, err = self.run_split(fake, {"issue": 438, "parts": [part("a"), part("b"), part("x")]})
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(fake.written("issue", "edit"), [["issue", "edit", "438", "--milestone", "f"]])
+        self.assertEqual([c[c.index("--title") + 1] for c in fake.written("issue", "create")], ["a", "b"])
+
+    def test_no_parts_only_puts_the_label_whole_on_the_issue_and_makes_it_when_it_is_missing(self):
+        fake = self.big()
+        code, out, err = self.run_split(fake, {"issue": 438, "parts": []})
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([w[2] for w in fake.written("label", "create")], ["whole"])
+        self.assertEqual(fake.written("issue", "edit"), [["issue", "edit", "438", "--add-label", "whole"]])
         self.assertEqual(fake.written("issue", "create"), [])
         self.assertEqual(fake.written("issue", "close"), [])
         self.assertEqual(fake.issues[438]["state"], "open")
-        self.assertEqual(fake.written("api", "milestones"), [["api", "milestones", "f"]])
+        self.assertIn("whole", [x["name"] for x in fake.issues[438]["labels"]])
 
-    def test_no_parts_with_an_existing_milestone_makes_no_milestone(self):
+    def test_no_parts_with_the_label_whole_that_exists_makes_no_label(self):
         fake = self.big(("point:8",))
-        fake.milestone("f")
-        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": []})
+        fake.labels.append("whole")
+        code, _, _ = self.run_split(fake, {"issue": 438, "parts": []})
         self.assertEqual(code, 0)
-        self.assertEqual(fake.written("api", "milestones"), [])
+        self.assertEqual(fake.written("label"), [])
         self.assertEqual(len(fake.written("issue", "edit")), 1)
 
     def test_a_split_file_that_is_not_json_is_refused(self):
@@ -1438,8 +1514,8 @@ class HandoverHistory(unittest.TestCase):
 class NightlyLimit(unittest.TestCase):
     """nightly-limit.sh with the points and the clock given by the environment."""
 
-    # "{issue number} {points} [{unit}]": the unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and nothing for any other issue
-    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 m:Slack thread\n12 3 m:Slack thread\n13 2 m:Slack thread\n14 3 m:Orca files\n15 8 i15\n16 3 m:Slack thread\n17 3 m:Slack thread\n20 3\n21 3 m:Notion\n22 3 m:Notion\n"
+    # "{issue number} {points} [{unit}]": the unit is `i{n}` for a point:8 issue and for a `solo` issue with no parent, `p:{parent number}` for a `solo` part of a parent, and nothing for any other issue
+    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 p:900\n12 3 p:900\n13 2 p:900\n14 3 p:901\n15 8 i15\n16 3 p:900\n17 3 p:900\n18 3 i18\n20 3\n21 3 p:902\n22 3 p:902\n"
     # the issues with the label `session`
     SESSION = "20,21,22"
 
@@ -1491,6 +1567,12 @@ class NightlyLimit(unittest.TestCase):
         self.assertEqual(code, 3, text)
         self.assertIn("#11", text)
         self.assertEqual(self.run_limit("issue", "12", "--taken", "11,1")[0], 3)
+
+    def test_a_solo_issue_with_no_parent_is_a_unit_of_its_own(self):
+        self.assertEqual(self.run_limit("issue", "18")[0], 0)
+        self.assertEqual(self.run_limit("issue", "18", "--taken", "11")[0], 3)
+        self.assertEqual(self.run_limit("issue", "11", "--taken", "18")[0], 3)
+        self.assertEqual(self.run_limit("issue", "1", "--taken", "18")[0], 3)
 
     def test_a_part_of_another_unit_and_a_point_8_issue_do_not_start_with_a_unit(self):
         self.assertEqual(self.run_limit("issue", "14", "--taken", "11")[0], 3)
