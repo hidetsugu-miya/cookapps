@@ -8,4 +8,4 @@ import type { OrcaWorktree } from "./OrcaWorktree";
 /**
  * This machine's lists beside a saved environment's, with the state of their own read.
  */
-export type OrcaLocal = { state: OrcaState, message: string, rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>, projects: Array<OrcaProject>, hosts: Array<OrcaProject>, terminals: Array<OrcaTerminal>, };
+export type OrcaLocal = { state: OrcaState, message: string, rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>, projects: Array<OrcaProject>, terminals: Array<OrcaTerminal>, };

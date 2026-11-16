@@ -677,7 +677,7 @@ function adopt(read: OrcaOverview) {
   const keep = next.state === "failed" && view !== null && view.state !== "missing" && view.target === next.target;
   // A target that changed (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
   if (view !== null && next.target !== view.target) forgetNotices();
-  view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, hosts: view!.hosts, terminals: view!.terminals } : next;
+  view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, terminals: view!.terminals } : next;
   // The count and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked.
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
@@ -691,7 +691,7 @@ function adopt(read: OrcaOverview) {
 function adoptHere(read: OrcaLocal | null | undefined) {
   if (view === null || view.target === null || view.state === "missing") here = null;
   else if (read) {
-    here = read.state === "ready" ? read : { ...read, rows: here?.rows ?? [], worktrees: here?.worktrees ?? [], projects: here?.projects ?? [], hosts: here?.hosts ?? [], terminals: here?.terminals ?? [] };
+    here = read.state === "ready" ? read : { ...read, rows: here?.rows ?? [], worktrees: here?.worktrees ?? [], projects: here?.projects ?? [], terminals: here?.terminals ?? [] };
     hereTry = Date.now();
   }
   remix();
@@ -810,9 +810,9 @@ function onStream(event: OrcaStreamEvent) {
   if (view === null) return;
   if (event.kind === "status") {
     if (event.live) return;
-    adopt({ ...view, state: "failed", message: event.message, ssh: [], known: false, local: null });
+    adopt({ ...view, state: "failed", message: event.message, known: false, local: null });
   } else {
-    adopt({ ...view, state: "ready", message: "", rows: event.rows, worktrees: event.worktrees, projects: event.projects, hosts: event.hosts, terminals: event.terminals, ssh: [], known: false, local: null });
+    adopt({ ...view, state: "ready", message: "", rows: event.rows, worktrees: event.worktrees, projects: event.projects, terminals: event.terminals, known: false, local: null });
   }
   draw();
 }
@@ -832,7 +832,7 @@ async function load(scope: Scope, force = false) {
   try {
     next = await invoke("orca_overview", { scope, target: view?.target ?? null });
   } catch (e) {
-    next = { state: "failed", message: String(e), target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false };
+    next = { state: "failed", message: String(e), target: null, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: false };
   }
   if (seq !== loadSeq) return;
   loading = false;
@@ -927,7 +927,7 @@ export async function readDestination(environment: string | null, force: boolean
   try {
     return await invoke("orca_destination", { environment, force });
   } catch (e) {
-    return { state: "failed", message: String(e), target: environment, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false };
+    return { state: "failed", message: String(e), target: environment, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: false };
   }
 }
 

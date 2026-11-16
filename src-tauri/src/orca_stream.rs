@@ -57,7 +57,6 @@ pub enum OrcaStreamEvent {
         rows: Vec<OrcaRow>,
         worktrees: Vec<OrcaWorktree>,
         projects: Vec<OrcaProject>,
-        hosts: Vec<OrcaProject>,
         terminals: Vec<OrcaTerminal>,
     },
     /// The connection is up (`live`, once the first list came), or it failed and is tried again after a wait (`message` says why, in Japanese).
@@ -259,12 +258,11 @@ fn list_of(ps: &Value, tabs: &HashMap<String, Value>) -> OrcaStreamEvent {
     let (worktrees_doc, terminals_doc) = documents_of(ps, tabs);
     let rows = rows_of(&worktrees_doc, &terminals_doc);
     let terminals = plain_terminals_of(&worktrees_doc, &terminals_doc, &rows);
-    let (projects, hosts) = projects_of(&worktrees_doc, &rows, &terminals);
+    let projects = projects_of(&worktrees_doc, &rows, &terminals);
     OrcaStreamEvent::List {
         rows,
         worktrees: worktrees_of(ps),
         projects,
-        hosts,
         terminals,
     }
 }
@@ -275,7 +273,6 @@ fn placed_in(mut event: OrcaStreamEvent, environment: &str) -> OrcaStreamEvent {
         rows,
         worktrees,
         projects,
-        hosts,
         terminals,
     } = &mut event
     {
@@ -283,7 +280,6 @@ fn placed_in(mut event: OrcaStreamEvent, environment: &str) -> OrcaStreamEvent {
         place_in(rows, place);
         place_in(worktrees, place);
         place_in(projects, place);
-        place_in(hosts, place);
         place_in(terminals, place);
     }
     event
@@ -1029,7 +1025,6 @@ mod tests {
             rows,
             worktrees,
             projects,
-            hosts,
             terminals,
         } = placed_in(list_of(&ps(), &tabs), "Lab")
         else {
@@ -1041,7 +1036,6 @@ mod tests {
         assert!(rows.iter().all(|i| i.environment.as_deref() == lab));
         assert!(worktrees.iter().all(|i| i.environment.as_deref() == lab));
         assert!(projects.iter().all(|i| i.environment.as_deref() == lab));
-        assert!(hosts.iter().all(|i| i.environment.as_deref() == lab));
         assert!(terminals.iter().all(|i| i.environment.as_deref() == lab));
         let status = OrcaStreamEvent::Status {
             live: true,
@@ -1064,7 +1058,6 @@ mod tests {
             rows,
             worktrees,
             projects,
-            hosts,
             terminals,
         } = list_of(&ps(), &tabs)
         else {
@@ -1083,7 +1076,6 @@ mod tests {
         assert_eq!(terminals[0].handle, "term_s");
         assert_eq!(terminals[0].title, "zsh");
         assert_eq!(worktrees.len(), 2);
-        assert!(hosts.is_empty());
         // The project with tabs comes first (its agent is newer), and shows its agent: the worktree's own status is not taken.
         assert_eq!(projects[0].key, "r1");
         assert_eq!(projects[0].sessions, 2);

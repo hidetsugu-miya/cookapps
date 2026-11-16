@@ -23,7 +23,6 @@ import {
   note,
   onceId,
   orcaRow,
-  orcaSsh,
   orcaTerminal,
   orcaWorktree,
   PNG,
@@ -980,25 +979,20 @@ describe("orca: the divider", () => {
 });
 
 describe("orca: projects", () => {
-  const hostRow = { key: "ssh:s1", name: "s1", status: "working" as const, sessions: 2, atMs: 0 };
   const withTerminals = () =>
     orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
       terminals: [orcaTerminal("example-app", "zsh")],
-      ssh: [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host")],
-      hosts: [hostRow],
     });
   const projectNames = () => textsOf("#orca-feed .orca-project-name");
   const projectStatuses = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project .orca-ic")].map((i) => i.dataset.status));
 
-  it("starts with the projects: a status icon, the name and the number of sessions, and no SSH host", async () => {
+  it("starts with the projects: a status icon, the name and the number of sessions", async () => {
     await openOrca(withTerminals());
     // The working projects come first (example-app, example-web), then the rest as the read lists them.
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
-    // example-app has a running agent and a shell, example-api a waiting agent, example-lib a done one, example-idle nothing. The overview holds two SSH hosts of this machine and a row of one (`ssh` and `hosts`), and the list draws none of them: no heading, no row.
+    // example-app has a running agent and a shell, example-api a waiting agent, example-lib a done one, example-idle nothing.
     expect(await projectStatuses()).toEqual(["working", "working", "question", "done", "idle"]);
     expect(await textsOf("#orca-feed .orca-n")).toEqual(["2", "1", "1", "1"]);
-    expect(await count("#orca-feed .orca-project[data-key^='ssh:']")).toBe(0);
-    expect(await count("#orca-feed h3")).toBe(0);
   });
 
   it("puts the stopped projects (a session, not working) under the working ones and above those with no session, each group in the order of the read", async () => {
@@ -1007,12 +1001,6 @@ describe("orca: projects", () => {
     // The read lists a project with no session before the stopped ones (example-api waits, example-lib is done), and the working one last.
     await openOrca({ ...overview, projects: [byName("example-idle"), byName("example-api"), byName("example-lib"), byName("example-app"), byName("example-web")] });
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
-  });
-
-  it("draws no row for an SSH host of the target that this machine does not list either", async () => {
-    await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [{ key: "ssh:s9", name: "lost-host", status: "working", sessions: 1, atMs: 0 }] }));
-    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
-    expect(await count("#orca-feed h3")).toBe(0);
   });
 
   it("does not draw the list again when only the time of activity of a project moved", async () => {
@@ -2936,12 +2924,10 @@ describe("orca: split panes (A-17)", () => {
 });
 
 describe("orca: search the list (A-19)", () => {
-  // example-app, example-web, example-api, example-lib and example-idle as projects (the working ones, example-app and example-web, come first). The overview holds the SSH hosts example-host and other-host too, which the list does not draw and the search does not find.
+  // example-app, example-web, example-api, example-lib and example-idle as projects (the working ones, example-app and example-web, come first).
   const overview = () =>
     orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
       terminals: [orcaTerminal("example-app", "zsh")],
-      ssh: [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host")],
-      hosts: [{ key: "ssh:s1", name: "s1", status: "working" as const, sessions: 2, atMs: 0 }],
     });
   const ALL = ["example-app", "example-web", "example-api", "example-lib", "example-idle"];
   const input = () => $("#orca-search-input");
@@ -2953,7 +2939,21 @@ describe("orca: search the list (A-19)", () => {
   const cursorOn = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].filter((r) => r.dataset.cursor === "true").map((r) => r.dataset.key));
   const search = async (text: string) => {
     await input().setValue(text);
-    await browser.waitUntil(async () => (await names()).length !== ALL.length || text.trim() === "", { timeoutMsg: "the list never changed with the search" });
+    // The list is narrowed when every row it draws holds the text (in bold), however many rows that leaves; a blank text draws all of them, none in bold.
+    const needle = text.trim().toLowerCase();
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          (needle: string, all: number) => {
+            const rows = [...document.querySelectorAll("#orca-feed .orca-project")];
+            if (needle === "") return rows.length === all && rows.every((r) => r.querySelector("b") === null);
+            return rows.every((r) => r.querySelector(".orca-project-name")!.textContent!.toLowerCase().includes(needle) && r.querySelector("b") !== null);
+          },
+          needle,
+          ALL.length,
+        ),
+      { timeoutMsg: "the list never changed with the search" },
+    );
   };
   // Cmd+J as the page gets it, from the element that has the focus.
   const cmdJ = (init: KeyboardEventInit = { metaKey: true }) =>
@@ -2998,13 +2998,6 @@ describe("orca: search the list (A-19)", () => {
     await search("p");
     expect((await bolds())[0]).toEqual(["example-app", ["p", "p", "p"]]);
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#orca-feed .orca-project-name b")!).fontWeight)).toBe("800");
-  });
-
-  it("finds no row for the name of an SSH host, which the list does not draw", async () => {
-    await openOrca(overview());
-    await search("host");
-    await expect($("#orca-feed")).toHaveText("一致するプロジェクトがありません");
-    expect(await count("#orca-feed .orca-project")).toBe(0);
   });
 
   it("matches a character that a regular expression takes as its own as itself, and says so when nothing matches", async () => {

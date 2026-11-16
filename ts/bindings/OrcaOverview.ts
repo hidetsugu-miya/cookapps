@@ -2,7 +2,6 @@
 import type { OrcaLocal } from "./OrcaLocal";
 import type { OrcaProject } from "./OrcaProject";
 import type { OrcaRow } from "./OrcaRow";
-import type { OrcaSshTarget } from "./OrcaSshTarget";
 import type { OrcaState } from "./OrcaState";
 import type { OrcaTerminal } from "./OrcaTerminal";
 import type { OrcaWorktree } from "./OrcaWorktree";
@@ -20,17 +19,9 @@ rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>,
  */
 projects: Array<OrcaProject>, 
 /**
- * What the worktrees of each SSH host show (A-8), by `ssh:{id}`.
- */
-hosts: Array<OrcaProject>, 
-/**
  * The plain terminals (A-8).
  */
 terminals: Array<OrcaTerminal>, 
-/**
- * The SSH hosts of this machine, whatever the target is (A-8). Read only with the environments: a read that does not say what the target is leaves the ones the screen held (`known`).
- */
-ssh: Array<OrcaSshTarget>, 
 /**
  * Whether this read says what the target and the environments are. A poll of the screen or of the badge does not read them, and a failed `environment list` cannot: the screen then keeps the ones it had.
  */

@@ -7,4 +7,4 @@ import type { OrcaWorktree } from "./OrcaWorktree";
 /**
  * What the stream tells the screen about the list.
  */
-export type OrcaStreamEvent = { "kind": "list", rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>, projects: Array<OrcaProject>, hosts: Array<OrcaProject>, terminals: Array<OrcaTerminal>, } | { "kind": "status", live: boolean, message: string, };
+export type OrcaStreamEvent = { "kind": "list", rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>, projects: Array<OrcaProject>, terminals: Array<OrcaTerminal>, } | { "kind": "status", live: boolean, message: string, };

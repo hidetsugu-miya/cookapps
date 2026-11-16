@@ -24,14 +24,14 @@ const placed = <T extends { environment?: string | null }>(items: T[], environme
 export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaOverview> = {}): OrcaOverview => {
   const read = readOf(rows, worktrees, extra);
   const at = read.target;
-  return { ...read, rows: placed(read.rows, at), worktrees: placed(read.worktrees, at), projects: placed(read.projects, at), hosts: placed(read.hosts, at), terminals: placed(read.terminals, at) };
+  return { ...read, rows: placed(read.rows, at), worktrees: placed(read.worktrees, at), projects: placed(read.projects, at), terminals: placed(read.terminals, at) };
 };
 
 // `streamList` of `support.ts`, with every item put in the saved environment that streams it (`Studio`, as the specs stream it), as Rust does.
 export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], terminals: OrcaTerminal[] = [], environment = "Studio"): OrcaStreamEvent => {
   const event = streamOf(rows, worktrees, terminals);
   if (event.kind !== "list") return event;
-  return { ...event, rows: placed(event.rows, environment), worktrees: placed(event.worktrees, environment), projects: placed(event.projects, environment), hosts: placed(event.hosts, environment), terminals: placed(event.terminals, environment) };
+  return { ...event, rows: placed(event.rows, environment), worktrees: placed(event.worktrees, environment), projects: placed(event.projects, environment), terminals: placed(event.terminals, environment) };
 };
 
 // The list `read` with the projects of `repos` (and their rows, worktrees and terminals) on this machine, while the rest of it stays where it is: a list of a saved environment that holds this machine's items too.
@@ -43,8 +43,8 @@ export const onThisMachine = (read: OrcaOverview, ...repos: string[]): OrcaOverv
 
 // `local` of `orca_overview` (A-6, A-33): this machine's lists beside those of a saved environment, which has its own state. Its items name no place (this machine's); `extra` gives another state or lists.
 export const beside = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaLocal> = {}): OrcaLocal => {
-  const { state, message, rows: held, worktrees: trees, projects, hosts, terminals } = readOf(rows, worktrees);
-  return { state, message, rows: held, worktrees: trees, projects, hosts, terminals, ...extra };
+  const { state, message, rows: held, worktrees: trees, projects, terminals } = readOf(rows, worktrees);
+  return { state, message, rows: held, worktrees: trees, projects, terminals, ...extra };
 };
 
 // A saved environment as the target: its list is streamed.

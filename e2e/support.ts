@@ -25,7 +25,6 @@ import type { LogEntry } from "../ts/bindings/LogEntry";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaProject } from "../ts/bindings/OrcaProject";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
-import type { OrcaSshTarget } from "../ts/bindings/OrcaSshTarget";
 import type { OrcaStatus } from "../ts/bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "../ts/bindings/OrcaStreamEvent";
 import type { ClaudeCodeEvent } from "../ts/bindings/ClaudeCodeEvent";
@@ -734,19 +733,17 @@ export const orcaRow = (repo: string, branch: string, line: string, extra: Parti
   return { group, repo, branch, line, reply: null, subagents: 0, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, status: GROUP_STATUS[group], projectKey: `proj_${repo}`, ...rest };
 };
 
-// A worktree of the project `proj_{repo}`, on the git branch of its name (`extra.gitBranch` gives another one, or "" for a detached HEAD); `extra` gives another path (a second worktree of the same project, which is not the main one) or another project (an SSH host's `ssh:{id}`).
+// A worktree of the project `proj_{repo}`, on the git branch of its name (`extra.gitBranch` gives another one, or "" for a detached HEAD); `extra` gives another path (a second worktree of the same project, which is not the main one) or another project.
 export const orcaWorktree = (repo: string, branch: string, extra: Partial<OrcaWorktree> = {}): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch, gitBranch: branch, projectKey: `proj_${repo}`, isMain: extra.path === undefined, ...extra });
 
 // A plain terminal of Orca (a shell) in the project of `repo`.
 export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, path: `/work/${repo}`, ...extra });
-export const orcaSsh = (id: string, label: string): OrcaSshTarget => ({ id, label });
 
 const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring", "interrupted", "done", "idle"];
 
 // The project list of what is on the screen: one project for each repository of the rows, the worktrees and the terminals, the highest status of its rows (a terminal is a green dot), and its sessions.
-// An SSH host (`ssh:{id}`) is no project: Rust lists it in `hosts`, which a spec gives in `extra`.
 function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaTerminal[]): OrcaProject[] {
-  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])].filter((key) => !key.startsWith("ssh:"));
+  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])];
   return keys.map((key) => {
     const mine = rows.filter((r) => r.projectKey === key);
     const mineTerminals = terminals.filter((t) => t.projectKey === key);
@@ -764,9 +761,7 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
   rows,
   worktrees,
   projects: projectsOf(rows, worktrees, extra.terminals ?? []),
-  hosts: [],
   terminals: [],
-  ssh: [],
   known: true,
   ...extra,
 });
@@ -777,7 +772,6 @@ export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], term
   rows,
   worktrees,
   projects: projectsOf(rows, worktrees, terminals),
-  hosts: [],
   terminals,
 });
 
