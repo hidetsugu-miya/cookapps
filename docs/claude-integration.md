@@ -71,5 +71,5 @@ Claude Code を使う機能（メールの AI 要約、Slack のメッセージ�
 
 ## Claude との連携
 
-Claude Code から受信トレイと予定を扱う MCP サーバー `cookapps-mcp` があります。
+Claude Code から受信トレイと予定と、データベースの画面の接続を扱う MCP サーバー `cookapps-mcp` があります。
 設定の手順は [Claude との連携（MCP）](mcp.md) にあります。

@@ -99,7 +99,7 @@ Apple の公証を受けていないので、ブラウザでダウンロード�
 | OS | macOS（Apple Silicon） |
 | メール | Gmail のみ。返信は書式つきで、新規作成はテキストで送れます。添付と下書きの保存はできません |
 | Claude の機能 | [Claude Code](docs/claude-integration.md) と [Orca](docs/orca.md) が必要です。なくても、メール、カレンダー、Todo、Slack は使えます |
-| 連携 | Google Calendar（閲覧のみ）、Todoist、Slack、MySQL（閲覧のみ。AWS Systems Manager 経由も可） |
+| 連携 | Google Calendar（閲覧のみ）、Todoist、Slack、MySQL（閲覧のみ。ポートフォワードなどを開く事前スクリプトも使えます） |
 
 ## ドキュメント
 
@@ -110,7 +110,7 @@ Apple の公証を受けていないので、ブラウザでダウンロード�
 | [Slack](docs/slack.md) | ワークスペースの追加、未読とチャンネルの履歴、投稿、要約 |
 | [Orca](docs/orca.md) | セッションの一覧、ターミナル、Claude への渡し方 |
 | [Claude](docs/claude-integration.md) | 要約、接続方式、モデルの選び方 |
-| [MCP サーバー](docs/mcp.md) | Claude Code から受信トレイと予定を扱う |
+| [MCP サーバー](docs/mcp.md) | Claude Code から受信トレイと予定、データベースの接続を扱う |
 
 ## ライセンス
 
