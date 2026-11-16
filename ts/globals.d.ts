@@ -12,7 +12,7 @@ interface Window {
     };
   };
   // E2E build only (e2e/fixtures.js): the periods of the timers that a spec shortens (ts/e2e-timers.ts).
-  __e2e_timers__?: Partial<Record<"orcaClock" | "orcaMirror" | "arrival", number>>;
+  __e2e_timers__?: Partial<Record<"orcaClock" | "orcaMirror" | "arrival" | "databaseProfiles", number>>;
 }
 
 declare const marked: { parse(markdown: string, options?: { breaks?: boolean }): string };

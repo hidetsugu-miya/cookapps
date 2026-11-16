@@ -343,6 +343,128 @@ describe("database: edit", () => {
   });
 });
 
+describe("database: edit pane, terminal and reload", () => {
+  const toggle = () => $("#database-edit-terminal");
+  const fast = timers({ databaseProfiles: 250 });
+
+  it("has an icon button with no text at the right end of the header of the edit pane, and the pane closed", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-label", "ターミナル");
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    expect((await toggle().getText()).trim()).toBe("");
+    await expect(toggle().$("svg")).toExist();
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    const atEnd = await browser.execute(() => {
+      const head = document.querySelector(".database-edit-head")!.getBoundingClientRect();
+      const button = document.getElementById("database-edit-terminal")!.getBoundingClientRect();
+      const actions = document.querySelector(".database-edit-actions")!.getBoundingClientRect();
+      return { inside: button.top >= head.top && button.bottom <= head.bottom, after: button.left >= actions.right, gap: Math.round(head.right - button.right) };
+    });
+    expect(atEnd.inside).toBe(true);
+    expect(atEnd.after).toBe(true);
+    expect(atEnd.gap).toBeLessThanOrEqual(32);
+  });
+
+  it("opens the terminal pane at the right of the edit pane and closes it with a second press, and the icon of the work pane follows", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await expect($("#database-terminal")).toBeDisplayed();
+    await expect($("#database-terminal-split")).toBeDisplayed();
+    await expect($("#database-form")).toBeDisplayed();
+    const order = await browser.execute(() => {
+      const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
+      return left("database-edit") < left("database-terminal-split") && left("database-terminal-split") < left("database-terminal");
+    });
+    expect(order).toBe(true);
+    await $("#database-form").$("button=キャンセル").click();
+    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#database-terminal")).toBeDisplayed();
+    await $("#database-terminal-toggle").click();
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await toggle().click();
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    await expect($("#database-terminal-split")).not.toBeDisplayed();
+    await expect($("#database-form")).toBeDisplayed();
+  });
+
+  it("starts pressed when the terminal pane was open before the edit pane", async () => {
+    await openDatabase();
+    await $("#database-terminal-toggle").click();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await expect($("#database-terminal")).toBeDisplayed();
+  });
+
+  it("takes what was saved elsewhere into the fields that were not changed by hand, and leaves the ones that were", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await pickFromMenu("p1", 1);
+    await field("name").setValue("Typed by hand");
+    await mock("database_profiles", [databaseProfile("p1", "Saved elsewhere", { username: "writer", dbHost: "db2.example.com", dbPort: 3307 }), tunnel]);
+    await expect(field("username")).toHaveValue("writer");
+    await expect(field("dbHost")).toHaveValue("db2.example.com");
+    await expect(field("dbPort")).toHaveValue("3307");
+    await expect(field("name")).toHaveValue("Typed by hand");
+    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
+    await expect($('#database-side-feed [data-key="p1"]')).toHaveText("Saved elsewhere");
+  });
+
+  it("selects スクリプト経由 and fills the script when a script was saved elsewhere, unless the way was chosen by hand", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await pickFromMenu("p1", 1);
+    await mock("database_profiles", [databaseProfile("p1", "Example direct", { script: 'exec forward-port "$COOKAPPS_PORT"', dbHost: "", dbPort: 0 }), tunnel]);
+    await expect(way("script")).toHaveAttribute("aria-selected", "true");
+    await expect(field("script")).toHaveValue('exec forward-port "$COOKAPPS_PORT"');
+    await expect(field("script")).toBeDisplayed();
+    await expect(field("dbPort")).toHaveValue("3306");
+
+    await $("#database-form").$("button=キャンセル").click();
+    await pickFromMenu("p2", 1);
+    await way("direct").click();
+    await mock("database_profiles", [direct, { ...tunnel, script: "exec other-forward" }]);
+    await expect(field("script")).toHaveValue("exec other-forward");
+    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
+    await expect(field("script")).not.toBeDisplayed();
+  });
+
+  it("stops reading when the connection is gone from the list, and keeps the pane as it is", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await pickFromMenu("p1", 1);
+    await field("username").setValue("typed");
+    const read = await mock("database_profiles", [tunnel]);
+    await waitForCalls(read);
+    await browser.pause(400);
+    const calls = (await callsOf(read)).length;
+    await browser.pause(900);
+    expect((await callsOf(read)).length).toBe(calls);
+    await expect($("#database-form")).toBeDisplayed();
+    await expect(field("name")).toHaveValue("Example direct");
+    await expect(field("username")).toHaveValue("typed");
+  });
+
+  it("stops reading when the edit pane is closed, and reads nothing for a new connection", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await pickFromMenu("p1", 1);
+    const read = await mock("database_profiles", [direct, tunnel]);
+    await waitForCalls(read, 2);
+    await $("#database-form").$("button=キャンセル").click();
+    await browser.pause(400);
+    const calls = (await callsOf(read)).length;
+    await browser.pause(900);
+    expect((await callsOf(read)).length).toBe(calls);
+    await $("#database-add").click();
+    await expect($("#database-form")).toBeDisplayed();
+    await browser.pause(900);
+    expect((await callsOf(read)).length).toBe(calls);
+  });
+});
+
 describe("database: delete", () => {
   const confirm = () => $('.pop[role="alertdialog"]');
 

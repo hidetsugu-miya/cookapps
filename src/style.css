@@ -1795,6 +1795,10 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-edit-actions { display: flex; gap: 8px; margin-left: auto; }
 .database-edit-actions .text-btn:disabled { opacity: .4; cursor: default; }
 .database-edit-actions .text-btn:disabled:hover { background: var(--surface); }
+#database-edit-terminal { flex: none; width: var(--header-btn); height: var(--header-btn); }
+#database-edit-terminal svg { width: var(--header-ic); height: var(--header-ic); }
+#database-edit-terminal:hover:not(:disabled) { background: var(--hover); }
+#database-edit-terminal[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 .database-edit-body { flex: 1; min-height: 0; overflow-y: auto; box-sizing: border-box; width: 100%; max-width: 560px; padding: 16px 24px; font-size: calc(13px * var(--fs)); display: flex; flex-direction: column; gap: 12px; }
 .database-field { display: flex; flex-direction: column; gap: 4px; }
 .database-label { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--muted); }

@@ -139,19 +139,21 @@ const draw = () => {
   drawDatabaseWork(workState(), workActions);
 };
 
-// Reads the connections from Rust (the file and the keychain are the only copy) and draws them.
-async function load() {
+// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the edit pane's, at an interval) shows no error.
+async function load(quiet = false): Promise<DatabaseProfileView[] | null> {
   const seq = ++loadSeq;
   try {
     const list = await invoke("database_profiles");
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq) return null;
     profiles = list;
     // A connection that is gone from the list has nothing open any more (Rust closed it with the delete).
     for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
     if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
     draw();
+    return list;
   } catch (e) {
-    if (seq === loadSeq) showError(e);
+    if (seq === loadSeq && !quiet) showError(e);
+    return null;
   }
 }
 
@@ -411,7 +413,7 @@ const actions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
-  edit: (profile) => openDatabaseForm(profile, save, test),
+  edit: (profile) => openDatabaseForm(profile, save, test, () => load(true)),
   disconnect: async (profile) => {
     connections.delete(profile.id);
     if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
@@ -436,7 +438,7 @@ export function showDatabase() {
 export function initDatabase() {
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
-  add.onclick = () => openDatabaseForm(null, save, test);
+  add.onclick = () => openDatabaseForm(null, save, test, () => load(true));
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
   initDatabaseTerminal();
 }
