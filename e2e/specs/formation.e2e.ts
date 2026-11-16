@@ -497,12 +497,15 @@ describe("orchestration mode: the two panes", () => {
   });
 
   it("fits the orchestrator's terminal to its width again when the right pane goes", async () => {
-    await openFlow([formationChild("api-update", "planned")]);
-    await expect($("#formation-flow")).toBeDisplayed();
-    // The orchestrator started with the whole width, and the pane that appeared made it narrower.
-    await browser.waitUntil(async () => (await callsOf("claude_code_resize")).length > 0);
-    await browser.pause(300);
-    const narrow = ((await callsOf("claude_code_resize")).at(-1) as { viewport: { cols: number } }).viewport.cols;
+    await openFlow([]);
+    const [start] = await waitForCalls("claude_code_start");
+    const wide = (start as { viewport: { cols: number } }).viewport.cols;
+    // The pane appears and makes the orchestrator narrower; the fit of that is waited for, then the pane goes.
+    await mock("claude_code_resize", null);
+    await mock("formation_children", [formationChild("api-update", "planned")]);
+    const [narrowed] = await waitForCalls("claude_code_resize");
+    const narrow = (narrowed as { viewport: { cols: number } }).viewport.cols;
+    expect(narrow).toBeLessThan(wide);
     await mock("claude_code_resize", null);
     await mock("formation_children", []);
     const [resize] = await waitForCalls("claude_code_resize");
@@ -541,8 +544,9 @@ describe("orchestration mode: the view of the flow", () => {
     // The orchestrator's card is over the middle of the row.
     const middle = (rects.cards[0].left + rects.cards[1].right) / 2;
     expect(Math.abs((rects.root.left + rects.root.right) / 2 - middle)).toBeLessThan(4);
-    // A branch goes down to each card.
-    expect(await browser.execute(() => getComputedStyle(document.querySelector("#formation-flow-list li")!, "::after").borderLeftWidth)).toBe("2px");
+    // One branch goes down from the orchestrator's card to the frame that holds the cards.
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("formation-flow-list")!, "::before").borderLeftWidth)).toBe("2px");
+    expect(await styleOf("#formation-flow-list", "borderTopStyle")).toBe("solid");
   });
 
   it("wraps the cards that do not fit in one row, and holds the view to a height of its own", async () => {
@@ -723,6 +727,23 @@ describe("orchestration mode: the session of a child", () => {
     await mock("orca_terminal_read", ["$"]);
     await browser.pause(MIRROR * 3);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
+  });
+
+  it("brings the card of the child that the follow selects into the view of the tree", async () => {
+    const many = (lastState: "working" | "waiting") => Array.from({ length: 24 }, (_, i) => formationChild(`child-${String(i).padStart(2, "0")}`, i === 23 ? lastState : "working", { minutes: 2 }));
+    await openSession(many("working"));
+    await browser.waitUntil(async () => (await cardNames()).length === 24);
+    await expect($('#formation-flow-list [data-child="child-00"]')).toHaveAttribute("aria-pressed", "true");
+    // The last card is below the view while the tree is at its top.
+    const inView = (name: string) =>
+      browser.execute((n) => {
+        const [body, card] = [document.getElementById("formation-flow-body")!.getBoundingClientRect(), document.querySelector(`#formation-flow-list [data-child="${n}"]`)!.getBoundingClientRect()];
+        return card.top >= body.top - 1 && card.bottom <= body.bottom + 1;
+      }, name);
+    expect(await inView("child-23")).toBe(false);
+    await mock("formation_children", many("waiting"));
+    await expect($('#formation-flow-list [data-child="child-23"]')).toHaveAttribute("aria-pressed", "true");
+    await browser.waitUntil(() => inView("child-23"));
   });
 });
 

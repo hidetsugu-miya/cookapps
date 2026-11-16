@@ -28,8 +28,11 @@ const held = new Set<string>();
 let timer: number | null = null;
 let watching: "flow" | "count" | null = null;
 let reading = false;
-// What the tree shows now; it is drawn again only when this changes.
+// What the tree shows now, and what the session band shows now; each is drawn again only when its key changes.
 let treeKey = "";
+let sessionKey = "";
+// The child whose card was last brought into the view of the tree (the selection that moved is shown, the one that stays is not scrolled to again).
+let scrolledTo: string | null = null;
 
 async function read() {
   // A hidden window reads nothing, as the Orca list does; it reads once when it is shown again (initFormationFlow).
@@ -105,9 +108,13 @@ function syncSession() {
     releaseTerminal(handle, OWNER);
   }
   const child = terms.find((c) => c.name === selected);
-  $("formation-session").hidden = !child;
-  $("formation-session-head").dataset.state = child?.state ?? "";
-  $("formation-session-name").textContent = child?.name ?? "";
+  const key = child ? `${child.name}\n${child.state}` : "";
+  if (key !== sessionKey) {
+    sessionKey = key;
+    $("formation-session").hidden = !child;
+    $("formation-session-head").dataset.state = child?.state ?? "";
+    $("formation-session-name").textContent = child?.name ?? "";
+  }
   showSelected(false);
 }
 
@@ -177,6 +184,11 @@ function draw() {
   list.replaceChildren(...children.map((c) => card(c, now)));
   body.scrollTop = top;
   if (focused) list.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  // A selection that moved (the follow moves it too) is brought into the view of the tree; the focus stays where it was.
+  if (selected !== scrolledTo) {
+    scrolledTo = selected;
+    list.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 export function initFormationFlow() {
