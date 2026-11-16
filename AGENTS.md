@@ -31,7 +31,7 @@ A new requirement gets a section there and an entry here.
 | Claude | `requirements/claude.md` | A-1 Claude integration, A-2 Claude model and effort, A-4 Claude connection, A-32 Skills tab |
 | App | `requirements/app.md` | A-3 Settings tabs, A-5 Side menu by screen, A-20 Fonts by screen, A-23 No title bar, A-28 The app's log, A-35 Footer with the unread count |
 | Orca | `requirements/orca.md` | A-6 Orca, A-7 Orca session history (retired), A-8 Orca terminal and project list, A-9 Hand to Orca, A-10 Attach a file in Orca, A-11 Answer a question in the Orca history (retired), A-12 Orca terminal stream, A-13 Ghostty settings in the Orca terminal, A-14 Terminal colors, A-15 Terminal appearance, A-16 Start from the plus of the Orca work pane, A-17 Split panes in the Orca work pane, A-18 Orca files and editor, A-19 Search the Orca list, A-21 Colors in the Orca editor, A-22 Download an Orca file, A-24 Orca file diff, A-25 Switch the branch from the Orca file pane, A-26 Rich Markdown view, A-27 Git history in the Orca file pane, A-29 Scratchpad in the Orca work pane, A-30 Scratchpad on an SSH host, A-31 Open an Orca HTML file in the browser, A-33 This machine and a saved environment in one list, A-34 Go to a definition in the Orca editor |
-| Database | `requirements/database.md` | D-1 Database screen and connections, D-2 Connection to MySQL and the test of a connection, D-3 Open a connection, and the databases and tables under it, D-4 Records of a table, D-5 Structure of a table, D-6 SQL, D-7 Terminal pane on the database screen |
+| Database | `requirements/database.md` | D-1 Database screen and connections, D-2 Connection to MySQL and the test of a connection, D-3 Open a connection, and the databases and tables under it, D-4 Records of a table, D-5 Structure of a table, D-6 SQL, D-7 Terminal pane on the database screen, D-8 Claude Code prepares a connection |
 | Updates | `requirements/updates.md` | U-1 Auto update, U-2 Update settings and version |
 
 ### Out of scope
@@ -108,7 +108,7 @@ Add more accounts from "Add account" in the Google tab of the settings screen.
 `cookapps-mcp` reads the same `client_secret.json`, `accounts.json` and keychain entries as the app, and it never logs in.
 Install it with `cargo install --path src-tauri --bin cookapps-mcp --locked`.
 The setup is in `docs/mcp.md`.
-The tools are `list_inbox`, `get_thread` and `list_events` (read), and `archive`, `set_read` and `trash` (write).
+The tools are `list_inbox`, `get_thread`, `list_events` and `db_profiles` (read), `archive`, `set_read` and `trash` (write), and `db_profile_save` and `db_test` (the connections of the database screen: save one with its script, and try it, D-8).
 
 ## Tests
 

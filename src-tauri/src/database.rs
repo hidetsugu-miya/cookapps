@@ -5,6 +5,7 @@
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
 //! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
+//! `cookapps-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod mysql;
@@ -278,6 +279,16 @@ pub fn save(
     view(passwords, saved)
 }
 
+/// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never handles its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
+pub fn save_without_password(
+    dir: &Path,
+    passwords: &impl PasswordStore,
+    profile: DatabaseProfile,
+) -> Result<DatabaseProfileView, String> {
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    save(dir, passwords, profile, None)
+}
+
 /// Deletes a connection and its password. The password goes first: a failure then leaves the connection, and no password is left that no connection shows.
 /// An id that is not saved is already deleted.
 pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<(), String> {
@@ -367,6 +378,17 @@ pub async fn test_connection(
         scripts.close(id).await;
     }
     tested
+}
+
+/// Tests the connection of `id` as saved, with the password saved for it (D-8), through `test_connection`, the function of the test of D-2.
+pub async fn test_saved(
+    dir: &Path,
+    passwords: &impl PasswordStore,
+    scripts: &script::Scripts,
+    id: &str,
+) -> Result<String, String> {
+    let (profile, password) = saved_login(dir, passwords, id)?;
+    test_connection(scripts, profile, &password).await
 }
 
 /// The saved connection of `id` and the password saved for it (none is an empty password, as in a test), or the reason it cannot be opened.
@@ -1294,5 +1316,66 @@ mod tests {
             expected
         );
         assert_eq!(sessions.ids(&scripts).await, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_save_without_a_password_keeps_the_saved_one_and_sets_none() {
+        let dir = temp_dir("mcp-save");
+        let passwords = Memory::default();
+        let first = save_without_password(&dir, &passwords, direct("a")).unwrap();
+        assert!(!first.password_saved);
+        assert_eq!(passwords.get(&first.profile.id), None);
+        passwords.set(&first.profile.id, "secret").unwrap();
+        let edited = DatabaseProfile {
+            username: "other".to_owned(),
+            ..first.profile.clone()
+        };
+        let second = save_without_password(&dir, &passwords, edited).unwrap();
+        assert!(second.password_saved);
+        assert_eq!(second.profile.username, "other");
+        assert_eq!(passwords.get(&first.profile.id).as_deref(), Some("secret"));
+        assert_eq!(list(&dir, &passwords).unwrap(), vec![second]);
+        // Only the checks of a save: a name another connection has is refused, and nothing is written.
+        let taken = save_without_password(&dir, &passwords, direct("a")).unwrap_err();
+        assert_eq!(taken, "同じ名前の接続があります: a");
+        assert_eq!(list(&dir, &passwords).unwrap().len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_test_of_a_saved_connection_that_is_not_saved_is_refused() {
+        let dir = temp_dir("mcp-test-missing");
+        let scripts = script::Scripts::default();
+        let error = test_saved(&dir, &Memory::default(), &scripts, "nope")
+            .await
+            .unwrap_err();
+        assert_eq!(error, "接続が見つかりません。一覧を読み直してください");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_test_of_a_saved_connection_runs_its_script_and_tells_the_end_of_its_standard_error()
+    {
+        let dir = temp_dir("mcp-test-script");
+        let passwords = Memory::default();
+        let scripts = script::Scripts::default();
+        let saved = save_without_password(
+            &dir,
+            &passwords,
+            DatabaseProfile {
+                script: "echo no route >&2\nexit 7".to_owned(),
+                ..direct("a")
+            },
+        )
+        .unwrap();
+        let error = test_saved(&dir, &passwords, &scripts, &saved.profile.id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "接続のスクリプトが、準備ができる前に終了しました（終了コード 7）。標準エラーの最後の行: no route"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
