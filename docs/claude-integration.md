@@ -57,9 +57,27 @@ Todo 画面の右側は、いつも開いています。右側の上の帯の右
 - 0 以外の終了コードで終わったときは、理由が読めるように、× を押すまでタブとメッセージが残ります。
 - アプリを終了すると、Claude Code も終えます。
 
+## 開発の画面の司令塔で Claude Code を動かす
+
+開発の画面のオーケストレーションのモードの左のペインは、司令塔の Claude Code です（画面は [Orca](orca.md#オーケストレーション)）。
+モードを初めて出したときに、アプリが自分で開いたターミナルで `claude` を起動します。Orca は使いません。
+司令塔は仕事を子に分け、子は Orca の新しい worktree で動く Claude Code です。
+
+- 使えるのは、`claude` が入っているときです。見つからないときと、`tsunagiai-mcp` が見つからないときは、ペインにそう出ます。
+- Claude Code は、設定フォルダの `formation/` で動きます。起動のたびに、司令塔への指示（`CLAUDE.md`）、MCP の設定、起動のスクリプト、空のプロジェクト設定（`.claude/settings.json`）を書き直すので、司令塔が足した許可やフックは、次の起動には残りません。
+- 権限のモードは auto で、組み込みの道具（Bash など）も使えます。道具やコマンドを使う前に確かめるかどうかは、Claude Code の auto モードが決めます。
+- MCP サーバーは `tsunagiai-mcp` だけです。司令塔にだけ、子を予定に入れる `formation_plan`、子を起動する `formation_launch`、子を終える `formation_close` を渡します。ほかに渡すのは読み取りのツール（`list_inbox`、`get_thread`、`list_events`、`db_profiles`）だけで、書き込みのツール（`archive`、`set_read`、`trash`、`db_profile_save`、`db_test`）は渡しません。
+- `formation_launch` は、この Mac の Orca で、指定したリポジトリに新しい worktree を作り、そのターミナルで `claude -n {子の名前}` を auto モードで起動して、最初の指示を送ります。司令塔は、その名前に SendMessage で指示します。
+- `formation_close` は、子のターミナルを閉じ、worktree をブランチごと消します。コミットしていない変更、追跡していないファイル、どのリモートにも無いコミットがあるときは、何も消さずに理由を返します。
+- 起動した子と予定の子は、`formation/children.json` に記録します。子への指示の文は記録しません。
+- サインインは、下の「Claude の接続方式」で選んだ方式です。書体、配色、キーは Orca のターミナルと同じです。
+- 司令塔に打ち込んだ内容と、Claude Code が呼んだツールや道具の結果は、Claude Code を通じて Anthropic に送られます。子への指示は、Orca が動かす子の Claude Code を通じて Anthropic に送られます。
+- モードや開発の画面を離れても、司令塔は動き続けます。戻ると、同じ Claude Code が出ます。Claude Code が自分で終わったときは、次にモードを出したときに起動し直します。
+- アプリを終了すると、司令塔の Claude Code も終えます。
+
 ## Claude の接続方式
 
-Claude Code を使う機能（メールの AI 要約、Slack のメッセージの要約、Todo の案の修正、要約プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約、Todo の相談、データベースの画面の Claude タブ）は、Claude のサブスクリプションか、Anthropic の API キーのどちらかで動きます。
+Claude Code を使う機能（メールの AI 要約、Slack のメッセージの要約、Todo の案の修正、要約プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約、Todo の相談、データベースの画面の Claude タブ、開発の画面の司令塔）は、Claude のサブスクリプションか、Anthropic の API キーのどちらかで動きます。
 設定の Claude タブの 1 枚目のカード「Claude」に、「サブスクリプション」と「API キー」の 2 行があり、ラジオで使う方を選びます。
 使っていない方の状態も、それぞれの行に出ます。
 

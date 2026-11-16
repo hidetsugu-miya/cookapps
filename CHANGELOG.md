@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.81.0
+
+A-5, A-37: the Orca button of the side menu opens the development screen, with a code icon and the label 「開発」 (#795). The screen has two modes, Orca and the orchestration, switched by two buttons at the left end of the footer, which show only on this screen. Orca is the mode at each start, and "Orca の画面で開く" opens the Orca mode. The count and the working yellow of the button are as they were.
+
+A-37, A-36: the orchestration mode has the orchestrator at its left, a Claude Code that the app starts in a terminal of its own, in `formation/` of the config folder, in auto mode and with its built-in tools (#793). You give it the work, and it splits the work into children: each child is a Claude Code in auto mode, in a new Orca worktree on this Mac, and the orchestrator instructs it with SendMessage (#792). `tsunagiai-mcp` gives the orchestrator three tools, to plan, launch and close the children, and of its other tools only the reads; no other MCP client gets the three. Closing a child closes its terminal and removes its worktree with its branch, but not a worktree with a change, an untracked file or a commit that no remote has. A child whose worktree was removed in Orca is taken off the list when it is closed, so that its name can be used again. The children are recorded in `formation/children.json` (#794). Leaving the mode or the screen does not end the orchestrator.
+
+A-37: the right of the orchestration mode is the flow pane: the orchestrator and, under it, each child with its state (作業中, 承認待ち, 完了 or 予定), how long the state has lasted and the first line of its last reply, read every 3 seconds (#796). A button closes and opens the pane. The middle has a tab for each child with a terminal, and the terminal of the selected child under the tabs, where you answer its permissions and questions (#797). 「自動で追う」, on at each start, moves to the child that has waited longest for approval, else to a working child, and leaves the keys with the orchestrator. While the Orca mode is shown, the orchestration button of the footer shows the number of children that wait for approval.
+
 ## v0.80.3
 
 D-1: the buttons "接続をテスト", "キャンセル" and "保存" of the edit pane are in a row at its bottom, under the fields, and no longer in its header: "接続をテスト" at the left end, "キャンセル" and "保存" at the right end (#772).

@@ -8,6 +8,7 @@ title: Claude との連携（MCP）
 stdio で動き、ネットワークのポートは開きません。
 つなぎAIアプリが起動していなくても使えます。
 データベースの画面の Claude タブでは、アプリが自分の中の `tsunagiai-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
+開発の画面の司令塔にも、アプリが `tsunagiai-mcp` を渡します。子のセッションを起動して終えるツールは、司令塔にだけ出し、この文書の設定で登録したクライアントには出ません（[Claude](claude-integration.md#開発の画面の司令塔で-claude-code-を動かす)）。
 
 この文書は AI に読ませて設定を任せられるように、手順と確認方法を順に書いています。
 
