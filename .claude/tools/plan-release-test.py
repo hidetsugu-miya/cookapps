@@ -634,7 +634,11 @@ class LoadState(unittest.TestCase):
                     raw(5, login="other"),
                 ]
             if "state=closed" in path:
-                return [raw(6, "closed", closed_at="2026-11-06T00:00:00Z"), raw(7, "closed", closed_at="2026-11-04T00:00:00Z")]
+                return [
+                    raw(6, "closed", closed_at="2026-11-06T00:00:00Z"),
+                    raw(7, "closed", closed_at="2026-11-04T00:00:00Z"),
+                    raw(10, "closed", login="other", closed_at="2026-11-06T00:00:00Z"),
+                ]
             if path.endswith("/issues/1/dependencies/blocked_by?per_page=100"):
                 return [{"number": 9, "id": 9009, "state": "open", "repository_url": "https://api.github.com/repos/o/r"}]
             if path.endswith("/issues/3/dependencies/blocked_by?per_page=100"):
@@ -656,7 +660,7 @@ class LoadState(unittest.TestCase):
         state, calls = self.run_load()
         self.assertEqual((state.repo, state.owner, state.last_tag), ("o/r", "owner", "v0.2.0"))
         self.assertEqual(sorted(state.issues), [1, 2, 3, 6])  # 7 closed before the release, 5 is another author's
-        self.assertEqual(state.skipped, 1)
+        self.assertEqual(state.strangers, [(5, "other")])  # only an open issue of another author, not 10, which is closed
         self.assertEqual(state.issues[1].blocked_by, [9])
         self.assertEqual(state.issues[3].blocked_by, [2])  # a closed blocker and one of another repository are not blockers
         self.assertEqual(state.states[8], "closed")
@@ -837,7 +841,7 @@ class DoneParents(unittest.TestCase):
                 return {"1": [self.sub(10)], "2": [self.sub(11, "open")]}[path.split("/issues/")[1].split("/")[0]]
             raise AssertionError(path)
 
-        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, sub=1), 2: mk(2, sub=1), 3: mk(3, parent=2), 4: mk(4, sub=1, state="closed")}, [], [], set(), {}, {}, 0, [])
+        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, sub=1), 2: mk(2, sub=1), 3: mk(3, parent=2), 4: mk(4, sub=1, state="closed")}, [], [], set(), {}, {}, [], [])
         real = (pr.gh, pr.api, pr.load_state)
         pr.gh, pr.api, pr.load_state = fake_gh, fake_api, lambda blockers=True: state
         out = io.StringIO()
@@ -849,6 +853,55 @@ class DoneParents(unittest.TestCase):
             pr.gh, pr.api, pr.load_state = real
         self.assertEqual(calls, [["issue", "close", "1", "--reason", "completed", "--comment", pr.close_comment()]])
         self.assertEqual(out.getvalue().count("closed #1 "), 2)
+
+
+class Snapshot(unittest.TestCase):
+    def run_snapshot(self, strangers, fail_on=None):
+        calls = []
+
+        def fake_gh(*args):
+            calls.append(list(args))
+            if fail_on and args[2] == str(fail_on):
+                raise pr.GhError(f"gh {' '.join(args[:3])}: boom")
+            return "\n"
+
+        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, ["point:2"])}, [], [mk(1, ["point:2"])], set(), {}, {}, strangers, [])
+        real = (pr.gh, pr.load_state)
+        pr.gh, pr.load_state = fake_gh, lambda blockers=True: state
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = pr.main(["snapshot"])
+        finally:
+            pr.gh, pr.load_state = real
+        return code, calls, out.getvalue(), err.getvalue()
+
+    def test_an_open_issue_of_another_author_is_closed_as_not_planned_with_the_fixed_comment_and_is_not_in_the_output(self):
+        code, calls, out, err = self.run_snapshot([(12, "someone"), (13, "other")])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            calls,
+            [
+                ["issue", "close", "12", "--reason", "not planned", "--comment", pr.stranger_comment()],
+                ["issue", "close", "13", "--reason", "not planned", "--comment", pr.stranger_comment()],
+            ],
+        )
+        self.assertEqual(err.splitlines(), ["closed #12 of someone (not the owner)", "closed #13 of other (not the owner)"])
+        self.assertEqual([i["number"] for i in json.loads(out)["free"]], [1])
+        self.assertNotIn("someone", out)
+
+    def test_nothing_is_closed_or_said_when_every_open_issue_is_the_owners(self):
+        code, calls, out, err = self.run_snapshot([])
+        self.assertEqual((code, calls, err), (0, [], ""))
+
+    def test_a_failed_close_is_told_and_the_snapshot_goes_on_with_the_rest(self):
+        code, calls, out, err = self.run_snapshot([(12, "someone"), (13, "other")], fail_on=12)
+        self.assertEqual(code, 0)
+        self.assertEqual([c[2] for c in calls], ["12", "13"])
+        self.assertEqual(len(err.splitlines()), 2)
+        self.assertIn("could not close #12 of someone", err)
+        self.assertIn("closed #13 of other (not the owner)", err)
+        self.assertEqual([i["number"] for i in json.loads(out)["free"]], [1])
 
 
 class SavedPlan(unittest.TestCase):

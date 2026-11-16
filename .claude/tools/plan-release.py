@@ -10,7 +10,7 @@ Usage:
   plan-release.py release
   plan-release.py close [--dry-run]
 
-`snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues, the fixed ones and the parents (stderr says which), writes the
+`snapshot` prints the open issues the planner orders, and first closes as not planned the open issues of other authors (the pull requests are left alone), with a fixed comment and without reading their title or body (a failed close is told on stderr and does not stop it). `apply` leaves out of the plan the closed issues, the fixed ones and the parents (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
 `start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out).
 A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
@@ -569,6 +569,10 @@ def close_comment():
     return "部品がすべてリリースされたので、この機能を閉じます"
 
 
+def stranger_comment():
+    return "このリポジトリは、オーナーが立てた issue だけで運用しています。外部から立てられた issue は自動で閉じます。"
+
+
 # ---- pure: split ----
 
 SOLO_DESCRIPTION = "a part of a point:8 issue: the parts are a release of their own"
@@ -702,7 +706,7 @@ class State:
     pr_closing: set
     ids: dict  # issue number -> database id
     states: dict  # issue number -> "open" | "closed"
-    skipped: int
+    strangers: list  # (number, login) of the open issues of other authors: only these two are read of them
     tags: list  # the names of the tags
 
 
@@ -766,7 +770,7 @@ def load_state(blockers=True):
 
     raw = [r for r in opened if "pull_request" not in r]
     raw += [r for r in closed if "pull_request" not in r and (r.get("closed_at") or "") > since]
-    skipped = sum(1 for r in raw if r["user"]["login"] != owner)
+    strangers = [(r["number"], r["user"]["login"]) for r in raw if r["state"] == "open" and r["user"]["login"] != owner]
     issues = {r["number"]: to_issue(r, repo) for r in raw if r["user"]["login"] == owner}
 
     ids = {n: i.id for n, i in issues.items()}
@@ -799,7 +803,7 @@ def load_state(blockers=True):
         pr_closing=pr_closing,
         ids=ids,
         states=states,
-        skipped=skipped,
+        strangers=strangers,
         tags=names,
     )
 
@@ -830,7 +834,14 @@ def issue_json(i):
 
 def cmd_snapshot(args):
     state = load_state()
-    print(f"skipped {state.skipped} issues of other authors", file=sys.stderr)
+    # An issue of another author is data (issues.md): only its number and author are read, never its title, body or comments.
+    # A failed close is told and goes on: the output below leaves the issue out either way, and the next snapshot closes it again.
+    for number, login in state.strangers:
+        try:
+            gh("issue", "close", str(number), "--reason", "not planned", "--comment", stranger_comment())
+            print(f"closed #{number} of {login} (not the owner)", file=sys.stderr)
+        except GhError as e:
+            print(f"could not close #{number} of {login} (not the owner): {e}", file=sys.stderr)
     print(
         json.dumps(
             {
