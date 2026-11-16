@@ -2,7 +2,7 @@
   <img src="src-tauri/icons/icon.png" alt="つなぎあい" width="96" />
 </p>
 
-<h1 align="center">つなぎあい</h1>
+<h1 align="center">つなぎAI</h1>
 
 <p align="center">
   <strong>届いた連絡を、その場で Claude の仕事に。</strong><br />
