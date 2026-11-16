@@ -685,8 +685,10 @@
       <section id="formation-children" aria-label="子">
         <div id="formation-tabbar" data-tauri-drag-region>
           <div id="formation-tabs" role="tablist" aria-label="子"></div>
+          <button id="formation-follow" class="formation-follow" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>自動で追う</button>
           <button id="formation-tabbar-toggle" class="icon-btn formation-flow-toggle" type="button" aria-label="流れ" aria-pressed="true" hidden><span class="formation-flow-badge" aria-hidden="true" hidden></span></button>
         </div>
+        <div id="formation-child-term"></div>
       </section>
       <aside id="formation-flow" aria-label="流れ">
         <header id="formation-flow-head" data-tauri-drag-region>
@@ -749,6 +751,7 @@
         <button id="footer-mode-formation" class="footer-btn footer-mode" type="button" aria-label="オーケストレーション" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="2.5" width="7" height="5" rx="1.5"/><path d="M12 7.5v4M5 15.5v-4h14v4M12 11.5v4"/><rect x="2.5" y="15.5" width="5" height="5" rx="1.5"/><rect x="9.5" y="15.5" width="5" height="5" rx="1.5"/><rect x="16.5" y="15.5" width="5" height="5" rx="1.5"/></svg>
           <span class="footer-mode-name" hidden>オーケストレーション</span>
+          <span class="footer-mode-count" aria-hidden="true" hidden></span>
         </button>
       </div>
       <button id="footer-bell" class="footer-btn" type="button" aria-label="通知" aria-expanded="false">

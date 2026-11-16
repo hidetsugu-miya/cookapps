@@ -66,7 +66,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 /* A-37: at the left end of the footer, only while the development screen is shown: the switch between Orca and the orchestration, the name drawn beside the icon of the mode that is on. */
 #footer-modes { display: flex; gap: 2px; margin-right: auto; padding: 2px; border-radius: 10px; border: 1px solid var(--chip-line); background: var(--surface); }
 .footer-mode { height: 24px; padding: 0 6px; color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); }
+.footer-mode { position: relative; }
 .footer-mode svg { width: 17px; height: 17px; }
+/* The count of the children that wait, at the corner of the orchestration's icon while Orca is the mode. */
+.footer-mode-count { position: absolute; top: -6px; right: -5px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--surface); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
 .footer-mode[aria-pressed="true"] { padding: 0 10px 0 6px; background: var(--soft); color: var(--accent-text); font-weight: bold; }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
@@ -999,14 +1002,25 @@ button.status:hover { filter: brightness(.95); }
 .header-sub { min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .back-text { display: inline-flex; align-items: center; gap: 4px; padding: 0 12px 0 6px; border-color: transparent; background: transparent; }
 
-/* The orchestration mode of the development screen (A-37): the orchestrator's terminal, the children's tabs and the flow, side by side; the last two are empty until their issues. */
+/* The orchestration mode of the development screen (A-37): the orchestrator's terminal, the children's tabs with the terminal of the selected one, and the flow, side by side. */
 #formation { flex: 1; min-height: 0; display: flex; }
 #formation-orchestrator { flex: none; width: 36%; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 #formation-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #formation-children { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-/* The strip of the children's tabs (the tabs are another issue's): the button that opens the flow is at its right end while the flow is closed, and the switch of the tabs that follows the child that waits goes at the left of it. */
+/* The strip of the children's tabs (as the tabs of Orca are): 「自動で追う」 is at its right end, and the button that opens the flow is at the right of it while the flow is closed. */
 #formation-tabbar { flex: none; display: flex; align-items: center; gap: 6px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); background: var(--bar); }
-#formation-tabs { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; }
+#formation-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+#formation-tabs::-webkit-scrollbar { display: none; }
+.formation-tab { flex: none; display: flex; align-items: center; gap: 6px; height: calc(max(var(--header-h), calc(32px * var(--fs))) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; padding: 0 12px 0 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); cursor: pointer; }
+.formation-tab:hover { color: var(--accent); }
+.formation-tab[aria-selected="true"] { border-color: var(--line); background: var(--surface); color: inherit; font-weight: 600; }
+.formation-tab[data-state="waiting"]:not([aria-selected="true"]) { color: var(--agent-question); }
+.formation-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.formation-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.formation-follow { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
+.formation-follow svg { width: 15px; height: 15px; }
+.formation-follow[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+#formation-child-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 #formation-flow { flex: none; width: 260px; box-sizing: border-box; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bar); }
 #formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px 0 16px; border-bottom: 1px solid var(--line); }
 #formation-flow-head h2 { flex: none; }
@@ -1047,13 +1061,13 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }
 .formation-card[data-state="planned"] .formation-card-state { color: var(--muted); font-weight: 600; }
 .formation-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-idle); }
-.formation-card[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
-.formation-card[data-state="waiting"] .formation-dot { background: var(--agent-question); }
-.formation-card[data-state="done"] .formation-dot { background: var(--agent-done); }
+.formation-card[data-state="working"] .formation-dot, .formation-tab[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
+.formation-card[data-state="waiting"] .formation-dot, .formation-tab[data-state="waiting"] .formation-dot { background: var(--agent-question); }
+.formation-card[data-state="done"] .formation-dot, .formation-tab[data-state="done"] .formation-dot { background: var(--agent-done); }
 .formation-card[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
 .formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
-@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-tab[data-state="working"] .formation-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }

@@ -17,6 +17,15 @@ export function setFooterCount(count: number) {
   onCount?.(count);
 }
 
+// The count of the children that wait for approval, at the corner of the orchestration's icon while Orca is the mode (A-37).
+export function setFormationWaiting(count: number) {
+  const button = $("footer-mode-formation");
+  const badge = button.querySelector<HTMLElement>(".footer-mode-count")!;
+  badge.hidden = count === 0;
+  badge.textContent = String(count);
+  button.setAttribute("aria-label", count === 0 ? "オーケストレーション" : `オーケストレーション（承認待ち ${count} 件）`);
+}
+
 // The switch between Orca and the orchestration (A-37): shown only while the development screen is, with the name beside the icon of the mode that is on.
 export function drawDevSwitch(shown: boolean, mode: DevMode) {
   $("footer-modes").hidden = !shown;

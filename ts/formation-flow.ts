@@ -1,11 +1,14 @@
 // The flow pane of the orchestration mode (A-37): the orchestrator's card and under it the children as small cards in the order `formation_children` gives, read every few seconds while the mode is shown.
+// The same read feeds the children's tabs (formation-tabs.ts), and, while Orca is the mode of the development screen, it is made at the Orca list's period only to count the children that wait, on the footer's icon.
 // The button that closes and opens the pane is in its heading while it is open and at the right end of the strip of the children's tabs while it is closed, as the file pane's of Orca is (A-18).
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { invoke } from "./ipc.js";
-import { elapsed } from "./orca.js";
+import { setFormationWaiting } from "./footer.js";
+import { initFormationTabs, selectChild, selectedChild, syncTabs } from "./formation-tabs.js";
+import { elapsed, shownMs } from "./orca.js";
 
 const READ_MS = 3000;
 const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
@@ -13,11 +16,11 @@ const STATE_LABELS: Record<FormationState, string> = { working: "作業中", wai
 // The last read; a read that failed keeps it and says why in `failure`.
 let children: FormationChild[] = [];
 let failure: string | null = null;
-// The child whose card was pressed (its name), and whether the pane is open: kept in memory only, open at first.
-let selected: string | null = null;
+// Whether the pane is open: kept in memory only, open at first.
 let open = true;
-// The clock of the reads, and whether one is on its way (the next tick waits for it).
+// The clock of the reads and what the reads are for (the pane and the tabs, or the count only), and whether one is on its way (the next tick waits for it).
 let timer: number | null = null;
+let watching: "flow" | "count" | null = null;
 let reading = false;
 // What the tree shows now; it is drawn again only when this changes.
 let treeKey = "";
@@ -36,18 +39,28 @@ async function read() {
   draw();
 }
 
-// The mode is shown: read now, and then by the clock.
-export function startFlow() {
-  if (timer !== null) return;
+// Reads now and then by the clock, for `next`; one clock at a time, so the two ways never read together.
+function watch(next: "flow" | "count", ms: number) {
+  if (watching === next) return;
+  stopFlow();
+  watching = next;
+  draw();
   void read();
-  timer = window.setInterval(() => void read(), periodMs("formationFlow", READ_MS));
+  timer = window.setInterval(() => void read(), ms);
 }
+
+// The mode is shown.
+export const startFlow = () => watch("flow", periodMs("formationFlow", READ_MS));
+
+// Orca is the mode of the development screen: the children that wait are counted at the period of the Orca list's read.
+export const startCount = () => watch("count", shownMs());
 
 // The mode or the screen is left: nothing is read until it is shown again.
 export function stopFlow() {
-  if (timer === null) return;
-  window.clearInterval(timer);
+  if (timer !== null) window.clearInterval(timer);
   timer = null;
+  watching = null;
+  setFormationWaiting(0);
 }
 
 function card(c: FormationChild, now: number): HTMLLIElement {
@@ -69,11 +82,8 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   if (node instanceof HTMLButtonElement) {
     node.type = "button";
     node.dataset.child = c.name;
-    node.setAttribute("aria-pressed", String(selected === c.name));
-    node.onclick = () => {
-      selected = c.name;
-      draw();
-    };
+    node.setAttribute("aria-pressed", String(selectedChild() === c.name));
+    node.onclick = () => selectChild(c.name);
   }
   li.append(node);
   return li;
@@ -84,7 +94,11 @@ function draw() {
   const launched = children.filter((c) => c.state !== "planned");
   const planned = children.length - launched.length;
   const waiting = launched.filter((c) => c.state === "waiting").length;
-  if (selected !== null && !launched.some((c) => c.name === selected)) selected = null;
+  setFormationWaiting(watching === "count" ? waiting : 0);
+  if (watching === "count") return;
+  // The tabs first: the follow may move the selection that the cards mark.
+  if (watching === "flow") syncTabs(children);
+  const selected = selectedChild();
   $("formation-flow").hidden = !open;
   $("formation-tabbar-toggle").hidden = open;
   $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
@@ -125,5 +139,6 @@ export function initFormationFlow() {
     $(id).insertAdjacentHTML("afterbegin", icon);
     $(id).onclick = toggleFlow;
   }
+  initFormationTabs(draw);
   draw();
 }

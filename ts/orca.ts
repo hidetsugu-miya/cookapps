@@ -48,7 +48,7 @@ const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
 // The clock ticks once a second, and a spec that shortens `SHOWN_MS` (`periodMs`) shortens the tick in the same proportion.
-const shownMs = () => periodMs("orcaClock", SHOWN_MS);
+export const shownMs = () => periodMs("orcaClock", SHOWN_MS);
 const HIDDEN_MS = 60_000;
 
 // The last read, or null before the first. A failed read keeps the rows and worktrees of the one before it while the target is the same.
