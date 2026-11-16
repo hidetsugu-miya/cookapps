@@ -1587,7 +1587,7 @@ mod tests {
     #[test]
     fn a_save_without_a_password_of_a_script_connection_deletes_it_when_the_script_the_host_or_the_port_changes(
     ) {
-        let (dir, passwords, saved) = saved_with_password("mcp-away-script", scripted("a"));
+        let (dir, passwords, saved) = saved_with_password("mcp-away-scripted", scripted("a"));
         // Only the name is not where the login goes.
         let renamed = DatabaseProfile {
             name: "renamed".to_owned(),
