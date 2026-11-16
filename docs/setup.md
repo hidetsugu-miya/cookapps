@@ -16,8 +16,8 @@ title: セットアップと起動
 1. Google Cloud で Gmail API と Google Calendar API を有効にし、OAuth 同意画面を設定します。
 2. 種類「デスクトップアプリ」の OAuth クライアントを作り、JSON をダウンロードします。
 3. JSON を `client_secret.json` という名前で、Tauri の `app_config_dir` に置きます。
-   - macOS では `~/Library/Application Support/jp.mysis.cookapps/client_secret.json` です。
-   - Windows では `%APPDATA%\jp.mysis.cookapps\client_secret.json`（`C:\Users\{ユーザー名}\AppData\Roaming\jp.mysis.cookapps\client_secret.json`）です。
+   - macOS では `~/Library/Application Support/jp.mysis.tsunagiai/client_secret.json` です。
+   - Windows では `%APPDATA%\jp.mysis.tsunagiai\client_secret.json`（`C:\Users\{ユーザー名}\AppData\Roaming\jp.mysis.tsunagiai\client_secret.json`）です。
    - ファイルが無いと、ログイン時に配置先の絶対パス付きでエラーが出ます。
 
 要求するスコープは `gmail.modify` と `calendar.readonly` です。
@@ -53,7 +53,7 @@ Todo の要約プロンプトを編集すると、編集した指示が同じ場
 
 ### macOS の場合
 
-`/Applications` に `cookapps.app` として入れます。
+`/Applications` に `tsunagiai.app` として入れます。
 キーチェーンに Apple Development 証明書（Apple ID で作れる無料のもので足ります）が入っている前提です。
 
 ```sh
@@ -61,8 +61,8 @@ npm install
 scripts/install-app.sh
 ```
 
-スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/cookapps.app` に置きます。
-cookapps が起動中のときは、終了してからやり直します。
+スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/tsunagiai.app` に置きます。
+つなぎあいが起動中のときは、終了してからやり直します。
 古い版はゴミ箱へ移します。
 署名の証明書は、キーチェーンの最初の Apple Development 証明書を使います。
 別の証明書を使うときは、環境変数 `APPLE_SIGNING_IDENTITY` に証明書の名前かハッシュを渡します。
@@ -84,6 +84,6 @@ npm ci
 npx tauri build --bundles nsis --config '{"version":"0.55.2"}'
 ```
 
-インストーラーは `src-tauri/target/release/bundle/nsis/` に `cookapps_{バージョン}_x64-setup.exe` として出ます。
+インストーラーは `src-tauri/target/release/bundle/nsis/` に `tsunagiai_{バージョン}_x64-setup.exe` として出ます。
 コード署名はしていないので、実行すると Windows の SmartScreen が警告を出すことがあります。
-`client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.cookapps\`）に置きます。
+`client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.tsunagiai\`）に置きます。

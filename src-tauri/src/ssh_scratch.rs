@@ -1,4 +1,4 @@
-//! The scratchpad of an SSH host (A-30): the files of `~/.local/share/cookapps/scratchpad/` on the host, read and written by the `ssh` command of this Mac.
+//! The scratchpad of an SSH host (A-30): the files of `~/.local/share/tsunagiai/scratchpad/` on the host, read and written by the `ssh` command of this Mac.
 //!
 //! The host is the `configHost` of a target of `ssh.listEditableTargets` (a Host of `~/.ssh/config`), read at each call, and it is one element of ssh's argument list; a target added by hand in Orca also gives its user and its port, as `-l` and `-p` before it. The command the host runs is one of the constant scripts below: a name and a text never go into it, they go to its standard input. Nothing of a file is kept or logged.
 
@@ -57,10 +57,12 @@ const EXIT_TAKEN_OTHER: i32 = 76;
 const EXIT_SSH: i32 = 255;
 
 /// A command for the host's login shell: `sh -c` with a POSIX script in single quotes, where `$d` is the folder. The script holds no `'`, no `!` and no line break, so that sh, bash, zsh, fish and csh all pass it to `sh` as it is.
+/// Every script starts by moving the folder of the old name (`~/.local/share/cookapps/scratchpad`, `$o`) to the new one when the new one is not there yet: a `mv` inside the host, so no file is copied.
 macro_rules! script {
     ($body:literal) => {
         concat!(
-            "sh -c 'd=\"$HOME/.local/share/cookapps/scratchpad\"; ",
+            "sh -c 'd=\"$HOME/.local/share/tsunagiai/scratchpad\"; o=\"$HOME/.local/share/cookapps/scratchpad\"; ",
+            "[ -e \"$d\" ] || { [ -d \"$o\" ] && mkdir -p \"$HOME/.local/share/tsunagiai\" && mv -- \"$o\" \"$d\"; }; ",
             $body,
             "'"
         )
@@ -79,7 +81,7 @@ const READ: &str = script!(
 
 /// stdin: the name, the `cksum` of the text that was read, the `cksum` of the new text, then the new text. Writes it to a temporary file beside the file (made with `cp -p`, so that it has the file's mode) and moves it over the file, only when the file still has the first `cksum` and the temporary file got the second. 66: no such file; 75: the file has another text.
 const WRITE: &str = script!(
-    r#"IFS= read -r n || exit 64; IFS= read -r e || exit 64; IFS= read -r w || exit 64; f="$d/$n"; if [ -L "$f" ]; then exit 66; fi; [ -f "$f" ] || exit 66; set -- $(cksum < "$f"); [ "$1 $2" = "$e" ] || exit 75; t="$d/.cookapps-$$.tmp"; rm -f -- "$t"; cp -p -- "$f" "$t" || { rm -f -- "$t"; exit 1; }; cat > "$t" || { rm -f -- "$t"; exit 1; }; set -- $(cksum < "$t"); [ "$1 $2" = "$w" ] || { rm -f -- "$t"; exit 1; }; mv -f -- "$t" "$f" || { rm -f -- "$t"; exit 1; }"#
+    r#"IFS= read -r n || exit 64; IFS= read -r e || exit 64; IFS= read -r w || exit 64; f="$d/$n"; if [ -L "$f" ]; then exit 66; fi; [ -f "$f" ] || exit 66; set -- $(cksum < "$f"); [ "$1 $2" = "$e" ] || exit 75; t="$d/.tsunagiai-$$.tmp"; rm -f -- "$t"; cp -p -- "$f" "$t" || { rm -f -- "$t"; exit 1; }; cat > "$t" || { rm -f -- "$t"; exit 1; }; set -- $(cksum < "$t"); [ "$1 $2" = "$w" ] || { rm -f -- "$t"; exit 1; }; mv -f -- "$t" "$f" || { rm -f -- "$t"; exit 1; }"#
 );
 
 /// stdin: the name. Makes the folder and an empty file in it, never over what is there (`set -C`). 73: a file of that name is there; 76: something else of that name is.
@@ -160,9 +162,9 @@ fn login_of(target: &Value) -> Result<Vec<String>, String> {
     Ok(login)
 }
 
-/// A temporary file of a save (`.cookapps-{pid}.tmp`), which is no file of the scratchpad.
+/// A temporary file of a save (`.tsunagiai-{pid}.tmp`, or `.cookapps-{pid}.tmp` of a folder that came from the old name), which is no file of the scratchpad.
 fn is_temporary(name: &str) -> bool {
-    name.starts_with(".cookapps-") && name.ends_with(".tmp")
+    (name.starts_with(".tsunagiai-") || name.starts_with(".cookapps-")) && name.ends_with(".tmp")
 }
 
 /// The name of a scratchpad file: one name as A-18 takes for a new file (`check_new_name`), that does not start with `-` and is not a temporary file of a save.
@@ -252,7 +254,7 @@ pub(crate) fn ssh_args(
 
 /// Where the sockets of the shared connections go, in the home folder `home`: none when the path of a socket there would be too long for a unix socket.
 fn control_path(home: &Path) -> Option<PathBuf> {
-    let dir = home.join(".cache/cookapps/ssh");
+    let dir = home.join(".cache/tsunagiai/ssh");
     (dir.as_os_str().len() + CONTROL_ADDS <= SOCKET_MAX).then_some(dir)
 }
 
@@ -765,6 +767,7 @@ mod tests {
             "-rf",
             " -n",
             ".cookapps-12.tmp",
+            ".tsunagiai-12.tmp",
             &"a".repeat(256),
         ] {
             assert_eq!(check_name(bad).unwrap_err(), BAD_NAME, "{bad:?}");
@@ -777,7 +780,7 @@ mod tests {
         let args = ssh_args(
             "example-host",
             &[],
-            Some("/home/u/.cache/cookapps/ssh"),
+            Some("/home/u/.cache/tsunagiai/ssh"),
             LIST,
         );
         assert_eq!(
@@ -790,7 +793,7 @@ mod tests {
                 "-o",
                 "ControlMaster=auto",
                 "-o",
-                "ControlPath=/home/u/.cache/cookapps/ssh/%C",
+                "ControlPath=/home/u/.cache/tsunagiai/ssh/%C",
                 "-o",
                 "ControlPersist=60",
                 "-T",
@@ -840,11 +843,11 @@ mod tests {
     fn control_folder_must_fit_a_socket_path() {
         assert_eq!(
             control_path(Path::new("/Users/example")),
-            Some(PathBuf::from("/Users/example/.cache/cookapps/ssh"))
+            Some(PathBuf::from("/Users/example/.cache/tsunagiai/ssh"))
         );
         // 45 bytes of folder is the most: 45 + 58 = 103.
         let home = |n: usize| format!("/{}", "a".repeat(n - 1));
-        let tail = "/.cache/cookapps/ssh".len();
+        let tail = "/.cache/tsunagiai/ssh".len();
         assert!(control_path(Path::new(&home(45 - tail))).is_some());
         assert!(control_path(Path::new(&home(46 - tail))).is_none());
     }
@@ -853,7 +856,7 @@ mod tests {
     #[test]
     fn control_folder_is_private() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("cookapps-ssh-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("tsunagiai-ssh-test-{}", std::process::id()));
         let dir = root.join("a/b");
         assert_eq!(prepare_control(&dir).as_deref(), dir.to_str());
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
@@ -873,7 +876,10 @@ mod tests {
     fn scripts_are_constants_any_login_shell_passes_on() {
         for script in SCRIPTS {
             let body = script
-                .strip_prefix("sh -c 'd=\"$HOME/.local/share/cookapps/scratchpad\"; ")
+                .strip_prefix(concat!(
+                    "sh -c 'd=\"$HOME/.local/share/tsunagiai/scratchpad\"; o=\"$HOME/.local/share/cookapps/scratchpad\"; ",
+                    "[ -e \"$d\" ] || { [ -d \"$o\" ] && mkdir -p \"$HOME/.local/share/tsunagiai\" && mv -- \"$o\" \"$d\"; }; "
+                ))
                 .and_then(|rest| rest.strip_suffix('\''))
                 .unwrap_or_else(|| panic!("{script}"));
             assert!(!body.contains(['\'', '!', '\n', '\r', '`']), "{script}");
@@ -907,7 +913,7 @@ mod tests {
 
     #[test]
     fn list_reads_names_in_order() {
-        let out = "b10.md/\nb2.md/\n.cookapps-9.tmp/\n-x/\nbad\nname/\nA.txt/\ncut-by-the-lim";
+        let out = "b10.md/\nb2.md/\n.cookapps-9.tmp/\n.tsunagiai-9.tmp/\n-x/\nbad\nname/\nA.txt/\ncut-by-the-lim";
         let mut fake = Fake::answering(0, out.as_bytes());
         assert_eq!(list(&mut fake).unwrap(), ["A.txt", "b2.md", "b10.md"]);
         assert_eq!(fake.runs, [(LIST, Vec::new(), LIST_MAX)]);
@@ -1140,8 +1146,8 @@ mod tests {
     fn scripts_work_in(shell: &'static str) {
         use std::os::unix::fs::PermissionsExt;
         let home =
-            std::env::temp_dir().join(format!("cookapps-scratch-test-{}", std::process::id()));
-        let dir = home.join(".local/share/cookapps/scratchpad");
+            std::env::temp_dir().join(format!("tsunagiai-scratch-test-{}", std::process::id()));
+        let dir = home.join(".local/share/tsunagiai/scratchpad");
         std::fs::create_dir_all(&home).unwrap();
         let mut sh = Local(shell, home.clone());
 
@@ -1161,6 +1167,7 @@ mod tests {
         std::os::unix::fs::symlink(home.join("outside"), dir.join("link")).unwrap();
         std::fs::write(home.join("outside"), "secret").unwrap();
         std::fs::write(dir.join(".cookapps-1.tmp"), "").unwrap();
+        std::fs::write(dir.join(".tsunagiai-1.tmp"), "").unwrap();
         std::fs::write(dir.join(".dot file"), "").unwrap();
         assert_eq!(list(&mut sh).unwrap(), [".dot file", "memo.md"]);
         assert_eq!(create(&mut sh, "folder").unwrap_err(), NAME_TAKEN);
@@ -1231,6 +1238,50 @@ mod tests {
         // Nothing outside the folder was touched.
         assert_eq!(std::fs::read(home.join("outside")).unwrap(), b"secret");
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A host that still has the folder of the old name (`~/.local/share/cookapps/scratchpad`): the scripts move it to the new one, inside the host, once.
+    #[cfg(unix)]
+    #[test]
+    fn the_old_folder_of_a_host_is_moved_to_the_new_one() {
+        for shell in ["/bin/sh", "/bin/dash"] {
+            if !Path::new(shell).exists() {
+                continue;
+            }
+            let home = std::env::temp_dir().join(format!(
+                "tsunagiai-scratch-move-{}-{}",
+                std::process::id(),
+                shell.len()
+            ));
+            let _ = std::fs::remove_dir_all(&home);
+            let share = home.join(".local/share");
+            let (old, new) = (
+                share.join("cookapps/scratchpad"),
+                share.join("tsunagiai/scratchpad"),
+            );
+            let mut sh = Local(shell, home.clone());
+
+            // Neither folder: an empty list, and nothing is made by a list.
+            std::fs::create_dir_all(&home).unwrap();
+            assert!(list(&mut sh).unwrap().is_empty());
+            assert!(!share.join("tsunagiai").exists());
+
+            // Only the old one: it becomes the new one, with its files, whatever script comes first.
+            std::fs::create_dir_all(&old).unwrap();
+            std::fs::write(old.join("memo.md"), "kept\n").unwrap();
+            assert_eq!(read(&mut sh, "memo.md").unwrap().content, "kept\n");
+            assert!(!old.exists());
+            assert_eq!(std::fs::read(new.join("memo.md")).unwrap(), b"kept\n");
+            assert_eq!(list(&mut sh).unwrap(), ["memo.md"]);
+
+            // Both: the new one is used as it is, and the old one is left alone.
+            std::fs::create_dir_all(&old).unwrap();
+            std::fs::write(old.join("old.md"), "").unwrap();
+            assert_eq!(list(&mut sh).unwrap(), ["memo.md"]);
+            assert!(old.join("old.md").exists());
+            assert!(!new.join("old.md").exists());
+            std::fs::remove_dir_all(&home).unwrap();
+        }
     }
 
     /// The runner, with programs of this machine that are not ssh.

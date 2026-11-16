@@ -9,7 +9,7 @@ export type DatabaseProfileView = { passwordSaved: boolean,
  */
 id: string, name: string, username: string, 
 /**
- * The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `COOKAPPS_PORT` and listens there.
+ * The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `TSUNAGIAI_PORT` (`COOKAPPS_PORT` too, for the scripts saved before the rename) and listens there.
  * Empty when the connection goes straight to the host and the port. Old files have none (`default`).
  */
 script: string, 

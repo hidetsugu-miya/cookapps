@@ -1604,7 +1604,7 @@ mod tests {
 
     #[test]
     fn first_day_load_gives_what_save_wrote_and_sunday_for_no_file() {
-        let dir = std::env::temp_dir().join(format!("cookapps-calendar-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tsunagiai-calendar-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load_first_day(&dir), 0);
         save_first_day(&dir, 1).unwrap();
@@ -2304,7 +2304,7 @@ mod tests {
 
     fn selection_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "cookapps-calendar-selection-{name}-{}",
+            "tsunagiai-calendar-selection-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

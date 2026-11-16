@@ -1,4 +1,4 @@
-// The entry of src/vendor/milkdown.js (A-26): Milkdown with the CommonMark and GFM presets and the history, under one global, `CookappsMilkdown`.
+// The entry of src/vendor/milkdown.js (A-26): Milkdown with the CommonMark and GFM presets and the history, under one global, `TsunagiaiMilkdown`.
 // An editor is read only until `edit` is called on it; the page decides, from `normalize`, whether the text may be edited.
 import { defaultValueCtx, Editor, editorViewCtx, editorViewOptionsCtx, rootCtx } from "@milkdown/kit/core";
 import { history } from "@milkdown/kit/plugin/history";

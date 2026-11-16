@@ -10,8 +10,10 @@ mod disk_cache;
 pub mod fonts;
 pub mod ghostty;
 pub mod gmail;
+pub mod identity;
 pub mod image_senders;
 pub mod images;
+mod keychain;
 pub mod lsp;
 pub mod mail_address;
 pub mod mail_send;
@@ -214,6 +216,17 @@ pub fn run() {
         .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
+            // Before anything reads the settings: the folder of the old identifier is copied to the new one once.
+            match app.path().app_config_dir() {
+                Ok(dir) => {
+                    if let Err(e) = identity::migrate_config_dir(&dir) {
+                        gmail::log_failure("config_migrate", "-", e);
+                    }
+                }
+                Err(e) => {
+                    gmail::log_failure("config_migrate", "-", e.to_string());
+                }
+            }
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
             #[cfg(all(feature = "e2e", target_os = "macos"))]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -442,7 +455,7 @@ mod tests {
     fn e2e_build_keeps_credentials_out_of_the_keychain() {
         super::use_mock_keyring();
         // The entry must come from the mock store even though keyring's own init ran first.
-        let _ = keyring::Entry::new("jp.mysis.cookapps.test", "u");
+        let _ = keyring::Entry::new("jp.mysis.tsunagiai.test", "u");
         assert!(keyring_core::get_default_store()
             .unwrap()
             .vendor()

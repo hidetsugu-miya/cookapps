@@ -1,5 +1,5 @@
-// The Claude Code pane's shared part (A-36): a terminal in which cookapps runs Claude Code itself, in a pseudo terminal that Rust opens (`src-tauri/src/claude_code.rs`), drawn by the xterm.js of `ts/orca-terminal.ts` (the kind "pty").
-// No Orca is in between. Claude Code gets only the tools of `cookapps-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), and a saved skill when the screen gives one.
+// The Claude Code pane's shared part (A-36): a terminal in which tsunagiai runs Claude Code itself, in a pseudo terminal that Rust opens (`src-tauri/src/claude_code.rs`), drawn by the xterm.js of `ts/orca-terminal.ts` (the kind "pty").
+// No Orca is in between. Claude Code gets only the tools of `tsunagiai-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), and a saved skill when the screen gives one.
 // A screen that holds a pane gives it a host element and an `owner` (the name of the pane), shows it with `showClaudeCode` while it is in view, hides it with `hideClaudeCode` (the process goes on, and what it prints is drawn into the hidden terminal),
 // and ends it with `closeClaudeCode` when the pane is closed or the screen no longer needs it (the process and what it started are ended). A message of a failed start or of the end of the process is drawn in the terminal.
 import type { SkillScreen } from "./bindings/SkillScreen";

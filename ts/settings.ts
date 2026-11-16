@@ -115,7 +115,7 @@ function workspaceRow(w: Workspace, result: Check | null) {
   unlink.setAttribute("aria-label", `${w.team} の接続を解除`);
   unlink.setAttribute("data-hint", "");
   unlink.onclick = () =>
-    confirmUnlink(unlink, w.team, "トークンを Slack で取り消し、cookapps から削除します。Slack のアプリは残ります。", async () => {
+    confirmUnlink(unlink, w.team, "トークンを Slack で取り消し、つなぎあいから削除します。Slack のアプリは残ります。", async () => {
       $("error").hidden = true;
       try {
         const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
@@ -279,7 +279,7 @@ function renderTodoistCard() {
     unlink.setAttribute("aria-label", "Todoist の接続を解除");
     unlink.setAttribute("data-hint", "");
     unlink.onclick = () =>
-      confirmUnlink(unlink, "Todoist", "トークンを cookapps から削除します。Todoist のタスクは残ります。", unlinkTodoist);
+      confirmUnlink(unlink, "Todoist", "トークンをつなぎあいから削除します。Todoist のタスクは残ります。", unlinkTodoist);
     row = itemRow({ name: "Todoist", meta: "", status: ["ok", "接続済み"], actions: [unlink] });
   } else {
     row = itemRow({ name: "Todoist", meta: "Todo 画面でトークンを入力します", status: ["off", "未接続"] });
@@ -369,7 +369,7 @@ export function initSettings() {
         [
           [appsLink(), " で、ワークスペースごとにアプリを作る"],
           ["「User Token Scopes」に次を足す", ...scopesBlock(SLACK_SCOPES)],
-          [code("users:read"), "、", code("files:read"), "、", code("usergroups:read"), "、", code("emoji:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像、ユーザーグループへのメンションの名前、リアクションのカスタム絵文字の画像を出すために使います。なくても、ほかのことはできます。", code("reactions:write"), " は、Slack の画面でリアクションを付けたり外したりするために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたときやチャンネルの「既読にする」を押したとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、cookapps は既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
+          [code("users:read"), "、", code("files:read"), "、", code("usergroups:read"), "、", code("emoji:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像、ユーザーグループへのメンションの名前、リアクションのカスタム絵文字の画像を出すために使います。なくても、ほかのことはできます。", code("reactions:write"), " は、Slack の画面でリアクションを付けたり外したりするために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたときやチャンネルの「既読にする」を押したとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、つなぎあいは既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
           ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
         ],
         "トークンは OS の資格情報の保管場所に入れ、画面には出しません",

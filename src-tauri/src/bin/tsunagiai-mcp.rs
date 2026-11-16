@@ -2,25 +2,18 @@
 
 use std::path::PathBuf;
 
-use cookapps_lib::{
-    auth::Auth,
-    calendar,
-    database::{self, script::Scripts, DatabaseProfile, Keychain},
-    gmail,
-};
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, transport::stdio, ServiceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Tauri's `app_config_dir` for the app's identifier: `dirs::config_dir()` (as Tauri resolves it) joined with the identifier.
-fn config_dir() -> Result<PathBuf, String> {
-    dirs::config_dir()
-        .map(|dir| dir.join("jp.mysis.cookapps"))
-        .ok_or_else(|| "設定フォルダの場所を特定できません".to_string())
-}
+use tsunagiai_lib::{
+    auth::Auth,
+    calendar,
+    database::{self, script::Scripts, DatabaseProfile, Keychain},
+    gmail, identity,
+};
 
 fn relogin(account: &str) -> String {
-    format!("{account} は再ログインが必要です。cookapps アプリで再ログインしてください")
+    format!("{account} は再ログインが必要です。つなぎあいアプリで再ログインしてください")
 }
 
 fn json(value: &impl Serialize) -> Result<String, String> {
@@ -61,7 +54,7 @@ struct DbProfileSaveArgs {
     name: String,
     /// User name to log in to MySQL with.
     username: String,
-    /// The whole script that opens the way to the database, or an empty text for none. It runs before the login, gets db_port in the environment variable COOKAPPS_PORT and must listen there, at db_host. The connection fails when something already answers at db_host:db_port before the script is run. A save replaces the saved script with this text.
+    /// The whole script that opens the way to the database, or an empty text for none. It runs before the login, gets db_port in the environment variable TSUNAGIAI_PORT (COOKAPPS_PORT too, for the scripts saved before the rename) and must listen there, at db_host. The connection fails when something already answers at db_host:db_port before the script is run. A save replaces the saved script with this text.
     script: String,
     /// Host MySQL is logged in to, always needed, with a script or without one.
     db_host: String,
@@ -88,10 +81,10 @@ struct DbTestArgs {
     id: String,
 }
 
-/// The error of a port in use before the script, with the way out that only the app can be told of: `db_test` cannot know that cookapps holds the port with its own open connection (D-8).
+/// The error of a port in use before the script, with the way out that only the app can be told of: `db_test` cannot know that tsunagiai holds the port with its own open connection (D-8).
 fn with_open_hint(error: String) -> String {
     if database::script::is_in_use_text(&error) {
-        format!("{error}。cookapps でこの接続を開いているときは、切断してからテストしてください")
+        format!("{error}。つなぎあいでこの接続を開いているときは、切断してからテストしてください")
     } else {
         error
     }
@@ -109,13 +102,13 @@ fn db_test_answer(tested: Result<String, String>) -> Result<String, String> {
     }
 }
 
-struct Cookapps {
+struct Tsunagiai {
     auth: Auth,
     dir: PathBuf,
 }
 
 #[tool_router(server_handler)]
-impl Cookapps {
+impl Tsunagiai {
     #[tool(
         description = "List the inbox threads of every account, newest first. Accounts that must log in again are in needsLogin, accounts that failed to load are in failed.",
         annotations(read_only_hint = true)
@@ -206,7 +199,7 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "Save a connection of the database screen: its host and port, and its script when the way to the database has to be opened first (an empty script is none). A new one without id, or the one of that id replaced. The password is not handled here: it is typed in the app, and a new connection has none. Answers the connection as saved. Try it with db_test. The script is run by db_test and by the app, with the port in COOKAPPS_PORT, and a change of the user, the script, the host or the port deletes the saved password.",
+        description = "Save a connection of the database screen: its host and port, and its script when the way to the database has to be opened first (an empty script is none). A new one without id, or the one of that id replaced. The password is not handled here: it is typed in the app, and a new connection has none. Answers the connection as saved. Try it with db_test. The script is run by db_test and by the app, with the port in TSUNAGIAI_PORT (and in COOKAPPS_PORT, for the scripts saved before the rename), and a change of the user, the script, the host or the port deletes the saved password.",
         annotations(destructive_hint = true)
     )]
     async fn db_profile_save(
@@ -237,9 +230,9 @@ impl Cookapps {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let server = Cookapps {
+    let server = Tsunagiai {
         auth: Auth::new(),
-        dir: config_dir()?,
+        dir: identity::config_dir()?,
     };
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -252,14 +245,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_dir, db_test_answer, Cookapps, DbProfileSaveArgs};
-
-    #[test]
-    fn config_dir_is_the_apps_folder_under_the_users_config_dir() {
-        let dir = config_dir().unwrap();
-        assert!(dir.is_absolute());
-        assert!(dir.ends_with("jp.mysis.cookapps"));
-    }
+    use super::{db_test_answer, DbProfileSaveArgs, Tsunagiai};
 
     #[test]
     fn a_save_without_an_id_is_a_new_connection_and_the_script_is_kept_as_given() {
@@ -318,7 +304,7 @@ mod tests {
 
     #[test]
     fn the_tools_that_run_a_script_or_change_a_connection_ask_for_a_check_each_time() {
-        let tools = Cookapps::tool_router().list_all();
+        let tools = Tsunagiai::tool_router().list_all();
         let hints = |name: &str| {
             tools
                 .iter()

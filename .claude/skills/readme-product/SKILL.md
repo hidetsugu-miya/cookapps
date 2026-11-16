@@ -1,6 +1,6 @@
 ---
 name: readme-product
-description: Keeps the cookapps README a product page, with screen photos taken from made-up data, and the how-to in docs/. Use on 「README を直して」「README の見栄え」「README の写真を撮り直して」, when a change makes a photo or a claim in the README out of date, and at every release (issues.md).
+description: Keeps the つなぎあい README a product page, with screen photos taken from made-up data, and the how-to in docs/. Use on 「README を直して」「README の見栄え」「README の写真を撮り直して」, when a change makes a photo or a claim in the README out of date, and at every release (issues.md).
 ---
 
 # readme-product

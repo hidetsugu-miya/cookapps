@@ -145,7 +145,7 @@ pub(crate) fn error_response(id: &Value, code: i64, message: &str) -> Value {
 pub(crate) fn initialize_params(root_uri: &str) -> Value {
     json!({
         "processId": null,
-        "clientInfo": {"name": "cookapps"},
+        "clientInfo": {"name": "tsunagiai"},
         "rootUri": root_uri,
         "workspaceFolders": [{"uri": root_uri, "name": "worktree"}],
         "capabilities": {

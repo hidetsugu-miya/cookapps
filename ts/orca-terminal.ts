@@ -13,7 +13,7 @@
 // A program that asks for the clipboard with OSC 52 (Claude Code does, for what is selected while it tracks the mouse) gets it, as in Orca's own terminal: a write is made only from what the terminal prints live, not from a snapshot or a mirror frame drawn again, and a read ("?") is never answered.
 // The request comes by the stream, outside a user action, and WKWebView may refuse the write: the latest text is then held, and the next copy event (⌘C or Edit > Copy) puts it in the clipboard when xterm.js has no selection.
 // Option+drag selects in xterm.js while a program tracks the mouse (`macOptionClickForcesSelection`, as Orca sets it).
-// A pane of Claude Code (A-36, `ts/claude-code.ts`) is a terminal of the kind "pty": cookapps runs the process itself in a pseudo terminal, and its output comes by one channel for as long as the pane holds it, shown or not (a hidden pane keeps drawing into its box in the stash).
+// A pane of Claude Code (A-36, `ts/claude-code.ts`) is a terminal of the kind "pty": tsunagiai runs the process itself in a pseudo terminal, and its output comes by one channel for as long as the pane holds it, shown or not (a hidden pane keeps drawing into its box in the stash).
 // Its keys and its size go to Rust (`claude_code_input`, `claude_code_resize`), after the start has answered; the process ends when the pane forgets the terminal (`releaseTerminal`), not when the pane is hidden.
 // The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
 import type { Appearance } from "./bindings/Appearance";
@@ -55,7 +55,7 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 // What a link in the text is: it starts with http:// or https:// and ends before a space, a quote, a bracket, or a full-width punctuation mark or bracket (U+3000 to U+303F and U+FF00 to U+FFEF), so a URL in a Japanese sentence is cut where the sentence goes on.
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
-// Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that cookapps opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
+// Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
 // `pty` is what a pty is started with: whether Claude Code keeps its own tools, and the saved skill it is given.
 export interface TermSource {

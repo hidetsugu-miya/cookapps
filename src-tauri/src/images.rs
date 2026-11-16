@@ -454,7 +454,7 @@ async fn fetch_image(
         Ok((mime, bytes)) => Some((url, mime, bytes)),
         Err((status, why)) => {
             let status = status.map_or("-".to_owned(), |s| s.to_string());
-            eprintln!("cookapps: fetch_images url={shown} status={status} error={why}");
+            eprintln!("tsunagiai: fetch_images url={shown} status={status} error={why}");
             None
         }
     }
@@ -624,7 +624,7 @@ pub(crate) async fn fetch_slack_files(
                 Err((status, why)) => {
                     let status = status.map_or("-".to_owned(), |s| s.to_string());
                     eprintln!(
-                        "cookapps: slack_file_images url={} status={status} error={why}",
+                        "tsunagiai: slack_file_images url={} status={status} error={why}",
                         log_url(&parsed)
                     );
                     None

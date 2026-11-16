@@ -1,11 +1,11 @@
 [package]
-name = "cookapps"
+name = "tsunagiai"
 version = "0.0.0"
 edition = "2021"
-default-run = "cookapps"
+default-run = "tsunagiai"
 
 [lib]
-name = "cookapps_lib"
+name = "tsunagiai_lib"
 
 # Test-only: the WebDriver server and mock bridge for E2E (e2e/). Never in the default or release build.
 [features]

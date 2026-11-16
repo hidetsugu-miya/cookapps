@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Implements the open cookapps issues in the order of the plan, up to 10 points a night, on one branch with one pull request (issues that touch no common file together, the others one after another; in the night run it first files and takes one improvement of its own), and prepares the Release PR for the owner to merge. Use on /ship and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
+description: Implements the open つなぎあい issues in the order of the plan, up to 10 points a night, on one branch with one pull request (issues that touch no common file together, the others one after another; in the night run it first files and takes one improvement of its own), and prepares the Release PR for the owner to merge. Use on /ship and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
 ---
 
 # ship

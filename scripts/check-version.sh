@@ -13,8 +13,8 @@ fixed=0.0.0
 cargo_toml=$(awk '/^\[/ { in_pkg = ($0 == "[package]") } in_pkg && /^version[[:space:]]*=/ { print; exit }' Cargo.toml | sed -E 's/^[^"]*"([^"]*)".*/\1/')
 # tauri.conf.json は version の値を読む。キーが無ければ空。
 tauri_conf=$(python3 -c 'import json; print(json.load(open("tauri.conf.json")).get("version", ""))')
-# Cargo.lock は name = "cookapps" の直後の version を読む。
-cargo_lock=$(awk '$0 == "name = \"cookapps\"" { getline; print; exit }' Cargo.lock | sed -E 's/^[^"]*"([^"]*)".*/\1/')
+# Cargo.lock は name = "tsunagiai" の直後の version を読む。
+cargo_lock=$(awk '$0 == "name = \"tsunagiai\"" { getline; print; exit }' Cargo.lock | sed -E 's/^[^"]*"([^"]*)".*/\1/')
 
 status=0
 [ "$cargo_toml" = "$fixed" ] || status=1

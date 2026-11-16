@@ -903,7 +903,7 @@ async fn rename_case(
     getrandom::fill(&mut random).map_err(|_| "乱数を作れません".to_owned())?;
     let unique: String = random.iter().map(|b| format!("{b:02x}")).collect();
     let dir = from.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let temp = join(dir, &format!(".cookapps-rename-{unique}"));
+    let temp = join(dir, &format!(".tsunagiai-rename-{unique}"));
     rename(rpc, path, host_id, from, &temp)
         .await
         .map_err(rename_reason)?;
@@ -2249,7 +2249,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-files-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-files-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -3936,7 +3936,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        let name = temp.strip_prefix("src/.cookapps-rename-").unwrap();
+        let name = temp.strip_prefix("src/.tsunagiai-rename-").unwrap();
         assert!(name.len() == 16 && name.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(orca.calls[0].1["oldRelativePath"], "src/a.md");
         assert_eq!(

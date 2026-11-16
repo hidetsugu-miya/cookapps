@@ -18,10 +18,10 @@ use url::Url;
 
 use crate::{
     accounts::write_atomic,
-    auth::{config_dir, delete_entry, keyring_entry, Auth},
+    auth::{config_dir, Auth, KEYRING_SERVICE},
     claude::{self, Summary},
     gmail::{log_failure, ApiError},
-    slack,
+    keychain, slack,
 };
 
 const API_URL: &str = "https://api.todoist.com/api/v1";
@@ -30,7 +30,7 @@ const GMAIL_URL: &str = "https://mail.google.com/mail/u/";
 /// The keychain user name (and the `account=` of the logs) of the personal API token.
 const TOKEN_USER: &str = "todoist";
 /// The token has a service of its own: under the Gmail accounts' one, a name from outside could reach it as an account.
-const TOKEN_SERVICE: &str = "jp.mysis.cookapps.todoist";
+const TOKEN_SERVICE: &str = "jp.mysis.tsunagiai.todoist";
 /// Todoist refuses a task name longer than this.
 const CONTENT_LIMIT: usize = 500;
 const PAGE_LIMIT: &str = "200";
@@ -547,7 +547,7 @@ fn bucket_of(due: Option<NaiveDate>, today: NaiveDate) -> Bucket {
     }
 }
 
-/// The URL cookapps writes into a task's description to point at a thread. The account must be one of `accounts`, the registered ones.
+/// The URL tsunagiai writes into a task's description to point at a thread. The account must be one of `accounts`, the registered ones.
 fn gmail_url(accounts: &[String], account: &str, thread_id: &str) -> Result<String, String> {
     if !accounts.iter().any(|a| a == account) {
         return Err("登録されていないアカウントです".into());
@@ -556,7 +556,7 @@ fn gmail_url(accounts: &[String], account: &str, thread_id: &str) -> Result<Stri
     Ok(format!("{GMAIL_URL}{account}/#all/{thread_id}"))
 }
 
-/// The thread a description links to with a URL `gmail_url` made; links of any other form are not cookapps's.
+/// The thread a description links to with a URL `gmail_url` made; links of any other form are not tsunagiai's.
 fn mail_of(description: &str) -> Option<MailRef> {
     let start = description.find(GMAIL_URL)?;
     let link = description[start..].split_whitespace().next()?;
@@ -1019,10 +1019,6 @@ impl TodoistState {
     }
 }
 
-fn token_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(TOKEN_SERVICE, TOKEN_USER).map_err(|e| e.to_string())
-}
-
 /// What reading the token does with the entry the first versions kept under the Gmail accounts' service.
 struct Migration {
     token: Option<String>,
@@ -1041,24 +1037,17 @@ fn migration(new: Option<String>, old: Option<String>) -> Migration {
 
 /// The stored token. An old entry is moved to the new one and deleted.
 fn read_token() -> Result<Option<String>, String> {
-    let (new, old) = (token_entry()?, keyring_entry(TOKEN_USER)?);
-    let m = migration(read_entry(&new)?, read_entry(&old)?);
+    let m = migration(
+        keychain::read(TOKEN_SERVICE, TOKEN_USER)?,
+        keychain::read(KEYRING_SERVICE, TOKEN_USER)?,
+    );
     if let (true, Some(token)) = (m.copy, &m.token) {
-        new.set_password(token)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))?;
+        keychain::write(TOKEN_SERVICE, TOKEN_USER, token)?;
     }
     if m.delete_old {
-        delete_entry(&old)?;
+        keychain::delete(KEYRING_SERVICE, TOKEN_USER)?;
     }
     Ok(m.token)
-}
-
-fn read_entry(entry: &keyring::Entry) -> Result<Option<String>, String> {
-    match entry.get_password() {
-        Ok(t) => Ok(Some(t)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-    }
 }
 
 /// The response body. `Ok(None)` means the token was rejected with 401.
@@ -1369,16 +1358,11 @@ pub async fn todoist_save_token(
     }
     let mut cached = state.token.lock().await;
     let stored = token.clone();
-    tokio::task::spawn_blocking(move || {
-        token_entry().and_then(|e| {
-            e.set_password(&stored)
-                .map_err(|e| format!("資格情報の保存に失敗: {e}"))
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())
-    .and_then(|r| r)
-    .map_err(|e| log_failure("todoist_save_token", TOKEN_USER, e))?;
+    tokio::task::spawn_blocking(move || keychain::write(TOKEN_SERVICE, TOKEN_USER, &stored))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r)
+        .map_err(|e| log_failure("todoist_save_token", TOKEN_USER, e))?;
     *cached = Some(token);
     Ok(())
 }
@@ -1394,8 +1378,8 @@ pub async fn todoist_disconnect(
     let cleared = tokio::task::spawn_blocking(move || {
         // All three run even when one fails, so a failed keychain delete does not leave the cache behind.
         [
-            token_entry().and_then(|e| delete_entry(&e)),
-            keyring_entry(TOKEN_USER).and_then(|e| delete_entry(&e)),
+            keychain::delete(TOKEN_SERVICE, TOKEN_USER),
+            keychain::delete(KEYRING_SERVICE, TOKEN_USER),
             dir.and_then(|dir| remove_cache(&dir)),
         ]
         .into_iter()
@@ -2223,6 +2207,14 @@ mod tests {
     use super::*;
     use chrono::FixedOffset;
 
+    #[test]
+    fn the_token_service_has_an_old_one_to_move_from() {
+        assert_eq!(
+            keychain::old_service(TOKEN_SERVICE).as_deref(),
+            Some("jp.mysis.cookapps.todoist")
+        );
+    }
+
     fn jst() -> FixedOffset {
         FixedOffset::east_opt(9 * 3600).unwrap()
     }
@@ -2610,7 +2602,7 @@ mod tests {
     }
 
     #[test]
-    fn links_that_cookapps_did_not_make_are_not_mail() {
+    fn links_that_tsunagiai_did_not_make_are_not_mail() {
         for description in [
             "",
             "https://example.com/",
@@ -3489,7 +3481,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-todoist-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-todoist-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

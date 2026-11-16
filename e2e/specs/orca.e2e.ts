@@ -3387,7 +3387,7 @@ describe("orca: scratchpad (A-29)", () => {
 
 // A-30: the scratchpad of an SSH host's row. Rust runs ssh and decides what a save did (unit tests); here the screen is checked: the popover of the plus, what it asks of Rust, and that the editor reads and saves the file by the commands of the host.
 describe("orca: scratchpad of an SSH host (A-30)", () => {
-  const DIR = "~/.local/share/cookapps/scratchpad/";
+  const DIR = "~/.local/share/tsunagiai/scratchpad/";
   const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "111 7", language: "plaintext", highlight: null });
   const pop = () => $('.orca-scratch-pop[role="dialog"]');
   const field = () => $('.orca-scratch-pop input[aria-label="ファイル名"]');

@@ -1,11 +1,12 @@
-//! The skills of cookapps: instructions the owner writes once and has Claude follow on the screens that talk to it.
+//! The skills of tsunagiai: instructions the owner writes once and has Claude follow on the screens that talk to it.
 //!
 //! A skill is a `SKILL.md` in the shape Claude Code reads, at `claude-plugin/skills/{name}/SKILL.md` in the app config directory.
 //! The folder `claude-plugin/` is a folder of its own, so that the rest of the config directory (the client secret, the settings) is never read by Claude Code.
 //! A call is never given that folder: Claude Code reads everything in a plugin folder (the other skills, the hooks and the MCP servers of a file placed by hand),
-//! so `plugin_for` makes a folder for the call, with a plugin named `cookapps` that holds the one skill the call runs (`/cookapps:{name}`) and nothing else, and deletes it when the call is over.
-//! The front matter holds `name`, `description` (the keys Claude Code reads) and `cookapps-display-name` and `cookapps-screens` (cookapps's own);
-//! the body is the instructions.
+//! so `plugin_for` makes a folder for the call, with a plugin named `tsunagiai` that holds the one skill the call runs (`/tsunagiai:{name}`) and nothing else, and deletes it when the call is over.
+//! The front matter holds `name`, `description` (the keys Claude Code reads) and `tsunagiai-display-name` and `tsunagiai-screens` (tsunagiai's own);
+//! a file saved before the rename has `cookapps-display-name` and `cookapps-screens` instead: they are read as the new keys are, and the next save writes the new ones only.
+//! The body is the instructions.
 //! The name is the folder's, and it is checked before any path is made of it (`validate_name`), so a name never points outside `skills/`.
 //! This file reads and writes only: nothing here calls Claude. `plugin_for` is what a call of a skill asks (S-4, S-7): it gives the folder for `--plugin-dir` only for a saved skill that the screen of the call may use.
 
@@ -26,8 +27,8 @@ const PLUGIN_DIR: &str = "claude-plugin";
 /// The folder of the skills, in the plugin.
 const DIR: &str = "skills";
 const FILE: &str = "SKILL.md";
-/// The plugin's name: the `cookapps` of `/cookapps:{name}`.
-pub const PLUGIN_NAME: &str = "cookapps";
+/// The plugin's name: the `tsunagiai` of `/tsunagiai:{name}`.
+pub const PLUGIN_NAME: &str = "tsunagiai";
 const MANIFEST_DIR: &str = ".claude-plugin";
 const MANIFEST_FILE: &str = "plugin.json";
 const NAME_MAX: usize = 64;
@@ -60,7 +61,7 @@ impl SkillScreen {
     }
 }
 
-/// One skill. `name` is the folder name and what follows `/cookapps:`.
+/// One skill. `name` is the folder name and what follows `/tsunagiai:`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -74,7 +75,7 @@ pub struct Skill {
     pub instructions: String,
 }
 
-/// Whether `name` can follow `/cookapps:` and be a folder: 1 to 64 of a to z, 0 to 9 and `-`, not starting or ending with `-`, with no `--`.
+/// Whether `name` can follow `/tsunagiai:` and be a folder: 1 to 64 of a to z, 0 to 9 and `-`, not starting or ending with `-`, with no `--`.
 /// Nothing else gets through, so no `/`, `\`, `.` or `..` can leave `skills/`.
 pub fn validate_name(name: &str) -> Result<(), String> {
     let allowed = !name.is_empty()
@@ -146,7 +147,7 @@ fn quoted(text: &str) -> String {
 fn render(skill: &Skill) -> String {
     let screens: Vec<&str> = skill.screens.iter().map(|s| s.key()).collect();
     format!(
-        "---\nname: {}\ndescription: {}\ncookapps-display-name: {}\ncookapps-screens: {}\n---\n\n{}\n",
+        "---\nname: {}\ndescription: {}\ntsunagiai-display-name: {}\ntsunagiai-screens: {}\n---\n\n{}\n",
         quoted(&skill.name),
         quoted(&skill.description),
         quoted(&skill.display_name),
@@ -218,9 +219,16 @@ fn parse(name: &str, text: &str) -> Skill {
         .unwrap_or(text)
         .replace("\r\n", "\n");
     let (front, body) = split_front_matter(&text);
-    let mut display_name = None;
+    // The keys of the new name win over the ones of the old name, wherever they stand in the file.
+    let (mut display_name, mut old_display_name) = (None, None);
+    let (mut screens, mut old_screens) = (None, None);
     let mut description = String::new();
-    let mut screens = Vec::new();
+    let screens_of = |value: &str| -> Vec<SkillScreen> {
+        SkillScreen::ALL
+            .into_iter()
+            .filter(|screen| value.split(',').any(|word| word.trim() == screen.key()))
+            .collect()
+    };
     let mut lines = front.lines().peekable();
     while let Some(line) = lines.next() {
         // An indented line is a continuation of a value the reader does not take.
@@ -237,22 +245,20 @@ fn parse(name: &str, text: &str) -> Skill {
                     None => scalar(value),
                 }
             }
-            "cookapps-display-name" => display_name = Some(scalar(value)),
-            "cookapps-screens" => {
-                screens = SkillScreen::ALL
-                    .into_iter()
-                    .filter(|screen| value.split(',').any(|word| word.trim() == screen.key()))
-                    .collect();
-            }
+            "tsunagiai-display-name" => display_name = Some(scalar(value)),
+            "cookapps-display-name" => old_display_name = Some(scalar(value)),
+            "tsunagiai-screens" => screens = Some(screens_of(value)),
+            "cookapps-screens" => old_screens = Some(screens_of(value)),
             _ => {}
         }
     }
     Skill {
         name: name.to_string(),
         display_name: display_name
+            .or(old_display_name)
             .filter(|shown| !shown.trim().is_empty())
             .unwrap_or_else(|| name.to_string()),
-        screens,
+        screens: screens.or(old_screens).unwrap_or_default(),
         description,
         instructions: body.trim().to_string(),
     }
@@ -363,7 +369,7 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// The plugin folder of a call of the skill `name` on `screen`, for a name that passes `validate_name`, has a saved `SKILL.md` and lists `screen` among its screens; any other name is refused, in Japanese.
-/// The folder is made new for the call and holds only `.claude-plugin/plugin.json` and `skills/{name}/SKILL.md`. The `SKILL.md` is the saved one read and written again (`parse`, `render`), so that only `name`, `description` and the keys of cookapps remain:
+/// The folder is made new for the call and holds only `.claude-plugin/plugin.json` and `skills/{name}/SKILL.md`. The `SKILL.md` is the saved one read and written again (`parse`, `render`), so that only `name`, `description` and the keys of tsunagiai remain:
 /// an `allowed-tools`, a `hooks` or any other key of a file placed by hand is dropped, and so is every other file of `claude-plugin/`.
 pub fn plugin_for(dir: &Path, name: &str, screen: SkillScreen) -> Result<CallPlugin, String> {
     let skill = read_skill(dir, name)?;
@@ -373,7 +379,7 @@ pub fn plugin_for(dir: &Path, name: &str, screen: SkillScreen) -> Result<CallPlu
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(|e| e.to_string())?;
     let root = std::env::temp_dir().join(format!(
-        "cookapps-skill-{}",
+        "tsunagiai-skill-{}",
         random
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -440,7 +446,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-skills-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-skills-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -533,7 +539,7 @@ mod tests {
         let text = render(&check(&skill("proofread")).unwrap());
         assert_eq!(
             text,
-            "---\nname: \"proofread\"\ndescription: \"文面を直す\"\ncookapps-display-name: \"校正\"\ncookapps-screens: slack-paste, slack-thread\n---\n\n# 手順\n\n1. 誤字を直す\n"
+            "---\nname: \"proofread\"\ndescription: \"文面を直す\"\ntsunagiai-display-name: \"校正\"\ntsunagiai-screens: slack-paste, slack-thread\n---\n\n# 手順\n\n1. 誤字を直す\n"
         );
     }
 
@@ -556,6 +562,26 @@ mod tests {
             assert_eq!(parsed.display_name, "a");
             assert_eq!(parsed.description, "");
         }
+    }
+
+    #[test]
+    fn parse_reads_the_keys_of_the_old_name_and_the_new_keys_win() {
+        let old = "---\nname: a\ncookapps-display-name: \"古い\"\ncookapps-screens: slack-paste\n---\nbody";
+        let parsed = parse("a", old);
+        assert_eq!(parsed.display_name, "古い");
+        assert_eq!(parsed.screens, vec![SkillScreen::SlackPaste]);
+        // Both: the new keys are taken, in either order, and an old key never fills what a new key left empty.
+        let both = "---\ncookapps-display-name: \"古い\"\ntsunagiai-display-name: \"新しい\"\ntsunagiai-screens: slack-thread\ncookapps-screens: slack-paste\n---\nbody";
+        let parsed = parse("a", both);
+        assert_eq!(parsed.display_name, "新しい");
+        assert_eq!(parsed.screens, vec![SkillScreen::SlackThread]);
+        let none = "---\ntsunagiai-screens: nowhere\ncookapps-screens: slack-paste\n---\nbody";
+        assert!(parse("a", none).screens.is_empty());
+        // What a save writes has the new keys only, and reads back as the same skill.
+        let saved = render(&parse("a", old));
+        assert!(saved.contains("tsunagiai-display-name: \"古い\""));
+        assert!(!saved.contains("cookapps"));
+        assert_eq!(parse("a", &saved), parse("a", old));
     }
 
     #[test]
@@ -775,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn the_skill_file_of_a_call_drops_every_key_but_the_names_and_the_keys_of_cookapps() {
+    fn the_skill_file_of_a_call_drops_every_key_but_the_names_and_the_keys_of_tsunagiai() {
         let dir = temp_dir("plugin-keys");
         std::fs::create_dir_all(dir.join("claude-plugin/skills/mine")).unwrap();
         std::fs::write(
@@ -787,8 +813,10 @@ mod tests {
         let text = std::fs::read_to_string(plugin.path().join("skills/mine/SKILL.md")).unwrap();
         assert_eq!(
             text,
-            "---\nname: \"mine\"\ndescription: \"Fixes the text\"\ncookapps-display-name: \"校正\"\ncookapps-screens: slack-paste\n---\n\nDo it.\n"
+            "---\nname: \"mine\"\ndescription: \"Fixes the text\"\ntsunagiai-display-name: \"校正\"\ntsunagiai-screens: slack-paste\n---\n\nDo it.\n"
         );
+        // The file of the call has the new keys only, though the saved one has the old.
+        assert!(!text.contains("cookapps"));
         // The file placed by hand is not changed.
         assert!(
             std::fs::read_to_string(dir.join("claude-plugin/skills/mine/SKILL.md"))

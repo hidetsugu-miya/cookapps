@@ -5,7 +5,7 @@
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
 //! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
-//! `cookapps-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
+//! `tsunagiai-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod mysql;
@@ -22,13 +22,10 @@ use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{
-    accounts::write_atomic,
-    auth::{config_dir, delete_entry},
-};
+use crate::{accounts::write_atomic, auth::config_dir, keychain};
 
 const FILE: &str = "database-profiles.json";
-const KEYRING_SERVICE: &str = "jp.mysis.cookapps.database";
+const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai.database";
 const NAME_MAX: usize = 100;
 const PORT_MAX: u32 = 65535;
 /// A save reads the file, changes it and writes it again by a temporary name beside it: two at once would lose a change.
@@ -44,7 +41,7 @@ pub struct DatabaseProfile {
     pub id: String,
     pub name: String,
     pub username: String,
-    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `COOKAPPS_PORT` and listens there.
+    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `TSUNAGIAI_PORT` (`COOKAPPS_PORT` too, for the scripts saved before the rename) and listens there.
     /// Empty when the connection goes straight to the host and the port. Old files have none (`default`).
     #[serde(default)]
     pub script: String,
@@ -216,35 +213,21 @@ pub trait PasswordStore {
 /// The OS keychain.
 pub struct Keychain;
 
-fn password_entry(id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, id).map_err(|e| e.to_string())
-}
-
 impl PasswordStore for Keychain {
     fn exists(&self, id: &str) -> Result<bool, String> {
-        match password_entry(id)?.get_password() {
-            Ok(_) => Ok(true),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-        }
+        Ok(keychain::read(KEYRING_SERVICE, id)?.is_some())
     }
 
     fn get(&self, id: &str) -> Result<Option<String>, String> {
-        match password_entry(id)?.get_password() {
-            Ok(password) => Ok(Some(password)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-        }
+        keychain::read(KEYRING_SERVICE, id)
     }
 
     fn set(&self, id: &str, password: &str) -> Result<(), String> {
-        password_entry(id)?
-            .set_password(password)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))
+        keychain::write(KEYRING_SERVICE, id, password)
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
-        delete_entry(&password_entry(id)?)
+        keychain::delete(KEYRING_SERVICE, id)
     }
 }
 
@@ -289,7 +272,7 @@ pub fn save(
     view(passwords, saved)
 }
 
-/// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
+/// `save` with no password and with the lock of the app's own save (D-8: `tsunagiai-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
 /// The saved password is kept only while the connection logs in as the saved one does (`same_login`); an edit of the user, the script, the host or the port deletes it first,
 /// so that a test of the connection never sends it to another place than the one it was saved for (D-2). The input is checked before the deletion, so a refused save deletes nothing.
 pub fn save_without_password(
@@ -424,7 +407,7 @@ enum TestWay {
 }
 
 /// The way a test of `typed` goes (D-2). An open connection holds the port of its script, so a test that started the script again would meet its own connection's script on that port.
-/// What is open is the session, not the saved file: `cookapps-mcp` may have saved another script, host or port since it was opened, and the saved file then says nothing of what listens.
+/// What is open is the session, not the saved file: `tsunagiai-mcp` may have saved another script, host or port since it was opened, and the saved file then says nothing of what listens.
 /// A typed connection with no script has no script to start, so it is tested as any other.
 fn test_way(opened: Option<&Login>, typed: &DatabaseProfile) -> Result<TestWay, String> {
     let Some(opened) = opened else {
@@ -722,6 +705,14 @@ mod tests {
     use super::*;
     use std::{collections::HashMap, path::PathBuf};
 
+    #[test]
+    fn the_password_service_has_an_old_one_to_move_from() {
+        assert_eq!(
+            keychain::old_service(KEYRING_SERVICE).as_deref(),
+            Some("jp.mysis.cookapps.database")
+        );
+    }
+
     /// The passwords in memory, so that no test reaches the keychain.
     #[derive(Default)]
     struct Memory {
@@ -763,7 +754,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-database-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-database-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -782,7 +773,7 @@ mod tests {
 
     fn scripted(name: &str) -> DatabaseProfile {
         DatabaseProfile {
-            script: "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\"".to_owned(),
+            script: "#!/bin/sh\nexec forward-port \"$TSUNAGIAI_PORT\"".to_owned(),
             ..direct(name)
         }
     }
@@ -805,7 +796,7 @@ mod tests {
         assert_eq!(checked.db_host, "127.0.0.1");
         assert_eq!(
             check(scripted("本番"), &[]).unwrap().script,
-            "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\""
+            "#!/bin/sh\nexec forward-port \"$TSUNAGIAI_PORT\""
         );
     }
 
@@ -1580,7 +1571,7 @@ mod tests {
         // Not open: the script is started as before.
         assert_eq!(test_way(None, &opened_with), Ok(TestWay::OwnScript));
         // Open, and the user, the script, the host or the port is not the open one's: the script would meet the open connection's.
-        // This includes a file that `cookapps-mcp` saved after the session was opened, with the pane reading it and the test going out as typed (#720): the typed login is the saved one, and not the open one.
+        // This includes a file that `tsunagiai-mcp` saved after the session was opened, with the pane reading it and the test going out as typed (#720): the typed login is the saved one, and not the open one.
         let moved: [fn(&mut DatabaseProfile); 4] = [
             |p| p.username = "other".to_owned(),
             |p| p.script = "exec other-forward".to_owned(),

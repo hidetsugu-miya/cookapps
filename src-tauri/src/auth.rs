@@ -22,16 +22,33 @@ use crate::{
     calendar::{self, CalendarCache},
     disk_cache,
     gmail::{self, HeldThreads, InlineCache, SyncState},
+    keychain,
 };
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
-// Existing refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json.
-const KEYRING_SERVICE: &str = "jp.mysis.cookapps";
+// The refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json. The old name is read by `keychain`.
+pub(crate) const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The refresh token of `account`, read off the async workers: the keychain may wait for the OS to ask for permission.
+async fn blocking_read(account: &str) -> Result<Option<String>, String> {
+    let account = account.to_owned();
+    tokio::task::spawn_blocking(move || keychain::read(KEYRING_SERVICE, &account))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Deletes the refresh token of `account`, off the async workers as `blocking_read` does.
+async fn blocking_delete(account: &str) -> Result<(), String> {
+    let account = account.to_owned();
+    tokio::task::spawn_blocking(move || keychain::delete(KEYRING_SERVICE, &account))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 #[derive(Deserialize)]
 struct ClientFile {
@@ -119,11 +136,8 @@ impl Auth {
         if !is_registered(&self.accounts(dir)?, account) {
             return Ok(None);
         }
-        let entry = keyring_entry(account)?;
-        let refresh_token = match entry.get_password() {
-            Ok(p) => p,
-            Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) => return Err(format!("資格情報の読み取りに失敗: {e}")),
+        let Some(refresh_token) = blocking_read(account).await? else {
+            return Ok(None);
         };
         let client = load_client(dir)?;
         match self.refresh_access(&client, &refresh_token).await? {
@@ -136,7 +150,7 @@ impl Auth {
             }
             None => {
                 self.access.lock().unwrap().remove(account);
-                delete_entry(&entry)?;
+                blocking_delete(account).await?;
                 Ok(None)
             }
         }
@@ -153,17 +167,12 @@ impl Auth {
         if !is_registered(&list, account) {
             return Err("登録されていないアカウントです".into());
         }
-        let entry = keyring_entry(account)?;
-        match entry.get_password() {
-            Ok(token) => {
-                if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
-                    eprintln!("cookapps: revoke account={account} status=- error={e}");
-                }
+        if let Some(token) = blocking_read(account).await? {
+            if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
+                eprintln!("tsunagiai: revoke account={account} status=- error={e}");
             }
-            Err(keyring::Error::NoEntry) => {}
-            Err(e) => return Err(format!("資格情報の読み取りに失敗: {e}")),
         }
-        delete_entry(&entry)?;
+        blocking_delete(account).await?;
         self.access.lock().unwrap().remove(account);
         // Under the cache lock, so a save that began before cannot write this account's data back after the delete.
         disk_cache::exclusive(|| {
@@ -230,9 +239,7 @@ impl Auth {
             .ok_or("リフレッシュトークンが返されませんでした")?;
         let access = access_token_of(res)?;
         let email = self.fetch_email(&access).await?;
-        keyring_entry(&email)?
-            .set_password(&refresh_token)
-            .map_err(|e| format!("資格情報の保存に失敗: {e}"))?;
+        keychain::write(KEYRING_SERVICE, &email, &refresh_token)?;
         accounts::save(&dir, &accounts::with_account(existing, &email))?;
         self.access.lock().unwrap().insert(email.clone(), access);
         Ok(email)
@@ -305,14 +312,14 @@ pub async fn login(
 ) -> Result<String, String> {
     auth.login(&app, login_hint.as_deref()).await.map_err(|e| {
         eprintln!(
-            "cookapps: login account={} status=- error={e}",
+            "tsunagiai: login account={} status=- error={e}",
             login_hint.as_deref().unwrap_or("-")
         );
         e
     })
 }
 
-/// Removes an account from cookapps: revokes its grant at Google and drops every trace of it kept here.
+/// Removes an account from tsunagiai: revokes its grant at Google and drops every trace of it kept here.
 #[tauri::command]
 pub async fn remove_account(
     app: AppHandle,
@@ -332,7 +339,7 @@ pub async fn remove_account(
         Err(e) => Err(e),
     };
     removed.map_err(|e| {
-        eprintln!("cookapps: remove_account account={account} status=- error={e}");
+        eprintln!("tsunagiai: remove_account account={account} status=- error={e}");
         e
     })
 }
@@ -365,22 +372,6 @@ fn access_token_of(res: TokenResponse) -> Result<String, String> {
 
 fn is_registered(list: &[String], account: &str) -> bool {
     list.iter().any(|a| a == account)
-}
-
-pub(crate) fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| e.to_string())
-}
-
-/// A missing entry counts as deleted, so a repeated or concurrent run ends in the same state.
-pub(crate) fn delete_entry(entry: &keyring::Entry) -> Result<(), String> {
-    ignore_missing(entry.delete_credential())
-}
-
-fn ignore_missing(result: Result<(), keyring::Error>) -> Result<(), String> {
-    match result {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("資格情報の削除に失敗: {e}")),
-    }
 }
 
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -518,30 +509,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deleting_a_missing_entry_succeeds() {
-        assert_eq!(ignore_missing(Ok(())), Ok(()));
-        assert_eq!(ignore_missing(Err(keyring::Error::NoEntry)), Ok(()));
-        let err = ignore_missing(Err(keyring::Error::Invalid("k".into(), "v".into())));
-        assert!(err.unwrap_err().contains("資格情報の削除に失敗"));
-    }
-
-    /// Writes, reads and deletes a real Windows Credential Manager entry under a service name only this test uses.
-    #[cfg(windows)]
-    #[test]
-    fn credential_manager_round_trip() {
-        let user = format!("round-trip-{}", std::process::id());
-        let entry = keyring::Entry::new("jp.mysis.cookapps.test", &user).unwrap();
-        let written = entry.set_password("secret-value");
-        let read = entry.get_password();
-        // Deleted before any assertion, so a failed assertion leaves nothing behind.
-        let deleted = entry.delete_credential();
-        written.unwrap();
-        assert_eq!(read.unwrap(), "secret-value");
-        deleted.unwrap();
-        assert!(matches!(entry.get_password(), Err(keyring::Error::NoEntry)));
-    }
-
     /// Answers one request with `response`, then hands back the request it received.
     fn serve_once(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
         use std::io::{Read, Write};
@@ -609,7 +576,7 @@ mod tests {
     /// A directory without accounts.json: no account is registered, so neither call reaches the keychain.
     #[test]
     fn refresh_and_remove_refuse_an_unregistered_account() {
-        let dir = std::env::temp_dir().join("cookapps-test-no-accounts");
+        let dir = std::env::temp_dir().join("tsunagiai-test-no-accounts");
         let auth = Auth::new();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -623,7 +590,7 @@ mod tests {
     /// The token another call already refreshed is used without touching the keychain: the directory has no accounts.json.
     #[test]
     fn refresh_uses_the_token_a_concurrent_call_already_refreshed() {
-        let dir = std::env::temp_dir().join("cookapps-test-no-accounts");
+        let dir = std::env::temp_dir().join("tsunagiai-test-no-accounts");
         let auth = Auth::new();
         auth.access
             .lock()

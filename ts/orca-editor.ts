@@ -112,7 +112,7 @@ let definition: (query: DefinitionQuery) => void = () => {};
 let ruby: (target: string | null, project: string, path: string) => void = () => {};
 
 // The folder of the scratchpad files on an SSH host (A-30), as the screen shows it; Rust alone makes the real path.
-export const SSH_SCRATCH_DIR = "~/.local/share/cookapps/scratchpad/";
+export const SSH_SCRATCH_DIR = "~/.local/share/tsunagiai/scratchpad/";
 
 export const nameOf = (relative: string) => relative.slice(relative.lastIndexOf("/") + 1);
 
@@ -351,7 +351,7 @@ async function drawRich(f: EditorFile) {
     if (turn !== f.richTurn) return;
     const host = tag("div");
     f.rich.append(host);
-    const view = await CookappsMilkdown.mount(host, body);
+    const view = await TsunagiaiMilkdown.mount(host, body);
     if (turn !== f.richTurn) {
       void view.destroy().catch(() => {});
       host.remove();
@@ -359,7 +359,7 @@ async function drawRich(f: EditorFile) {
     }
     f.view = view;
     const before = view.markdown();
-    const [again, patched] = await Promise.all([CookappsMilkdown.normalize(before), invoke("markdown_patch", { original: text, before, after: before })]);
+    const [again, patched] = await Promise.all([TsunagiaiMilkdown.normalize(before), invoke("markdown_patch", { original: text, before, after: before })]);
     if (turn !== f.richTurn) return;
     const first = f.richFirst;
     f.richFirst = false;

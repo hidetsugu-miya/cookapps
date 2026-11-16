@@ -357,7 +357,7 @@ describe("thread loading", () => {
     await waitForCalls(open);
     await $(`#account-list button[aria-label="${account}"]`).click();
     await $("button=このアカウントを削除").click();
-    await $("button=削除").click();
+    await $("#account-popup").$("button=削除").click();
     await expect($("#threads")).toBeDisplayed();
     await expect($("#thread")).not.toBeDisplayed();
     await release(open, threadDetail("First unread", "Hello from Alice", false));
@@ -723,7 +723,7 @@ describe("thread reply field", () => {
       const isMac = /Mac/.test(navigator.platform);
       document.querySelector("#mail-reply-body-input .ProseMirror")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
     }, onceId());
-  const milkdownRead = () => browser.execute("return typeof CookappsMilkdown !== 'undefined'");
+  const milkdownRead = () => browser.execute("return typeof TsunagiaiMilkdown !== 'undefined'");
   const edges = () =>
     browser.execute(() => {
       const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
@@ -778,7 +778,7 @@ describe("thread reply field", () => {
     await expect($("#mail-reply")).toBeDisplayed();
     await browser.waitUntil(async () => (await editable()) === "true");
     expect(await browser.execute(() => document.activeElement === document.querySelector("#mail-reply-body-input .ProseMirror"))).toBe(true);
-    await expect($("#messages article")).not.toHaveElementClass("folded");
+    await expect($$("#messages article")[0]).not.toHaveElementClass("folded");
   });
 
   it("takes half the height of the area, fills it with the text, and shows the field at the bottom with the recipients of a reply, and no Cc or Bcc", async () => {

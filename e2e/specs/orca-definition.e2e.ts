@@ -254,7 +254,7 @@ describe("orca: definition (A-34)", () => {
     await browser.waitUntil(async () => (await caret()) === caretOf(rows(40), 6, 2));
     // The caret leaves the line, and the tab of the first file is selected; the same open selects the tab again, with the caret back at the line.
     await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(0, 0));
-    await $('.orca-tab[data-file="true"] [role="tab"]').click();
+    await $$('.orca-tab[data-file="true"] [role="tab"]')[0].click();
     await expect($(".orca-edit-area")).toHaveValue(source, { trim: false });
     await press(0, "open");
     await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });

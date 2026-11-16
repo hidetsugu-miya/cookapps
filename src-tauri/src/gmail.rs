@@ -636,7 +636,7 @@ pub fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> Stri
     let e = e.into();
     let status = e.status.map_or("-".to_owned(), |s| s.to_string());
     eprintln!(
-        "cookapps: {command} account={account} status={status} error={}",
+        "tsunagiai: {command} account={account} status={status} error={}",
         e.message
     );
     e.message
@@ -780,7 +780,7 @@ pub(crate) async fn send_json<T: DeserializeOwned>(
             continue;
         }
         eprintln!(
-            "cookapps: gmail api status={} url={url} error={text}",
+            "tsunagiai: gmail api status={} url={url} error={text}",
             status.as_u16()
         );
         return Err(ApiError {

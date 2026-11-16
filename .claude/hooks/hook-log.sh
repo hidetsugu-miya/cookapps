@@ -6,7 +6,7 @@
 #   {start time}<TAB>hook={name}<TAB>gate={gate name}<TAB>duration_ms={n}<TAB>exit={code}
 # It writes only these names, times and codes: never a command, a path, a file's content or a hook input (publishing.md).
 # It reads no stdin, prints nothing, and never changes the hook's exit code, so a log that cannot be written changes nothing.
-# COOKAPPS_HOOK_LOG_DIR replaces the directory; the self-tests of the hooks set it to a temporary one.
+# TSUNAGIAI_HOOK_LOG_DIR replaces the directory; the self-tests of the hooks set it to a temporary one.
 # The clock is read once at the start and once at the end (one perl each), and the day of the file name and the start time are taken at the start.
 
 # Milliseconds since the epoch (macOS ships bash 3.2, which has no EPOCHREALTIME).
@@ -47,7 +47,7 @@ hook_log_end() {
   {
     local ms dir
     ms=$(($(hook_log_now) - ${_HL_START:-0}))
-    dir=${COOKAPPS_HOOK_LOG_DIR:-}
+    dir=${TSUNAGIAI_HOOK_LOG_DIR:-}
     if [ -z "$dir" ]; then
       dir=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --path-format=absolute --git-common-dir </dev/null) && dir="$dir/../logs"
     fi

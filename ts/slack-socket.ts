@@ -41,7 +41,7 @@ function workspaceRow(w: Workspace) {
     unlink.setAttribute("aria-label", `${w.team} の App-Level Token を削除`);
     unlink.setAttribute("data-hint", "");
     unlink.onclick = () =>
-      confirmUnlink(unlink, `${w.team} のリアルタイム更新`, "App-Level Token を cookapps から削除します。Slack のアプリは残ります。", async () => {
+      confirmUnlink(unlink, `${w.team} のリアルタイム更新`, "App-Level Token をつなぎあいから削除します。Slack のアプリは残ります。", async () => {
         $("error").hidden = true;
         try {
           adopt(await invoke("slack_app_token_remove", { teamId: w.teamId }));

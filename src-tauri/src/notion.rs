@@ -19,7 +19,8 @@ use url::Url;
 
 use crate::{
     accounts,
-    auth::{self, config_dir, delete_entry},
+    auth::{self, config_dir},
+    keychain,
 };
 
 const AUTH_URL: &str = "https://mcp.notion.com/authorize";
@@ -28,7 +29,7 @@ const REGISTER_URL: &str = "https://mcp.notion.com/register";
 const MCP_URL: &str = "https://mcp.notion.com/mcp";
 /// The redirect the client is registered with. Notion accepts any port on `127.0.0.1` for it (RFC 8252), and the path must match.
 const REGISTERED_REDIRECT: &str = "http://127.0.0.1/";
-const KEYRING_SERVICE: &str = "jp.mysis.cookapps.notion";
+const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai.notion";
 const FILE: &str = "notion-accounts.json";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// An access token this close to its end is refreshed before it is used.
@@ -264,7 +265,7 @@ impl NotionState {
         let Some(id) = workspace_id.filter(|id| !id.is_empty()) else {
             // The grant exists at Notion but cannot be kept under a name, so it is given back.
             if let Err(e) = revoke(&self.http, TOKEN_URL, &client_id, &stored.refresh_token).await {
-                eprintln!("cookapps: notion revoke status=- error={e}");
+                eprintln!("tsunagiai: notion revoke status=- error={e}");
             }
             return Err("Notion がワークスペースを知らせませんでした".into());
         };
@@ -280,7 +281,7 @@ impl NotionState {
             let previous = match cached {
                 Some(s) => Some(s),
                 None => read_stored_async(&id).await.unwrap_or_else(|e| {
-                    eprintln!("cookapps: notion connect workspace={id} status=- error={e}");
+                    eprintln!("tsunagiai: notion connect workspace={id} status=- error={e}");
                     None
                 }),
             };
@@ -294,7 +295,7 @@ impl NotionState {
         // The grant of the pair that was replaced is given back, once the new one is kept.
         if let Some(old) = replaced_refresh_token(previous.as_ref(), &stored) {
             if let Err(e) = revoke(&self.http, TOKEN_URL, &client_id, old).await {
-                eprintln!("cookapps: notion revoke workspace={id} status=- error={e}");
+                eprintln!("tsunagiai: notion revoke workspace={id} status=- error={e}");
             }
         }
         let mut workspace = Workspace {
@@ -318,7 +319,7 @@ impl NotionState {
                 })?;
             }
             Ok(None) => {}
-            Err(e) => eprintln!("cookapps: notion get-self workspace={id} status=- error={e}"),
+            Err(e) => eprintln!("tsunagiai: notion get-self workspace={id} status=- error={e}"),
         }
         Ok(account_of(workspace, false))
     }
@@ -337,7 +338,7 @@ impl NotionState {
         };
         if let (Some(stored), Some(client_id)) = (stored, load_file_async(dir).await?.client_id) {
             if let Err(e) = revoke(&self.http, TOKEN_URL, &client_id, &stored.refresh_token).await {
-                eprintln!("cookapps: notion revoke workspace={workspace} status=- error={e}");
+                eprintln!("tsunagiai: notion revoke workspace={workspace} status=- error={e}");
             }
         }
         delete_stored_async(workspace).await?;
@@ -425,7 +426,7 @@ async fn write_stored_async(workspace: &str, stored: &Stored) -> Result<(), Stri
 
 async fn delete_stored_async(workspace: &str) -> Result<(), String> {
     let workspace = workspace.to_owned();
-    blocking(move || delete_entry(&entry(&workspace)?)).await
+    blocking(move || keychain::delete(KEYRING_SERVICE, &workspace)).await
 }
 
 /// The workspaces of the file, each with whether it needs a new connection (`held`: the ones with a token in memory).
@@ -454,7 +455,7 @@ pub async fn notion_accounts(
     state: State<'_, NotionState>,
 ) -> Result<Vec<NotionAccount>, String> {
     state.accounts(&config_dir(&app)?).await.map_err(|e| {
-        eprintln!("cookapps: notion_accounts workspace=- status=- error={e}");
+        eprintln!("tsunagiai: notion_accounts workspace=- status=- error={e}");
         e
     })
 }
@@ -466,7 +467,7 @@ pub async fn notion_connect(
     state: State<'_, NotionState>,
 ) -> Result<NotionAccount, String> {
     state.connect(&app).await.map_err(|e| {
-        eprintln!("cookapps: notion_connect workspace=- status=- error={e}");
+        eprintln!("tsunagiai: notion_connect workspace=- status=- error={e}");
         e
     })
 }
@@ -483,7 +484,7 @@ pub async fn notion_disconnect(
         Err(e) => Err(e),
     };
     removed.map_err(|e| {
-        eprintln!("cookapps: notion_disconnect workspace={workspace_id} status=- error={e}");
+        eprintln!("tsunagiai: notion_disconnect workspace={workspace_id} status=- error={e}");
         e
     })
 }
@@ -521,7 +522,7 @@ fn authorize_url(
 
 fn registration_body(redirect_uri: &str) -> Value {
     json!({
-        "client_name": "cookapps",
+        "client_name": "tsunagiai",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -669,24 +670,15 @@ fn load_file(dir: &Path) -> Result<NotionFile, String> {
     }
 }
 
-fn entry(workspace: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, workspace).map_err(|e| e.to_string())
-}
-
 /// `None` for no entry, and for one that is not a pair (a new connection replaces it).
 fn read_stored(workspace: &str) -> Result<Option<Stored>, String> {
-    match entry(workspace)?.get_password() {
-        Ok(text) => Ok(serde_json::from_str(&text).ok()),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
-    }
+    Ok(keychain::read(KEYRING_SERVICE, workspace)?
+        .and_then(|text| serde_json::from_str(&text).ok()))
 }
 
 fn write_stored(workspace: &str, stored: &Stored) -> Result<(), String> {
     let text = serde_json::to_string(stored).map_err(|e| e.to_string())?;
-    entry(workspace)?
-        .set_password(&text)
-        .map_err(|e| format!("資格情報の保存に失敗: {e}"))
+    keychain::write(KEYRING_SERVICE, workspace, &text)
 }
 
 /// Posts a form to the token endpoint. An error answer is in the reply (`error`), not an `Err`; an answer that is no JSON is an `Err`.
@@ -794,7 +786,7 @@ async fn mcp_call(
         "params": {
             "protocolVersion": MCP_PROTOCOL,
             "capabilities": {},
-            "clientInfo": {"name": "cookapps", "version": env!("CARGO_PKG_VERSION")},
+            "clientInfo": {"name": "tsunagiai", "version": env!("CARGO_PKG_VERSION")},
         },
     });
     let Some(opened) = mcp_post(http, url, token, None, None, &init).await? else {
@@ -889,7 +881,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("cookapps-test-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("tsunagiai-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -1232,7 +1225,7 @@ mod tests {
                 r#"{"client_id":"new-id","redirect_uris":["http://127.0.0.1/"]}"#,
             ),
             json_http("400 Bad Request", r#"{"error":"invalid_redirect_uri"}"#),
-            json_http("201 Created", r#"{"client_name":"cookapps"}"#),
+            json_http("201 Created", r#"{"client_name":"tsunagiai"}"#),
         ]);
         let http_client = reqwest::Client::new();
         assert_eq!(

@@ -2,13 +2,13 @@
 //!
 //! A connection with a script runs it as a child process, with no shell: the body is written to a file of its own (the owner only, in a folder of its own, deleted when the script has ended)
 //! and that file is run, so the first line decides the interpreter (`#!/bin/sh` is put before a body that has no `#!` line).
-//! The port is the one the connection names (its host and its port, D-1); it is given to the script as `COOKAPPS_PORT`, and the script is to listen there, for instance with a port forward.
+//! The port is the one the connection names (its host and its port, D-1); it is given to the script as `TSUNAGIAI_PORT` (and, for the scripts saved before the rename, as `COOKAPPS_PORT` too, with the same value), and the script is to listen there, for instance with a port forward.
 //! A port that something answers on before the script is run is an error, and the script is not run.
-//! The script is ready when a TCP connection to `{host}:{COOKAPPS_PORT}` succeeds. It fails when the script ends before that (an exit code of 0 too), when it is not ready in two minutes,
+//! The script is ready when a TCP connection to `{host}:{TSUNAGIAI_PORT}` succeeds. It fails when the script ends before that (an exit code of 0 too), when it is not ready in two minutes,
 //! and, once it was ready, when it ends: the connection is then closed. The error holds the last lines of the script's standard error.
 //! The script runs in a process group of its own, which is sent SIGTERM when the connection is closed and the app exits, and SIGKILL when it is still there after a few seconds.
 //!
-//! `start` takes the folder for the script file as a `&Path`, so that `cookapps-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
+//! `start` takes the folder for the script file as a `&Path`, so that `tsunagiai-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
 //! The decisions (the shebang, the lines kept, the words of an error) are pure functions.
 
 use std::{
@@ -35,7 +35,9 @@ use tokio::{
 use super::mysql::shorten;
 
 /// The environment variable that gives the script the port it is to listen on.
-pub const PORT_ENV: &str = "COOKAPPS_PORT";
+pub const PORT_ENV: &str = "TSUNAGIAI_PORT";
+/// The name that the variable had before the app was renamed. It is given the same value, so that a saved script that reads it keeps working.
+pub const OLD_PORT_ENV: &str = "COOKAPPS_PORT";
 const SCRIPT_FILE: &str = "script";
 /// How many of the last lines of the standard error an error shows.
 const TAIL_LINES: usize = 5;
@@ -149,7 +151,7 @@ fn in_use_text(host: &str, port: u16) -> String {
     format!("{host}:{port} は、スクリプトを実行する前から使われています。{IN_USE_TAIL}")
 }
 
-/// Whether `text` is the error of a port that was in use before the script was run (`cookapps-mcp` adds its own hint to it).
+/// Whether `text` is the error of a port that was in use before the script was run (`tsunagiai-mcp` adds its own hint to it).
 pub fn is_in_use_text(text: &str) -> bool {
     text.ends_with(IN_USE_TAIL)
 }
@@ -174,7 +176,7 @@ fn make_folder(dir: &Path, body: &str) -> std::io::Result<PathBuf> {
     let mut random = [0u8; 8];
     getrandom::fill(&mut random).map_err(std::io::Error::other)?;
     let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    let folder = dir.join(format!("cookapps-script-{name}"));
+    let folder = dir.join(format!("tsunagiai-script-{name}"));
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
@@ -342,7 +344,7 @@ impl Script {
 }
 
 impl Drop for Script {
-    /// A `Script` that is dropped while its group may still run (the runtime ended before `supervise` could end it, as when `cookapps-mcp` ends while `db_test` waits) kills the group,
+    /// A `Script` that is dropped while its group may still run (the runtime ended before `supervise` could end it, as when `tsunagiai-mcp` ends while `db_test` waits) kills the group,
     /// because `kill_on_drop` reaches only the first process and a child of the script (a `session-manager-plugin`, for instance) would stay. After `supervise` has ended the group (`done` is set) nothing is sent, as the id may be another process's by then.
     fn drop(&mut self) {
         if self.pgid > 0 && self.done.borrow().is_none() {
@@ -351,7 +353,7 @@ impl Drop for Script {
     }
 }
 
-/// Starts the script `body` written in a folder of `dir`, with `port` given as `COOKAPPS_PORT`, and answers when `host:port` answers, or why it does not.
+/// Starts the script `body` written in a folder of `dir`, with `port` given as `TSUNAGIAI_PORT` and `COOKAPPS_PORT`, and answers when `host:port` answers, or why it does not.
 /// A port that answers before the script is run is an error, and nothing is run.
 pub async fn start(
     dir: &Path,
@@ -377,6 +379,7 @@ pub async fn start(
     command
         .current_dir(&folder)
         .env(PORT_ENV, port.to_string())
+        .env(OLD_PORT_ENV, port.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -635,7 +638,7 @@ mod tests {
         impl Dir {
             fn new(name: &str) -> Self {
                 let dir = std::env::temp_dir().join(format!(
-                    "cookapps-script-test-{}-{name}",
+                    "tsunagiai-script-test-{}-{name}",
                     std::process::id()
                 ));
                 let _ = std::fs::remove_dir_all(&dir);
@@ -650,7 +653,7 @@ mod tests {
                         e.as_ref().is_ok_and(|e| {
                             e.file_name()
                                 .to_string_lossy()
-                                .starts_with("cookapps-script-")
+                                .starts_with("tsunagiai-script-")
                         })
                     })
                     .count()
@@ -707,7 +710,10 @@ mod tests {
             let port = free_port();
             let _listener = listen_later(port);
             let out = dir.file("port");
-            let body = format!("echo \"${PORT_ENV}\" > '{}'\nsleep 30", out.display());
+            let body = format!(
+                "echo \"${PORT_ENV} ${OLD_PORT_ENV}\" > '{}'\nsleep 30",
+                out.display()
+            );
             let script = start(&dir.0, HOST, port, &body, quick(10_000))
                 .await
                 .unwrap();
@@ -719,10 +725,13 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
+            // The variable of the new name, and the old name with the same value for a saved script.
             assert_eq!(
                 std::fs::read_to_string(&out).unwrap().trim(),
-                port.to_string()
+                format!("{port} {port}")
             );
+            assert_eq!(PORT_ENV, "TSUNAGIAI_PORT");
+            assert_eq!(OLD_PORT_ENV, "COOKAPPS_PORT");
             script.stop().await;
             assert_eq!(dir.leftovers(), 0, "the folder of the script is deleted");
         }

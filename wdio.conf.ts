@@ -3,7 +3,7 @@ import { createServer, type AddressInfo, type Server } from "node:net";
 import { resolve } from "node:path";
 
 // `npm run e2e:build` puts the E2E binary here; Windows adds .exe. The exit code of `wdio run` (non-zero on a failed spec) is the result `npm run e2e` answers.
-const binary = resolve("src-tauri/target/debug", process.platform === "win32" ? "cookapps.exe" : "cookapps");
+const binary = resolve("src-tauri/target/debug", process.platform === "win32" ? "tsunagiai.exe" : "tsunagiai");
 
 // `tauri dev` writes its binary to the same place, so tell the E2E build apart by its identifier (src-tauri/tauri.e2e.conf.json), which Tauri embeds in the binary.
 const e2eIdentifier: string = JSON.parse(readFileSync("src-tauri/tauri.e2e.conf.json", "utf8")).identifier;

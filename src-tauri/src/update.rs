@@ -299,16 +299,16 @@ mod tests {
     fn bundle_path_is_the_app_that_holds_contents_macos_exe() {
         assert_eq!(
             bundle_path(Path::new(
-                "/Applications/cookapps.app/Contents/MacOS/cookapps"
+                "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai"
             )),
-            Some(PathBuf::from("/Applications/cookapps.app"))
+            Some(PathBuf::from("/Applications/tsunagiai.app"))
         );
         for odd in [
-            "/repo/target/debug/cookapps",
-            "/Applications/cookapps.app/Contents/Resources/cookapps",
-            "/Applications/cookapps/Contents/MacOS/cookapps",
-            "/Applications/cookapps.app/MacOS/cookapps",
-            "cookapps",
+            "/repo/target/debug/tsunagiai",
+            "/Applications/tsunagiai.app/Contents/Resources/tsunagiai",
+            "/Applications/tsunagiai/Contents/MacOS/tsunagiai",
+            "/Applications/tsunagiai.app/MacOS/tsunagiai",
+            "tsunagiai",
             "/",
         ] {
             assert_eq!(bundle_path(Path::new(odd)), None, "{odd}");
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn load_gives_what_save_wrote_and_auto_for_no_file() {
-        let dir = std::env::temp_dir().join(format!("cookapps-update-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tsunagiai-update-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load(&dir), UpdateMode::Auto);
         save(&dir, UpdateMode::Manual).unwrap();

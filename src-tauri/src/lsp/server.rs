@@ -2273,7 +2273,7 @@ mod tests {
     async fn a_program_that_is_not_there_is_a_failure_to_start() {
         let (mut ctx, _commands, events) = ctx_for(&key("/w/a"));
         let spawn = Spawn {
-            program: "/nonexistent/cookapps-lsp-test".into(),
+            program: "/nonexistent/tsunagiai-lsp-test".into(),
             args: Vec::new(),
         };
         run_spawn(&mut ctx, &spawn, "/app", &FAST).await;

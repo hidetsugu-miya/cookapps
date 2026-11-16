@@ -1,12 +1,12 @@
 {
-  "identifier": "jp.mysis.cookapps.e2e",
+  "identifier": "jp.mysis.tsunagiai.e2e",
   "build": {
     "frontendDist": "../e2e/dist"
   },
   "app": {
     "windows": [
       {
-        "title": "cookapps",
+        "title": "つなぎあい",
         "width": 1440,
         "height": 932,
         "visible": false
