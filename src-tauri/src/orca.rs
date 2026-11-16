@@ -23,9 +23,9 @@ use crate::{
 };
 
 /// Reading the agents is a few local calls (or one to a paired server).
-const READ_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// A launch starts an agent CLI, and a send waits for the terminal to take the text.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `orca worktree ps` is asked for this many worktrees.
 const WORKTREE_LIMIT: &str = "200";
 /// How long a worktree confirmed against the target's list is believed without asking the CLI again (A-18).
@@ -321,7 +321,7 @@ pub(crate) fn first_line(text: &str) -> Option<String> {
         .map(|l| l.chars().take(LINE_LIMIT).collect())
 }
 
-fn ms_of(value: &Value, key: &str) -> i64 {
+pub(crate) fn ms_of(value: &Value, key: &str) -> i64 {
     // Truncation is intended: an epoch in milliseconds has no meaningful fraction.
     #[allow(clippy::cast_possible_truncation)]
     value[key].as_f64().map_or(0, |ms| ms as i64)
@@ -486,7 +486,7 @@ fn is_process_output(line: &str) -> bool {
 /// The first line of `text` that the owner or Claude wrote, cut to `LINE_LIMIT` characters: `text` without its harness elements (`HARNESS_ELEMENTS`) and then without its XML tags, the first line that still has text.
 /// `None` when nothing is left, or when what is left opens as data or as the output of a process (`is_pasted_data`, `is_process_output`; the first three lines are read, so that an object over several lines is found).
 /// Only the first `LINE_READ_LIMIT` characters are read.
-fn first_text_line(text: &str) -> Option<String> {
+pub(crate) fn first_text_line(text: &str) -> Option<String> {
     let read = text
         .char_indices()
         .nth(LINE_READ_LIMIT)
@@ -887,8 +887,8 @@ fn started_of(result: &Value) -> OrcaStarted {
     }
 }
 
-/// The terminal `orca terminal create` made (A-16): `result.terminal.handle`. Orca names no pane for a plain terminal, so `pane_key` is `None`.
-fn created_of(result: &Value) -> OrcaStarted {
+/// The terminal `orca terminal create` made (A-16): `result.terminal.handle`. A-16 finds its tab by the handle alone, so `pane_key` is `None` here although Orca 1.4.259 names the pane too (`created_pane_key_of`, which A-37 reads).
+pub(crate) fn created_of(result: &Value) -> OrcaStarted {
     OrcaStarted {
         pane_key: None,
         handle: text_of(&result["terminal"], "handle")
@@ -897,8 +897,15 @@ fn created_of(result: &Value) -> OrcaStarted {
     }
 }
 
+/// The pane of the terminal `orca terminal create` made: `result.terminal.paneKey` (`{tabId}:{leafId}`, the `paneKey` of its agent in `orca worktree ps`), `None` when the reply lacks it or holds it in a shape that is not a pane key.
+pub(crate) fn created_pane_key_of(result: &Value) -> Option<String> {
+    text_of(&result["terminal"], "paneKey")
+        .filter(|k| check_pane_key(k).is_ok())
+        .map(str::to_owned)
+}
+
 /// The path of the worktree `orca worktree create` made: `result.worktree.path`, which must be an absolute path.
-fn created_worktree_path_of(result: &Value) -> Result<String, String> {
+pub(crate) fn created_worktree_path_of(result: &Value) -> Result<String, String> {
     text_of(&result["worktree"], "path")
         .filter(|path| check_path(path).is_ok())
         .map(str::to_owned)
@@ -1005,7 +1012,7 @@ pub(crate) fn check_handle(handle: &str) -> Result<(), String> {
 }
 
 /// A pane is `{tabId}:{leafId}`; nothing else is accepted, and a key is never put in a command line.
-fn check_pane_key(pane_key: &str) -> Result<(), String> {
+pub(crate) fn check_pane_key(pane_key: &str) -> Result<(), String> {
     if !pane_key.is_empty()
         && pane_key.chars().count() <= 256
         && pane_key
@@ -1144,7 +1151,7 @@ fn check_environment(name: &str, environments: &[String]) -> Result<(), String> 
 
 // ---- the arguments ----
 
-fn args_of(args: &[&str]) -> Vec<String> {
+pub(crate) fn args_of(args: &[&str]) -> Vec<String> {
     args.iter().map(|a| (*a).to_owned()).collect()
 }
 
@@ -1156,7 +1163,7 @@ fn with_environment(mut args: Vec<String>, environment: Option<&str>) -> Vec<Str
     args
 }
 
-fn ps_args(environment: Option<&str>) -> Vec<String> {
+pub(crate) fn ps_args(environment: Option<&str>) -> Vec<String> {
     with_environment(
         args_of(&["worktree", "ps", "--limit", WORKTREE_LIMIT, "--json"]),
         environment,
@@ -1243,7 +1250,7 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
 
 /// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
 /// `--branch` and `--base-branch` are passed only when given (already checked by `check_ref`).
-fn create_worktree_args(
+pub(crate) fn create_worktree_args(
     project: &str,
     name: &str,
     branch: Option<&str>,
@@ -1268,7 +1275,7 @@ fn create_worktree_args(
 
 // ---- running the CLI ----
 
-enum RunError {
+pub(crate) enum RunError {
     Missing,
     Failed(String),
 }
@@ -1310,7 +1317,7 @@ fn run(args: &[String], timeout: Duration) -> Result<String, RunError> {
 }
 
 /// Runs the CLI and gives the `result` of its JSON.
-fn call(args: &[String], timeout: Duration) -> Result<Value, RunError> {
+pub(crate) fn call(args: &[String], timeout: Duration) -> Result<Value, RunError> {
     parse_output(&run(args, timeout)?).map_err(RunError::Failed)
 }
 
@@ -1338,7 +1345,7 @@ fn read_lists(environment: Option<&str>, terminals: bool) -> Lists {
     })
 }
 
-fn message_of(e: RunError) -> String {
+pub(crate) fn message_of(e: RunError) -> String {
     match e {
         RunError::Missing => not_installed(),
         RunError::Failed(message) => message,
@@ -1582,7 +1589,7 @@ fn not_installed() -> String {
 }
 
 /// Runs a write of the CLI once and gives its `result`. It is never run again: after a lost reply a second run would post twice (the CLI forbids a fresh retry of a launch).
-fn write(args: &[String]) -> Result<Value, String> {
+pub(crate) fn write(args: &[String]) -> Result<Value, String> {
     let result = call(args, WRITE_TIMEOUT).map_err(message_of)?;
     check_accepted(&result)?;
     Ok(result)
@@ -3635,6 +3642,24 @@ mod tests {
             json!({"terminal": {"handle": ["term_1"]}}),
         ] {
             assert_eq!(created_of(&odd), OrcaStarted::default(), "{odd}");
+        }
+    }
+
+    #[test]
+    fn the_reply_of_a_new_terminal_names_its_pane_for_a_caller_that_wants_it() {
+        let out = r#"{"ok": true, "result": {"terminal": {"handle": "term_abc-1", "tabId": "t1", "paneKey": "t1:l2", "title": "x"}}}"#;
+        let result = parse_output(out).unwrap();
+        assert_eq!(created_pane_key_of(&result).as_deref(), Some("t1:l2"));
+        // A-16 still reads the handle alone.
+        assert_eq!(created_of(&result).pane_key, None);
+        for odd in [
+            Value::Null,
+            json!({"terminal": {"handle": "term_1"}}),
+            json!({"terminal": {"paneKey": ""}}),
+            json!({"terminal": {"paneKey": "a b"}}),
+            json!({"terminal": {"paneKey": ["t1:l2"]}}),
+        ] {
+            assert_eq!(created_pane_key_of(&odd), None, "{odd}");
         }
     }
 

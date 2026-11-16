@@ -17,6 +17,8 @@ import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
+import type { FormationChild } from "../ts/bindings/FormationChild";
+import type { FormationState } from "../ts/bindings/FormationState";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
 import type { Inbox } from "../ts/bindings/Inbox";
@@ -79,9 +81,9 @@ declare global {
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 
-// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) and `databaseProfiles` the read of the connections that the edit pane of the database screen does (2 s).
+// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the edit pane of the database screen does (2 s) and `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s).
 // A wait for a period to pass is that period times 1.2. Put it in the fixtures of `boot`: `boot({ ...timers({ orcaMirror: 250 }) })`.
-export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number }) => ({ e2e_timers: periods });
+export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number }) => ({ e2e_timers: periods });
 
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
@@ -751,6 +753,13 @@ function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaT
     return { key, name: key.replace(/^proj_/, ""), status: statuses.sort((a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b))[0], sessions: mine.length + mineTerminals.length, atMs: 0 };
   });
 }
+
+// A child of the orchestrator as `formation_children` answers it (A-37). `minutes` is how long ago its state began (a done child: how long ago it ended); a planned child has no branch, time or terminal.
+export const formationChild = (name: string, state: FormationState, extra: Partial<FormationChild> & { minutes?: number } = {}): FormationChild => {
+  const { minutes = 2, ...rest } = extra;
+  const planned = state === "planned";
+  return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, ...rest };
+};
 
 // What `orca_overview` answers: a read that worked, this machine's, unless `extra` says another.
 export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaOverview> = {}): OrcaOverview => ({

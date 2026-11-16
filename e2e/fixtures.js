@@ -132,6 +132,8 @@ const answers = {
   claude_code_input: null,
   claude_code_resize: null,
   claude_code_close: null,
+  // A-37: no children yet.
+  formation_children: [],
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).

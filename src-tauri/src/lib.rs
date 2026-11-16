@@ -8,6 +8,7 @@ pub mod claude_code;
 pub mod database;
 mod disk_cache;
 pub mod fonts;
+pub mod formation;
 pub mod ghostty;
 pub mod gmail;
 pub mod identity;
@@ -427,6 +428,7 @@ pub fn run() {
             claude_code::claude_code_input,
             claude_code::claude_code_resize,
             claude_code::claude_code_close,
+            formation::formation_children,
             set_badge
         ])
         .build(tauri::generate_context!())

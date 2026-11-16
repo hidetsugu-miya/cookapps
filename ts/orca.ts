@@ -21,6 +21,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
+import { devMode, setDevMode } from "./formation.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
@@ -47,7 +48,7 @@ const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
 // The clock ticks once a second, and a spec that shortens `SHOWN_MS` (`periodMs`) shortens the tick in the same proportion.
-const shownMs = () => periodMs("orcaClock", SHOWN_MS);
+export const shownMs = () => periodMs("orcaClock", SHOWN_MS);
 const HIDDEN_MS = 60_000;
 
 // The last read, or null before the first. A failed read keeps the rows and worktrees of the one before it while the target is the same.
@@ -119,7 +120,7 @@ let feedKey = "";
 let noticeKey = "";
 
 const feed = () => $("orca-feed");
-const shown = () => currentScreen() === "orca";
+const shown = () => currentScreen() === "orca" && devMode() === "orca";
 
 export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
@@ -272,12 +273,12 @@ function drawBadge() {
   const viewed = viewedPane();
   if (viewed !== null) notified.delete(viewed);
   const waiting = waitingCount + notified.size;
-  setNavCount("nav-orca", waiting, "Orca", "確認待ち");
+  setNavCount("nav-orca", waiting, "開発", "確認待ち");
   // The number that work is not drawn: the button's icon is yellow and fades, and the label says it (read aloud, and in the tooltip on hover).
   const nav = $("nav-orca");
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
-  nav.setAttribute("aria-label", parts.length === 0 ? "Orca" : `Orca（${parts.join("、")}）`);
+  nav.setAttribute("aria-label", parts.length === 0 ? "開発" : `開発（${parts.join("、")}）`);
 }
 
 // What a read that did not work says (the Orca screen and the side pane show it alike), else null.
@@ -938,6 +939,7 @@ export function openInOrca(paneKey: string | null) {
     setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
   }
+  setDevMode("orca");
   setScreen("orca");
 }
 

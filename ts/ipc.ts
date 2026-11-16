@@ -18,6 +18,7 @@ import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
 import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
+import type { FormationChild } from "./bindings/FormationChild";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
@@ -337,6 +338,8 @@ export interface Commands {
   claude_code_resize: { args: { id: string; viewport: OrcaViewport }; result: null };
   // A-36: ends the process of the pane `id` that the start `launch` (its answer) made, and what it started; a process of a later start stays.
   claude_code_close: { args: { id: string; launch: number }; result: null };
+  // A-37: the children of the orchestrator, in the order of `formation/children.json`, each joined to its agent of this Mac's `orca worktree ps` (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
+  formation_children: { args: undefined; result: FormationChild[] };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
