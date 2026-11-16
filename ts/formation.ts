@@ -1,9 +1,8 @@
-// The orchestration mode of the development screen (A-37): three columns, the orchestrator's terminal at the left, the children's tabs and terminals in the middle (formation-tabs.ts) and the flow at the right (formation-flow.ts).
+// The orchestration mode of the development screen (A-37): two panes, the orchestrator's terminal at the left and the flow at the right, with the session of the selected child under it (formation-flow.ts).
 // The mode is kept only while the app runs; the first one is Orca.
 import { claudeCodeStarted, closeClaudeCode, FORMATION_ID, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
-import { startCount, startFlow, stopFlow } from "./formation-flow.js";
-import { hideTabs } from "./formation-tabs.js";
+import { hideSession, startCount, startFlow, stopFlow } from "./formation-flow.js";
 import { RELOAD_SVG } from "./icons.js";
 import { show } from "./view.js";
 
@@ -49,7 +48,7 @@ export function hideFormation() {
 
 // Only the terminals are hidden: the count of the waiting children, when it is the read in hand, goes on.
 export function hidePanes() {
-  hideTabs();
+  hideSession();
   hideClaudeCode(OWNER);
 }
 

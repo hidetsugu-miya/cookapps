@@ -1002,50 +1002,40 @@ button.status:hover { filter: brightness(.95); }
 .header-sub { min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .back-text { display: inline-flex; align-items: center; gap: 4px; padding: 0 12px 0 6px; border-color: transparent; background: transparent; }
 
-/* The orchestration mode of the development screen (A-37): the orchestrator's terminal, the children's tabs with the terminal of the selected one, and the flow, side by side. */
+/* The orchestration mode of the development screen (A-37): the orchestrator's terminal at the left, and the right pane (the flow, and under it the session of the selected child) of the same width. */
 #formation { flex: 1; min-height: 0; display: flex; }
-#formation-orchestrator { flex: none; width: calc((100% - 260px) / 2); min-width: 0; display: flex; flex-direction: column; }
-#formation:has(#formation-children[hidden]) #formation-orchestrator { flex: 1; width: auto; }
+#formation-orchestrator { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
 #formation-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #formation-restart { flex: none; margin-left: auto; }
-#formation-children { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); }
-/* The strip of the children's tabs (as the tabs of Orca are): 「自動で追う」 is at its right end, and the button that opens the flow is at the right of it while the flow is closed. */
-#formation-tabbar { flex: none; display: flex; align-items: center; gap: 6px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); background: var(--bar); }
-#formation-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-#formation-tabs::-webkit-scrollbar { display: none; }
-.formation-tab { flex: none; display: flex; align-items: center; gap: 6px; height: calc(max(var(--header-h), calc(32px * var(--fs))) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; padding: 0 12px 0 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); cursor: pointer; }
-.formation-tab:hover { color: var(--accent); }
-.formation-tab[aria-selected="true"] { border-color: var(--line); background: var(--surface); color: inherit; font-weight: 600; }
-.formation-tab[data-state="waiting"]:not([aria-selected="true"]) { color: var(--agent-question); }
-.formation-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.formation-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.formation-follow { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
-.formation-follow svg { width: 15px; height: 15px; }
-.formation-follow[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
-#formation-child-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
-#formation-flow { flex: none; width: 260px; box-sizing: border-box; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bar); }
-#formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px 0 16px; border-bottom: 1px solid var(--line); }
+#formation-flow { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
+#formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
 #formation-flow-head h2 { flex: none; }
 #formation-flow-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
-/* The same button and place as the file pane's of Orca (.orca-files-toggle): pressed (a soft ground, the accent) while the pane is open. The count of the children that wait is at its corner while the pane is closed. */
-.formation-flow-toggle { position: relative; flex: none; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
-.formation-flow-toggle svg { width: var(--header-ic); height: var(--header-ic); }
-.formation-flow-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
-.formation-flow-badge { position: absolute; top: -5px; right: -7px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--bar); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
-#formation-flow-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 6px 14px 10px; }
+.formation-follow { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
+.formation-follow svg { width: 15px; height: 15px; }
+.formation-follow[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+/* The view has a height of its own at most, and scrolls inside when the tree is taller; without a session under it, it takes the height of the pane. */
+#formation-flow-body { flex: 0 1 auto; min-height: 0; max-height: min(300px, 50%); overflow-y: auto; box-sizing: border-box; padding: 14px 10px; }
+#formation-flow:has(#formation-session[hidden]) #formation-flow-body { flex: 1 1 auto; max-height: none; }
 #formation-flow-error { margin: 0 0 10px; overflow-wrap: anywhere; }
-/* The tree: the orchestrator's card, and the children under it in a line with a branch to each card. A planned child is dashed and faint, with a hollow dot. */
-#formation-flow-root { cursor: default; }
-#formation-flow-list { list-style: none; margin: 14px 0 0; padding: 0; position: relative; }
-#formation-flow-list::before { content: ""; position: absolute; left: 5px; top: -14px; height: 14px; border-left: 2px solid var(--chip-line); }
-#formation-flow-list li { --c: var(--chip-line); position: relative; padding: 3px 0 3px 22px; }
+/* The tree: the orchestrator's card on top, and the children in a row under it (wrapped when they do not fit), each on a branch of its own. A planned child is dashed and faint, with a hollow dot. */
+#formation-flow-root { width: fit-content; min-width: 140px; margin: 0 auto; cursor: default; }
+#formation-flow-list { list-style: none; margin: 14px 0 0; padding: 0; position: relative; display: flex; flex-wrap: wrap; justify-content: center; }
+#formation-flow-list::before { content: ""; position: absolute; left: calc(50% - 1px); top: -14px; height: 14px; border-left: 2px solid var(--chip-line); }
+#formation-flow-list li { --c: var(--chip-line); position: relative; flex: none; width: 188px; box-sizing: border-box; padding: 14px 6px 0; }
 #formation-flow-list li[data-state="working"] { --c: var(--agent-working); }
 #formation-flow-list li[data-state="waiting"] { --c: var(--agent-question); }
 #formation-flow-list li[data-state="done"] { --c: var(--agent-done); }
-#formation-flow-list li::before { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; border-left: 2px solid var(--chip-line); }
-#formation-flow-list li:last-child::before { bottom: auto; height: 50%; }
-#formation-flow-list li::after { content: ""; position: absolute; left: 5px; top: 50%; width: 17px; border-top: 2px solid var(--c); }
-#formation-flow-list li[data-state="planned"]::after { border-top-style: dashed; }
+#formation-flow-list li::before { content: ""; position: absolute; top: 0; left: 0; right: 0; border-top: 2px solid var(--chip-line); }
+#formation-flow-list li:first-child::before { left: 50%; }
+#formation-flow-list li:last-child::before { right: 50%; }
+#formation-flow-list li::after { content: ""; position: absolute; top: 0; left: calc(50% - 1px); height: 14px; border-left: 2px solid var(--c); }
+#formation-flow-list li[data-state="planned"]::after { border-left-style: dashed; }
+/* The session of the selected child: a thin band with the state and the name, and the terminal under it. */
+#formation-session { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+#formation-session-head { flex: none; display: flex; align-items: center; gap: 8px; box-sizing: border-box; height: calc(32px * var(--fs)); padding: 0 14px; border-bottom: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); font-weight: 600; }
+#formation-session-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#formation-child-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .formation-card { display: grid; gap: 2px; width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 9px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; text-align: left; }
 button.formation-card { cursor: pointer; }
 .formation-card[data-state="working"] { border-color: color-mix(in srgb, var(--agent-working) 55%, var(--line)); }
@@ -1063,13 +1053,13 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }
 .formation-card[data-state="planned"] .formation-card-state { color: var(--muted); font-weight: 600; }
 .formation-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-idle); }
-.formation-card[data-state="working"] .formation-dot, .formation-tab[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
-.formation-card[data-state="waiting"] .formation-dot, .formation-tab[data-state="waiting"] .formation-dot { background: var(--agent-question); }
-.formation-card[data-state="done"] .formation-dot, .formation-tab[data-state="done"] .formation-dot { background: var(--agent-done); }
+.formation-card[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
+.formation-card[data-state="waiting"] .formation-dot, #formation-session-head[data-state="waiting"] .formation-dot { background: var(--agent-question); }
+.formation-card[data-state="done"] .formation-dot, #formation-session-head[data-state="done"] .formation-dot { background: var(--agent-done); }
 .formation-card[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
 .formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
-@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-tab[data-state="working"] .formation-dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }

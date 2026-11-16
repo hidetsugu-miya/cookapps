@@ -1,24 +1,30 @@
-// The flow pane of the orchestration mode (A-37): the orchestrator's card and under it the children as small cards in the order `formation_children` gives, read every few seconds while the mode is shown.
-// The same read feeds the children's tabs (formation-tabs.ts), and, while Orca is the mode of the development screen, it is made at the Orca list's period only to count the children that wait, on the footer's icon.
-// The button that closes and opens the pane is in its heading while it is open and at the right end of the strip of the children's tabs while it is closed, as the file pane's of Orca is (A-18).
+// The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal mirrored from Orca as the Orca screen's are (A-8).
+// The children are read every few seconds while the mode is shown. While Orca is the mode of the development screen, the read is made at the Orca list's period only to count the children that wait, on the footer's icon.
+// The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { invoke } from "./ipc.js";
 import { setFormationWaiting } from "./footer.js";
-import { initFormationTabs, selectChild, selectedChild, syncTabs } from "./formation-tabs.js";
 import { elapsed, shownMs } from "./orca.js";
+import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
 const READ_MS = 3000;
+// The name of the owner of the terminals: what `showTerminals` and `hideTerminals` are told.
+const OWNER = "formation-session";
 const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
 
 // The last read; a read that failed keeps it and says why in `failure`.
 let children: FormationChild[] = [];
 let failure: string | null = null;
-// Whether the pane is open: kept in memory only, open at first.
-let open = true;
-// The clock of the reads and what the reads are for (the pane and the tabs, or the count only), and whether one is on its way (the next tick waits for it).
+// The children that have a terminal (the last read), the selected child (its name) and whether 「自動で追う」 is on (on at first, in memory only).
+let terms: FormationChild[] = [];
+let selected: string | null = null;
+let follow = true;
+// The handles whose terminals were shown, to forget the ones of children that are gone.
+const held = new Set<string>();
+// The clock of the reads and what the reads are for (the pane, or the count only), and whether one is on its way (the next tick waits for it).
 let timer: number | null = null;
 let watching: "flow" | "count" | null = null;
 let reading = false;
@@ -64,6 +70,61 @@ export function stopFlow() {
   setFormationWaiting(0);
 }
 
+// The child that 「自動で追う」 selects: the one that has waited for approval the longest, else the selected one when it works, else the first one that works; null when none works.
+export function followTarget(list: FormationChild[], current: string | null): string | null {
+  const waiting = list.filter((c) => c.state === "waiting").sort((a, b) => a.atMs - b.atMs)[0];
+  if (waiting) return waiting.name;
+  const working = list.filter((c) => c.state === "working");
+  return (working.find((c) => c.name === current) ?? working[0])?.name ?? null;
+}
+
+function placementOf(child: FormationChild): Placement {
+  const handle = child.handle!;
+  return { id: handle, source: { kind: "mirror", handle, path: "", environment: null }, host: $("formation-child-term") };
+}
+
+// Shows the terminal of the selected child, and hides the others (their reads stop). `focus` gives it the keyboard: only a press of the user does, never the follow, so the orchestrator's terminal keeps the keys the owner is typing.
+function showSelected(focus: boolean) {
+  const child = terms.find((c) => c.name === selected);
+  if (!child) return hideTerminals(OWNER);
+  const placement = placementOf(child);
+  if (!isShowing(placement, OWNER) || focus) showTerminals([placement], focus ? placement.id : null, OWNER);
+  held.add(placement.id);
+}
+
+// The children of a read: the session follows them, the selection follows the waiting child while 「自動で追う」 is on, and the terminals of the children that are gone are forgotten.
+// The session is shown before its terminal is placed, so that the terminal is placed in a host that has its size.
+function syncSession() {
+  terms = children.filter((c) => c.handle !== null);
+  if (follow) selected = followTarget(terms, selected) ?? selected;
+  if (!terms.some((c) => c.name === selected)) selected = terms[0]?.name ?? null;
+  const handles = new Set(terms.map((c) => c.handle));
+  for (const handle of held) {
+    if (handles.has(handle)) continue;
+    held.delete(handle);
+    releaseTerminal(handle, OWNER);
+  }
+  const child = terms.find((c) => c.name === selected);
+  $("formation-session").hidden = !child;
+  $("formation-session-head").dataset.state = child?.state ?? "";
+  $("formation-session-name").textContent = child?.name ?? "";
+  showSelected(false);
+}
+
+// A press of the user on a card selects that child and turns 「自動で追う」 off. A child with no terminal is not selected.
+function selectChild(name: string) {
+  if (!terms.some((c) => c.name === name)) return;
+  selected = name;
+  follow = false;
+  draw();
+  showSelected(true);
+}
+
+// The mode or the screen is left: the terminal is hidden and its reads stop.
+export function hideSession() {
+  hideTerminals(OWNER);
+}
+
 function card(c: FormationChild, now: number): HTMLLIElement {
   const li = tag("li");
   li.dataset.state = c.state;
@@ -83,7 +144,7 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   if (node instanceof HTMLButtonElement) {
     node.type = "button";
     node.dataset.child = c.name;
-    node.setAttribute("aria-pressed", String(selectedChild() === c.name));
+    node.setAttribute("aria-pressed", String(selected === c.name));
     node.onclick = () => selectChild(c.name);
   }
   li.append(node);
@@ -97,25 +158,12 @@ function draw() {
   const waiting = launched.filter((c) => c.state === "waiting").length;
   setFormationWaiting(watching === "count" ? waiting : 0);
   if (watching === "count") return;
-  // The middle and the right columns are shown from the first child (a planned one too) on, and the orchestrator has the whole width before.
-  // The middle column comes first, so that the terminal of a tab is placed in a host that has its size.
-  const formed = children.length > 0;
-  $("formation-children").hidden = !formed;
-  // The tabs first: the follow may move the selection that the cards mark.
-  if (watching === "flow") syncTabs(children);
-  const selected = selectedChild();
-  $("formation-flow").hidden = !formed || !open;
-  $("formation-tabbar-toggle").hidden = open;
+  // The right pane is shown from the first child (a planned one too) on, and the orchestrator has the whole width before.
+  $("formation-flow").hidden = children.length === 0;
+  // The session first: the follow may move the selection that the cards mark.
+  if (watching === "flow") syncSession();
+  $("formation-follow").setAttribute("aria-pressed", String(follow));
   $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
-  // While the pane is closed the button shows how many children wait for the user.
-  const label = !open && waiting > 0 ? `流れ（承認待ち ${waiting} 件）` : "流れ";
-  for (const id of ["formation-flow-toggle", "formation-tabbar-toggle"]) {
-    $(id).setAttribute("aria-pressed", String(open));
-    $(id).setAttribute("aria-label", label);
-  }
-  const badge = $("formation-tabbar-toggle").querySelector<HTMLElement>(".formation-flow-badge")!;
-  badge.hidden = open || waiting === 0;
-  badge.textContent = String(waiting);
   $("formation-flow-error").hidden = failure === null;
   $("formation-flow-error").textContent = failure ?? "";
   const key = JSON.stringify([selected, children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply])]);
@@ -125,28 +173,17 @@ function draw() {
   const body = $("formation-flow-body");
   const top = body.scrollTop;
   const list = $("formation-flow-list");
-  // The tab of the same child carries the same name, so only a focus inside this list is put back.
   const focused = list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.child : undefined;
-  $("formation-flow-list").replaceChildren(...children.map((c) => card(c, now)));
+  list.replaceChildren(...children.map((c) => card(c, now)));
   body.scrollTop = top;
-  if (focused) $("formation-flow-list").querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
-}
-
-// The pressed button is hidden by the draw, so the focus goes on to the button that is shown now.
-function toggleFlow() {
-  const focused = document.activeElement?.classList.contains("formation-flow-toggle") ?? false;
-  open = !open;
-  draw();
-  if (focused) [...document.querySelectorAll<HTMLElement>(".formation-flow-toggle")].find((b) => b.offsetParent !== null)?.focus({ preventScroll: true });
+  if (focused) list.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
 export function initFormationFlow() {
-  const icon = $("footer-mode-formation").querySelector("svg")!.outerHTML;
-  for (const id of ["formation-flow-toggle", "formation-tabbar-toggle"]) {
-    $(id).insertAdjacentHTML("afterbegin", icon);
-    $(id).onclick = toggleFlow;
-  }
-  initFormationTabs(draw);
+  $("formation-follow").onclick = () => {
+    follow = !follow;
+    draw();
+  };
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && watching !== null) void read();
   });

@@ -683,25 +683,21 @@
         </header>
         <div id="formation-term"></div>
       </section>
-      <section id="formation-children" aria-label="子">
-        <div id="formation-tabbar" data-tauri-drag-region>
-          <div id="formation-tabs" role="tablist" aria-label="子"></div>
-          <button id="formation-follow" class="formation-follow" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>自動で追う</button>
-          <button id="formation-tabbar-toggle" class="icon-btn formation-flow-toggle" type="button" aria-label="流れ" aria-pressed="true" hidden><span class="formation-flow-badge" aria-hidden="true" hidden></span></button>
-        </div>
-        <div id="formation-child-term"></div>
-      </section>
-      <aside id="formation-flow" aria-label="流れ">
+      <aside id="formation-flow" aria-label="流れ" hidden>
         <header id="formation-flow-head" data-tauri-drag-region>
           <h2>流れ</h2>
           <span id="formation-flow-count"></span>
-          <button id="formation-flow-toggle" class="icon-btn formation-flow-toggle" type="button" aria-label="流れ" aria-pressed="true"></button>
+          <button id="formation-follow" class="formation-follow" type="button" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>自動で追う</button>
         </header>
         <div id="formation-flow-body">
           <p id="formation-flow-error" class="pending fail" role="alert" hidden></p>
           <div id="formation-flow-root" class="formation-card"><span class="formation-card-row"><span class="formation-card-name">formation</span><span class="formation-card-role">司令塔</span></span></div>
           <ul id="formation-flow-list"></ul>
         </div>
+        <section id="formation-session" aria-label="子のセッション" hidden>
+          <header id="formation-session-head"><i class="formation-dot"></i><span id="formation-session-name"></span></header>
+          <div id="formation-child-term"></div>
+        </section>
       </aside>
     </section>
     <section id="slack-compose" hidden>
