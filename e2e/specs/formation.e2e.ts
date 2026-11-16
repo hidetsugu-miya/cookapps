@@ -689,6 +689,23 @@ describe("orchestration mode: the session of a child", () => {
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_batch-update")).toBe(true);
   });
 
+  it("reads and types into the terminal of a child of a saved environment in that environment, and the one of this Mac as before", async () => {
+    await openSession([formationChild("a-update", "working"), formationChild("lab-update", "waiting", { minutes: 3, environment: "mac-studio" })]);
+    // The follow selects the child that waits: it runs in the saved environment.
+    expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_lab-update", environment: "mac-studio" });
+    await browser.waitUntil(async () => (await screenText()).includes("確認します"));
+    const input = await mock("orca_terminal_input", null);
+    await browser.execute(() => document.querySelector<HTMLElement>('#formation-flow-list [data-child="lab-update"]')!.click());
+    await browser.keys(["c", "d"]);
+    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
+    expect((await callsOf(input)).every((c) => (c as { handle: string; environment: string }).handle === "term_lab-update" && (c as { environment: string }).environment === "mac-studio")).toBe(true);
+    // The child of this Mac names no environment.
+    await card("a-update").click();
+    await mock("orca_terminal_read", ["$ npm test"]);
+    await browser.waitUntil(async () => (await readHandles()).join() === "term_a-update");
+    expect((await callsOf("orca_terminal_read")).every((c) => JSON.stringify(c) === JSON.stringify({ handle: "term_a-update" }))).toBe(true);
+  });
+
   it("does not take the keyboard when the follow moves the selection", async () => {
     await openSession([formationChild("a-update", "working"), formationChild("b-update", "working")]);
     await $("#formation-term .orca-term-box:not([hidden]) .xterm-screen").click();

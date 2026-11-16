@@ -997,6 +997,8 @@ pub struct FormationChild {
     pub tool_name: Option<String>,
     /// The terminal that runs it, to open its tab; `None` when the child is planned or has left `orca worktree ps` (no tab is drawn).
     pub handle: Option<String>,
+    /// The Orca the child runs in: `local` (this Mac) or the name of a saved environment, as the record holds it (a launched child's is the name `orca environment list` gives, also when the record has its id). The screen reads and types into the terminal in that Orca.
+    pub environment: String,
 }
 
 /// The state of an agent that `orca worktree ps` lists.
@@ -1027,61 +1029,150 @@ fn agent_of<'a>(ps: &'a Value, pane_key: &str) -> Option<&'a Value> {
         })
 }
 
-/// The children of the record, in its order, each joined by its `paneKey` to the agents of `ps`. A planned child is planned; a launched one that `ps` does not list any more is done, with no handle.
-fn children_of(children: &[Child], ps: &Value) -> Vec<FormationChild> {
-    children
+/// One child of the record as the screen draws it, joined by its `paneKey` to the agents of `ps` (`orca worktree ps` of its environment, its `result`). A planned child is planned; a launched one that `ps` does not list any more is done, with no handle.
+/// `ps` is `None` when the Orca of its environment could not be read: the child is then working, with its handle and nothing else known, because a child is not taken for finished unless Orca says so.
+fn child_row(child: &Child, environment: &str, ps: Option<&Value>) -> FormationChild {
+    let mut row = FormationChild {
+        name: child.name.clone(),
+        repo: child.repo.clone(),
+        branch: String::new(),
+        state: FormationState::Planned,
+        at_ms: 0,
+        reply: None,
+        tool_name: None,
+        handle: None,
+        environment: environment.to_owned(),
+    };
+    let Some(launch) = &child.launch else {
+        return row;
+    };
+    row.branch = launch.branch.clone();
+    row.handle = Some(launch.handle.clone());
+    let Some(ps) = ps else {
+        row.state = FormationState::Working;
+        return row;
+    };
+    let Some(agent) = agent_of(ps, &launch.pane_key) else {
+        row.state = FormationState::Done;
+        row.handle = None;
+        return row;
+    };
+    row.state = state_of(agent);
+    row.at_ms = orca::ms_of(
+        agent,
+        if row.state == FormationState::Done {
+            "updatedAt"
+        } else {
+            "stateStartedAt"
+        },
+    );
+    row.reply = orca::text_of(agent, "lastAssistantMessage").and_then(orca::first_text_line);
+    if row.state != FormationState::Done {
+        row.tool_name = orca::text_of(agent, "toolName").map(str::to_owned);
+    }
+    row
+}
+
+/// The list of `formation_children`. Each environment that a launched child is in is asked once for `orca worktree ps` (side by side), and only its own children are joined to the answer; a record of planned children alone, or of none, needs no Orca, and a record of this Mac's children alone does not read `orca environment list`.
+/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI.
+/// An environment that cannot be read (also one whose value is refused) leaves its children working with their terminals, and the others are drawn from what was read. When no launched child could be read, the read fails with the first reason, so that the screen keeps its last list and says why.
+fn children_view_with(
+    children: &[Child],
+    read: &(dyn Fn(&[String]) -> Result<Value, String> + Sync),
+) -> Result<Vec<FormationChild>, String> {
+    let mut saved: Option<Result<Vec<Environment>, String>> = None;
+    let named: Vec<Option<Result<String, String>>> = children
         .iter()
         .map(|child| {
-            let mut row = FormationChild {
-                name: child.name.clone(),
-                repo: child.repo.clone(),
-                branch: String::new(),
-                state: FormationState::Planned,
-                at_ms: 0,
-                reply: None,
-                tool_name: None,
-                handle: None,
-            };
-            let Some(launch) = &child.launch else {
-                return row;
-            };
-            row.branch = launch.branch.clone();
-            let Some(agent) = agent_of(ps, &launch.pane_key) else {
-                row.state = FormationState::Done;
-                return row;
-            };
-            row.state = state_of(agent);
-            row.at_ms = orca::ms_of(
-                agent,
-                if row.state == FormationState::Done {
-                    "updatedAt"
-                } else {
-                    "stateStartedAt"
-                },
-            );
-            row.reply =
-                orca::text_of(agent, "lastAssistantMessage").and_then(orca::first_text_line);
-            if row.state != FormationState::Done {
-                row.tool_name = orca::text_of(agent, "toolName").map(str::to_owned);
-            }
-            row.handle = Some(launch.handle.clone());
-            row
+            child.launch.as_ref()?;
+            Some(if child.environment == LOCAL {
+                Ok(LOCAL.to_owned())
+            } else {
+                saved
+                    .get_or_insert_with(|| {
+                        read(&environment_list_args())
+                            .map(|result| environments_listed(&result))
+                            .map_err(|e| format!("環境の一覧を読めません: {e}"))
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)
+                    .and_then(|list| resolve_environment(list, &child.environment))
+            })
         })
-        .collect()
+        .collect();
+    let mut wanted: Vec<&str> = Vec::new();
+    for name in named.iter().flatten().flatten() {
+        if !wanted.contains(&name.as_str()) {
+            wanted.push(name);
+        }
+    }
+    let reads: Vec<(&str, Result<Value, String>)> = std::thread::scope(|scope| {
+        let started: Vec<_> = wanted
+            .iter()
+            .map(|name| {
+                let args = orca::ps_args(Some(name));
+                (*name, scope.spawn(move || read(&args)))
+            })
+            .collect();
+        started
+            .into_iter()
+            .map(|(name, run)| {
+                let result = run
+                    .join()
+                    .unwrap_or_else(|_| Err("Orca の読み取りが止まりました".into()));
+                (name, result)
+            })
+            .collect()
+    });
+    let mut first_failure: Option<String> = None;
+    let mut launched = 0;
+    let mut read_ok = 0;
+    let rows: Vec<FormationChild> = children
+        .iter()
+        .zip(&named)
+        .map(|(child, name)| {
+            let Some(name) = name else {
+                return child_row(child, &child.environment, None);
+            };
+            launched += 1;
+            let listing = name.as_ref().map_err(Clone::clone).and_then(|name| {
+                reads
+                    .iter()
+                    .find(|(read_name, _)| read_name == name)
+                    .map_or_else(
+                        || Err("Orca を読めませんでした".to_owned()),
+                        |(_, result)| {
+                            result
+                                .as_ref()
+                                .map(|ps| (name.as_str(), ps))
+                                .map_err(Clone::clone)
+                        },
+                    )
+            });
+            match listing {
+                Ok((environment, ps)) => {
+                    read_ok += 1;
+                    child_row(child, environment, Some(ps))
+                }
+                Err(e) => {
+                    first_failure.get_or_insert(e);
+                    let environment = name.as_deref().unwrap_or(&child.environment);
+                    child_row(child, environment, None)
+                }
+            }
+        })
+        .collect();
+    match first_failure {
+        Some(failure) if launched > 0 && read_ok == 0 => Err(failure),
+        _ => Ok(rows),
+    }
 }
 
-/// The list of `formation_children`. `orca worktree ps` is run only when a child is launched: a record of planned children alone needs no Orca.
 fn children_view(config: &Path) -> Result<Vec<FormationChild>, String> {
-    let children = read_children(config);
-    let ps = if children.iter().any(|c| c.launch.is_some()) {
-        orca_read(&orca::ps_args(None))?
-    } else {
-        Value::Null
-    };
-    Ok(children_of(&children, &ps))
+    children_view_with(&read_children(config), &orca_read)
 }
 
-/// The children of the orchestrator for its screen (A-37), read from `formation/children.json` and `orca worktree ps` of this Mac.
+/// The children of the orchestrator for its screen (A-37), read from `formation/children.json` and `orca worktree ps` of the environment of each child.
 #[tauri::command]
 pub async fn formation_children(app: tauri::AppHandle) -> Result<Vec<FormationChild>, String> {
     let dir = config_dir(&app)?;
@@ -1880,6 +1971,14 @@ mod tests {
         json!({"worktrees": [{"path": "/w/a", "agents": agents}]})
     }
 
+    /// The rows of children that are all in the environment their record says, whose `ps` was read.
+    fn rows_of(children: &[Child], ps: &Value) -> Vec<FormationChild> {
+        children
+            .iter()
+            .map(|child| child_row(child, &child.environment, Some(ps)))
+            .collect()
+    }
+
     fn agent(pane: &str, state: &str, program: Option<&str>) -> Value {
         let mut agent = json!({
             "paneKey": pane, "parentPaneKey": null, "hasLivePty": true, "state": state,
@@ -1943,7 +2042,7 @@ mod tests {
             agent("tab:other", "working", None),
             agent("tab:b", "working", Some("working")),
         ]);
-        let rows = children_of(&[b.clone(), children[1].clone(), c.clone()], &ps);
+        let rows = rows_of(&[b.clone(), children[1].clone(), c.clone()], &ps);
         let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["b", "a", "c"]);
         assert_eq!(rows[0].state, FormationState::Working);
@@ -1956,7 +2055,7 @@ mod tests {
 
     #[test]
     fn a_planned_child_has_no_state_time_branch_or_terminal() {
-        let rows = children_of(
+        let rows = rows_of(
             &[planned("a", "r1")],
             &ps_of(vec![agent("x", "working", None)]),
         );
@@ -1971,6 +2070,7 @@ mod tests {
                 reply: None,
                 tool_name: None,
                 handle: None,
+                environment: LOCAL.into(),
             }]
         );
     }
@@ -1991,7 +2091,7 @@ mod tests {
             json!({}),
             Value::Null,
         ] {
-            let rows = children_of(std::slice::from_ref(&gone), &ps);
+            let rows = rows_of(std::slice::from_ref(&gone), &ps);
             assert_eq!(rows[0].state, FormationState::Done);
             assert_eq!(rows[0].handle, None);
             assert_eq!(rows[0].at_ms, 0);
@@ -2007,15 +2107,12 @@ mod tests {
         child.launch.as_mut().unwrap().pane_key = "tab:a".into();
         for (state, want) in [("working", 5_000), ("waiting", 5_000), ("done", 9_000)] {
             let ps = ps_of(vec![agent("tab:a", state, None)]);
-            assert_eq!(
-                children_of(std::slice::from_ref(&child), &ps)[0].at_ms,
-                want
-            );
+            assert_eq!(rows_of(std::slice::from_ref(&child), &ps)[0].at_ms, want);
         }
         let mut bare = agent("tab:a", "working", None);
         bare.as_object_mut().unwrap().remove("stateStartedAt");
         let ps = ps_of(vec![bare]);
-        assert_eq!(children_of(&[child], &ps)[0].at_ms, 0);
+        assert_eq!(rows_of(&[child], &ps)[0].at_ms, 0);
     }
 
     #[test]
@@ -2023,7 +2120,7 @@ mod tests {
         let mut child = launched("a", "r1");
         child.launch.as_mut().unwrap().pane_key = "tab:a".into();
         let ps = ps_of(vec![agent("tab:a", "working", None)]);
-        let row = &children_of(std::slice::from_ref(&child), &ps)[0];
+        let row = &rows_of(std::slice::from_ref(&child), &ps)[0];
         assert_eq!(row.reply.as_deref(), Some("終わりました"));
         assert_eq!(row.tool_name.as_deref(), Some("Bash"));
         assert!(!serde_json::to_string(row).unwrap().contains("prompt"));
@@ -2031,18 +2128,18 @@ mod tests {
 
         let mut data = agent("tab:a", "working", None);
         data["lastAssistantMessage"] = json!("[stderr] boom");
-        let row = &children_of(std::slice::from_ref(&child), &ps_of(vec![data]))[0];
+        let row = &rows_of(std::slice::from_ref(&child), &ps_of(vec![data]))[0];
         assert_eq!(row.reply, None);
 
         let long = "あ".repeat(500);
         let mut agent_long = agent("tab:a", "working", None);
         agent_long["lastAssistantMessage"] = json!(long);
-        let row = &children_of(std::slice::from_ref(&child), &ps_of(vec![agent_long]))[0];
+        let row = &rows_of(std::slice::from_ref(&child), &ps_of(vec![agent_long]))[0];
         assert_eq!(row.reply.as_ref().unwrap().chars().count(), 200);
 
         // Orca keeps the last tool name after the turn ended.
         let ps = ps_of(vec![agent("tab:a", "done", None)]);
-        assert_eq!(children_of(&[child], &ps)[0].tool_name, None);
+        assert_eq!(rows_of(&[child], &ps)[0].tool_name, None);
     }
 
     #[test]
@@ -2050,7 +2147,7 @@ mod tests {
         let mut child = launched("a", "r1");
         child.launch.as_mut().unwrap().pane_key = "tab:a".into();
         let ps = ps_of(vec![agent("tab:a", "waiting", Some("blocked"))]);
-        let value = serde_json::to_value(&children_of(&[child], &ps)[0]).unwrap();
+        let value = serde_json::to_value(&rows_of(&[child], &ps)[0]).unwrap();
         assert_eq!(value["state"], "waiting");
         assert_eq!(value["atMs"], 5_000);
         assert_eq!(value["toolName"], "Bash");
@@ -2355,12 +2452,262 @@ mod tests {
         std::fs::remove_dir_all(&there).unwrap();
     }
 
+    // ---- the state of each child, read in its own environment ----
+
+    /// A read of Orca that answers by the arguments, and records every command it was given.
+    struct FakeOrca {
+        saved: Result<Value, String>,
+        /// `--environment=` argument (as given to the CLI) to the `result` of `orca worktree ps`, or why it fails.
+        ps: Vec<(&'static str, Result<Value, String>)>,
+        calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl FakeOrca {
+        fn new(ps: Vec<(&'static str, Result<Value, String>)>) -> Self {
+            Self {
+                saved: Ok(
+                    json!({"environments": [{"id": "env-1", "name": "mac-studio"}, {"id": "env-2", "name": "lab"}]}),
+                ),
+                ps,
+                calls: Mutex::default(),
+            }
+        }
+
+        fn read(&self, args: &[String]) -> Result<Value, String> {
+            self.calls.lock().unwrap().push(args.to_vec());
+            if args == environment_list_args() {
+                return self.saved.clone();
+            }
+            assert_eq!(args[..3], ["worktree", "ps", "--limit"], "{args:?}");
+            let wanted = args.last().unwrap().as_str();
+            self.ps
+                .iter()
+                .find(|(name, _)| *name == wanted)
+                .map_or_else(
+                    || panic!("no environment of this name is read: {args:?}"),
+                    |(_, result)| result.clone(),
+                )
+        }
+
+        fn view(&self, children: &[Child]) -> Result<Vec<FormationChild>, String> {
+            children_view_with(children, &|args| self.read(args))
+        }
+
+        fn reads_of_ps(&self) -> Vec<String> {
+            let mut names: Vec<String> = self
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|args| args[0] == "worktree")
+                .map(|args| args.last().unwrap().clone())
+                .collect();
+            names.sort();
+            names
+        }
+
+        fn reads_of_the_list_of_environments(&self) -> usize {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|args| args[0] == "environment")
+                .count()
+        }
+    }
+
     #[test]
-    fn the_state_of_a_child_of_a_saved_environment_is_read_as_before() {
-        // The state is read from this Mac's `orca worktree ps`: a saved environment's child is not in it, and is done (#810 reads its own Orca).
-        let child = in_environment(launched("a", "web"), "mac-studio");
-        let rows = children_of(&[child], &ps_of(vec![agent("tab-a:leaf", "working", None)]));
-        assert_eq!(rows[0].repo, "web");
+    fn the_state_of_each_child_is_read_from_the_ps_of_its_own_environment_once_for_each_environment(
+    ) {
+        let fake = FakeOrca::new(vec![
+            (
+                "--environment=local",
+                Ok(ps_of(vec![agent("tab-a:leaf", "working", None)])),
+            ),
+            (
+                "--environment=mac-studio",
+                Ok(ps_of(vec![
+                    agent("tab-b:leaf", "waiting", Some("blocked")),
+                    agent("tab-c:leaf", "done", None),
+                ])),
+            ),
+        ]);
+        let children = [
+            launched("a", "web"),
+            in_environment(launched("b", "api"), "mac-studio"),
+            in_environment(launched("c", "api"), "mac-studio"),
+        ];
+        let rows = fake.view(&children).unwrap();
+        let seen: Vec<_> = rows
+            .iter()
+            .map(|r| (r.name.as_str(), r.state, r.environment.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("a", FormationState::Working, "local"),
+                ("b", FormationState::Waiting, "mac-studio"),
+                ("c", FormationState::Done, "mac-studio"),
+            ]
+        );
+        assert_eq!(
+            fake.reads_of_ps(),
+            ["--environment=local", "--environment=mac-studio"]
+        );
+        assert_eq!(fake.reads_of_the_list_of_environments(), 1);
+    }
+
+    #[test]
+    fn a_child_is_not_joined_to_an_agent_of_another_environment_with_the_same_pane() {
+        let fake = FakeOrca::new(vec![
+            ("--environment=local", Ok(ps_of(vec![]))),
+            (
+                "--environment=mac-studio",
+                Ok(ps_of(vec![agent("tab-a:leaf", "working", None)])),
+            ),
+        ]);
+        let rows = fake.view(&[launched("a", "web")]).unwrap();
+        assert_eq!(rows[0].state, FormationState::Done);
+        assert_eq!(rows[0].handle, None);
+        assert_eq!(fake.reads_of_ps(), ["--environment=local"]);
+    }
+
+    #[test]
+    fn a_record_of_this_macs_children_alone_does_not_read_the_environments() {
+        let fake = FakeOrca::new(vec![("--environment=local", Ok(ps_of(vec![])))]);
+        fake.view(&[launched("a", "web"), launched("b", "web")])
+            .unwrap();
+        assert_eq!(fake.reads_of_the_list_of_environments(), 0);
+        assert_eq!(fake.reads_of_ps(), ["--environment=local"]);
+    }
+
+    #[test]
+    fn planned_children_alone_or_none_ask_no_orca() {
+        let fake = FakeOrca::new(vec![]);
+        assert_eq!(fake.view(&[]).unwrap(), vec![]);
+        let rows = fake
+            .view(&[
+                planned("a", "r1"),
+                in_environment(planned("b", "r2"), "mac-studio"),
+            ])
+            .unwrap();
+        assert!(rows.iter().all(|r| r.state == FormationState::Planned));
+        assert_eq!(rows[1].environment, "mac-studio");
+        assert!(fake.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_old_record_with_no_environment_is_read_as_this_mac() {
+        let config = temp_dir("view-old-record");
+        std::fs::create_dir_all(dir(&config)).unwrap();
+        std::fs::write(
+            dir(&config).join(CHILDREN_FILE),
+            r#"{"children":[{"name":"a","repo":"web","path":"/work/a","branch":"user/a","handle":"term_a","paneKey":"tab-a:leaf","launchedAt":1}]}"#,
+        )
+        .unwrap();
+        let fake = FakeOrca::new(vec![(
+            "--environment=local",
+            Ok(ps_of(vec![agent("tab-a:leaf", "working", None)])),
+        )]);
+        let rows = fake.view(&read_children(&config)).unwrap();
+        assert_eq!(rows[0].environment, "local");
         assert_eq!(rows[0].state, FormationState::Working);
+        assert_eq!(fake.reads_of_ps(), ["--environment=local"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_id_of_a_saved_environment_in_the_record_is_read_under_its_name() {
+        let fake = FakeOrca::new(vec![(
+            "--environment=mac-studio",
+            Ok(ps_of(vec![agent("tab-a:leaf", "waiting", None)])),
+        )]);
+        let rows = fake
+            .view(&[in_environment(launched("a", "web"), "env-1")])
+            .unwrap();
+        assert_eq!(rows[0].environment, "mac-studio");
+        assert_eq!(rows[0].state, FormationState::Waiting);
+    }
+
+    #[test]
+    fn the_children_of_an_environment_that_cannot_be_read_work_on_and_the_others_are_read() {
+        let fake = FakeOrca::new(vec![
+            (
+                "--environment=local",
+                Ok(ps_of(vec![agent("tab-a:leaf", "waiting", None)])),
+            ),
+            ("--environment=mac-studio", Err("Orca に届きません".into())),
+        ]);
+        let rows = fake
+            .view(&[
+                launched("a", "web"),
+                in_environment(launched("b", "api"), "mac-studio"),
+            ])
+            .unwrap();
+        assert_eq!(rows[0].state, FormationState::Waiting);
+        assert_eq!(rows[1].state, FormationState::Working);
+        assert_eq!(rows[1].handle.as_deref(), Some("term_b"));
+        assert_eq!(rows[1].branch, "user/b");
+        assert_eq!(rows[1].environment, "mac-studio");
+        assert_eq!(rows[1].at_ms, 0);
+        assert_eq!(rows[1].reply, None);
+        assert_eq!(rows[1].tool_name, None);
+    }
+
+    #[test]
+    fn a_read_where_no_launched_child_could_be_read_fails_with_the_first_reason() {
+        let fake = FakeOrca::new(vec![(
+            "--environment=local",
+            Err("Orca に届きません".into()),
+        )]);
+        assert_eq!(
+            fake.view(&[planned("p", "r"), launched("a", "web")])
+                .unwrap_err(),
+            "Orca に届きません"
+        );
+        let mut fake = FakeOrca::new(vec![]);
+        fake.saved = Err("環境の一覧".into());
+        let error = fake
+            .view(&[in_environment(launched("a", "web"), "mac-studio")])
+            .unwrap_err();
+        assert!(error.contains("環境の一覧"), "{error}");
+        assert!(fake.reads_of_ps().is_empty());
+    }
+
+    #[test]
+    fn an_environment_of_the_record_that_is_not_saved_never_reaches_the_cli() {
+        for bad in ["--help", "unknown", "", "LAB", "--environment=local"] {
+            let fake = FakeOrca::new(vec![(
+                "--environment=local",
+                Ok(ps_of(vec![agent("tab-a:leaf", "working", None)])),
+            )]);
+            let rows = fake
+                .view(&[
+                    launched("a", "web"),
+                    in_environment(launched("b", "api"), bad),
+                ])
+                .unwrap();
+            assert_eq!(rows[0].state, FormationState::Working, "{bad:?}");
+            assert_eq!(rows[1].state, FormationState::Working, "{bad:?}");
+            assert_eq!(rows[1].environment, bad);
+            assert_eq!(fake.reads_of_ps(), ["--environment=local"], "{bad:?}");
+            let alone = fake.view(&[in_environment(launched("b", "api"), bad)]);
+            assert!(alone.is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_two_saved_environments_share_is_not_read() {
+        let mut fake = FakeOrca::new(vec![("--environment=local", Ok(ps_of(vec![])))]);
+        fake.saved =
+            Ok(json!({"environments": [{"id": "e1", "name": "lab"}, {"id": "e2", "name": "lab"}]}));
+        let rows = fake
+            .view(&[
+                launched("a", "web"),
+                in_environment(launched("b", "api"), "lab"),
+            ])
+            .unwrap();
+        assert_eq!(rows[1].state, FormationState::Working);
+        assert_eq!(fake.reads_of_ps(), ["--environment=local"]);
     }
 }

@@ -24,4 +24,8 @@ toolName: string | null,
 /**
  * The terminal that runs it, to open its tab; `None` when the child is planned or has left `orca worktree ps` (no tab is drawn).
  */
-handle: string | null, };
+handle: string | null, 
+/**
+ * The Orca the child runs in: `local` (this Mac) or the name of a saved environment, as the record holds it (a launched child's is the name `orca environment list` gives, also when the record has its id). The screen reads and types into the terminal in that Orca.
+ */
+environment: string, };

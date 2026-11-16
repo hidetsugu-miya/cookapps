@@ -1,4 +1,4 @@
-// The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal mirrored from Orca as the Orca screen's are (A-8).
+// The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal mirrored from the Orca of the child's environment as the Orca screen's are (A-8).
 // The children are read every few seconds while the mode is shown. While Orca is the mode of the development screen, the read is made at the Orca list's period only to count the children that wait, on the footer's icon.
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
@@ -13,6 +13,8 @@ import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminal
 const READ_MS = 3000;
 // The name of the owner of the terminals: what `showTerminals` and `hideTerminals` are told.
 const OWNER = "formation-session";
+// The environment of this Mac in `FormationChild.environment`; the terminal source calls it null, as the Orca screen's.
+const LOCAL = "local";
 const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
 
 // The last read; a read that failed keeps it and says why in `failure`.
@@ -83,7 +85,9 @@ export function followTarget(list: FormationChild[], current: string | null): st
 
 function placementOf(child: FormationChild): Placement {
   const handle = child.handle!;
-  return { id: handle, source: { kind: "mirror", handle, path: "", environment: null }, host: $("formation-child-term") };
+  // The terminal is read and typed into in the Orca of the child's environment.
+  const environment = child.environment === LOCAL ? null : child.environment;
+  return { id: handle, source: { kind: "mirror", handle, path: "", environment }, host: $("formation-child-term") };
 }
 
 // Shows the terminal of the selected child, and hides the others (their reads stop). `focus` gives it the keyboard: only a press of the user does, never the follow, so the orchestrator's terminal keeps the keys the owner is typing.
