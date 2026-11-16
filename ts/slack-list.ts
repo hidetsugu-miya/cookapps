@@ -31,6 +31,7 @@ import { getSlackWorkspaces, setSlackWorkspaces, slackListVersion } from "./slac
 import { isSlackThreadShown, openSlackThread } from "./slack-thread.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
 import { toast } from "./toast.js";
+import { drawUnreadPane } from "./unread-pane.js";
 import { setNavCount, show, showError } from "./view.js";
 
 // The workspaces (`slack_load`), or null until read.
@@ -353,6 +354,18 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
   row.append(press, avatar, main);
   if (!grouped) row.append(tag("span", "feed-date", formatDate(slackMs(m.ts))));
   return row;
+}
+
+// The unread messages held, for the pane of the footer (A-35).
+export const unreadMessages = () => (timeline?.messages ?? []).filter((m) => m.unread);
+
+// What the pane of the footer does for a message (A-35): the same as the popup's "スレッドを開く" (S-17), and as pressing the row, which also closes the popup.
+export function openUnreadMessage(m: TimelineMessage) {
+  closeSlackChannel();
+  setScreen("slack");
+  readRow(m);
+  openSlackThread(m);
+  dismissSlackArrival(m);
 }
 
 // Opens the thread of a row and reads it (S-6, S-8). The second click of a double click on "既読にする" lands here when the row moved under the pointer: it opens nothing.
@@ -840,6 +853,7 @@ function drawPending() {
 
 // Draws the list's parts when the list is on screen; it is drawn from what is held when it is shown (`revealSlackList`).
 function draw() {
+  drawUnreadPane();
   // The popups of messages that are not unread rows any more go, whichever screen is shown.
   if (timeline) pruneSlackArrivals(() => new Set(timeline!.messages.filter((m) => m.unread).map(slackKey)), answers);
   drawSide();

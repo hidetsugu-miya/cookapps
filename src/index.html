@@ -714,11 +714,18 @@
       </div>
     </section>
     <footer id="footer">
-      <button id="footer-bell" class="footer-btn" type="button" aria-label="通知">
+      <button id="footer-bell" class="footer-btn" type="button" aria-label="通知" aria-expanded="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>
         <span class="footer-count" aria-hidden="true" hidden></span>
       </button>
     </footer>
+    <aside id="unread-pane" aria-label="未読" hidden>
+      <header>
+        <h2 id="unread-pane-title"></h2>
+        <button id="unread-pane-close" class="icon-btn" type="button" aria-label="閉じる"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <ul id="unread-pane-list"></ul>
+    </aside>
   </div>
   <div id="update-pop" class="pop" role="status" hidden>
     <div class="up-body">

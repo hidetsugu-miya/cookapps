@@ -10,6 +10,7 @@ import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
 import { opened } from "./thread.js";
 import { hideToast, toast } from "./toast.js";
+import { initUnreadPane } from "./unread-pane.js";
 import { show, showError } from "./view.js";
 
 // What the last archive / trash did, for "元に戻す" and Cmd+Z (Ctrl+Z off macOS): the command that reverses it and the thread data to put back.
@@ -334,6 +335,7 @@ async function syncAll() {
 
 export function initInbox() {
   $("mail-mark-all").onclick = markAllRead;
+  initUnreadPane();
   // Whether there are rows changes with every load, sync, removal and read toggle.
   const watch = new MutationObserver(drawInboxState);
   watch.observe($("unread-threads"), { childList: true });
