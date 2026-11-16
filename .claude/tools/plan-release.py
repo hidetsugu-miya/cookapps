@@ -15,7 +15,7 @@ Usage:
 `start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out).
 A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
 `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
-(open, no `needs:owner`, not in hand, no sub-issue, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
+(open, no `needs:owner`, not in hand, no sub-issue, no parent, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
 `split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "parts": [{"title", "body", "labels", "points_reason"}]}; a `milestone` key is refused.
 It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes `solo` and `session` when they are missing,
 creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
@@ -241,8 +241,8 @@ def parse_plan(plan):
     return (None, [_int(n) for n in order], {_int(k): [_int(b) for b in v] for k, v in blocked_by.items()})
 
 
-def validate_plan(plan, free, fixed, states):
-    """-> list of problems. `states` maps an issue number to "open" or "closed"."""
+def validate_plan(plan, free, fixed, states, parents=frozenset()):
+    """-> list of problems. `states` maps an issue number to "open" or "closed". `parents`: the numbers of the open parents, which may stand as blockers like the fixed issues."""
     problem, order, blocked_by = parse_plan(plan)
     if problem:
         return [problem]
@@ -272,7 +272,7 @@ def validate_plan(plan, free, fixed, states):
                 problems.append(f"blocked_by: #{n} names #{b}, which is unknown")
             elif state == "open" and b in free_by and position.get(b, -1) >= position.get(n, -1):
                 problems.append(f"blocked_by: #{b} blocks #{n} but is not placed earlier in order")
-            elif state == "open" and b not in free_by and b not in fixed_nums:
+            elif state == "open" and b not in free_by and b not in fixed_nums and b not in parents:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
 
     # An issue comes before every issue of a lower tier (urgency, then importance), and a bug of 1, 2 or 3 points comes before every other issue of its tier.
@@ -411,7 +411,7 @@ def plan_positions(plan):
 
 def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
     """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), not in hand (`pr_closing`, `mine`),
-    no sub-issue and not labelled `whole`. The mark of a split issue is its sub-issues, and the mark of one kept as one is the label `whole`."""
+    no sub-issue, no parent (`split` refuses a part) and not labelled `whole`. The mark of a split issue is its sub-issues, and the mark of one kept as one is the label `whole`."""
     return [
         i
         for i in issues
@@ -421,6 +421,7 @@ def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
         and i.number not in pr_closing
         and i.number not in mine
         and not is_parent(i)
+        and i.parent is None
         and not has(i, "whole")
     ]
 
@@ -916,10 +917,11 @@ def cmd_apply(args):
     refuse_missing_points(state)
     states = dict(state.states)
     states.update(closed_states(state.repo, [n for n in {*mentioned(plan), *blockers(plan)} if n not in states]))
-    plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed}, {n for n, i in state.issues.items() if is_parent(i)})
+    parents = {n for n, i in state.issues.items() if is_parent(i)}
+    plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed}, parents)
     for n, why in dropped:
         print(f"dropped #{n} ({why})", file=sys.stderr)
-    problems = validate_plan(plan, state.free, state.fixed, state.states)
+    problems = validate_plan(plan, state.free, state.fixed, state.states, parents)
     if problems:
         raise PlanError(problems)
     wanted = {int(k): [int(b) for b in v] for k, v in plan.get("blocked_by", {}).items()}
@@ -1001,7 +1003,8 @@ def cmd_release(args):
 
 def cmd_close(args):
     state = load_state(blockers=False)
-    parents = [i for i in state.issues.values() if i.state == "open" and is_parent(i)]
+    open_children = {i.parent for i in state.issues.values() if i.state == "open" and i.parent}
+    parents = [i for i in state.issues.values() if i.state == "open" and is_parent(i) and i.number not in open_children]
     found = parallel([lambda n=p.number: api(f"repos/{state.repo}/issues/{n}/sub_issues?per_page=100", paginate=True) for p in parents])
     for p in done_parents(parents, {p.number: subs for p, subs in zip(parents, found)}, state.issues.values()):
         if not args.dry_run:

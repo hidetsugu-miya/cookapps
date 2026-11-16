@@ -185,6 +185,12 @@ class Validation(unittest.TestCase):
         plan = {"order": [42, 32, 50, 33], "blocked_by": {"33": [42, 7, 9]}, "reasons": {}}
         self.assertEqual(self.check(plan), [])
 
+    def test_an_open_parent_may_be_a_blocker_only_when_it_is_named_as_a_parent(self):
+        states = {**self.states, 5: "open"}
+        plan = {"order": [42, 32, 50, 33], "blocked_by": {"33": [5]}}
+        self.assertTrue(any("#5, which is open but not planned" in p for p in pr.validate_plan(plan, self.free, self.fixed, states)))
+        self.assertEqual(pr.validate_plan(plan, self.free, self.fixed, states, {5}), [])
+
     def test_keys_of_an_older_plan_are_ignored(self):
         plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "touches": {"32": ["ts/a.ts"]}}
         self.assertEqual(self.check(plan), [])
@@ -454,7 +460,7 @@ class Next(unittest.TestCase):
 
 
 class Unsplit(unittest.TestCase):
-    def test_a_big_issue_with_no_sub_issue_no_whole_and_no_needs_owner_is_unsplit(self):
+    def test_a_big_issue_with_no_sub_issue_no_parent_no_whole_and_no_needs_owner_is_unsplit(self):
         issues = [
             mk(1, ["point:5"]),
             mk(2, ["point:8", "bug"]),
@@ -463,9 +469,9 @@ class Unsplit(unittest.TestCase):
             mk(5, ["point:8"], sub=3),
             mk(6, ["point:5"], state="closed"),
             mk(7, ["point:5", "whole"]),
-            mk(8, ["point:5"], parent=5),
+            mk(8, ["point:5"], parent=5),  # a part: split refuses an issue that has a parent
         ]
-        self.assertEqual(numbers(pr.unsplit(issues)), [1, 2, 8])
+        self.assertEqual(numbers(pr.unsplit(issues)), [1, 2])
 
     def test_an_issue_in_hand_is_not_unsplit(self):
         issues = [mk(1, ["point:5"]), mk(2, ["point:8"]), mk(3, ["point:5"]), mk(4, ["point:5"])]
@@ -516,6 +522,14 @@ class Prune(unittest.TestCase):
         self.assertEqual(pruned["blocked_by"], {"2": [1]})  # a parent is open: a dependency on it is real
         self.assertEqual(pruned["reasons"], {"2": "b"})
         self.assertEqual(dropped, [(1, "parent"), (3, "parent"), (4, "fixed")])
+
+    def test_a_plan_that_depends_on_a_parent_passes_after_the_prune(self):
+        free = [mk(2)]
+        states = {1: "open", 2: "open"}
+        plan = {"order": [1, 2], "blocked_by": {"2": [1]}}
+        pruned, _ = pr.prune_plan(plan, states, set(), {1})
+        self.assertEqual(pr.validate_plan(pruned, free, [], states), ["blocked_by: #2 names #1, which is open but not planned"])
+        self.assertEqual(pr.validate_plan(pruned, free, [], states, {1}), [])
 
     def test_a_plan_of_the_wrong_shape_is_returned_as_it_is(self):
         self.assertEqual(pr.prune_plan({"order": "x"}, {}, set()), ({"order": "x"}, []))
@@ -838,7 +852,7 @@ class DoneParents(unittest.TestCase):
 
         def fake_api(path, method="GET", fields=None, paginate=False):
             if path.endswith("/sub_issues?per_page=100"):
-                return {"1": [self.sub(10)], "2": [self.sub(11, "open")]}[path.split("/issues/")[1].split("/")[0]]
+                return {"1": [self.sub(10)]}[path.split("/issues/")[1].split("/")[0]]  # #2 has an open part in the state: its sub-issues are not read
             raise AssertionError(path)
 
         state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, sub=1), 2: mk(2, sub=1), 3: mk(3, parent=2), 4: mk(4, sub=1, state="closed")}, [], [], set(), {}, {}, [], [])
