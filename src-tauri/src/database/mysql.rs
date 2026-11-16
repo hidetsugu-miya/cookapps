@@ -498,12 +498,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_port_that_nothing_listens_on_is_refused() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
         let endpoint = Endpoint {
             host: "127.0.0.1".to_owned(),
-            port,
+            port: super::super::script::support::free_port(),
             scripted: false,
         };
         let failure = open(&endpoint, "reader", "", SECOND).await.unwrap_err();
