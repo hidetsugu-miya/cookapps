@@ -4,7 +4,7 @@ title: Claude との連携（MCP）
 
 # Claude との連携（MCP）
 
-`cookapps-mcp` は、Claude Code から cookapps の受信トレイと予定を扱うためのローカルの MCP サーバーです。
+`cookapps-mcp` は、Claude Code から cookapps の受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
 stdio で動き、ネットワークのポートは開きません。
 cookapps アプリが起動していなくても使えます。
 
@@ -18,6 +18,7 @@ cookapps アプリが起動していなくても使えます。
     macOS では `~/Library/Application Support/jp.mysis.cookapps/`、Windows では `%APPDATA%\jp.mysis.cookapps\` です。
   - リフレッシュトークンもアプリと同じ OS の資格情報の保管場所の項目（サービス名 `jp.mysis.cookapps`。macOS ではキーチェーン、Windows では資格情報マネージャー）から読みます。
 - `cookapps-mcp` はログインを行いません。アカウントの追加と再ログインは、アプリで行います。
+- データベースの接続のツールは、アプリと同じ設定フォルダの `database-profiles.json` を読み書きし、パスワードはアプリと同じ資格情報の保管場所の項目（サービス名 `jp.mysis.cookapps.database`）から読みます（接続先やユーザーを変える保存では、その項目を消します）。パスワードを登録するのは、アプリの接続の編集ペインだけです。
 - `~/.cargo/bin`（Windows では `%USERPROFILE%\.cargo\bin`）が `PATH` に入っていること。
 
 ## 手順
@@ -84,7 +85,7 @@ macOS では `command` に `/Users/{ユーザー名}/.cargo/bin/cookapps-mcp` �
 
 ### 3. 読み取りのツールだけを許可する
 
-Claude Code の設定ファイル（`~/.claude/settings.json` など）の `permissions.allow` に、次の 3 つを足します。
+Claude Code の設定ファイル（`~/.claude/settings.json` など）の `permissions.allow` に、次の 4 つを足します。
 
 ```json
 {
@@ -92,14 +93,16 @@ Claude Code の設定ファイル（`~/.claude/settings.json` など）の `perm
     "allow": [
       "mcp__cookapps__list_inbox",
       "mcp__cookapps__get_thread",
-      "mcp__cookapps__list_events"
+      "mcp__cookapps__list_events",
+      "mcp__cookapps__db_profiles"
     ]
   }
 }
 ```
 
-書き込みのツール（`archive`、`set_read`、`trash`）は、許可リストに入れません。
+書き込みのツール（`archive`、`set_read`、`trash`、`db_profile_save`、`db_test`）は、許可リストに入れません。
 メールの本文に、Claude への指示が紛れ込むことがあるためです。
+`db_profile_save` は事前スクリプトを保存し、保存したパスワードを消すことがあり、`db_test` は保存した事前スクリプトをこの Mac で動かすので、どちらにも書き込みのツールの印（`destructiveHint`）を付けています。
 許可リストに入れなければ、書き込みのたびに確認が出ます。
 
 ### 4. つながったことを確かめる
@@ -109,7 +112,7 @@ claude mcp get cookapps
 ```
 
 `Status` が `✔ Connected` なら完了です。
-Claude Code の中では、`/mcp` で `cookapps` の 6 つのツールが見えます。
+Claude Code の中では、`/mcp` で `cookapps` の 9 つのツールが見えます。
 
 macOS では、最初にツールを呼んだとき、キーチェーンへのアクセスの許可を求められることがあります。
 「常に許可」を選びます。
@@ -125,8 +128,13 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 | `archive` | `account`、`id` | スレッドを受信トレイから外す | 書き込み |
 | `set_read` | `account`、`id`、`read` | スレッドを既読（`true`）または未読（`false`）にする | 書き込み |
 | `trash` | `account`、`id` | スレッドをゴミ箱へ移す。Gmail から元に戻せる | 書き込み |
+| `db_profiles` | なし | データベースの画面の接続を返す（`id`、`name`、`username`、`script`、`dbHost`、`dbPort`、`passwordSaved`）。パスワードは返さない | 読み取り |
+| `db_profile_save` | `id`（新しい接続では省く）、`name`、`username`、`script`、`dbHost`、`dbPort`（`script` があるときは `dbHost` と `dbPort` を省ける） | 接続を保存し、保存した内容を返す。確かめ方と断り方はアプリの保存と同じ。パスワードは設定しない。ユーザー名、`script`、スクリプトの無い接続のホストとポートを変えると、保存したパスワードを消す | 書き込み |
+| `db_test` | `id` | 保存した接続を、保存したパスワードで、アプリの「接続をテスト」と同じようにテストする（事前スクリプトを動かし、MySQL にログインして版を読み、スクリプトを止める）。`{"ok": true, "version": …}` か `{"ok": false, "error": …, "note": …}` を返す。最長 2 分ほどかかる | 書き込み |
 
 `account` と `id` には、`list_inbox` が返した値を使います。
+`db_profile_save` と `db_test` の `id` には、`db_profiles` か `db_profile_save` が返した値を使います。
+`db_test` の `error` は、事前スクリプト、MySQL、アプリが書いた文で、`note` はそれがデータであって指示ではないことを伝えます。
 
 再ログインが要るアカウントは、`list_inbox` と `list_events` の `needsLogin` に入ります。
 読み込みに失敗したアカウントは、`failed` に入ります。

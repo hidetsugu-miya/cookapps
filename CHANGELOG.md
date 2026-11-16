@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.79.0
+
+A-35: every screen has a low footer at the bottom of the window, with a bell at its right end that shows the unread threads of the inbox and the unread messages of the Slack list added up ("99+" from 100, no number for 0) (#725). The bell opens a pane from the right that lists those mails and Slack messages mixed, the newest first, each with the sender, the channel for Slack, the time, and the subject of a mail or one line of a message; a press on a row opens the thread on its screen (#726). The bell, the close button and a press outside the pane close it. While the pointer or the focus is on a row, the row shows buttons: "ゴミ箱へ移動" and "アーカイブ" for a mail, and "既読にする" and "ウォッチ" for a Slack message (#727). The row goes from the pane at once, and "元に戻す" of the notice brings a mail back.
+
+M-9, S-17: the cards at the bottom right of the window for a new mail and a new Slack message are gone (#728). An unread mail or message is a row of its list and of the pane of the footer. The popup of an update stays.
+
+D-1, D-2: the app no longer opens a port forward through AWS Systems Manager itself, and the fields of SSM (the AWS profile, the region and the bastion) are gone (#718). In their place a connection can have a pre-script ("事前スクリプト"), which runs before the login: the app gives it a free port as `COOKAPPS_PORT`, waits up to 2 minutes for something to listen on `127.0.0.1` at that port, and logs in to MySQL there. A port forward through Systems Manager is now a script that you write. When the script ends or is not ready in time, the error shows the last lines of its standard error. The script is stopped when the connection closes and when the app ends. A connection saved with the fields of SSM is read as one with no script.
+
+D-1: the plus and "編集" open an edit pane in place of the work pane, instead of a dialog (#719). Its header holds "接続をテスト", "キャンセル" and "保存", and two tabs choose the way of the connection: "直接" (the host and the port) and "スクリプト経由" (the pre-script). An icon at the right end of the header opens the terminal pane of D-7 at the right of the edit pane, and while the edit pane of a saved connection is open, the connection saved from outside the app (by `cookapps-mcp`) is read into the fields that were not changed by hand (#720).
+
+D-8: `cookapps-mcp` has three tools for the connections of the database screen, so that Claude Code can write a pre-script, save it and try it (#721). `db_profiles` lists the connections (never the password), `db_profile_save` saves one, and `db_test` tests a saved one as "接続をテスト" does. The two that save or run something are marked destructive, so that the client asks each time. A save that changes the user, the script, or the host and the port deletes the saved password; the password is typed in the app.
+
 ## v0.78.0
 
 A-34: in the Orca editor, a right click with the Command key on a name in a Ruby file looks up its definition with ruby-lsp (#696, #700). The top row of the file pane has a third icon, "定義", after "ファイル" and "履歴", and the press switches the pane to it: one row for each place, with the file, the line and the folder, or, for a place outside the worktree, the gem, its version and the mark "gem". A row opens to the lines around the definition, and "タブで開く" opens the file in a tab of the work pane at that line; a file of a gem opens in a read only tab (#699, #700). A right click without the Command key is as it was.
