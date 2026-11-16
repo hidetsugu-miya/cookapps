@@ -1004,9 +1004,10 @@ button.status:hover { filter: brightness(.95); }
 
 /* The orchestration mode of the development screen (A-37): the orchestrator's terminal, the children's tabs with the terminal of the selected one, and the flow, side by side. */
 #formation { flex: 1; min-height: 0; display: flex; }
-#formation-orchestrator { flex: none; width: 36%; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+#formation-orchestrator { flex: none; width: calc((100% - 260px) / 2); min-width: 0; display: flex; flex-direction: column; }
+#formation:has(#formation-children[hidden]) #formation-orchestrator { flex: 1; width: auto; }
 #formation-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#formation-children { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#formation-children { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); }
 /* The strip of the children's tabs (as the tabs of Orca are): 「自動で追う」 is at its right end, and the button that opens the flow is at the right of it while the flow is closed. */
 #formation-tabbar { flex: none; display: flex; align-items: center; gap: 6px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); background: var(--bar); }
 #formation-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }

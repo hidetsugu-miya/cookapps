@@ -97,10 +97,14 @@ function draw() {
   const waiting = launched.filter((c) => c.state === "waiting").length;
   setFormationWaiting(watching === "count" ? waiting : 0);
   if (watching === "count") return;
+  // The middle and the right columns are shown from the first child (a planned one too) on, and the orchestrator has the whole width before.
+  // The middle column comes first, so that the terminal of a tab is placed in a host that has its size.
+  const formed = children.length > 0;
+  $("formation-children").hidden = !formed;
   // The tabs first: the follow may move the selection that the cards mark.
   if (watching === "flow") syncTabs(children);
   const selected = selectedChild();
-  $("formation-flow").hidden = !open;
+  $("formation-flow").hidden = !formed || !open;
   $("formation-tabbar-toggle").hidden = open;
   $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
   // While the pane is closed the button shows how many children wait for the user.

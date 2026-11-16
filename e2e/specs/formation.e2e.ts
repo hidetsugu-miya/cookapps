@@ -56,7 +56,9 @@ describe("development screen: orchestration mode", () => {
   });
 
   it("switches to the orchestration with its three columns, and the name moves to its icon", async () => {
+    await boot({ inbox: inbox(), formation_children: [formationChild("api-update", "planned")] });
     await openFormation();
+    await expect($("#formation-flow")).toBeDisplayed();
     await expect($("#orca")).not.toBeDisplayed();
     expect(await pressed("footer-mode-orca")).toBe("false");
     expect(await pressed("footer-mode-formation")).toBe("true");
@@ -414,11 +416,84 @@ describe("orchestration mode: the flow pane", () => {
     expect(await cardNames()).toEqual(["api-update"]);
   });
 
-  it("says that the first read failed", async () => {
+  it("shows no flow pane when the first read failed, because no child is known", async () => {
     await openFlow(rejects("Orca に届きません"));
-    await expect($("#formation-flow-error")).toBeDisplayed();
-    await expect($("#formation-flow-error")).toHaveText("Orca に届きません");
+    await waitForCalls("formation_children", 1);
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-children")).not.toBeDisplayed();
     expect(await cardNames()).toEqual([]);
+  });
+
+  it("keeps the columns of the last read that worked when a read fails", async () => {
+    await openFlow([formationChild("api-update", "working")]);
+    await expect($("#formation-flow")).toBeDisplayed();
+    await mock("formation_children", rejects("Orca に届きません"));
+    await expect($("#formation-flow-error")).toHaveText("Orca に届きません");
+    await expect($("#formation-children")).toBeDisplayed();
+    await expect($("#formation-flow")).toBeDisplayed();
+  });
+});
+
+// A-37: the columns appear with the first child.
+const widthOf = async (id: string) => (await rectOf(`#${id}`)).right - (await rectOf(`#${id}`)).left;
+
+describe("orchestration mode: the columns", () => {
+  it("shows the orchestrator alone, with the whole width, while no child is recorded", async () => {
+    await openFlow([]);
+    await waitForCalls("formation_children", 1);
+    await expect($("#formation-orchestrator")).toBeDisplayed();
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation")];
+    expect(Math.abs(pane.left - screen.left)).toBeLessThan(1);
+    expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
+  });
+
+  it("shows the middle and the right columns when a child, a planned one too, is recorded, and splits the rest 5:5", async () => {
+    await openFlow([]);
+    await waitForCalls("formation_children", 1);
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await mock("formation_children", [formationChild("api-update", "planned")]);
+    await expect($("#formation-children")).toBeDisplayed();
+    await expect($("#formation-flow")).toBeDisplayed();
+    const [orchestrator, children, flow] = [await widthOf("formation-orchestrator"), await widthOf("formation-children"), await widthOf("formation-flow")];
+    expect(Math.abs(orchestrator - children)).toBeLessThan(1);
+    expect(Math.round(flow)).toBe(260);
+    const [first, second] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-children")];
+    expect(Math.abs(first.right - second.left)).toBeLessThan(1);
+  });
+
+  it("hides the middle and the right columns again when the children are gone, and the orchestrator takes the width", async () => {
+    await openFlow([formationChild("api-update", "working")]);
+    await expect($("#formation-children")).toBeDisplayed();
+    await mock("formation_children", []);
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation")];
+    expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
+  });
+
+  it("keeps the flow closed with the button while the children are there, and shows no flow without children whatever the button was", async () => {
+    await openFlow([formationChild("api-update", "working")]);
+    await $("#formation-flow-toggle").click();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-children")).toBeDisplayed();
+    await mock("formation_children", []);
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await mock("formation_children", [formationChild("api-update", "working")]);
+    await expect($("#formation-children")).toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-tabbar-toggle")).toBeDisplayed();
+  });
+
+  it("fits the orchestrator's terminal to its new width when the columns appear", async () => {
+    await openFlow([]);
+    const [start] = await waitForCalls("claude_code_start");
+    const wide = (start as { viewport: { cols: number } }).viewport.cols;
+    await mock("claude_code_resize", null);
+    await mock("formation_children", [formationChild("api-update", "planned")]);
+    const [resize] = await waitForCalls("claude_code_resize");
+    expect((resize as { cols: number }).cols).toBeLessThan(wide);
   });
 });
 
