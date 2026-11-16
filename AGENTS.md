@@ -50,7 +50,7 @@ A new requirement gets a section there and an entry here.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
-- The name the app shows is つなぎAI (the window title, `CFBundleDisplayName` in `src-tauri/Info.plist`, the texts of the screens, #764). The internal name stays `tsunagiai`: `productName`, `tsunagiai.app`, the crate, `tsunagiai-mcp`, the config folder and the keychain.
+- The name the app shows is つなぎAI (the window title, the name in Finder and the Dock, which `LSHasLocalizedDisplayName` in `src-tauri/Info.plist` reads from `src-tauri/macos/ja.lproj/InfoPlist.strings` (`bundle.macOS.files` puts it in the app; `CFBundleDisplayName` stays `tsunagiai`, because Finder shows the file name when the two differ), the texts of the screens, #764). The internal name stays `tsunagiai`: `productName`, `tsunagiai.app`, the crate, `tsunagiai-mcp`, the config folder and the keychain.
 - The identifier is `jp.mysis.tsunagiai`. The config directory and the keychain services of the old identifier `jp.mysis.cookapps` are moved to the new ones by the app (`requirements/constraints.md`, "Settings files").
 - If the OAuth consent screen is "External" and in "Testing", refresh tokens expire after 7 days.
   - Use an "Internal" consent screen, or publish an "External" one.

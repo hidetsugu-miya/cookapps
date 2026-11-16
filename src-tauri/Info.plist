@@ -2,13 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Merged into the bundle's Info.plist by `tauri build`. The app is Japanese only, so the
      bundle says so: macOS then draws its own menus in the WebView (the right-click menu's
-     Cut, Copy, Paste and so on) in Japanese instead of English (#598). CFBundleDisplayName is the
-     name the Dock and the menus show (#764); `productName` stays `tsunagiai`, the file name of the
-     app. -->
+     Cut, Copy, Paste and so on) in Japanese instead of English (#598). Finder shows the file name
+     (`tsunagiai.app`) when CFBundleDisplayName differs from it, so the key stays `tsunagiai`, and
+     LSHasLocalizedDisplayName makes Finder and the Dock read the name from
+     `Resources/ja.lproj/InfoPlist.strings` (`src-tauri/macos/ja.lproj/`, put there by
+     `bundle.macOS.files`), which says つなぎAI (#764). -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>つなぎAI</string>
+	<string>tsunagiai</string>
+	<key>LSHasLocalizedDisplayName</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>ja</string>
 	<key>CFBundleLocalizations</key>

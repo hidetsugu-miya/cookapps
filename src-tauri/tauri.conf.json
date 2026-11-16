@@ -25,6 +25,9 @@
   "bundle": {
     "active": true,
     "targets": ["app", "nsis"],
-    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "files": { "Resources/ja.lproj/InfoPlist.strings": "macos/ja.lproj/InfoPlist.strings" }
+    }
   }
 }
