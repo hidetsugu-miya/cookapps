@@ -116,6 +116,11 @@ const answers = {
   orca_stream_terminal_close: null,
   orca_stream_viewport: null,
   orca_stream_input: null,
+  // A-36: a Claude Code pane's process; a spec that checks the calls reads them with `callsOf`.
+  claude_code_start: null,
+  claude_code_input: null,
+  claude_code_resize: null,
+  claude_code_close: null,
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).

@@ -555,7 +555,7 @@ pub struct MailMessage {
 }
 
 /// Where `claude` is looked for. A GUI app does not inherit the shell's PATH, so the installer's own folder comes first.
-fn locations(home: Option<PathBuf>, windows: bool) -> Vec<PathBuf> {
+pub(crate) fn locations(home: Option<PathBuf>, windows: bool) -> Vec<PathBuf> {
     let file = if windows { "claude.exe" } else { "claude" };
     home.map(|h| h.join(".local").join("bin").join(file))
         .into_iter()

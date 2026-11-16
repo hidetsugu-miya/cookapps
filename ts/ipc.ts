@@ -41,6 +41,7 @@ import type { MonthGrid } from "./bindings/MonthGrid";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { Skill } from "./bindings/Skill";
+import type { SkillScreen } from "./bindings/SkillScreen";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
 import type { NotionAccount } from "./bindings/NotionAccount";
@@ -327,6 +328,14 @@ export interface Commands {
   orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
+  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given. A failure is the message the pane shows.
+  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; channel: unknown }; result: null };
+  // A-36: types `text` into the pane `id` as it is (no Enter is added).
+  claude_code_input: { args: { id: string; text: string }; result: null };
+  // A-36: the new size of the pane `id` in cells.
+  claude_code_resize: { args: { id: string; viewport: OrcaViewport }; result: null };
+  // A-36: ends the process of the pane `id` and what it started.
+  claude_code_close: { args: { id: string }; result: null };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.

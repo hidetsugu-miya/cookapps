@@ -1336,6 +1336,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
+/* The host of a Claude Code pane (A-36), as `#orca-panes .orca-term` is the host of an Orca terminal: the box of the terminal fills it. */
+.claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
 body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
 .orca-dest-pop { width: 320px; max-height: calc(100vh - 32px); padding: 8px; gap: 8px; }
