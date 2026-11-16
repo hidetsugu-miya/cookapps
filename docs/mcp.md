@@ -7,7 +7,7 @@ title: Claude との連携（MCP）
 `tsunagiai-mcp` は、Claude Code からつなぎAIの受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
 stdio で動き、ネットワークのポートは開きません。
 つなぎAIアプリが起動していなくても使えます。
-データベースの画面の Claude Code のペインでは、アプリが自分の中の `tsunagiai-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
+データベースの画面の Claude タブでは、アプリが自分の中の `tsunagiai-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
 
 この文書は AI に読ませて設定を任せられるように、手順と確認方法を順に書いています。
 
