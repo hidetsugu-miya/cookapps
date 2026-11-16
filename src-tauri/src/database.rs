@@ -15,7 +15,7 @@ pub mod session;
 pub mod sql;
 pub mod structure;
 
-use std::{collections::HashMap, path::Path, sync::Mutex};
+use std::{path::Path, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -203,60 +203,11 @@ fn new_id() -> Result<String, String> {
 /// Where the passwords are kept, by the id of a profile.
 pub trait PasswordStore {
     fn exists(&self, id: &str) -> Result<bool, String>;
-    /// `exists` for a list that is read again and again: `login` (`login_key`) is what the password was saved for, so a store that remembers the answer may keep it while the login is the same. The default asks every time.
-    fn exists_for(&self, id: &str, _login: &str) -> Result<bool, String> {
-        self.exists(id)
-    }
     /// The saved password; none when there is none.
     fn get(&self, id: &str) -> Result<Option<String>, String>;
     fn set(&self, id: &str, password: &str) -> Result<(), String>;
     /// A missing password counts as deleted.
     fn delete(&self, id: &str) -> Result<(), String>;
-}
-
-/// What the keychain said about each password, with the login it was said for (`login_key`), so that the list, which the edit pane reads every 2 seconds, does not read every password out of the keychain each time (#721 review).
-/// A password is written and deleted here (`Keychain::set` and `delete` change the answer), and by `save_without_password` of `cookapps-mcp`, which deletes it only when the login of the connection changes:
-/// the login of the file then differs from the one remembered, and the keychain is read again.
-#[derive(Default)]
-struct Presence(Mutex<HashMap<String, (String, bool)>>);
-
-impl Presence {
-    /// The remembered answer for `id` when it was got for `login`; else `read` is asked and its answer is remembered.
-    fn get(
-        &self,
-        id: &str,
-        login: &str,
-        read: impl FnOnce() -> Result<bool, String>,
-    ) -> Result<bool, String> {
-        {
-            let seen = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((was, present)) = seen.get(id) {
-                if was == login {
-                    return Ok(*present);
-                }
-            }
-        }
-        let present = read()?;
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.to_owned(), (login.to_owned(), present));
-        Ok(present)
-    }
-
-    fn forget(&self, id: &str) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
-    }
-}
-
-static PRESENCE: std::sync::LazyLock<Presence> = std::sync::LazyLock::new(Presence::default);
-
-/// What a password was saved for: the fields of `same_login`.
-fn login_key(profile: &DatabaseProfile) -> String {
-    format!(
-        "{}\0{}\0{}\0{}",
-        profile.username, profile.script, profile.db_host, profile.db_port
-    )
 }
 
 /// The OS keychain.
@@ -275,10 +226,6 @@ impl PasswordStore for Keychain {
         }
     }
 
-    fn exists_for(&self, id: &str, login: &str) -> Result<bool, String> {
-        PRESENCE.get(id, login, || self.exists(id))
-    }
-
     fn get(&self, id: &str) -> Result<Option<String>, String> {
         match password_entry(id)?.get_password() {
             Ok(password) => Ok(Some(password)),
@@ -288,14 +235,12 @@ impl PasswordStore for Keychain {
     }
 
     fn set(&self, id: &str, password: &str) -> Result<(), String> {
-        PRESENCE.forget(id);
         password_entry(id)?
             .set_password(password)
             .map_err(|e| format!("資格情報の保存に失敗: {e}"))
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
-        PRESENCE.forget(id);
         delete_entry(&password_entry(id)?)
     }
 }
@@ -305,7 +250,7 @@ fn view(
     profile: DatabaseProfile,
 ) -> Result<DatabaseProfileView, String> {
     Ok(DatabaseProfileView {
-        password_saved: passwords.exists_for(&profile.id, &login_key(&profile))?,
+        password_saved: passwords.exists(&profile.id)?,
         profile,
     })
 }
@@ -1569,66 +1514,6 @@ mod tests {
         );
         assert_eq!(passwords.get(&saved.profile.id).as_deref(), Some("secret"));
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn the_keychain_is_asked_again_only_when_the_login_changed() {
-        let presence = Presence::default();
-        let reads = std::cell::Cell::new(0);
-        let reads = &reads;
-        let read = |present: bool| {
-            move || {
-                reads.set(reads.get() + 1);
-                Ok(present)
-            }
-        };
-        assert!(presence.get("a", "login-1", read(true)).unwrap());
-        assert!(presence.get("a", "login-1", read(false)).unwrap());
-        assert_eq!(reads.get(), 1);
-        // The login changed (cookapps-mcp deleted the password): read again.
-        assert!(!presence.get("a", "login-2", read(false)).unwrap());
-        assert_eq!(reads.get(), 2);
-        // Another id has its own answer, and a forgotten one is read again.
-        assert!(presence.get("b", "login-2", read(true)).unwrap());
-        presence.forget("b");
-        assert!(!presence.get("b", "login-2", read(false)).unwrap());
-        assert_eq!(reads.get(), 4);
-        // A read that fails is not remembered.
-        assert!(presence.get("c", "x", || Err("locked".to_owned())).is_err());
-        assert!(presence.get("c", "x", read(true)).unwrap());
-        assert_eq!(reads.get(), 5);
-    }
-
-    #[test]
-    fn the_login_key_follows_the_fields_that_decide_where_a_password_goes() {
-        let a = direct("a");
-        assert_eq!(
-            login_key(&a),
-            login_key(&DatabaseProfile {
-                name: "z".to_owned(),
-                ..a.clone()
-            })
-        );
-        for other in [
-            DatabaseProfile {
-                username: "x".to_owned(),
-                ..a.clone()
-            },
-            DatabaseProfile {
-                script: "x".to_owned(),
-                ..a.clone()
-            },
-            DatabaseProfile {
-                db_host: "x".to_owned(),
-                ..a.clone()
-            },
-            DatabaseProfile {
-                db_port: 1,
-                ..a.clone()
-            },
-        ] {
-            assert_ne!(login_key(&a), login_key(&other));
-        }
     }
 
     #[tokio::test]
