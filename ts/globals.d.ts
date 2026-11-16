@@ -35,7 +35,7 @@ interface MilkdownComposer {
   setEditable(on: boolean): void;
   run(name: MilkdownCommand, payload?: { href: string }): void;
 }
-declare const CookappsMilkdown: {
+declare const TsunagiaiMilkdown: {
   mount(root: HTMLElement, markdown: string): Promise<MilkdownView>;
   normalize(markdown: string): Promise<string>;
   compose(root: HTMLElement, onChange: () => void): Promise<MilkdownComposer>;

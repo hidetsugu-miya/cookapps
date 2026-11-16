@@ -3,7 +3,7 @@ import { orcaOverview as placedOverview, streamList as placedStream, studio } fr
 import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
-const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", passwordSaved: true });
+const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port \"$TSUNAGIAI_PORT\"", dbHost: "db.internal.example.com", passwordSaved: true });
 
 // The app with `profiles` saved, and the database screen open.
 async function openDatabase(profiles = [direct, tunnel], fixtures: Record<string, unknown> = {}) {
@@ -143,10 +143,10 @@ describe("database: register", () => {
     expect(await textsOf("#database-form label.database-field .database-label")).toEqual(["接続名", "ユーザー名", "パスワード", "DB のホスト", "ポート", "事前スクリプト"]);
     await field("dbHost").setValue("127.0.0.1");
     await field("dbPort").setValue("3307");
-    await field("script").setValue("exec forward-port $COOKAPPS_PORT");
+    await field("script").setValue("exec forward-port $TSUNAGIAI_PORT");
     await expect(field("dbHost")).toHaveValue("127.0.0.1");
     await expect(field("dbPort")).toHaveValue("3307");
-    await expect(field("script")).toHaveValue("exec forward-port $COOKAPPS_PORT");
+    await expect(field("script")).toHaveValue("exec forward-port $TSUNAGIAI_PORT");
   });
 
   it("saves a connection with no script, sends the id empty and the password, closes, and draws the list that Rust answers next", async () => {
@@ -172,10 +172,10 @@ describe("database: register", () => {
     await $("#database-add").click();
     await fillDirect();
     await field("dbPort").setValue("3307");
-    await field("script").setValue("#!/bin/sh\nexec forward-port $COOKAPPS_PORT");
+    await field("script").setValue("#!/bin/sh\nexec forward-port $TSUNAGIAI_PORT");
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
-      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $COOKAPPS_PORT", dbPort: 3307 }, password: "" },
+      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $TSUNAGIAI_PORT", dbPort: 3307 }, password: "" },
     ]);
     await expect($("#database-form")).not.toExist();
   });
@@ -269,7 +269,7 @@ describe("database: edit", () => {
     await expect(field("password")).toHaveValue("");
     await expect($("#database-form .status.ok")).toHaveText("保存済み");
     await expect(field("script")).toBeDisplayed();
-    await expect(field("script")).toHaveValue('exec forward-port "$COOKAPPS_PORT"');
+    await expect(field("script")).toHaveValue('exec forward-port "$TSUNAGIAI_PORT"');
     await expect(field("dbHost")).toBeDisplayed();
     await expect(field("dbHost")).toHaveValue("db.internal.example.com");
     await expect(field("dbPort")).toBeDisplayed();
@@ -309,7 +309,7 @@ describe("database: edit", () => {
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
       {
-        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", dbPort: 3306 },
+        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$TSUNAGIAI_PORT\"", dbHost: "db.internal.example.com", dbPort: 3306 },
         password: "",
       },
     ]);
@@ -476,8 +476,8 @@ describe("database: edit pane, Claude Code and reload", () => {
   it("fills the script when a script was saved elsewhere, unless the script was typed by hand", async () => {
     await openDatabase([direct, tunnel], fast);
     await pickFromMenu("p1", 1);
-    await mock("database_profiles", [databaseProfile("p1", "Example direct", { script: 'exec forward-port "$COOKAPPS_PORT"' }), tunnel]);
-    await expect(field("script")).toHaveValue('exec forward-port "$COOKAPPS_PORT"');
+    await mock("database_profiles", [databaseProfile("p1", "Example direct", { script: 'exec forward-port "$TSUNAGIAI_PORT"' }), tunnel]);
+    await expect(field("script")).toHaveValue('exec forward-port "$TSUNAGIAI_PORT"');
     await expect(field("dbHost")).toHaveValue("db.example.com");
     await expect(field("dbPort")).toHaveValue("3306");
 

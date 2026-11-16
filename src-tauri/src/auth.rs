@@ -153,7 +153,7 @@ impl Auth {
         }
         if let Some(token) = keychain::read(KEYRING_SERVICE, account)? {
             if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
-                eprintln!("cookapps: revoke account={account} status=- error={e}");
+                eprintln!("tsunagiai: revoke account={account} status=- error={e}");
             }
         }
         keychain::delete(KEYRING_SERVICE, account)?;
@@ -296,14 +296,14 @@ pub async fn login(
 ) -> Result<String, String> {
     auth.login(&app, login_hint.as_deref()).await.map_err(|e| {
         eprintln!(
-            "cookapps: login account={} status=- error={e}",
+            "tsunagiai: login account={} status=- error={e}",
             login_hint.as_deref().unwrap_or("-")
         );
         e
     })
 }
 
-/// Removes an account from cookapps: revokes its grant at Google and drops every trace of it kept here.
+/// Removes an account from tsunagiai: revokes its grant at Google and drops every trace of it kept here.
 #[tauri::command]
 pub async fn remove_account(
     app: AppHandle,
@@ -323,7 +323,7 @@ pub async fn remove_account(
         Err(e) => Err(e),
     };
     removed.map_err(|e| {
-        eprintln!("cookapps: remove_account account={account} status=- error={e}");
+        eprintln!("tsunagiai: remove_account account={account} status=- error={e}");
         e
     })
 }
@@ -560,7 +560,7 @@ mod tests {
     /// A directory without accounts.json: no account is registered, so neither call reaches the keychain.
     #[test]
     fn refresh_and_remove_refuse_an_unregistered_account() {
-        let dir = std::env::temp_dir().join("cookapps-test-no-accounts");
+        let dir = std::env::temp_dir().join("tsunagiai-test-no-accounts");
         let auth = Auth::new();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -574,7 +574,7 @@ mod tests {
     /// The token another call already refreshed is used without touching the keychain: the directory has no accounts.json.
     #[test]
     fn refresh_uses_the_token_a_concurrent_call_already_refreshed() {
-        let dir = std::env::temp_dir().join("cookapps-test-no-accounts");
+        let dir = std::env::temp_dir().join("tsunagiai-test-no-accounts");
         let auth = Auth::new();
         auth.access
             .lock()

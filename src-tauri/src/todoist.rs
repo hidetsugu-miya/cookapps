@@ -547,7 +547,7 @@ fn bucket_of(due: Option<NaiveDate>, today: NaiveDate) -> Bucket {
     }
 }
 
-/// The URL cookapps writes into a task's description to point at a thread. The account must be one of `accounts`, the registered ones.
+/// The URL tsunagiai writes into a task's description to point at a thread. The account must be one of `accounts`, the registered ones.
 fn gmail_url(accounts: &[String], account: &str, thread_id: &str) -> Result<String, String> {
     if !accounts.iter().any(|a| a == account) {
         return Err("登録されていないアカウントです".into());
@@ -556,7 +556,7 @@ fn gmail_url(accounts: &[String], account: &str, thread_id: &str) -> Result<Stri
     Ok(format!("{GMAIL_URL}{account}/#all/{thread_id}"))
 }
 
-/// The thread a description links to with a URL `gmail_url` made; links of any other form are not cookapps's.
+/// The thread a description links to with a URL `gmail_url` made; links of any other form are not tsunagiai's.
 fn mail_of(description: &str) -> Option<MailRef> {
     let start = description.find(GMAIL_URL)?;
     let link = description[start..].split_whitespace().next()?;
@@ -2602,7 +2602,7 @@ mod tests {
     }
 
     #[test]
-    fn links_that_cookapps_did_not_make_are_not_mail() {
+    fn links_that_tsunagiai_did_not_make_are_not_mail() {
         for description in [
             "",
             "https://example.com/",
@@ -3481,7 +3481,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-todoist-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-todoist-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

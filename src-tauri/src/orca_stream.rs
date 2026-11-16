@@ -377,7 +377,7 @@ fn new_client() -> String {
     // Without randomness every copy shares the fallback name, which only risks that ending.
     let _ = getrandom::fill(&mut random);
     let hex: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    format!("cookapps-{hex}")
+    format!("tsunagiai-{hex}")
 }
 
 // ---- the stream ----
@@ -1369,32 +1369,32 @@ mod tests {
     #[test]
     fn the_params_name_the_viewer_and_a_size_orca_takes() {
         assert_eq!(
-            subscribe_params("term_1", "cookapps-1", OrcaViewport { cols: 80, rows: 24 }),
-            json!({"terminal": "term_1", "client": {"id": "cookapps-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24}})
+            subscribe_params("term_1", "tsunagiai-1", OrcaViewport { cols: 80, rows: 24 }),
+            json!({"terminal": "term_1", "client": {"id": "tsunagiai-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24}})
         );
         assert_eq!(
-            subscribe_params("term_1", "cookapps-1", OrcaViewport { cols: 5, rows: 900 })
+            subscribe_params("term_1", "tsunagiai-1", OrcaViewport { cols: 5, rows: 900 })
                 ["viewport"],
             json!({"cols": 20, "rows": 500})
         );
         assert_eq!(
             viewport_params(
                 "term_1",
-                "cookapps-1",
+                "tsunagiai-1",
                 OrcaViewport {
                     cols: 2000,
                     rows: 1
                 }
             ),
-            json!({"terminal": "term_1", "client": {"id": "cookapps-1", "type": "desktop"},
+            json!({"terminal": "term_1", "client": {"id": "tsunagiai-1", "type": "desktop"},
                    "viewport": {"cols": 1000, "rows": 8}, "claim": true})
         );
         assert_eq!(
-            unsubscribe_params("term_1", "cookapps-1", "c7"),
-            json!({"subscriptionId": "term_1:cookapps-1", "requestId": "c7"})
+            unsubscribe_params("term_1", "tsunagiai-1", "c7"),
+            json!({"subscriptionId": "term_1:tsunagiai-1", "requestId": "c7"})
         );
         let (a, b) = (new_client(), new_client());
-        assert!(a.starts_with("cookapps-") && a.len() == "cookapps-".len() + 16);
+        assert!(a.starts_with("tsunagiai-") && a.len() == "tsunagiai-".len() + 16);
         assert_ne!(a, b);
     }
 
@@ -1456,7 +1456,7 @@ mod tests {
         let (mut first, _) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
         first.generation = 1;
         let mut stream = Stream {
-            client: "cookapps-test".into(),
+            client: "tsunagiai-test".into(),
             watches: HashMap::new(),
             attempt: 0,
         };
@@ -1514,7 +1514,7 @@ mod tests {
             },
             receiver,
             move |event| into.lock().unwrap().push(event),
-            "cookapps-test".into(),
+            "tsunagiai-test".into(),
         ));
         let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
 
@@ -1565,7 +1565,7 @@ mod tests {
         assert_eq!(subscribe["method"], "terminal.subscribe");
         assert_eq!(
             subscribe["params"],
-            json!({"terminal": "term_c", "client": {"id": "cookapps-test", "type": "desktop"}, "viewport": {"cols": 100, "rows": 30}})
+            json!({"terminal": "term_c", "client": {"id": "tsunagiai-test", "type": "desktop"}, "viewport": {"cols": 100, "rows": 30}})
         );
         let sub_id = subscribe["id"].clone();
         streamed(
@@ -1604,7 +1604,7 @@ mod tests {
             resize["params"],
             viewport_params(
                 "term_c",
-                "cookapps-test",
+                "tsunagiai-test",
                 OrcaViewport {
                     cols: 120,
                     rows: 40
@@ -1626,7 +1626,7 @@ mod tests {
                 input_params(
                     "term_c",
                     "ls\r",
-                    "cookapps-test",
+                    "tsunagiai-test",
                     Some(OrcaViewport {
                         cols: 120,
                         rows: 40
@@ -1666,7 +1666,7 @@ mod tests {
         assert_eq!(unsubscribe["method"], "terminal.unsubscribe");
         assert_eq!(
             unsubscribe["params"],
-            unsubscribe_params("term_c", "cookapps-test", sub_id.as_str().unwrap())
+            unsubscribe_params("term_c", "tsunagiai-test", sub_id.as_str().unwrap())
         );
 
         // Keys into a terminal shown no more, still in the list, are sent all the same, with no size (it has no pane).
@@ -1679,7 +1679,7 @@ mod tests {
         assert_eq!(send["method"], "terminal.send");
         assert_eq!(
             send["params"],
-            input_params("term_c", "x", "cookapps-test", None)
+            input_params("term_c", "x", "tsunagiai-test", None)
         );
         assert!(send["params"].get("viewport").is_none());
         server
@@ -1747,7 +1747,7 @@ mod tests {
             },
             receiver,
             move |event| into.lock().unwrap().push(event),
-            "cookapps-test".into(),
+            "tsunagiai-test".into(),
         ));
         let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
         let on = |branch: &str| {
@@ -1825,7 +1825,7 @@ mod tests {
             },
             receiver,
             move |event| into.lock().unwrap().push(event),
-            "cookapps-test".into(),
+            "tsunagiai-test".into(),
         ));
         // Asked for before the list came: it waits for the list.
         let (gone, gone_events) = watch("term_gone", OrcaViewport { cols: 80, rows: 24 });
@@ -1916,7 +1916,7 @@ mod tests {
             },
             receiver,
             |_| {},
-            "cookapps-test".into(),
+            "tsunagiai-test".into(),
         ));
         let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
         let request = server.request().await;
@@ -2002,7 +2002,7 @@ mod tests {
             input_params(
                 "term_c",
                 "a",
-                "cookapps-test",
+                "tsunagiai-test",
                 Some(OrcaViewport {
                     cols: 100,
                     rows: 30
@@ -2022,7 +2022,7 @@ mod tests {
         assert_eq!(unsubscribe["method"], "terminal.unsubscribe");
         assert_eq!(
             unsubscribe["params"],
-            unsubscribe_params("term_c", "cookapps-test", one["id"].as_str().unwrap())
+            unsubscribe_params("term_c", "tsunagiai-test", one["id"].as_str().unwrap())
         );
         let (reply, answer) = oneshot::channel();
         commands
@@ -2041,7 +2041,7 @@ mod tests {
         assert_eq!(last["method"], "terminal.unsubscribe");
         assert_eq!(
             last["params"],
-            unsubscribe_params("term_s", "cookapps-test", two["id"].as_str().unwrap())
+            unsubscribe_params("term_s", "tsunagiai-test", two["id"].as_str().unwrap())
         );
         tokio::time::timeout(Duration::from_secs(5), task)
             .await

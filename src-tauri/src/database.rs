@@ -41,7 +41,7 @@ pub struct DatabaseProfile {
     pub id: String,
     pub name: String,
     pub username: String,
-    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `COOKAPPS_PORT` and listens there.
+    /// The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `TSUNAGIAI_PORT` (`COOKAPPS_PORT` too, for the scripts saved before the rename) and listens there.
     /// Empty when the connection goes straight to the host and the port. Old files have none (`default`).
     #[serde(default)]
     pub script: String,
@@ -754,7 +754,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-database-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-database-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -773,7 +773,7 @@ mod tests {
 
     fn scripted(name: &str) -> DatabaseProfile {
         DatabaseProfile {
-            script: "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\"".to_owned(),
+            script: "#!/bin/sh\nexec forward-port \"$TSUNAGIAI_PORT\"".to_owned(),
             ..direct(name)
         }
     }
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(checked.db_host, "127.0.0.1");
         assert_eq!(
             check(scripted("本番"), &[]).unwrap().script,
-            "#!/bin/sh\nexec forward-port \"$COOKAPPS_PORT\""
+            "#!/bin/sh\nexec forward-port \"$TSUNAGIAI_PORT\""
         );
     }
 

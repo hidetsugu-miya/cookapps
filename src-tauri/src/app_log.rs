@@ -404,7 +404,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-app-log-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-app-log-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(redact(long), long);
         let camel = "ThisIsALongIdentifierWithoutAnyNumber";
         assert_eq!(redact(camel), camel);
-        let path = "/Users/a/Library/Application/Support/cookapps/notion-accounts-0001.json";
+        let path = "/Users/a/Library/Application/Support/tsunagiai/notion-accounts-0001.json";
         assert_eq!(redact(path), path);
         let url = "https://mcp.notion.com/some/path/with/segments/v1/and-more";
         assert_eq!(redact(url), url);

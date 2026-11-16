@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn load_gives_what_save_wrote_and_auto_for_no_file() {
-        let dir = std::env::temp_dir().join(format!("cookapps-update-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tsunagiai-update-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load(&dir), UpdateMode::Auto);
         save(&dir, UpdateMode::Manual).unwrap();

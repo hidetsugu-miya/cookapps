@@ -118,7 +118,7 @@ export function initOrcaTheme() {
         [
           ["Orca 画面のターミナルの配色を、ライトとダークで別々に選びます"],
           ["「外観」が「システムに合わせる」のときは、システムの外観に合わせて切り替わります（Orca の外観の設定には合わせません）。「ライト」「ダーク」にすると、システムの外観に関係なく、そのテーマで描きます"],
-          ["選べるのは Orca の組み込みのテーマです。色は cookapps が持っています"],
+          ["選べるのは Orca の組み込みのテーマです。色はつなぎあいが持っています"],
           ["初めての選択は、この Mac の Orca の設定（", code("terminalThemeLight"), "、", code("terminalThemeDark"), "）から取ります。読めたときの 1 回だけです。Orca で足したテーマや、組み込みにないテーマのときは、ライトは Builtin Tango Light、ダークは Ghostty Default Style Dark になります"],
           ["ここで選んだテーマは、Ghostty から取り込んだ色より優先します。Ghostty のフォントとキーはそのまま使います"],
         ],

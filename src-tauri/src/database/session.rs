@@ -582,7 +582,7 @@ mod tests {
             Timing,
         };
         let dir =
-            std::env::temp_dir().join(format!("cookapps-session-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-session-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (up_port, down_port) = (free_port(), free_port());
         let _up = listen_later(up_port);

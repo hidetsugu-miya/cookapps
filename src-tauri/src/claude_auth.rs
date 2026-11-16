@@ -355,7 +355,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "cookapps-claude-auth-{name}-{}",
+            "tsunagiai-claude-auth-{name}-{}",
             std::process::id()
         ))
     }

@@ -19,7 +19,7 @@ pub fn config_dir() -> Result<PathBuf, String> {
         .map(|dir| dir.join(IDENTIFIER))
         .ok_or_else(|| "設定フォルダの場所を特定できません".to_string())?;
     if let Err(e) = migrate_config_dir(&dir) {
-        eprintln!("cookapps: config_migrate account=- status=- error={e}");
+        eprintln!("tsunagiai: config_migrate account=- status=- error={e}");
     }
     Ok(dir)
 }
@@ -76,7 +76,7 @@ mod tests {
     /// A fresh parent folder, standing for the user's config folder.
     fn parent(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cookapps-identity-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("tsunagiai-identity-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

@@ -327,7 +327,7 @@ fn encode_body(body: &str) -> String {
 }
 
 /// The boundary of `multipart/alternative`. The parts are base64, whose lines never hold a `-`, so no body can contain it.
-const BOUNDARY: &str = "cookapps-alternative";
+const BOUNDARY: &str = "tsunagiai-alternative";
 
 fn escape_html(text: &str, out: &mut String) {
     for c in text.chars() {
@@ -1094,10 +1094,10 @@ mod tests {
 
     #[test]
     fn the_boundary_cannot_appear_in_the_encoded_parts() {
-        let mut m = mail(&["a@example.com"], "s", "--cookapps-alternative\n--");
+        let mut m = mail(&["a@example.com"], "s", "--tsunagiai-alternative\n--");
         m.markdown = Some(true);
         let message = build("me@example.com", &m, None).unwrap();
-        let boundary = "cookapps-alternative";
+        let boundary = "tsunagiai-alternative";
         assert_eq!(parts(&message, boundary).len(), 2);
         assert_eq!(message.matches(&format!("--{boundary}")).count(), 3);
     }
@@ -1107,7 +1107,7 @@ mod tests {
         let mut m = mail(&["a@example.com"], "s", "");
         m.markdown = Some(true);
         let message = build("me@example.com", &m, None).unwrap();
-        let parts = parts(&message, "cookapps-alternative");
+        let parts = parts(&message, "tsunagiai-alternative");
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0].1, "");
     }
@@ -1192,7 +1192,7 @@ mod tests {
         let mut m = mail(&["a@example.com"], "s", "A\n\n<br />\n\nB\n");
         m.markdown = Some(true);
         let message = build("me@example.com", &m, None).unwrap();
-        let boundary = "cookapps-alternative";
+        let boundary = "tsunagiai-alternative";
         let parts = parts(&message, boundary);
         assert_eq!(parts[0].1, "A\r\n\r\n\r\nB\r\n");
         assert_eq!(

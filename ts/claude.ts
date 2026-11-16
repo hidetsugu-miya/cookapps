@@ -98,7 +98,7 @@ function keyRow(key: ApiKeyState) {
     confirmUnlink(
       unlink,
       "API キー",
-      `キーを cookapps から削除します。${connection?.method === "apiKey" ? "サブスクリプションに戻しますが、Claude Code はログアウトされたままです。" : ""}Anthropic の Console のキーは残るので、不要なら取り消してください。`,
+      `キーをつなぎあいから削除します。${connection?.method === "apiKey" ? "サブスクリプションに戻しますが、Claude Code はログアウトされたままです。" : ""}Anthropic の Console のキーは残るので、不要なら取り消してください。`,
       () => changeConnection(() => invoke("claude_key_delete")),
     );
   const actions = [paste, unlink];

@@ -1,4 +1,4 @@
-//! A-36: the shared part of the Claude Code panes. cookapps opens a pseudo terminal itself (`portable-pty`, no Orca in between) and runs Claude Code in it; the screen draws it with xterm.js (`ts/claude-code.ts`).
+//! A-36: the shared part of the Claude Code panes. tsunagiai opens a pseudo terminal itself (`portable-pty`, no Orca in between) and runs Claude Code in it; the screen draws it with xterm.js (`ts/claude-code.ts`).
 //! Claude Code runs in a folder of its own, `claude-code/` in the app config directory, which holds a launch script and the `--mcp-config` file. The script is written by the app in a fixed form
 //! (only paths the app decided are in it: nothing that comes from a mail, a message or a Todo), and it starts `claude --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {the file}` (the built-in tools stay on when the screen asks, as the database screen does).
 //! `manual` asks for every tool that writes, whatever `defaultMode` the owner's settings hold, and `--setting-sources user` leaves out the project and local settings of the shared folder, so an "always allow" chosen in one pane does not reach the others.
@@ -98,7 +98,7 @@ fn launch_script(claude: &Path, mcp_config: &Path, builtin_tools: bool) -> Strin
     let tools = if builtin_tools { "" } else { " --tools ''" };
     format!(
         "#!/bin/sh\n\
-         # Written by cookapps (A-36) at each start of a Claude Code pane; a change here is lost.\n\
+         # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
          exec {claude}{tools} --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
@@ -654,7 +654,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "cookapps-claude-code-{}-{name}",
+            "tsunagiai-claude-code-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -702,7 +702,7 @@ mod tests {
         assert_eq!(
             script,
             "#!/bin/sh\n\
-             # Written by cookapps (A-36) at each start of a Claude Code pane; a change here is lost.\n\
+             # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
              PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
              exec '/Users/x/.local/bin/claude' --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config '/c/app/claude-code/mcp.json' \"$@\"\n"
         );
@@ -746,9 +746,9 @@ mod tests {
         assert_eq!(
             launch_args(
                 Path::new("/c/start.sh"),
-                Some(Path::new("/tmp/cookapps-skill-1"))
+                Some(Path::new("/tmp/tsunagiai-skill-1"))
             ),
-            ["/c/start.sh", "--plugin-dir", "/tmp/cookapps-skill-1"]
+            ["/c/start.sh", "--plugin-dir", "/tmp/tsunagiai-skill-1"]
         );
     }
 
@@ -948,10 +948,10 @@ mod tests {
         let dir = temp_dir("cwd");
         let code = ClaudeCode::default();
         let (sink, rx) = collecting();
-        let mut run = spec("echo \"$TERM|$COOKAPPS_TEST|${HOME-unset}|$(basename \"$PWD\")\"");
+        let mut run = spec("echo \"$TERM|$TSUNAGIAI_TEST|${HOME-unset}|$(basename \"$PWD\")\"");
         run.cwd = dir.clone();
         run.env = vec![
-            EnvChange::Set("COOKAPPS_TEST", "set".to_owned()),
+            EnvChange::Set("TSUNAGIAI_TEST", "set".to_owned()),
             EnvChange::Remove("HOME"),
         ];
         code.start("a", &run, None, sink).unwrap();
@@ -1110,7 +1110,7 @@ mod tests {
         let code = ClaudeCode::default();
         let (sink, _rx) = collecting();
         let mut run = spec("");
-        run.program = "/nonexistent/cookapps-test".to_owned();
+        run.program = "/nonexistent/tsunagiai-test".to_owned();
         let message = code.start("a", &run, None, sink).unwrap_err();
         assert!(
             message.starts_with("Claude Code を起動できません"),

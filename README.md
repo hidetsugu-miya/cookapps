@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" alt="cookapps" width="96" />
+  <img src="src-tauri/icons/icon.png" alt="つなぎあい" width="96" />
 </p>
 
-<h1 align="center">cookapps</h1>
+<h1 align="center">つなぎあい</h1>
 
 <p align="center">
   <strong>届いた連絡を、その場で Claude の仕事に。</strong><br />
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hidetsugu-miya/cookapps/releases/latest"><img src="https://img.shields.io/github/v/release/hidetsugu-miya/cookapps?color=1e7b52&label=release" alt="最新の版" /></a>
+  <a href="https://github.com/hidetsugu-miya/tsunagiai/releases/latest"><img src="https://img.shields.io/github/v/release/hidetsugu-miya/tsunagiai?color=1e7b52&label=release" alt="最新の版" /></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-1e7b52" alt="macOS Apple Silicon" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1e7b52" alt="MIT ライセンス" /></a>
   <img src="https://img.shields.io/badge/built%20with-Tauri%20%2B%20Rust-1e7b52" alt="Tauri と Rust で作成" />
@@ -19,6 +19,10 @@
 <h3 align="center">
   <a href="#インストール">インストール</a> ・ <a href="docs/features.md">機能</a> ・ <a href="#ドキュメント">ドキュメント</a>
 </h3>
+
+つなぎあいは、Gmail、Google カレンダー、Todoist、Slack、Notion の公式 API と、オープンソース（MIT）の Orca の公開コードでつなぐ、個人用のクライアントです。
+商用で使う予定はありません。
+つないでいる各サービスと、作るうえで参考にしたアプリに敬意を持って作っています。
 
 <p align="center">
   <img src="docs/assets/readme/handoff.png" alt="メールを開いたまま、右のペインで Claude に調査と修正を頼んでいる画面" width="960" />
@@ -72,7 +76,7 @@
 
 ## データは、あなたのマシンに
 
-- cookapps にサーバーはありません。Gmail や Slack とは、あなたのマシンが直接話します。
+- つなぎあいにサーバーはありません。Gmail や Slack とは、あなたのマシンが直接話します。
 - ログインの情報は OS のキーチェーンに保存します。
 - Claude に内容を送るのは、あなたがボタンを押したときだけです。
 - ソースコードはすべて公開しています。
@@ -84,7 +88,7 @@
 macOS（Apple Silicon）のターミナルで実行します。
 
 ```sh
-curl -fsSL https://github.com/hidetsugu-miya/cookapps/releases/latest/download/tsunagiai.app.tar.gz | tar xz -C /Applications
+curl -fsSL https://github.com/hidetsugu-miya/tsunagiai/releases/latest/download/tsunagiai.app.tar.gz | tar xz -C /Applications
 ```
 
 Apple の公証を受けていないので、ブラウザでダウンロードしたものは macOS に止められます。

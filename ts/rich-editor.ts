@@ -151,7 +151,7 @@ export function createRichEditor({ prefix, label, arrow = true, sendLabel = "投
 
   async function start() {
     await loadMilkdown();
-    const made = await CookappsMilkdown.compose(host, () => {
+    const made = await TsunagiaiMilkdown.compose(host, () => {
       if (!silent) onChange();
     });
     view = made;

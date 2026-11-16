@@ -62,7 +62,7 @@ scripts/install-app.sh
 ```
 
 スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/tsunagiai.app` に置きます。
-cookapps が起動中のときは、終了してからやり直します。
+つなぎあいが起動中のときは、終了してからやり直します。
 古い版はゴミ箱へ移します。
 署名の証明書は、キーチェーンの最初の Apple Development 証明書を使います。
 別の証明書を使うときは、環境変数 `APPLE_SIGNING_IDENTITY` に証明書の名前かハッシュを渡します。
@@ -84,6 +84,6 @@ npm ci
 npx tauri build --bundles nsis --config '{"version":"0.55.2"}'
 ```
 
-インストーラーは `src-tauri/target/release/bundle/nsis/` に `cookapps_{バージョン}_x64-setup.exe` として出ます。
+インストーラーは `src-tauri/target/release/bundle/nsis/` に `tsunagiai_{バージョン}_x64-setup.exe` として出ます。
 コード署名はしていないので、実行すると Windows の SmartScreen が警告を出すことがあります。
 `client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.tsunagiai\`）に置きます。

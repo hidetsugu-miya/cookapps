@@ -723,7 +723,7 @@ describe("thread reply field", () => {
       const isMac = /Mac/.test(navigator.platform);
       document.querySelector("#mail-reply-body-input .ProseMirror")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
     }, onceId());
-  const milkdownRead = () => browser.execute("return typeof CookappsMilkdown !== 'undefined'");
+  const milkdownRead = () => browser.execute("return typeof TsunagiaiMilkdown !== 'undefined'");
   const edges = () =>
     browser.execute(() => {
       const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();

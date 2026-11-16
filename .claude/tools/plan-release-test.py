@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests of the pure functions of plan-release.py, and of the shell tools around the nightly run (nightly-limit.sh, use-worktree.sh, handover.sh) and the hook post-gh.sh.
 No network and no gh.
-The hook and the tools it runs are this checkout's own copies (the ones beside this file), not the main checkout's, and the hooks write their log to a temporary directory (COOKAPPS_HOOK_LOG_DIR), never to the real logs/.
+The hook and the tools it runs are this checkout's own copies (the ones beside this file), not the main checkout's, and the hooks write their log to a temporary directory (TSUNAGIAI_HOOK_LOG_DIR), never to the real logs/.
 Run: python3 -I .claude/tools/plan-release-test.py
 """
 import atexit
@@ -773,8 +773,8 @@ class DoneMilestones(unittest.TestCase):
 
 class SavedPlan(unittest.TestCase):
     def test_the_plan_lives_in_the_main_checkout(self):
-        self.assertEqual(pr.plan_file("/w/cookapps/.git"), "/w/cookapps/.claude/plan.json")
-        self.assertEqual(pr.plan_file("/w/cookapps/.git/"), "/w/cookapps/.claude/plan.json")
+        self.assertEqual(pr.plan_file("/w/tsunagiai/.git"), "/w/tsunagiai/.claude/plan.json")
+        self.assertEqual(pr.plan_file("/w/tsunagiai/.git/"), "/w/tsunagiai/.claude/plan.json")
 
     def test_save_and_read(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1142,7 +1142,7 @@ TOOLS = here
 
 # Every hook and tool started below inherits this, so a test never adds a line to the real logs/hooks-*.log.
 _hook_log_dir = tempfile.mkdtemp()
-os.environ["COOKAPPS_HOOK_LOG_DIR"] = _hook_log_dir
+os.environ["TSUNAGIAI_HOOK_LOG_DIR"] = _hook_log_dir
 atexit.register(shutil.rmtree, _hook_log_dir, ignore_errors=True)
 
 

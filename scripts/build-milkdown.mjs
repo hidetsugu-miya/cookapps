@@ -13,7 +13,7 @@ await build({
   bundle: true,
   minify: true,
   format: "iife",
-  globalName: "CookappsMilkdown",
+  globalName: "TsunagiaiMilkdown",
   target: "safari15",
   legalComments: "none",
   banner: {

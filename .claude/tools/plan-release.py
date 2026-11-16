@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orders the open issues of cookapps, and tells a run what to start and what the owner has to release (issues.md).
+"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (issues.md).
 
 Usage:
   plan-release.py snapshot

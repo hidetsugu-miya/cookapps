@@ -73,7 +73,7 @@ main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 
 The worktree's `src-tauri/target` is a clone of the main checkout's, so it shares disk blocks with it until a file is rewritten, and `du` counts the shared part in both.
 Read the real use from the fall of free space in `df`, not from `du`.
-`run-ci.sh` runs clippy and the tests with `CARGO_INCREMENTAL=0`, so the checks before a push leave no data for incremental builds, and `clean-target.sh` deletes the old output of cookapps itself (`harness.md`).
+`run-ci.sh` runs clippy and the tests with `CARGO_INCREMENTAL=0`, so the checks before a push leave no data for incremental builds, and `clean-target.sh` deletes the old output of the app itself (`harness.md`).
 Remove a worktree of an older layout (one named after its branch) with `git worktree remove`, without `--force`, so that a worktree with uncommitted files is refused; the one worktree itself stays.
 
 ```text

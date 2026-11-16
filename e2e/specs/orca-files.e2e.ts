@@ -288,7 +288,7 @@ describe("orca: files and editor (A-18)", () => {
   });
 
   it("reads Milkdown from vendor/ when the first Markdown file is drawn, and not at the start (A-26)", async () => {
-    const read = () => browser.execute("return typeof CookappsMilkdown !== 'undefined'");
+    const read = () => browser.execute("return typeof TsunagiaiMilkdown !== 'undefined'");
     await openFiles();
     expect(await read()).toBe(false);
     await openMarkdown("# a\n");
@@ -1015,7 +1015,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
     const list = await mock("orca_files_list", root());
     await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
-    await expect($("#orca-files-title")).toHaveText("~/.local/share/cookapps/scratchpad/");
+    await expect($("#orca-files-title")).toHaveText("~/.local/share/tsunagiai/scratchpad/");
     expect(await count("#orca-files-tree .orca-file")).toBe(0);
     await focusBack();
     await browser.pause(300);

@@ -2111,7 +2111,7 @@ async fn send_keys(
     let result = link
         .request(
             "terminal.send",
-            input_params(handle, text, "cookapps", None),
+            input_params(handle, text, "tsunagiai", None),
         )
         .await
         .map_err(crate::orca_link::reason_of)?;
@@ -2139,7 +2139,7 @@ pub async fn orca_terminal_input(
     let sent = match environment.clone() {
         None => crate::orca_link::local_call(
             "terminal.send",
-            input_params(&handle, &text, "cookapps", None),
+            input_params(&handle, &text, "tsunagiai", None),
         )
         .await
         .and_then(|result| check_accepted(&result)),
@@ -3718,7 +3718,7 @@ mod tests {
                 assert_eq!(send["method"], "terminal.send");
                 assert_eq!(
                     send["params"],
-                    input_params("term_1", "\u{3}--json", "cookapps", None)
+                    input_params("term_1", "\u{3}--json", "tsunagiai", None)
                 );
                 server
                     .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": accepted}}}))
@@ -3996,7 +3996,7 @@ mod tests {
 
     #[test]
     fn the_target_load_gives_what_the_file_says() {
-        let dir = std::env::temp_dir().join(format!("cookapps-orca-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tsunagiai-orca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load_target(&dir), Saved::Nothing);
         std::fs::create_dir_all(&dir).unwrap();
@@ -4561,12 +4561,12 @@ mod tests {
     #[test]
     fn the_keys_go_to_the_socket_as_the_cli_sends_them() {
         assert_eq!(
-            input_params("term_1", "\u{3}--json", "cookapps", None),
+            input_params("term_1", "\u{3}--json", "tsunagiai", None),
             json!({
                 "terminal": "term_1",
                 "text": "\u{3}--json",
                 "enter": false,
-                "client": {"id": "cookapps", "type": "desktop"},
+                "client": {"id": "tsunagiai", "type": "desktop"},
             })
         );
     }
@@ -4575,18 +4575,18 @@ mod tests {
     fn the_keys_of_a_terminal_that_fits_the_pane_claim_its_size_as_orca_does() {
         let viewport = |cols, rows| Some(OrcaViewport { cols, rows });
         assert_eq!(
-            input_params("term_1", "ls\r", "cookapps-1", viewport(120, 40)),
+            input_params("term_1", "ls\r", "tsunagiai-1", viewport(120, 40)),
             json!({
                 "terminal": "term_1",
                 "text": "ls\r",
                 "enter": false,
-                "client": {"id": "cookapps-1", "type": "desktop"},
+                "client": {"id": "tsunagiai-1", "type": "desktop"},
                 "viewport": {"cols": 120, "rows": 40},
                 "claimViewport": true,
             })
         );
         // A pane too small or too large is claimed at the nearest size Orca takes, as the other messages of the size do.
-        let params = input_params("term_1", "x", "cookapps-1", viewport(5, 900));
+        let params = input_params("term_1", "x", "tsunagiai-1", viewport(5, 900));
         assert_eq!(params["viewport"], json!({"cols": 20, "rows": 500}));
     }
 }

@@ -379,7 +379,7 @@ export interface Commands {
   lsp_word: { args: { line: string; character: number }; result: string | null };
   // A-34: how the definition pane draws each of `locations`, in order: the file and its line (from 1), the folder in the worktree or the gem and the folder in it, and whether it is outside the worktree. It reads and asks for nothing.
   lsp_places: { args: { locations: LspLocation[] }; result: LspPlace[] };
-  // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/cookapps/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
+  // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/tsunagiai/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
   ssh_scratch_list: { args: { host: string }; result: string[] };
   // A-30: the text of the scratchpad file `name` of the SSH host, as `orca_file_read` answers it (the signature is of the bytes on the host). A missing file, one over 384 KiB, one that is not UTF-8 and one with mixed line ends are errors.
   ssh_scratch_read: { args: { host: string; name: string }; result: OrcaFileText };

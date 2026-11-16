@@ -4,9 +4,9 @@ title: Claude との連携（MCP）
 
 # Claude との連携（MCP）
 
-`tsunagiai-mcp` は、Claude Code から cookapps の受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
+`tsunagiai-mcp` は、Claude Code からつなぎあいの受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
 stdio で動き、ネットワークのポートは開きません。
-cookapps アプリが起動していなくても使えます。
+つなぎあいアプリが起動していなくても使えます。
 データベースの画面の Claude Code のペインでは、アプリが自分の中の `tsunagiai-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
 
 この文書は AI に読ませて設定を任せられるように、手順と確認方法を順に書いています。
@@ -14,7 +14,7 @@ cookapps アプリが起動していなくても使えます。
 ## 前提
 
 - macOS か Windows で動かすこと。
-- cookapps アプリで、使いたいアカウントにログイン済みであること。
+- つなぎあいアプリで、使いたいアカウントにログイン済みであること。
   - `tsunagiai-mcp` は、アプリと同じ設定フォルダの `client_secret.json` と `accounts.json` を読みます。
     macOS では `~/Library/Application Support/jp.mysis.tsunagiai/`、Windows では `%APPDATA%\jp.mysis.tsunagiai\` です。
   - リフレッシュトークンもアプリと同じ OS の資格情報の保管場所の項目（サービス名 `jp.mysis.tsunagiai`。macOS ではキーチェーン、Windows では資格情報マネージャー）から読みます。
@@ -113,7 +113,7 @@ claude mcp get tsunagiai
 ```
 
 `Status` が `✔ Connected` なら完了です。
-Claude Code の中では、`/mcp` で `cookapps` の 9 つのツールが見えます。
+Claude Code の中では、`/mcp` で `tsunagiai` の 9 つのツールが見えます。
 
 macOS では、最初にツールを呼んだとき、キーチェーンへのアクセスの許可を求められることがあります。
 「常に許可」を選びます。
@@ -131,7 +131,7 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 | `trash` | `account`、`id` | スレッドをゴミ箱へ移す。Gmail から元に戻せる | 書き込み |
 | `db_profiles` | なし | データベースの画面の接続を返す（`id`、`name`、`username`、`script`、`dbHost`、`dbPort`、`passwordSaved`）。パスワードは返さない | 読み取り |
 | `db_profile_save` | `id`（新しい接続では省く）、`name`、`username`、`script`（無いときは空の文字列）、`db_host`、`db_port`（`script` の有無によらず、どちらも要る） | 接続を保存し、保存した内容を返す。確かめ方と断り方はアプリの保存と同じ。パスワードは設定しない。ユーザー名、`script`、ホスト、ポートを変えると、`script` の有無によらず、保存したパスワードを消す | 書き込み |
-| `db_test` | `id` | 保存した接続を、保存したパスワードで、アプリの「接続をテスト」と同じようにテストする（事前スクリプトがあれば動かし、接続のホストとポートで MySQL にログインして版を読み、スクリプトを止める。スクリプトを動かす前からそのポートが使われているときは失敗にし、cookapps でその接続を開いているなら切断してからテストするよう、`error` に添える）。`{"ok": true, "version": …}` か `{"ok": false, "error": …, "note": …}` を返す。最長 2 分ほどかかる | 書き込み |
+| `db_test` | `id` | 保存した接続を、保存したパスワードで、アプリの「接続をテスト」と同じようにテストする（事前スクリプトがあれば動かし、接続のホストとポートで MySQL にログインして版を読み、スクリプトを止める。スクリプトを動かす前からそのポートが使われているときは失敗にし、つなぎあいでその接続を開いているなら切断してからテストするよう、`error` に添える）。`{"ok": true, "version": …}` か `{"ok": false, "error": …, "note": …}` を返す。最長 2 分ほどかかる | 書き込み |
 
 `account` と `id` には、`list_inbox` が返した値を使います。
 `db_profile_save` と `db_test` の `id` には、`db_profiles` か `db_profile_save` が返した値を使います。
@@ -147,6 +147,6 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 | 症状 | 対処 |
 |---|---|
 | `claude mcp get tsunagiai` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v tsunagiai-mcp`（Windows の PowerShell では `Get-Command tsunagiai-mcp`）でパスが出るかを確かめる |
-| 「再ログインが必要です」と返る | cookapps アプリでそのアカウントに再ログインする |
+| 「再ログインが必要です」と返る | つなぎあいアプリでそのアカウントに再ログインする |
 | 「OAuth クライアント JSON を読めません」と返る | アプリの[セットアップ](setup.md#セットアップ)を済ませる |
 | macOS で、ツールを呼ぶたびにキーチェーンの許可を求められる | 許可のダイアログで「常に許可」を選ぶ |

@@ -7,9 +7,9 @@ guard="$(cd "$(dirname "$0")/../hooks" && pwd)/guard-e2e.sh"
 T="window.__TAU""RI__"
 fail=0
 # The hook writes its run to logs/ (hook-log.sh); a test run writes to a temporary directory instead.
-COOKAPPS_HOOK_LOG_DIR=$(mktemp -d) || exit 2
-export COOKAPPS_HOOK_LOG_DIR
-trap 'rm -rf "$COOKAPPS_HOOK_LOG_DIR"' EXIT
+TSUNAGIAI_HOOK_LOG_DIR=$(mktemp -d) || exit 2
+export TSUNAGIAI_HOOK_LOG_DIR
+trap 'rm -rf "$TSUNAGIAI_HOOK_LOG_DIR"' EXIT
 
 # check <期待する終了コード> <名前> <tool_name> <tool_input の JSON>
 check() {
@@ -21,9 +21,9 @@ check() {
 # check_log <期待するログの増え方（行数）> <名前> <tool_name> <tool_input の JSON>: 流した入力が logs/ に何行足すか（関係のない入力は 0 行、関係のある入力は 1 行）
 check_log() {
   local want=$1 name=$2 before after
-  before=$(cat "$COOKAPPS_HOOK_LOG_DIR"/hooks-*.log 2>/dev/null | wc -l)
+  before=$(cat "$TSUNAGIAI_HOOK_LOG_DIR"/hooks-*.log 2>/dev/null | wc -l)
   jq -n --arg t "$3" --argjson i "$4" '{tool_name: $t, tool_input: $i}' | "$guard" >/dev/null 2>&1
-  after=$(cat "$COOKAPPS_HOOK_LOG_DIR"/hooks-*.log 2>/dev/null | wc -l)
+  after=$(cat "$TSUNAGIAI_HOOK_LOG_DIR"/hooks-*.log 2>/dev/null | wc -l)
   [ $((after - before)) -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 ${want} 行、結果 $((after - before)) 行)"; fail=1; }
 }
 bash_in() { jq -n --arg c "$1" '{command: $c}'; }

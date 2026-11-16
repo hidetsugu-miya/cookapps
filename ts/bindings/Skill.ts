@@ -2,7 +2,7 @@
 import type { SkillScreen } from "./SkillScreen";
 
 /**
- * One skill. `name` is the folder name and what follows `/cookapps:`.
+ * One skill. `name` is the folder name and what follows `/tsunagiai:`.
  */
 export type Skill = { name: string, displayName: string, screens: Array<SkillScreen>, description: string, 
 /**
