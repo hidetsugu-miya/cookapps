@@ -1,5 +1,5 @@
 // The edit pane that registers or edits a connection (D-1): while it is open it takes the place of the work pane (`#database-pane`), with the side menu and the terminal pane as they were.
-// Its header has the title and the buttons 接続をテスト, キャンセル and 保存; under it are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
+// Its header has the title and the icon of the Claude Code pane; the bottom row has 接続をテスト at the left end and キャンセル and 保存 at the right end; between them are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
 // Saving runs `save`; a refusal (the reason Rust gives, in Japanese) shows under the fields and the pane stays with what was typed. キャンセル and Escape close it.
 // "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers, or the error (with the last lines of the script's standard error), under the fields.
 // The icon at the right end of the header opens and closes the Claude Code pane at the right of the edit pane (A-36, `ts/claude-code.ts`; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through tsunagiai-mcp (D-8).
@@ -167,9 +167,11 @@ export function openDatabaseForm(
 
   const head = tag("header", "database-edit-head");
   head.dataset.tauriDragRegion = "deep";
+  head.append(tag("h1", "", title), terminal);
   const actions = tag("div", "database-edit-actions");
-  actions.append(probe, cancel, submit);
-  head.append(tag("h1", "", title), actions, terminal);
+  actions.append(cancel, submit);
+  const foot = tag("div", "database-edit-foot");
+  foot.append(probe, actions);
   const body = tag("div", "database-edit-body");
   body.append(field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), field("DB のホスト", dbHost), field("ポート", dbPort), field("事前スクリプト", script), result, err);
 
@@ -177,7 +179,7 @@ export function openDatabaseForm(
   form.id = "database-form";
   form.noValidate = true;
   form.setAttribute("aria-label", title);
-  form.append(head, body);
+  form.append(head, body, foot);
   form.onsubmit = async (e) => {
     e.preventDefault();
     err.hidden = true;

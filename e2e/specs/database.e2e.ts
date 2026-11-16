@@ -121,7 +121,24 @@ describe("database: register", () => {
     await expect($("#database-side")).toBeDisplayed();
     await expect($("#database-form")).toHaveAttribute("aria-label", "接続を追加");
     await expect($("#database-form h1")).toHaveText("接続を追加");
-    expect(await textsOf("#database-form .database-edit-actions button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
+    expect(await textsOf("#database-form .database-edit-head button")).toEqual([""]);
+    expect(await textsOf("#database-form .database-edit-foot button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
+    const row = await browser.execute(() => {
+      const rect = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const body = rect(".database-edit-body");
+      const foot = rect(".database-edit-foot");
+      const form = rect("#database-form");
+      const probe = rect(".database-edit-foot > button");
+      const actions = rect(".database-edit-actions");
+      const buttons = [...document.querySelectorAll(".database-edit-foot button")].map((b) => b.getBoundingClientRect().top);
+      return { under: foot.top >= body.bottom, bottom: Math.round(form.bottom - foot.bottom), probeLeft: Math.round(probe.left - foot.left), actionsRight: Math.round(foot.right - actions.right), sameRow: Math.max(...buttons) - Math.min(...buttons) < 2, apart: actions.left > probe.right };
+    });
+    expect(row.under).toBe(true);
+    expect(row.bottom).toBe(0);
+    expect(row.sameRow).toBe(true);
+    expect(row.apart).toBe(true);
+    expect(row.probeLeft).toBeLessThanOrEqual(32);
+    expect(row.actionsRight).toBeLessThanOrEqual(32);
     expect(await count(".scrim")).toBe(0);
     expect(await count("#database-form .database-tab")).toBe(0);
     expect(await count('#database-form [role="tablist"]')).toBe(0);
@@ -354,11 +371,9 @@ describe("database: edit pane, Claude Code and reload", () => {
     const atEnd = await browser.execute(() => {
       const head = document.querySelector(".database-edit-head")!.getBoundingClientRect();
       const button = document.getElementById("database-edit-terminal")!.getBoundingClientRect();
-      const actions = document.querySelector(".database-edit-actions")!.getBoundingClientRect();
-      return { inside: button.top >= head.top && button.bottom <= head.bottom, after: button.left >= actions.right, gap: Math.round(head.right - button.right) };
+      return { inside: button.top >= head.top && button.bottom <= head.bottom, gap: Math.round(head.right - button.right) };
     });
     expect(atEnd.inside).toBe(true);
-    expect(atEnd.after).toBe(true);
     expect(atEnd.gap).toBeLessThanOrEqual(32);
   });
 
@@ -571,14 +586,14 @@ describe("database: delete", () => {
 });
 
 describe("database: test the connection", () => {
-  const probe = () => $("#database-form .database-edit-actions button:nth-child(1)");
+  const probe = () => $("#database-form .database-edit-foot > button");
   const result = () => $("#database-test-result");
 
-  it("has the button 接続をテスト before キャンセル and 保存 in the header, with nothing shown and nothing called before it is pressed", async () => {
+  it("has the button 接続をテスト at the left of the bottom row, before キャンセル and 保存, with nothing shown and nothing called before it is pressed", async () => {
     const test = await mock("database_test", "8.0.36");
     await openDatabase([]);
     await $("#database-add").click();
-    expect(await textsOf("#database-form .database-edit-actions button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
+    expect(await textsOf("#database-form .database-edit-foot button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
     await expect(probe()).toHaveAttribute("type", "button");
     await expect(result()).not.toBeDisplayed();
     expect(await callsOf(test)).toEqual([]);

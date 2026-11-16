@@ -1782,10 +1782,11 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .database-edit-head { flex: none; display: flex; align-items: center; gap: 12px; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 .database-edit-head h1 { min-width: 0; }
-.database-edit-actions { display: flex; gap: 8px; margin-left: auto; }
-.database-edit-actions .text-btn:disabled { opacity: .4; cursor: default; }
-.database-edit-actions .text-btn:disabled:hover { background: var(--surface); }
-#database-edit-terminal { flex: none; width: var(--header-btn); height: var(--header-btn); }
+.database-edit-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-sizing: border-box; padding: 12px 24px; background: var(--bar); border-top: 1px solid var(--line); }
+.database-edit-actions { display: flex; gap: 8px; }
+.database-edit-foot .text-btn:disabled { opacity: .4; cursor: default; }
+.database-edit-foot .text-btn:disabled:hover { background: var(--surface); }
+#database-edit-terminal { flex: none; margin-left: auto; width: var(--header-btn); height: var(--header-btn); }
 #database-edit-terminal svg { width: var(--header-ic); height: var(--header-ic); }
 #database-edit-terminal:hover:not(:disabled) { background: var(--hover); }
 #database-edit-terminal[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
