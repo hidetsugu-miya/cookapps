@@ -1,6 +1,6 @@
 ---
 name: improvement-proposal
-description: Looks for improvements to つなぎあい (refactoring of ts/ and src-tauri/, and the harness: hooks, skills, tools, agents; UI/UX too) and files them as issues, with `needs:owner` when the owner must decide; it implements nothing. Use on /improvement-proposal. Invoking it is the owner's instruction to file proposals, not to implement them.
+description: Looks for improvements to つなぎAI (refactoring of ts/ and src-tauri/, and the harness: hooks, skills, tools, agents; UI/UX too) and files them as issues, with `needs:owner` when the owner must decide; it implements nothing. Use on /improvement-proposal. Invoking it is the owner's instruction to file proposals, not to implement them.
 ---
 
 # improvement-proposal

@@ -394,7 +394,7 @@ def wait_for_callback(state):
                 result["code"] = query["code"][0]
             else:
                 result["error"] = "認可コードが付いていない"
-            page = "<!doctype html><meta charset=utf-8><title>つなぎあい</title><p>" + (
+            page = "<!doctype html><meta charset=utf-8><title>つなぎAI</title><p>" + (
                 "受け取りました。このタブは閉じてかまいません。" if "code" in result else "失敗しました。ターミナルを見てください。"
             )
             self.send_response(200 if "code" in result else 400)

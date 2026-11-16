@@ -21,7 +21,7 @@ Write no personal value in a rule or a skill for it either: not the name of the 
 `x-post.sh check` runs the same word list (`guard-public.sh text`) before every `send`.
 
 ```text
-Good: "つなぎあい v{version} を公開しました。" with the Releases URL, from the entries of CHANGELOG.md
+Good: "つなぎAI v{version} を公開しました。" with the Releases URL, from the entries of CHANGELOG.md
 Bad:  a post that names the account or the organization of the owner
 ```
 
