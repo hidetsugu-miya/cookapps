@@ -5,6 +5,8 @@ import { showCalendar } from "./calendar.js";
 import { closeDetail } from "./calendar-detail.js";
 import { showDatabase } from "./database.js";
 import { closeDatabaseForm } from "./database-form.js";
+import { drawDevSwitch } from "./footer.js";
+import { devMode, hideFormation, setDevMode, showFormation, type DevMode } from "./formation.js";
 import { closeHint } from "./hint.js";
 import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
@@ -21,7 +23,9 @@ export type Screen = "mail" | "calendar" | "todo" | "slack" | "orca" | "database
 let screen: Screen | "compose" | "new-mail" = "mail";
 export const currentScreen = () => screen;
 
+// The footer's switch of the development screen's mode shows with the sidebar's button of that screen (A-37).
 function markNav(name: Screen) {
+  drawDevSwitch(name === "orca", devMode());
   for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"], ["nav-slack", "slack"], ["nav-orca", "orca"], ["nav-database", "database"], ["nav-settings", "settings"]]) {
     if (target === name) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
@@ -81,6 +85,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   closeHint();
   closeDetail();
   closeDatabaseForm();
+  if (name !== "orca") hideFormation();
   markNav(name);
   syncTrays();
   $("error").hidden = true;
@@ -95,7 +100,13 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   } else if (name === "slack") {
     showSlackList();
   } else if (name === "orca") {
-    showOrca();
+    // The development screen: Orca, or the orchestration, whichever the footer's switch has on.
+    if (devMode() === "formation") {
+      showFormation();
+    } else {
+      hideFormation();
+      showOrca();
+    }
   } else if (name === "database") {
     showDatabase();
   } else if (name === "settings") {
@@ -114,6 +125,12 @@ export function initNav() {
   $("nav-todo").onclick = () => setScreen("todo");
   $("nav-slack").onclick = () => setScreen("slack");
   $("nav-orca").onclick = () => setScreen("orca");
+  for (const mode of ["orca", "formation"] as const satisfies DevMode[]) {
+    $(`footer-mode-${mode}`).onclick = () => {
+      setDevMode(mode);
+      setScreen("orca");
+    };
+  }
   $("nav-database").onclick = () => setScreen("database");
   syncTrays();
   $("nav-settings").onclick = () => setScreen("settings");
