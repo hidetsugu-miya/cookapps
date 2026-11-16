@@ -77,15 +77,15 @@ function line(avatar: HTMLElement, who: HTMLElement, text: string, icon: string,
 
 function mailItem(t: ThreadItem): Item {
   const name = t.fromName || t.fromAddress;
-  const subject = t.subject || "(件名なし)";
-  // The subject, then the snippet the list holds (Gmail sends it HTML-escaped).
-  const snippet = unescapeHtml(t.snippet).trim();
-  const text = snippet ? `${subject} — ${snippet}` : subject;
   const ms = t.dateMs;
   return {
     ms,
-    key: JSON.stringify(["mail", rowKey(t), name, text, ms]),
+    key: JSON.stringify(["mail", rowKey(t), name, t.subject, t.snippet, ms]),
     node: () => {
+      const subject = t.subject || "(件名なし)";
+      // The subject, then the snippet the list holds (Gmail sends it HTML-escaped): read only when the row is made, not at each check of the pane's key.
+      const snippet = unescapeHtml(t.snippet).trim();
+      const text = snippet ? `${subject} — ${snippet}` : subject;
       const avatar = span("avatar", initials(name));
       avatar.style.background = avatarColor(name);
       const who = el("unread-who");
