@@ -750,12 +750,13 @@ mod tests {
                 pid_file.display()
             );
             let started = Instant::now();
-            let err = start(&dir.0, HOST, free_port(), &body, quick(400))
+            // 2 s, not less: on a loaded machine the stderr of the script was not read yet after 400 ms.
+            let err = start(&dir.0, HOST, free_port(), &body, quick(2_000))
                 .await
                 .err()
                 .unwrap();
             assert!(started.elapsed() < Duration::from_secs(10));
-            assert!(err.contains("0 秒たっても準備できませんでした"), "{err}");
+            assert!(err.contains("2 秒たっても準備できませんでした"), "{err}");
             assert!(err.ends_with("waiting"), "{err}");
             // The `sleep` is a child of the script, in its group: it is ended with it.
             assert!(gone(read_pid(&pid_file).await).await);
