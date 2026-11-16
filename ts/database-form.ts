@@ -1,49 +1,28 @@
 // The edit pane that registers or edits a connection (D-1): while it is open it takes the place of the work pane (`#database-pane`), with the side menu and the terminal pane as they were.
-// Its header has the title and the buttons 接続をテスト, キャンセル and 保存; under it are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
+// Its header has the title and the icon of the terminal pane of the right (D-7); the bottom row has 接続をテスト at the left end and キャンセル and 保存 at the right end; between them are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
 // Saving runs `save`; a refusal (the reason Rust gives, in Japanese) shows under the fields and the pane stays with what was typed. キャンセル and Escape close it.
 // "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers, or the error (with the last lines of the script's standard error), under the fields.
-// The icon at the right end of the header opens and closes the Claude Code pane at the right of the edit pane (A-36, `ts/claude-code.ts`; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through tsunagiai-mcp (D-8).
-// Pressing it again hides the pane and the process goes on; closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) ends the process. While the edit pane of a saved connection is open, the list is read at an interval, and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The interval stops when the edit pane is closed or the connection is gone from the list.
+// The icon at the right end of the header opens and closes the same pane at the right as the icon of the work pane's header (`ts/database-terminal.ts`), whose first tab is Claude Code (A-36; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through tsunagiai-mcp (D-8).
+// Closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) leaves that pane and its process as they are. While the edit pane of a saved connection is open, the list is read at an interval, and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The interval stops when the edit pane is closed or the connection is gone from the list.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { $, composing, tag } from "./dom.js";
-import { closeClaudeCode, hideClaudeCode, showClaudeCode } from "./claude-code.js";
+import { isDatabaseTerminalOpen, toggleDatabaseTerminal } from "./database-terminal.js";
 import { periodMs } from "./e2e-timers.js";
 import { closeHint } from "./hint.js";
 import { TERMINAL_SVG } from "./icons.js";
 import { closeMenu } from "./menu.js";
-import { initSplit } from "./split.js";
 
 // How often the list is read while the pane of a saved connection is open.
 const WATCH_MS = 2000;
 
-// The id and the owner of the Claude Code pane of the edit pane (A-36): one pane, so one id.
-const CLAUDE_ID = "database-edit";
-const CLAUDE_OWNER = "database-claude";
-
 let opened: { opener: HTMLElement | null; timer: number | null } | null = null;
-
-// Shows the Claude Code pane at the right of the edit pane (the first show starts the process), or hides it (the process goes on).
-function setClaudeOpen(open: boolean) {
-  $("database-claude").hidden = !open;
-  $("database-claude-split").hidden = !open;
-  if (open) showClaudeCode($("database-claude-body"), { id: CLAUDE_ID, builtinTools: true }, CLAUDE_OWNER);
-  else hideClaudeCode(CLAUDE_OWNER);
-}
-
-// The width of the Claude Code pane is its divider's (ts/split.ts), kept in memory only.
-export function initDatabaseForm() {
-  initSplit($("database"), $("database-claude-split"), { min: 0.25, max: 0.5, initial: 0.35, property: "--claude-w" });
-}
 
 export function closeDatabaseForm() {
   if (!opened) return;
   const { opener, timer } = opened;
   if (timer !== null) clearInterval(timer);
   opened = null;
-  // The pane belongs to the edit pane: its process ends with it.
-  setClaudeOpen(false);
-  closeClaudeCode(CLAUDE_ID, CLAUDE_OWNER);
   $("database-edit").replaceChildren();
   $("database-edit").hidden = true;
   $("database-pane").hidden = false;
@@ -156,20 +135,18 @@ export function openDatabaseForm(
   const terminal = tag("button", "icon-btn");
   terminal.type = "button";
   terminal.id = "database-edit-terminal";
-  terminal.setAttribute("aria-label", "Claude Code");
-  terminal.setAttribute("aria-pressed", "false");
+  terminal.setAttribute("aria-label", "ターミナル");
+  terminal.setAttribute("aria-pressed", String(isDatabaseTerminalOpen()));
   terminal.innerHTML = TERMINAL_SVG;
-  terminal.onclick = () => {
-    const open = terminal.getAttribute("aria-pressed") !== "true";
-    terminal.setAttribute("aria-pressed", String(open));
-    setClaudeOpen(open);
-  };
+  terminal.onclick = toggleDatabaseTerminal;
 
   const head = tag("header", "database-edit-head");
   head.dataset.tauriDragRegion = "deep";
+  head.append(tag("h1", "", title), terminal);
   const actions = tag("div", "database-edit-actions");
-  actions.append(probe, cancel, submit);
-  head.append(tag("h1", "", title), actions, terminal);
+  actions.append(cancel, submit);
+  const foot = tag("div", "database-edit-foot");
+  foot.append(probe, actions);
   const body = tag("div", "database-edit-body");
   body.append(field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), field("DB のホスト", dbHost), field("ポート", dbPort), field("事前スクリプト", script), result, err);
 
@@ -177,7 +154,7 @@ export function openDatabaseForm(
   form.id = "database-form";
   form.noValidate = true;
   form.setAttribute("aria-label", title);
-  form.append(head, body);
+  form.append(head, body, foot);
   form.onsubmit = async (e) => {
     e.preventDefault();
     err.hidden = true;

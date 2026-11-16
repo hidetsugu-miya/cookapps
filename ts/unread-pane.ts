@@ -1,12 +1,12 @@
 // The pane of the unread (A-35): the count in the footer opens it from the right, over the screen and down to the footer, and it lists the unread threads of the inbox and the unread messages of the Slack list, mixed, the newest first.
-// A row says which of the two it is by its icon, then the sender's avatar and name, the channel (Slack), the time and one line (the subject, or the text). Its text button does what pressing the row of the inbox or of the Slack list does.
+// A row says which of the two it is by its icon, then the sender's avatar and name, the channel (Slack), the time and the text, up to 3 lines (the subject and the snippet of a mail, or the text of a Slack message). Its text button does what pressing the row of the inbox or of the Slack list does.
 // While the pointer is on a row or the focus is in it, its icon buttons show: a mail's trash and archive (M-3, M-4: the list's `removeRow`), a Slack message's "既読にする" (only where it changes something) and "ウォッチ" (S-13). The row goes from the pane and the count of the footer falls.
 // It draws what the inbox and the Slack list hold, with no call of its own, and it is drawn again where either changes (the inbox's unread rows, `drawUnreadPane` of slack-list.ts and the count of the footer). Everything is drawn as text.
 import type { ThreadItem } from "./bindings/ThreadItem";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { $, el, span, tag } from "./dom.js";
 import { watchFooterCount } from "./footer.js";
-import { avatarColor, formatDate, initials } from "./format.js";
+import { avatarColor, formatDate, initials, unescapeHtml } from "./format.js";
 import { BOOKMARK_SVG, CHECK_SVG, MAIL_SVG, SLACK_SVG, TRASH_SVG } from "./icons.js";
 import { removeRow } from "./inbox.js";
 import { pending, rowKey, rows } from "./inbox-rows.js";
@@ -77,12 +77,15 @@ function line(avatar: HTMLElement, who: HTMLElement, text: string, icon: string,
 
 function mailItem(t: ThreadItem): Item {
   const name = t.fromName || t.fromAddress;
-  const subject = t.subject || "(件名なし)";
   const ms = t.dateMs;
   return {
     ms,
-    key: JSON.stringify(["mail", rowKey(t), name, subject, ms]),
+    key: JSON.stringify(["mail", rowKey(t), name, t.subject, t.snippet, ms]),
     node: () => {
+      const subject = t.subject || "(件名なし)";
+      // The subject, then the snippet the list holds (Gmail sends it HTML-escaped): read only when the row is made, not at each check of the pane's key.
+      const snippet = unescapeHtml(t.snippet).trim();
+      const text = snippet ? `${subject} — ${snippet}` : subject;
       const avatar = span("avatar", initials(name));
       avatar.style.background = avatarColor(name);
       const who = el("unread-who");
@@ -95,7 +98,7 @@ function mailItem(t: ThreadItem): Item {
       const li = line(
         avatar,
         who,
-        subject,
+        text,
         MAIL_SVG,
         "詳細を開く",
         () => {
@@ -111,7 +114,7 @@ function mailItem(t: ThreadItem): Item {
   };
 }
 
-// The message as a row says it: its plain text on one line, or the files it holds.
+// The message as a row says it: its plain text (the row draws up to 3 lines of it), or the files it holds.
 const lineOf = (m: TimelineMessage) => m.text.trim() || (m.hasFiles ? "（添付ファイル）" : "");
 
 function slackItem(m: TimelineMessage): Item {

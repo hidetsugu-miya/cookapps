@@ -2,8 +2,9 @@
 // No Orca is in between. Claude Code gets only the tools of `tsunagiai-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), and a saved skill when the screen gives one.
 // A screen that holds a pane gives it a host element and an `owner` (the name of the pane), shows it with `showClaudeCode` while it is in view, hides it with `hideClaudeCode` (the process goes on, and what it prints is drawn into the hidden terminal),
 // and ends it with `closeClaudeCode` when the pane is closed or the screen no longer needs it (the process and what it started are ended). A message of a failed start or of the end of the process is drawn in the terminal.
+// `onEnd` is told when the process ends by itself with the exit code 0 (not when its start failed or it ended with an exit code or a signal, which stay drawn in the terminal), so a screen can drop the pane.
 import type { SkillScreen } from "./bindings/SkillScreen";
-import { hideTerminals, releaseTerminal, showTerminals } from "./orca-terminal.js";
+import { hideTerminals, isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
 export interface ClaudeCodeOptions {
   // The id of the pane: Rust names the process by it, and starting an id again ends the process it had.
@@ -12,13 +13,20 @@ export interface ClaudeCodeOptions {
   builtinTools?: boolean;
   // A saved skill that Claude Code is given with `--plugin-dir` (A-32).
   skill?: { name: string; screen: SkillScreen } | null;
+  // Called when the process ends by itself with the exit code 0.
+  onEnd?: () => void;
 }
 
 // Shows the terminal of the pane in `host` and gives it the keyboard when it is new. The first show starts the process, with the size of `host`; a later one only draws it again.
 export function showClaudeCode(host: HTMLElement, options: ClaudeCodeOptions, owner: string) {
   host.classList.add("claude-code-pane");
-  const pty = { builtinTools: options.builtinTools ?? false, skill: options.skill ?? null };
+  const pty = { builtinTools: options.builtinTools ?? false, skill: options.skill ?? null, onEnd: options.onEnd };
   showTerminals([{ id: options.id, source: { kind: "pty", handle: options.id, path: "", environment: null, pty }, host }], options.id, owner);
+}
+
+// Whether the pane `owner` shows the terminal `id` in `host`, so that showing it again would change nothing.
+export function isClaudeCodeShowing(host: HTMLElement, id: string, owner: string) {
+  return isShowing({ id, source: { kind: "pty", handle: id, path: "", environment: null }, host }, owner);
 }
 
 // Hides the terminal of the pane `owner` (another screen, or the pane is out of view). The process stays and keeps drawing.

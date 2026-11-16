@@ -31,6 +31,7 @@ pub mod orca_panes;
 pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod side_menu;
 pub mod skills;
 pub mod slack;
 mod slack_blocks;
@@ -396,6 +397,8 @@ pub fn run() {
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,
+            side_menu::side_menu_settings,
+            side_menu::side_menu_settings_set,
             skills::skill_list,
             skills::skill_get,
             skills::skill_save,

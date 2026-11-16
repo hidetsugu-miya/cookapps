@@ -1,10 +1,11 @@
 // The terminal pane of the database screen (D-7): a pane at the right of the work pane that the icon at the right end of the work pane's header opens and closes, and a divider between them that is dragged.
 // Whether it is open is the `aria-pressed` of the icon, and its width is the divider's (ts/split.ts); both are kept in memory only.
-// Its head is a strip of tabs with a plus. The plus asks Orca for its worktrees, lets the user pick one (the dialog of A-16) and opens a plain terminal there (`orca_terminal_create`); the terminal is drawn by ts/orca-terminal.ts (A-8, A-12), with this pane as its owner.
+// Its head is a strip of tabs with a plus. The first tab is the fixed "Claude" tab (A-36): opening the pane starts Claude Code in it when none runs (the built-in tools on, as the database screen runs `aws`), and it goes when the process ends by itself with the exit code 0 or its close button is pressed (an end with an exit code or a signal keeps it, with the message in its box); closing the pane, leaving the screen and closing the edit pane do not end it. The plus asks Orca for its worktrees, lets the user pick one (the dialog of A-16) and opens a plain terminal there (`orca_terminal_create`); the terminal is drawn by ts/orca-terminal.ts (A-8, A-12), with this pane as its owner.
 // Each terminal the plus opened has a tab, in the order they were opened, and the newest is selected. A tab is pressed to show its terminal, and its close button (the one of the tabs of the Orca screen) closes the terminal in Orca (`orca_close`).
 // Only the selected terminal is shown: a tick (every second) shows it when the pane is in view, and lets the others go (`hideTerminals`: their streams or reads end), as it lets all of them go when the pane is closed, the screen is left or the window is hidden. It also reads Orca's list, as long as the pane is in view, to see that each terminal is still there: first until the list holds it, then at the period of the Orca clock; a terminal the list lacks is forgotten, with its tab.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
+import { closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { CLOSE_SVG, PLUS_SVG, TERMINAL_SVG } from "./icons.js";
@@ -15,6 +16,9 @@ import { initSplit } from "./split.js";
 
 // The owner of the terminal in `ts/orca-terminal.ts`.
 const OWNER = "database-terminal";
+// The id of the Claude Code pane (Rust names the process by it), its owner in `ts/orca-terminal.ts`, and the key that `selected` holds while its tab is the selected one.
+const CLAUDE_ID = "database-claude";
+const CLAUDE_OWNER = "database-claude";
 const TICK_MS = 1000;
 const LIST_MS = 10_000;
 // How long the list may take to hold a terminal that Orca has just opened.
@@ -33,7 +37,11 @@ interface Held {
 
 // The terminals in the order they were opened, and the handle of the one the pane shows.
 const terminals: Held[] = [];
+// The handle of the terminal the pane shows, or CLAUDE_ID while the Claude tab is the selected one.
 let selected: string | null = null;
+// Whether the Claude tab is there (its process runs, or its start failed and the message is drawn), and the element its terminal is drawn in.
+let claude = false;
+let claudeHost: HTMLElement | null = null;
 // The handles whose close is on its way.
 const closing = new Set<string>();
 // The element the selected terminal is drawn in (there while a terminal is held), and the notice above it (Orca's missing, a read, an open or a close that failed).
@@ -59,32 +67,44 @@ function say(text: string | null) {
   body().prepend(notice);
 }
 
-// The tab of a terminal, as the tabs of the Orca screen are: the close button is beside the tab, not in it, so that pressing it never selects the tab.
-function tabOf(terminal: Held) {
+// A tab, as the tabs of the Orca screen are: the close button is beside the tab, not in it, so that pressing it never selects the tab.
+function makeTab(title: string, key: string, onSelect: () => void, onClose: () => void, closeOff: boolean) {
   const wrap = tag("div", "database-terminal-tab");
   wrap.setAttribute("role", "presentation");
   const select = tag("button", "database-terminal-tab-btn");
   select.type = "button";
   select.setAttribute("role", "tab");
-  select.setAttribute("aria-selected", String(terminal.handle === selected));
-  select.append(tag("span", "database-terminal-tab-title", terminal.title));
-  select.onclick = () => choose(terminal.handle);
+  select.setAttribute("aria-selected", String(key === selected));
+  select.append(tag("span", "database-terminal-tab-title", title));
+  select.onclick = onSelect;
   const close = tag("button", "icon-btn database-terminal-tab-close");
   close.type = "button";
   close.setAttribute("aria-label", "閉じる");
   close.innerHTML = CLOSE_SVG;
-  close.disabled = closing.has(terminal.handle);
-  close.onclick = () => void closeTab(terminal);
+  close.disabled = closeOff;
+  close.onclick = onClose;
   wrap.append(select, close);
+  return { wrap, select };
+}
+
+const tabOf = (terminal: Held) => makeTab(terminal.title, terminal.handle, () => choose(terminal.handle), () => void closeTab(terminal), closing.has(terminal.handle)).wrap;
+
+// The fixed tab of Claude Code, the first of the strip.
+function claudeTabOf() {
+  const { wrap, select } = makeTab("Claude", CLAUDE_ID, () => choose(CLAUDE_ID), closeClaude, false);
+  select.id = "database-claude-tab";
   return wrap;
 }
 
 function draw() {
   plus().disabled = busy;
-  const key = terminals.map((t) => `${t.handle}\n${t.title}\n${t.handle === selected}\n${closing.has(t.handle)}`).join("\n\n");
+  // Only the selected tab's terminal takes room in the body.
+  if (host) host.hidden = selected === CLAUDE_ID;
+  if (claudeHost) claudeHost.hidden = selected !== CLAUDE_ID;
+  const key = [claude ? `claude\n${selected === CLAUDE_ID}` : "", ...terminals.map((t) => `${t.handle}\n${t.title}\n${t.handle === selected}\n${closing.has(t.handle)}`)].join("\n\n");
   if (key === drawn) return;
   drawn = key;
-  $("database-terminal-tabs").replaceChildren(...terminals.map(tabOf));
+  $("database-terminal-tabs").replaceChildren(...(claude ? [claudeTabOf()] : []), ...terminals.map(tabOf));
 }
 
 function stopWatch() {
@@ -111,9 +131,9 @@ function forget(handle: string) {
   terminals.splice(at, 1);
   closing.delete(handle);
   releaseTerminal(handle, OWNER);
-  if (selected === handle) selected = (terminals[at] ?? terminals[at - 1])?.handle ?? null;
+  if (selected === handle) selected = (terminals[at] ?? terminals[at - 1])?.handle ?? (claude ? CLAUDE_ID : null);
   if (terminals.length === 0) {
-    stopWatch();
+    if (!claude) stopWatch();
     host?.remove();
     host = null;
   }
@@ -152,10 +172,26 @@ async function check() {
   }
 }
 
+// Shows the terminal of Claude Code in its box; the process starts with the first show, and a show of a running one starts nothing.
+function showClaude() {
+  if (claudeHost === null || isClaudeCodeShowing(claudeHost, CLAUDE_ID, CLAUDE_OWNER)) return;
+  showClaudeCode(claudeHost, { id: CLAUDE_ID, builtinTools: true, onEnd: closeClaude }, CLAUDE_OWNER);
+}
+
 async function tick() {
-  if (terminals.length === 0) return stopWatch();
-  // A pane that is not in view (closed, another screen, a hidden window) reads and streams nothing.
-  if (document.hidden || body().getClientRects().length === 0) return hideTerminals(OWNER);
+  if (terminals.length === 0 && !claude) return stopWatch();
+  // A pane that is not in view (closed, another screen, a hidden window) reads and streams nothing; the process of Claude Code goes on.
+  if (document.hidden || body().getClientRects().length === 0) {
+    hideTerminals(OWNER);
+    hideClaudeCode(CLAUDE_OWNER);
+    return;
+  }
+  if (selected === CLAUDE_ID) {
+    hideTerminals(OWNER);
+    showClaude();
+    return void (await check());
+  }
+  hideClaudeCode(CLAUDE_OWNER);
   await check();
   const terminal = selectedTerminal();
   // Only the selected terminal is shown, and only once the list holds it: the others read and stream nothing.
@@ -237,20 +273,48 @@ async function press() {
 // Whether the pane is open: the `aria-pressed` of the icon of the work pane's header.
 export const isDatabaseTerminalOpen = () => $("database-terminal-toggle").getAttribute("aria-pressed") === "true";
 
-// Opens the pane when it is closed and closes it when it is open: the press of the icon of the work pane's header.
-function toggleDatabaseTerminal() {
-  const open = !isDatabaseTerminalOpen();
-  $("database-terminal-toggle").setAttribute("aria-pressed", String(open));
+// Puts the Claude tab first and selects it; the process starts when the tick shows it.
+function startClaude() {
+  claude = true;
+  selected = CLAUDE_ID;
+  claudeHost = tag("div");
+  claudeHost.id = "database-claude-term";
+  body().append(claudeHost);
+  draw();
+}
+
+// Takes the Claude tab away (its process ended, or its close button was pressed): its process and what it started end. The first tab is selected; with no tab left the pane closes.
+function closeClaude() {
+  if (!claude) return;
+  claude = false;
+  closeClaudeCode(CLAUDE_ID, CLAUDE_OWNER);
+  claudeHost?.remove();
+  claudeHost = null;
+  if (selected === CLAUDE_ID) selected = terminals[0]?.handle ?? null;
+  // The strip is drawn before the pane closes, or the tab that went would stay in it.
+  draw();
+  if (terminals.length === 0) return setDatabaseTerminalOpen(false);
+  void tick();
+}
+
+// Opens or closes the pane, and keeps the icon of the work pane's header and the icon of the edit pane (both open and close this pane) in step. Opening it starts Claude Code when no process runs; closing it ends nothing.
+function setDatabaseTerminalOpen(open: boolean) {
+  for (const id of ["database-terminal-toggle", "database-edit-terminal"]) document.getElementById(id)?.setAttribute("aria-pressed", String(open));
   $("database-terminal").hidden = !open;
   $("database-terminal-split").hidden = !open;
   if (!open) {
     stopWatch();
     hideTerminals(OWNER);
-  } else if (terminals.length > 0) {
-    startWatch();
-    void tick();
+    hideClaudeCode(CLAUDE_OWNER);
+    return;
   }
+  if (!claude) startClaude();
+  startWatch();
+  void tick();
 }
+
+// The press of the icon of the work pane's header or of the edit pane's.
+export const toggleDatabaseTerminal = () => setDatabaseTerminalOpen(!isDatabaseTerminalOpen());
 
 export function initDatabaseTerminal() {
   const toggle = $("database-terminal-toggle");

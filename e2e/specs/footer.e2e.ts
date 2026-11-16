@@ -74,6 +74,8 @@ describe("footer", () => {
     const mail = (id: string, subject: string, minutes: number) => ({ ...thread(id, subject, true), dateMs: Date.now() - minutes * 60_000 });
     const slackAt = (minutes: number, name: string, text: string) => timelineMessage(slackTs(minutes), name, "dev", text, { unread: true });
     const lines = () => textsOf("#unread-pane-list li .unread-line");
+    // A mail's line is its subject and then its snippet (the fixture's snippet is the subject and " snippet").
+    const mailLine = (subject: string) => `${subject} — ${subject} snippet`;
     const panes = (slack = timeline([slackAt(4, "Slack Second", "second text"), slackAt(8, "Slack Oldest", "oldest text")], { refreshSecs: 1 })) =>
       boot({ inbox: inbox([mail("t1", "Mail newest", 2), mail("t2", "Mail third", 6)]), slack_load: slackLoad, slack_timeline: slack, claude_status: claudeReady, calendar_week: weekOfToday() });
     const open = async () => {
@@ -96,11 +98,11 @@ describe("footer", () => {
       expect(place).toEqual({ width: 380, right: 0, above: 0 });
     });
 
-    it("mixes the unread mail and the unread Slack messages, the newest first, each row with its icon, avatar, name, channel, time and one line", async () => {
+    it("mixes the unread mail and the unread Slack messages, the newest first, each row with its icon, avatar, name, channel, time and text", async () => {
       await panes();
       await open();
       await waitForCount("#unread-pane-list li", 4);
-      expect(await lines()).toEqual(["Mail newest", "second text", "Mail third", "oldest text"]);
+      expect(await lines()).toEqual([mailLine("Mail newest"), "second text", mailLine("Mail third"), "oldest text"]);
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#unread-pane-list li")].map((li) => li.dataset.kind))).toEqual(["mail", "slack", "mail", "slack"]);
       const slack = $$("#unread-pane-list li")[1];
       await expect(slack.$(".unread-kind svg")).toBeDisplayed();
@@ -112,6 +114,41 @@ describe("footer", () => {
       await expect(first.$("b")).toHaveText("Alice");
       await expect(first.$(".unread-channel")).not.toExist();
       expect(await textsOf("#unread-pane-list li .text-btn")).toEqual(["詳細を開く", "スレッドを開く", "詳細を開く", "スレッドを開く"]);
+    });
+
+    it("shows a mail's subject and snippet and a Slack message's text up to 3 lines, and cuts what passes them", async () => {
+      const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+      const broken = "one\ntwo\nthree\nfour\nfive";
+      const longMail = { ...mail("t2", "Long mail", 6), snippet: long };
+      await boot({
+        inbox: inbox([mail("t1", "Mail newest", 2), longMail]),
+        slack_load: slackLoad,
+        slack_timeline: timeline([slackAt(4, "Slack Long", long), slackAt(8, "Slack Short", "short"), slackAt(10, "Slack Broken", broken)], { refreshSecs: 1 }),
+        claude_status: claudeReady,
+        calendar_week: weekOfToday(),
+      });
+      await waitForText("#footer-bell .footer-count", "5");
+      await $("#footer-bell").click();
+      await waitForCount("#unread-pane-list li", 5);
+      const shape = await browser.execute(() =>
+        [...document.querySelectorAll<HTMLElement>("#unread-pane-list li .unread-line")].map((e) => ({
+          text: e.textContent,
+          height: e.clientHeight,
+          clipped: e.scrollHeight > e.clientHeight + 1,
+          clamp: getComputedStyle(e).getPropertyValue("-webkit-line-clamp"),
+        })),
+      );
+      // The whole text is in the line: the mail's subject and its snippet, the message's text with its line breaks.
+      expect(shape.map((r) => r.text)).toEqual([mailLine("Mail newest"), long, `Long mail — ${long}`, "short", broken]);
+      for (const r of shape) expect(r.clamp).toBe("3");
+      // A one-line text is not cut, and what passes three lines is cut to the height of three: a long text, a mail's long snippet and a text of five lines.
+      const one = shape[3];
+      expect(one.clipped).toBe(false);
+      expect(shape[0].clipped).toBe(false);
+      for (const i of [1, 2, 4]) {
+        expect(shape[i].clipped).toBe(true);
+        expect(Math.abs(shape[i].height - one.height * 3)).toBeLessThanOrEqual(3);
+      }
     });
 
     it("closes with the bell again, with the close button, and with a press outside the pane", async () => {
@@ -169,13 +206,13 @@ describe("footer", () => {
       // The Slack list is read in Slack: the messages go.
       await mock("slack_timeline", timeline([], { refreshSecs: 1 }));
       await waitForCount("#unread-pane-list li", 2);
-      expect(await lines()).toEqual(["Mail newest", "Mail third"]);
+      expect(await lines()).toEqual([mailLine("Mail newest"), mailLine("Mail third")]);
       await expect($("#unread-pane-title")).toHaveText("未読 2");
       // A mail is made read in the inbox.
       await mock("set_read", true);
       await browser.execute(() => document.querySelector<HTMLInputElement>("#unread-threads .read-box")!.click());
       await waitForCount("#unread-pane-list li", 1);
-      expect(await lines()).toEqual(["Mail third"]);
+      expect(await lines()).toEqual([mailLine("Mail third")]);
       await expect($("#unread-pane-title")).toHaveText("未読 1");
       expect(await textsOf("#unread-pane-list li b")).toEqual(["Alice"]);
     });
@@ -230,7 +267,7 @@ describe("footer", () => {
         await pressed(0, "ゴミ箱へ移動");
         expect(await waitForCalls(trash)).toEqual([{ account, id: "t1" }]);
         await waitForCount("#unread-pane-list li", 3);
-        expect(await lines()).toEqual(["text A", "Mail third", "text B"]);
+        expect(await lines()).toEqual(["text A", mailLine("Mail third"), "text B"]);
         await expect($("#unread-pane-title")).toHaveText("未読 3");
         await waitForText("#footer-bell .footer-count", "3");
         await expect($("#unread-pane")).toBeDisplayed();
@@ -243,7 +280,7 @@ describe("footer", () => {
         await $(".toast button").click();
         expect(await waitForCalls(untrash)).toEqual([{ account, id: "t1" }]);
         await waitForCount("#unread-pane-list li", 4);
-        expect((await lines())[0]).toBe("Mail newest");
+        expect((await lines())[0]).toBe(mailLine("Mail newest"));
         await expect($("#unread-pane-title")).toHaveText("未読 4");
       });
 
@@ -253,7 +290,7 @@ describe("footer", () => {
         await pressed(2, "アーカイブ");
         expect(await waitForCalls(archive)).toEqual([{ account, id: "t2" }]);
         await waitForCount("#unread-pane-list li", 3);
-        expect(await lines()).toEqual(["Mail newest", "text A", "text B"]);
+        expect(await lines()).toEqual([mailLine("Mail newest"), "text A", "text B"]);
         await expect($("#unread-pane-title")).toHaveText("未読 3");
         await waitForText("#footer-bell .footer-count", "3");
         await expect($(".toast")).toHaveText(expect.stringContaining("アーカイブしました"));
@@ -267,7 +304,7 @@ describe("footer", () => {
         await waitForCalls("trash");
         await expect($("#error")).toHaveText(expect.stringContaining("失敗しました"));
         await waitForCount("#unread-pane-list li", 4);
-        expect((await lines())[0]).toBe("Mail newest");
+        expect((await lines())[0]).toBe(mailLine("Mail newest"));
         await expect($("#unread-pane-title")).toHaveText("未読 4");
         await waitForText("#footer-bell .footer-count", "4");
       });
@@ -279,7 +316,7 @@ describe("footer", () => {
         await pressed(1, "既読にする");
         expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
         await waitForCount("#unread-pane-list li", 3);
-        expect(await lines()).toEqual(["Mail newest", "Mail third", "text B"]);
+        expect(await lines()).toEqual([mailLine("Mail newest"), mailLine("Mail third"), "text B"]);
         await expect($("#unread-pane-title")).toHaveText("未読 3");
         await waitForText("#footer-bell .footer-count", "3");
         await expect($("#unread-pane")).toBeDisplayed();
@@ -305,7 +342,7 @@ describe("footer", () => {
         await pressed(1, "ウォッチ");
         expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
         await waitForCount("#unread-pane-list li", 3);
-        expect(await lines()).toEqual(["Mail newest", "Mail third", "text B"]);
+        expect(await lines()).toEqual([mailLine("Mail newest"), mailLine("Mail third"), "text B"]);
         await expect($("#unread-pane-title")).toHaveText("未読 4");
         await expect($("#slack-thread")).not.toBeDisplayed();
         expect(await callsOf(mark)).toEqual([]);

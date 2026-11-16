@@ -5,7 +5,7 @@ import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
-import { initDatabaseForm, openDatabaseForm } from "./database-form.js";
+import { openDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
 import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
@@ -441,5 +441,4 @@ export function initDatabase() {
   add.onclick = () => openDatabaseForm(null, save, test, () => load(true));
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
   initDatabaseTerminal();
-  initDatabaseForm();
 }

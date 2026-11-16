@@ -1501,12 +1501,17 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_connection_with_a_script_runs_it_for_its_own_host_and_port_and_reaches_them() {
-        use script::support::{free_port, listen_later};
+        use script::support::{free_port, listen_after};
         let scripts = script::Scripts::default();
         let port = free_port();
-        let _listener = listen_later(port);
+        let marker = std::env::temp_dir().join(format!(
+            "tsunagiai-database-test-{}-{port}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let _listener = listen_after(port, marker.clone());
         let profile = DatabaseProfile {
-            script: "sleep 30".to_owned(),
+            script: format!("touch '{}'\nsleep 30", marker.display()),
             db_host: "127.0.0.1".to_owned(),
             db_port: u32::from(port),
             ..direct("a")
@@ -1519,6 +1524,7 @@ mod tests {
         let id = script.unwrap();
         assert_eq!(scripts.exited(id).await, None);
         scripts.close(id).await;
+        let _ = std::fs::remove_file(&marker);
     }
 
     #[cfg(unix)]
