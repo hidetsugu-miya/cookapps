@@ -4,11 +4,13 @@
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // A scratchpad file of an SSH host (A-30) is a file of this editor too: it has no worktree (`path` is empty) and names its host, and Rust reads and saves it by ssh (`ssh_scratch_read`, `ssh_scratch_write`) with the same answers, so everything else here is the same.
 // A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing. A scratchpad file of an SSH host is not read again.
+// A file of a Ruby worktree asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the file pane. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 import { tag } from "./dom.js";
-import { CODE_SVG, EDIT_SVG } from "./icons.js";
+import { CODE_SVG, EDIT_SVG, LOCK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import type { DefinitionQuery } from "./orca-definition.js";
 import { highlightReady, loadHighlight, loadMilkdown } from "./vendor-load.js";
 
 // What the heading says of the save: nothing yet, waiting for the typing to stop, on its way, done, or not done (and why).
@@ -34,6 +36,12 @@ interface EditorFile {
   relative: string;
   // The SSH host (the `id` of an `OrcaSshTarget`) whose scratchpad holds the file (A-30): `path` is then empty and `relative` is the name of the file. null: a file of a worktree.
   host: string | null;
+  // A file outside the worktree that the language server gave as a definition (A-34): `relative` is its absolute path on the server's side, and it is read only.
+  outside: boolean;
+  // The language Rust named for the file (A-21), once it is read.
+  language: string;
+  // The place the screen asked to go to (a definition), kept until the text is shown: the line from 0 and the character in UTF-16 units.
+  jump: { line: number; character: number } | null;
   // The text of the read (null until it is read), whether the file has CRLF, and the signature of what the disk held then; a save that went through brings the signature up to date.
   signature: string;
   crlf: boolean;
@@ -100,6 +108,7 @@ let lastId = 0;
 let autosaveMs = 1000;
 let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
+let definition: (query: DefinitionQuery) => void = () => {};
 
 // The folder of the scratchpad files on an SSH host (A-30), as the screen shows it; Rust alone makes the real path.
 export const SSH_SCRATCH_DIR = "~/.local/share/cookapps/scratchpad/";
@@ -111,7 +120,7 @@ export function setAutosaveMs(ms: number) {
   autosaveMs = ms;
 }
 
-const canSave = (f: EditorFile) => f.read === "ready" && f.dirty && !f.blocked && !f.held && f.save !== "error";
+const canSave = (f: EditorFile) => !f.outside && f.read === "ready" && f.dirty && !f.blocked && !f.held && f.save !== "error";
 
 function setSave(f: EditorFile, save: Save) {
   f.save = save;
@@ -390,9 +399,14 @@ function setMode(f: EditorFile, mode: "rich" | "source") {
 
 async function load(f: EditorFile) {
   try {
-    const text = f.host === null ? await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target }) : await invoke("ssh_scratch_read", { host: f.host, name: f.relative });
+    const text = f.outside
+      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
+      : f.host === null
+        ? await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target })
+        : await invoke("ssh_scratch_read", { host: f.host, name: f.relative });
     f.area.value = text.content;
     f.highlight = text.highlight;
+    f.language = text.language;
     f.markdown = text.language === "markdown";
     paint(f);
     numberLines(f, f.area.value);
@@ -411,8 +425,101 @@ async function load(f: EditorFile) {
   changed();
 }
 
+// The offset in the text of the textarea of the character under the point (`x`, `y` of the window), none where there is no character (past the end of a line, or below the last). The layer under the textarea carries the same text in the same place, so it is asked in place of the textarea, which gives no place of a character: the textarea lets the point through for the moment of the question.
+function offsetAt(f: EditorFile, x: number, y: number): number | null {
+  const layer = f.code.parentElement;
+  if (layer === null || f.code.textContent !== f.area.value) return null;
+  let range: Range | null;
+  f.area.style.pointerEvents = "none";
+  layer.style.pointerEvents = "auto";
+  try {
+    range = document.caretRangeFromPoint(x, y);
+  } finally {
+    f.area.style.pointerEvents = "";
+    layer.style.pointerEvents = "";
+  }
+  if (range === null || !f.code.contains(range.startContainer)) return null;
+  const before = document.createRange();
+  before.setStart(f.code, 0);
+  before.setEnd(range.startContainer, range.startOffset);
+  const caret = before.toString().length;
+  // The caret is before or after the character the point is on, by which half of it the point is in.
+  for (const at of [caret, caret - 1]) {
+    const box = charBox(f.code, at);
+    if (box !== null && x >= box.left && x < box.right && y >= box.top && y < box.bottom) return at;
+  }
+  return null;
+}
+
+// The box on the page of the character at `offset` of the text of the layer (its text is drawn in many nodes), none past its end.
+function charBox(code: HTMLElement, offset: number) {
+  if (offset < 0) return null;
+  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+  let left = offset;
+  for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+    if (left >= node.length) {
+      left -= node.length;
+      continue;
+    }
+    const box = document.createRange();
+    box.setStart(node, left);
+    box.setEnd(node, left + 1);
+    return box.getBoundingClientRect();
+  }
+  return null;
+}
+
+// The right button with the Command key on the text (A-34): the character under the mouse, not the caret, is where the definition is asked (the line from 0 and the character in UTF-16 units, which is the index of a string of the page). Rust finds the name there from the text of the line; where there is none nothing happens.
+async function askDefinition(f: EditorFile, x: number, y: number) {
+  const offset = offsetAt(f, x, y);
+  if (offset === null) return;
+  const text = f.area.value;
+  const lineStart = offset === 0 ? 0 : text.lastIndexOf("\n", offset - 1) + 1;
+  let line = 0;
+  for (let i = text.indexOf("\n"); i !== -1 && i < lineStart; i = text.indexOf("\n", i + 1)) line++;
+  const end = text.indexOf("\n", offset);
+  const character = offset - lineStart;
+  try {
+    const word = await invoke("lsp_word", { line: text.slice(lineStart, end === -1 ? undefined : end), character });
+    if (word === null) return;
+    definition({ target: f.target, project: f.project, path: f.path, relative: f.relative, text, line, character, word });
+  } catch (e) {
+    fail(e);
+  }
+}
+
+// Puts the caret at the place `jump` names, in view and in the middle of the pane, once the text is shown (the line from 0, the character in UTF-16 units; a place past the end is the end).
+function flushJump(f: EditorFile) {
+  const jump = f.jump;
+  if (jump === null || f.read !== "ready" || !f.el.isConnected || f.body.hidden || f.area.clientHeight === 0) return;
+  f.jump = null;
+  const text = f.area.value;
+  let start = 0;
+  let reached = 0;
+  while (reached < jump.line) {
+    const next = text.indexOf("\n", start);
+    if (next === -1) break;
+    start = next + 1;
+    reached++;
+  }
+  const end = text.indexOf("\n", start);
+  const at = start + Math.min(jump.character, (end === -1 ? text.length : end) - start);
+  f.area.focus({ preventScroll: true });
+  f.area.setSelectionRange(at, at);
+  f.area.scrollTop = Math.max(0, reached * (Number.parseFloat(getComputedStyle(f.area).lineHeight) || 20) - f.area.clientHeight / 2);
+  followScroll(f);
+}
+
+// Goes to a place of the file of the tab `id` (A-34): at once when its text is shown, else when it is.
+export function goTo(id: string, line: number, character: number) {
+  const f = files.get(id);
+  if (f === undefined) return;
+  f.jump = { line, character };
+  flushJump(f);
+}
+
 // Whether the text may be replaced by the disk's: the file is read, is a worktree's, and has no typing that is not on the disk, on its way to it or refused by it.
-const canReread = (f: EditorFile) => f.read === "ready" && f.host === null && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
+const canReread = (f: EditorFile) => f.read === "ready" && f.host === null && !f.outside && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
 
 // Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
 // Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
@@ -452,7 +559,7 @@ async function reread(f: EditorFile) {
   }
 }
 
-function create(id: string, target: string | null, project: string, path: string, relative: string, host: string | null): EditorFile {
+function create(id: string, target: string | null, project: string, path: string, relative: string, host: string | null, outside: boolean): EditorFile {
   // The path the heading shows: from the worktree, or the place on the SSH host.
   const shown = host === null ? relative : SSH_SCRATCH_DIR + relative;
   const el = tag("div", "orca-edit");
@@ -472,11 +579,22 @@ function create(id: string, target: string | null, project: string, path: string
   modes.hidden = true;
   modes.append(sourceButton, richButton);
   const where = tag("span", "orca-edit-path", shown);
+  // A file outside the worktree is read only: a lock before its path, and `gem` where the state of a save is.
+  if (outside) {
+    const lock = tag("span", "orca-edit-lock");
+    lock.setAttribute("role", "img");
+    lock.setAttribute("aria-label", "読み取り専用");
+    lock.innerHTML = LOCK_SVG;
+    head.append(lock);
+    state.textContent = "gem";
+    state.dataset.state = "outside";
+  }
   head.append(where, state, modes);
   const note = tag("p", "orca-empty feed-empty");
   note.hidden = true;
   const area = tag("textarea", "orca-edit-area");
   area.spellcheck = false;
+  area.readOnly = outside;
   area.disabled = true;
   area.setAttribute("aria-label", shown);
   const code = tag("code");
@@ -496,9 +614,14 @@ function create(id: string, target: string | null, project: string, path: string
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, host, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, host, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => typed(f);
   area.onscroll = () => followScroll(f);
+  area.oncontextmenu = (e) => {
+    if (!e.metaKey || f.host !== null || f.outside || f.read !== "ready" || f.language !== "ruby" || f.body.hidden) return;
+    e.preventDefault();
+    void askDefinition(f, e.clientX, e.clientY);
+  };
   sourceButton.onclick = async () => {
     if (f.mode === "source") return;
     // The edit of the rich view is in the textarea before the source is shown.
@@ -518,14 +641,14 @@ function create(id: string, target: string | null, project: string, path: string
   return f;
 }
 
-// Opens the file as a tab of the project and gives its id; a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane). With `host`, it is the scratchpad file named `relative` of that SSH host (A-30), and `path` is empty.
-export function openFile(target: string | null, project: string, path: string, relative: string, host: string | null = null) {
-  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.host === host);
+// Opens the file as a tab of the project and gives its id (with `outside`, a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane). With `host`, it is the scratchpad file named `relative` of that SSH host (A-30), and `path` is empty.
+export function openFile(target: string | null, project: string, path: string, relative: string, host: string | null = null, outside = false) {
+  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.host === host && f.outside === outside);
   if (open) {
     open.wantFocus = true;
     return open.id;
   }
-  const f = create(`file:${++lastId}`, target, project, path, relative, host);
+  const f = create(`file:${++lastId}`, target, project, path, relative, host, outside);
   files.set(f.id, f);
   void load(f);
   return f.id;
@@ -538,7 +661,7 @@ export const filesOf = (target: string | null, project: string) => [...files.val
 export const dirtyIds = () => new Set([...files.values()].filter((f) => f.dirty).map((f) => f.id));
 
 // The files of the worktree at `path` that are open in the project, by their relative paths (the file list colors them).
-export const openedIn = (target: string | null, project: string, path: string) => new Set(filesOf(target, project).filter((f) => f.path === path).map((f) => f.relative));
+export const openedIn = (target: string | null, project: string, path: string) => new Set(filesOf(target, project).filter((f) => !f.outside && f.path === path).map((f) => f.relative));
 
 // Closes the tab after its typing is saved. A save that cannot be made keeps the tab (its message is shown); one that was refused (the disk changed) is said in the heading already, and the tab closes without it.
 export async function closeFile(id: string) {
@@ -559,7 +682,7 @@ export async function closeFile(id: string) {
 
 // Takes out the tabs of the files of the worktree at `path` that are gone from the disk (A-18): the file `relative`, or with `folder` every file under that folder. Their typing is not saved (there is nothing to save it to), and a save on its way is not waited for. True when a tab was closed.
 export function discardFiles(target: string | null, project: string, path: string, relative: string, folder: boolean) {
-  const gone = filesOf(target, project).filter((f) => f.path === path && (f.relative === relative || (folder && f.relative.startsWith(`${relative}/`))));
+  const gone = filesOf(target, project).filter((f) => !f.outside && f.path === path && (f.relative === relative || (folder && f.relative.startsWith(`${relative}/`))));
   for (const f of gone) {
     clearTimer(f);
     cancelPaint(f);
@@ -573,7 +696,7 @@ export function discardFiles(target: string | null, project: string, path: strin
 // Holds the saves of the open files of the worktree at `path` that a move of `relative` takes along (the file itself, or the files under the folder), and waits for the save of each that is on its way, so that nothing is written to the old place once the move is asked for (A-18). The typing goes on and stays in the tab.
 // The function it answers ends the hold: with `to`, the place `relative` was moved to, each file takes its new path (the heading and the name of the tab follow; the text, its signature and the language it was opened with stay), and with null (the move failed) the paths stay. Typing that waited is saved then, to the path the file has now. It answers whether a path changed.
 export async function holdFiles(target: string | null, project: string, path: string, relative: string) {
-  const moved = filesOf(target, project).filter((f) => f.path === path && !f.held && (f.relative === relative || f.relative.startsWith(`${relative}/`)));
+  const moved = filesOf(target, project).filter((f) => !f.outside && f.path === path && !f.held && (f.relative === relative || f.relative.startsWith(`${relative}/`)));
   for (const f of moved) {
     f.held = true;
     clearTimer(f);
@@ -624,13 +747,15 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
       f.wantFocus = false;
       f.area.focus({ preventScroll: true });
     }
+    flushJump(f);
     if (back && fresh) void reread(f);
   }
 }
 
-export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void }) {
+export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void }) {
   changed = on.changed;
   fail = on.error;
+  definition = on.definition;
   // The page is going away (the window is closed): the typing that waits for its timer is sent now, for every file that can be saved.
   window.addEventListener("pagehide", () => {
     for (const f of files.values()) void flush(f);

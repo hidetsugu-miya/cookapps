@@ -22,14 +22,15 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
+import type { DefinitionQuery } from "./orca-definition.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
-import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, goTo, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
+import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, showDefinition, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { openScratchpad } from "./orca-scratchpad.js";
@@ -208,6 +209,8 @@ interface Tab {
   where: string;
   // Where the tab is: null for this machine, else the name of the saved environment. A terminal's comes from its row, a file's and a diff's from the project they were opened in.
   environment: string | null;
+  // A file outside the worktree that a definition named (A-34): the tab has a lock and `gem`, and the file is read only.
+  outside?: boolean;
 }
 
 // A tab with no terminal, whose page is a document of the worktree: a file in the editor, or the difference of a file.
@@ -247,7 +250,7 @@ function tabsOf(key: string): Tab[] {
   for (const f of filesOf(place, key)) {
     // A scratchpad file of an SSH host (A-30) is in no worktree.
     const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), reply: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), reply: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target);
@@ -493,9 +496,13 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   if (t.kind === "file") {
     wrap.dataset.file = "true";
+    if (t.outside) {
+      wrap.dataset.outside = "true";
+      select.append(tag("span", "orca-tab-gem", "gem"));
+    }
     if (dirtyIds().has(t.id)) {
       const unsaved = tag("span", "orca-tab-dirty");
       unsaved.setAttribute("role", "img");
@@ -519,6 +526,15 @@ function tabNode(t: Tab, selected: boolean) {
 function fileIcon() {
   const icon = tag("span", "orca-ic orca-file-tab-ic");
   icon.innerHTML = FILE_SVG;
+  return icon;
+}
+
+// The mark of the tab of a file outside the worktree: it is read only (A-34).
+function lockIcon() {
+  const icon = tag("span", "orca-ic orca-file-tab-ic");
+  icon.setAttribute("role", "img");
+  icon.setAttribute("aria-label", "読み取り専用");
+  icon.innerHTML = LOCK_SVG;
   return icon;
 }
 
@@ -638,14 +654,22 @@ function drawFiles(tabs: Tab[]) {
 }
 
 // A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
-function openFile(relative: string) {
+function openFile(relative: string, jump: { line: number; character: number } | null = null, outside = false) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative, worktree.host);
+  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative, worktree.host, outside);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();
+  // A place of a definition (A-34): the caret goes there when the text is shown.
+  if (jump !== null) goTo(id, jump.line, jump.character);
+}
+
+// A name of the editor was pressed with the Command key and the right button (A-34): the file pane is shown, if it was hidden, with the definition of the name.
+function askDefinition(query: DefinitionQuery) {
+  if (!filesShown()) toggleFilesAndDraw();
+  showDefinition(query);
 }
 
 // The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
@@ -1101,7 +1125,7 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   const split = (panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) >= 2;
   const file = projectKey === null ? undefined : filesOf(projectPlace(projectKey), projectKey).find((f) => f.id === tab);
   const items: MenuItem[] = split ? [item("右に分割", COLUMNS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "right" })), item("下に分割", ROWS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "bottom" }))] : [];
-  if (file !== undefined && file.host === null) {
+  if (file !== undefined && file.host === null && !file.outside) {
     const [path, from] = [`${file.path.replace(/\/+$/, "")}/${file.relative}`, file.relative];
     items.push({ ...item("パスのコピー", COPY_PATH_SVG, () => void copyText(path, "パスをコピーしました")), divider: split }, item("相対パスをコピー", COPY_PATH_SVG, () => void copyText(from, "相対パスをコピーしました")));
   }
@@ -1272,8 +1296,8 @@ export function initOrca() {
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
-  initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
+  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition });
+  initOrcaFiles({ open: (relative) => openFile(relative), definition: { inside: (relative, line, character) => openFile(relative, { line, character }), outside: (path, line, character) => openFile(path, { line, character }, true) }, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
     switched: () => {
       rereadTabs();

@@ -26,6 +26,7 @@ import type { LogLevel } from "./bindings/LogLevel";
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspOutsideFile } from "./bindings/LspOutsideFile";
+import type { LspPlace } from "./bindings/LspPlace";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { MailSummary } from "./bindings/MailSummary";
@@ -361,6 +362,10 @@ export interface Commands {
   lsp_definition: { args: { environment: string | null; worktree: string; relative: string; text: string; line: number; character: number }; result: LspLocation[] };
   // A-34: the text, read only, of the file `path` outside `worktree` (an absolute path on the server's side) that the server of that worktree gave as a definition with `outside`; any other path is an error. It is read the way the server is started (cat on this machine, `docker compose exec -T` in its service, ssh in front for a saved environment). A file over 1 MiB, one that is not UTF-8 and one that cannot be read are errors.
   lsp_read_outside: { args: { environment: string | null; project: string; worktree: string; path: string }; result: LspOutsideFile };
+  // A-34: the Ruby name at the UTF-16 unit `character` of `line`, the text of one line of the editor (a name may have `@`, `@@` or `$` before it and `?` or `!` after it); null where there is none.
+  lsp_word: { args: { line: string; character: number }; result: string | null };
+  // A-34: how the definition pane draws each of `locations`, in order: the file and its line (from 1), the folder in the worktree or the gem and the folder in it, and whether it is outside the worktree. It reads and asks for nothing.
+  lsp_places: { args: { locations: LspLocation[] }; result: LspPlace[] };
   // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/cookapps/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
   ssh_scratch_list: { args: { host: string }; result: string[] };
   // A-30: the text of the scratchpad file `name` of the SSH host, as `orca_file_read` answers it (the signature is of the bytes on the host). A missing file, one over 384 KiB, one that is not UTF-8 and one with mixed line ends are errors.
