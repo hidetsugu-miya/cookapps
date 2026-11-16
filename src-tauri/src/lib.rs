@@ -11,6 +11,7 @@ pub mod ghostty;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
+pub mod lsp;
 pub mod mail_address;
 pub mod mail_send;
 pub mod markdown_patch;
@@ -358,6 +359,9 @@ pub fn run() {
             orca_files::orca_commit_file_diff,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
+            lsp::lsp_settings,
+            lsp::lsp_settings_set,
+            lsp::lsp_launch,
             ssh_scratch::ssh_scratch_list,
             ssh_scratch::ssh_scratch_read,
             ssh_scratch::ssh_scratch_write,

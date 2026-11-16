@@ -23,6 +23,8 @@ import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
+import type { LspLaunch } from "./bindings/LspLaunch";
+import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
@@ -340,6 +342,12 @@ export interface Commands {
   orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
   // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
+  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language server: the saved ones, else the unset ones (`autoStart` true, nothing replaced).
+  lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
+  // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings with nothing set take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute and a text with a control character are errors.
+  lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
+  // A-34: how ruby-lsp is started in `worktree` of the project `project` of `environment` (null: this machine): read from the worktree just now (a saved environment's through the ssh Host of its settings), with the settings applied.
+  lsp_launch: { args: { environment: string | null; project: string; worktree: string }; result: LspLaunch };
   // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/cookapps/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
   ssh_scratch_list: { args: { host: string }; result: string[] };
   // A-30: the text of the scratchpad file `name` of the SSH host, as `orca_file_read` answers it (the signature is of the bytes on the host). A missing file, one over 384 KiB, one that is not UTF-8 and one with mixed line ends are errors.

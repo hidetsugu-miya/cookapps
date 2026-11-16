@@ -21,9 +21,9 @@ use crate::orca_files::{
     NOT_MOVED, NOT_UTF8, SAME_PLACE,
 };
 
-const SSH: &str = "/usr/bin/ssh";
+pub(crate) const SSH: &str = "/usr/bin/ssh";
 /// How long one call may take, the connection included (`ConnectTimeout` is 10 seconds of it).
-const TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the output of an ssh that has ended is waited for.
 const OUTPUT_WAIT: Duration = Duration::from_secs(2);
 /// The most bytes of ssh's stderr that are read.
@@ -111,7 +111,7 @@ pub struct SshScratchFile {
 // ---- the checks ----
 
 /// The Host of `~/.ssh/config` that ssh is given: not empty, not an option (`-`), and no whitespace or control character.
-fn check_host(host: &str) -> Result<&str, String> {
+pub(crate) fn check_host(host: &str) -> Result<&str, String> {
     let bad = host.is_empty()
         || host.starts_with('-')
         || host.chars().any(|c| c.is_whitespace() || c.is_control());
@@ -220,11 +220,11 @@ pub(crate) trait Ssh {
 }
 
 /// The arguments of ssh for `script` on `host`: no question is asked (`BatchMode`), the connection is shared through a socket in `control` when there is one, no terminal, the options `login` (`login_of`), and the host after `--` as one element.
-fn ssh_args(
+pub(crate) fn ssh_args(
     host: &str,
     login: &[String],
     control: Option<&str>,
-    script: &'static str,
+    script: &str,
 ) -> Vec<String> {
     let mut args: Vec<String> = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
         .map(str::to_owned)
@@ -254,6 +254,13 @@ fn ssh_args(
 fn control_path(home: &Path) -> Option<PathBuf> {
     let dir = home.join(".cache/cookapps/ssh");
     (dir.as_os_str().len() + CONTROL_ADDS <= SOCKET_MAX).then_some(dir)
+}
+
+/// The folder of the sockets of the shared connections of this Mac, made when it is missing; none when there is no home folder or no safe folder to be had.
+pub(crate) fn shared_control() -> Option<String> {
+    dirs::home_dir()
+        .and_then(|home| control_path(&home))
+        .and_then(|dir| prepare_control(&dir))
 }
 
 /// Makes the folder of the sockets for the owner alone (0700), and answers it as text only when it is a folder that nobody else can enter.
@@ -292,7 +299,7 @@ fn last_line(stderr: &str) -> Option<String> {
 }
 
 /// The message of a run that did not do what was asked: ssh's own failure (255) is a failed connection, anything else is `what`; each with ssh's last line.
-fn failure(ran: &Ran, what: &str) -> String {
+pub(crate) fn failure(ran: &Ran, what: &str) -> String {
     let what = if ran.code == Some(EXIT_SSH) {
         NOT_CONNECTED
     } else {
@@ -305,7 +312,7 @@ fn failure(ran: &Ran, what: &str) -> String {
 }
 
 /// Runs `program` with `args`, gives it `stdin`, and answers its exit code, its stdout up to `limit` bytes and its stderr. A run past `timeout` is killed. The end is the end of the process, not of its output: the ssh that stays behind for a shared connection can hold stderr open.
-fn run_process(
+pub(crate) fn run_process(
     program: &str,
     args: &[String],
     stdin: Vec<u8>,
@@ -528,13 +535,10 @@ async fn on_host<T: Send + 'static>(
         .map_err(|_| NO_HOSTS)?;
     let (host, login) = config_host_of(&targets, &id)?;
     crate::orca::blocking(move || {
-        let control = dirs::home_dir()
-            .and_then(|home| control_path(&home))
-            .and_then(|dir| prepare_control(&dir));
         call(&mut Host {
             host,
             login,
-            control,
+            control: shared_control(),
         })
     })
     .await?
