@@ -22,7 +22,6 @@ import {
   mock,
   onceId,
   orcaRow,
-  orcaSsh,
   orcaTerminal,
   orcaWorktree,
   rejects,
@@ -1003,22 +1002,6 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
     expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
     await expect(row("src")).toHaveAttribute("aria-expanded", "true");
-    expect(await callsOf(list)).toEqual([]);
-  });
-
-  it("reads no worktree for an SSH host's row with no tab, even when the list holds a main worktree of the host: the pane is the host's scratchpad folder (A-30)", async () => {
-    const hostRow = { key: "ssh:s1", name: "s1", status: "idle" as const, sessions: 0, atMs: 0 };
-    const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1", isMain: true });
-    await openOrca(withIdle({ ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }, [hostTree]), { orca_terminal_read: ["$"], orca_files_list: root(), ssh_scratch_list: [] });
-    await project("example-idle").click();
-    await filesToggle().click();
-    await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
-    const list = await mock("orca_files_list", root());
-    await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
-    await expect($("#orca-files-title")).toHaveText("~/.local/share/tsunagiai/scratchpad/");
-    expect(await count("#orca-files-tree .orca-file")).toBe(0);
-    await focusBack();
-    await browser.pause(300);
     expect(await callsOf(list)).toEqual([]);
   });
 
@@ -2691,18 +2674,6 @@ describe("orca: files and editor (A-18)", () => {
     expect(await branchRows()).toEqual(["origin/feat/a", "origin/feat/d"]);
   });
 
-  it("leaves the branch of an SSH host's worktree as text (A-25)", async () => {
-    const hostRow = { key: "ssh:s1", name: "s1", status: "working" as const, sessions: 1, atMs: 0 };
-    const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1" });
-    const remoteRow = orcaRow("remote-app", "main", "Remote task", { projectKey: "ssh:s1", path: "/home/dev/remote-app", paneKey: "tab_remote:leaf_1", handle: "term_remote" });
-    await openOrca(orcaOverview([remoteRow], [hostTree], { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: [], ...branchFixtures() });
-    await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
-    await expect(selectedTab()).toBeDisplayed();
-    await filesToggle().click();
-    await expect($("#orca-files-title")).toHaveText("remote-app ・ main");
-    expect(await count("#orca-files-title button")).toBe(0);
-    expect(await callsOf("orca_local_branches")).toEqual([]);
-  });
   // A-27: the history of the file pane. Rust reads the commits and the files of one (`orca_git_history`, `orca_commit_files`) and the diff of a file in a commit (`orca_commit_file_diff`); the page draws them, reads on at the end of the list and opens the diff tab.
   const commitId = (n: number) => `${n.toString(16).padStart(7, "0")}${"b".repeat(33)}`;
   const commitOf = (n: number, subject = `Commit ${n}`): OrcaCommit => ({ id: commitId(n), shortId: commitId(n).slice(0, 7), subject, author: "Alice Example", timeMs: Date.UTC(2024, 9, 17, 12, 0), parents: n > 1 ? [commitId(n - 1)] : [] });

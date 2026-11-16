@@ -2,7 +2,6 @@
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
-// A scratchpad file of an SSH host (A-30) is a file of this editor too: it has no worktree (`path` is empty) and names its host, and Rust reads and saves it by ssh (`ssh_scratch_read`, `ssh_scratch_write`) with the same answers, so everything else here is the same.
 // A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing. A scratchpad file of an SSH host is not read again.
 // A file of a Ruby worktree asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the file pane. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
@@ -34,8 +33,6 @@ interface EditorFile {
   // The worktree, and the file in it (relative).
   path: string;
   relative: string;
-  // The SSH host (the `id` of an `OrcaSshTarget`) whose scratchpad holds the file (A-30): `path` is then empty and `relative` is the name of the file. null: a file of a worktree.
-  host: string | null;
   // A file outside the worktree that the language server gave as a definition (A-34): `relative` is its absolute path on the server's side, and it is read only.
   outside: boolean;
   // The language Rust named for the file (A-21), once it is read.
@@ -110,9 +107,6 @@ let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
 let definition: (query: DefinitionQuery) => void = () => {};
 let ruby: (target: string | null, project: string, path: string) => void = () => {};
-
-// The folder of the scratchpad files on an SSH host (A-30), as the screen shows it; Rust alone makes the real path.
-export const SSH_SCRATCH_DIR = "~/.local/share/tsunagiai/scratchpad/";
 
 export const nameOf = (relative: string) => relative.slice(relative.lastIndexOf("/") + 1);
 
@@ -237,7 +231,7 @@ async function write(f: EditorFile) {
   const sent = f.area.value;
   setSave(f, "saving");
   try {
-    const saved = f.host === null ? await invoke("orca_file_write", { path: f.path, relative: f.relative, content: sent, crlf: f.crlf, signature: f.signature, environment: f.target }) : await invoke("ssh_scratch_write", { host: f.host, name: f.relative, content: sent, crlf: f.crlf, signature: f.signature });
+    const saved = await invoke("orca_file_write", { path: f.path, relative: f.relative, content: sent, crlf: f.crlf, signature: f.signature, environment: f.target });
     if (saved.state !== "saved") {
       f.blocked = true;
       setSave(f, saved.state);
@@ -402,9 +396,7 @@ async function load(f: EditorFile) {
   try {
     const text = f.outside
       ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
-      : f.host === null
-        ? await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target })
-        : await invoke("ssh_scratch_read", { host: f.host, name: f.relative });
+      : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.highlight = text.highlight;
     f.language = text.language;
@@ -417,7 +409,7 @@ async function load(f: EditorFile) {
     f.area.disabled = false;
     setMode(f, f.mode);
     // A Ruby file of a worktree starts its language server (A-34); a file outside the worktree belongs to a server that is there already.
-    if (f.language === "ruby" && !f.outside && f.host === null) ruby(f.target, f.project, f.path);
+    if (f.language === "ruby" && !f.outside) ruby(f.target, f.project, f.path);
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -522,7 +514,7 @@ export function goTo(id: string, line: number, character: number) {
 }
 
 // Whether the text may be replaced by the disk's: the file is read, is a worktree's, and has no typing that is not on the disk, on its way to it or refused by it.
-const canReread = (f: EditorFile) => f.read === "ready" && f.host === null && !f.outside && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
+const canReread = (f: EditorFile) => f.read === "ready" && !f.outside && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
 
 // Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
 // Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
@@ -562,9 +554,7 @@ async function reread(f: EditorFile) {
   }
 }
 
-function create(id: string, target: string | null, project: string, path: string, relative: string, host: string | null, outside: boolean): EditorFile {
-  // The path the heading shows: from the worktree, or the place on the SSH host.
-  const shown = host === null ? relative : SSH_SCRATCH_DIR + relative;
+function create(id: string, target: string | null, project: string, path: string, relative: string, outside: boolean): EditorFile {
   const el = tag("div", "orca-edit");
   el.dataset.file = id;
   const head = tag("div", "orca-edit-head");
@@ -581,7 +571,7 @@ function create(id: string, target: string | null, project: string, path: string
   const modes = tag("span", "orca-edit-modes");
   modes.hidden = true;
   modes.append(sourceButton, richButton);
-  const where = tag("span", "orca-edit-path", shown);
+  const where = tag("span", "orca-edit-path", relative);
   // A file outside the worktree is read only: a lock before its path, and `gem` where the state of a save is.
   if (outside) {
     const lock = tag("span", "orca-edit-lock");
@@ -599,7 +589,7 @@ function create(id: string, target: string | null, project: string, path: string
   area.spellcheck = false;
   area.readOnly = outside;
   area.disabled = true;
-  area.setAttribute("aria-label", shown);
+  area.setAttribute("aria-label", relative);
   const code = tag("code");
   const layer = tag("pre", "orca-edit-hl");
   layer.setAttribute("aria-hidden", "true");
@@ -617,11 +607,11 @@ function create(id: string, target: string | null, project: string, path: string
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, host, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => typed(f);
   area.onscroll = () => followScroll(f);
   area.oncontextmenu = (e) => {
-    if (!e.metaKey || f.host !== null || f.outside || f.read !== "ready" || f.language !== "ruby" || f.body.hidden) return;
+    if (!e.metaKey || f.outside || f.read !== "ready" || f.language !== "ruby" || f.body.hidden) return;
     e.preventDefault();
     void askDefinition(f, e.clientX, e.clientY);
   };
@@ -644,14 +634,14 @@ function create(id: string, target: string | null, project: string, path: string
   return f;
 }
 
-// Opens the file as a tab of the project and gives its id (with `outside`, a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane). With `host`, it is the scratchpad file named `relative` of that SSH host (A-30), and `path` is empty.
-export function openFile(target: string | null, project: string, path: string, relative: string, host: string | null = null, outside = false) {
-  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.host === host && f.outside === outside);
+// Opens the file as a tab of the project and gives its id (with `outside`, a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
+export function openFile(target: string | null, project: string, path: string, relative: string, outside = false) {
+  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.outside === outside);
   if (open) {
     open.wantFocus = true;
     return open.id;
   }
-  const f = create(`file:${++lastId}`, target, project, path, relative, host, outside);
+  const f = create(`file:${++lastId}`, target, project, path, relative, outside);
   files.set(f.id, f);
   void load(f);
   return f.id;
@@ -715,9 +705,8 @@ export async function holdFiles(target: string | null, project: string, path: st
       f.held = false;
       if (to !== null) {
         f.relative = to + f.relative.slice(relative.length);
-        const shown = f.host === null ? f.relative : SSH_SCRATCH_DIR + f.relative;
-        f.where.textContent = shown;
-        f.area.setAttribute("aria-label", shown);
+        f.where.textContent = f.relative;
+        f.area.setAttribute("aria-label", f.relative);
       }
       if (f.dirty && !f.blocked && f.save !== "error") schedule(f);
     }

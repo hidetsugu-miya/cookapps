@@ -1058,9 +1058,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-session-reply { color: var(--muted); font-weight: 400; }
 .orca-session-subagents { flex: none; display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 0 7px; border-radius: 9px; background: var(--effort-high-bg); color: var(--effort-high); font-size: calc(11px * var(--fs)); font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
 .orca-session-subagents svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-/* A-33: the name of the saved environment a project or an SSH host of the list is in (not a session). */
+/* A-33: the name of the saved environment a project of the list is in (not a session). */
 .orca-env { flex: none; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 400; line-height: 16px; }
-.orca-sec { margin: 12px 10px 4px; font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of a pane (the height of every header) has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
 #orca-panes { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
@@ -1349,7 +1348,6 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-pop button { flex: none; height: auto; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; }
 .orca-dest-pop button span { font-size: calc(12px * var(--fs)); color: var(--muted); }
 .orca-scratch-pop { width: 320px; padding: 8px; gap: 8px; }
-.orca-scratch-pop[data-place="host"] { width: 440px; }
 .orca-scratch-field { display: flex; align-items: center; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); }
 .orca-scratch-field:focus-within { border-color: var(--accent); }
 .orca-scratch-prefix { flex: none; font-size: calc(12.5px * var(--fs)); color: var(--muted); }

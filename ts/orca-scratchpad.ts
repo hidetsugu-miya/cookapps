@@ -1,25 +1,19 @@
-// The scratchpad of the Orca work pane (A-29, A-30): the small popover under the plus that asks for the name of a file in `.orca/scratchpad` of a worktree, or in the scratchpad folder of an SSH host. Rust makes the file (`orca_scratchpad_create` or `ssh_scratch_create`, which answer the existing file when the name is taken); this module draws the field and takes the keys, and tells the caller the file to open.
+// The scratchpad of the Orca work pane (A-29): the small popover under the plus that asks for the name of a file in `.orca/scratchpad` of a worktree. Rust makes the file (`orca_scratchpad_create`, which answers the existing file when the name is taken); this module draws the field and takes the keys, and tells the caller the file to open.
 import { composing, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
-import { SSH_SCRATCH_DIR } from "./orca-editor.js";
 import { showError } from "./view.js";
 
 // What the field starts with: its text before the extension is selected, so that typing replaces the name and keeps the extension.
 const START_NAME = "memo.md";
-// The folder of a worktree, as the fixed text before the field (an SSH host's is `SSH_SCRATCH_DIR`). Rust adds it to the name.
+// The folder of a worktree, as the fixed text before the field. Rust adds it to the name.
 const PREFIX = ".orca/scratchpad/";
 
-// Where the file is made: a worktree (at `path`, of the target `environment`), or the SSH host `host` (the `id` of an `OrcaSshTarget`).
-export type ScratchpadPlace = { path: string; environment: string | null } | { host: string };
-
-// Opens the popover under `anchor` for `place`. `opened` runs when the file was made, or was there already, with its path from the worktree, or its name on the SSH host.
-export function openScratchpad(anchor: Element, place: ScratchpadPlace, opened: (file: string) => void) {
+// Opens the popover under `anchor` for the worktree at `path` of the target `environment`. `opened` runs when the file was made, or was there already, with its path from the worktree.
+export function openScratchpad(anchor: Element, place: { path: string; environment: string | null }, opened: (file: string) => void) {
   const pop = tag("div", "menu orca-scratch-pop");
   pop.setAttribute("role", "dialog");
   pop.setAttribute("aria-label", "スクラッチパッド");
-  // The folder of an SSH host is longer: its popover is wider, so that the name still has room.
-  if ("host" in place) pop.dataset.place = "host";
   const input = tag("input");
   input.type = "text";
   input.value = START_NAME;
@@ -27,7 +21,7 @@ export function openScratchpad(anchor: Element, place: ScratchpadPlace, opened: 
   input.spellcheck = false;
   input.setAttribute("aria-label", "ファイル名");
   const field = tag("div", "orca-scratch-field");
-  field.append(tag("span", "orca-scratch-prefix", "host" in place ? SSH_SCRATCH_DIR : PREFIX), input);
+  field.append(tag("span", "orca-scratch-prefix", PREFIX), input);
   const cancel = tag("button", "text-btn", "やめる");
   cancel.type = "button";
   const make = tag("button", "text-btn primary", "作って開く");
@@ -43,7 +37,7 @@ export function openScratchpad(anchor: Element, place: ScratchpadPlace, opened: 
     busy = true;
     make.disabled = true;
     try {
-      const file = "host" in place ? (await invoke("ssh_scratch_create", { host: place.host, name })).name : (await invoke("orca_scratchpad_create", { path: place.path, name, environment: place.environment })).relative;
+      const file = (await invoke("orca_scratchpad_create", { path: place.path, name, environment: place.environment })).relative;
       if (pop.isConnected) closeMenu();
       opened(file);
     } catch (e) {

@@ -1,9 +1,9 @@
-// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host);
+// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine or of a saved environment);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
-// and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
+// and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments.
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field above the projects (A-19) narrows them by name; ⌘J moves to it.
@@ -13,7 +13,6 @@ import type { OrcaLocal } from "./bindings/OrcaLocal";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
 import type { OrcaRow } from "./bindings/OrcaRow";
-import type { OrcaSshTarget } from "./bindings/OrcaSshTarget";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
 import type { OrcaTerminal } from "./bindings/OrcaTerminal";
@@ -29,7 +28,7 @@ import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import type { DefinitionQuery } from "./orca-definition.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, showEditors } from "./orca-editor.js";
 import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, showDefinition, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
@@ -53,8 +52,6 @@ const HIDDEN_MS = 60_000;
 
 // The last read, or null before the first. A failed read keeps the rows and worktrees of the one before it while the target is the same.
 let view: OrcaOverview | null = null;
-// The SSH hosts of this machine: the last read that said them (a read that does not say what the target is leaves them).
-let ssh: OrcaSshTarget[] = [];
 // This machine's lists beside a saved environment's (A-33), null while this machine is the target (its lists are `view`'s own) or before a read of it. A read that failed keeps the lists of the last good one and says its state.
 let here: OrcaLocal | null = null;
 // When this machine's lists were last read by the clock while the target is streamed (`loadHere`); the read of `orca_overview` sets it too, as the first read of a target does.
@@ -67,10 +64,9 @@ interface Lists {
   rows: OrcaRow[];
   worktrees: OrcaWorktree[];
   projects: OrcaProject[];
-  hosts: OrcaProject[];
   terminals: OrcaTerminal[];
 }
-let mix: Lists = { rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
+let mix: Lists = { rows: [], worktrees: [], projects: [], terminals: [] };
 // How much a read asks for (see `orca_overview`).
 type Scope = "full" | "screen" | "badge";
 // The sidebar button's count: the agents that wait for the user, and the notices (see `track`). The rows held, or what a read for the count alone found.
@@ -90,7 +86,7 @@ let lastTry = 0;
 let filesAt = Date.now();
 // Whether the list of projects is open (A-23): held in memory only, so the screen is open again when the app starts.
 let listOpen = true;
-// The text of the search field (A-19): the list shows the projects and SSH hosts whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
+// The text of the search field (A-19): the list shows the projects whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
 let query = "";
 let cursor: string | null = null;
 // The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
@@ -220,9 +216,9 @@ const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff";
 // Where an item of a list is (A-6): the saved environment's name, null for this machine (an item with no `environment` is this machine's).
 const placeOf = (item: { environment?: string | null }) => item.environment ?? null;
 
-// Where the project `key` of the list is, which the layout of its panes, its files and its diffs are kept under. A key the list does not hold (an SSH host that only this machine lists, or a project that left) has no place of its own: the screen's target.
+// Where the project `key` of the list is, which the layout of its panes, its files and its diffs are kept under. A key the list does not hold (a project that left) has no place of its own: the screen's target.
 function projectPlace(key: string): string | null {
-  const project = mix.projects.find((p) => p.key === key) ?? mix.hosts.find((p) => p.key === key);
+  const project = mix.projects.find((p) => p.key === key);
   return project === undefined ? (view?.target ?? null) : placeOf(project);
 }
 
@@ -249,8 +245,7 @@ function tabsOf(key: string): Tab[] {
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
-    // A scratchpad file of an SSH host (A-30) is in no worktree.
-    const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
+    const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
     tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), reply: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside });
   }
   for (const d of diffsOf(place, key)) {
@@ -306,7 +301,7 @@ function drawSearch() {
   $("orca-search-clear").hidden = query === "";
 }
 
-// The name of the saved environment a row of the list is in (A-33): a project and an SSH host of a saved environment have it, and those of this machine have none. The sessions, the tabs and the terminals show no place.
+// The name of the saved environment a row of the list is in (A-33): a project of a saved environment has it, and those of this machine have none. The sessions, the tabs and the terminals show no place.
 function environmentChip(environment: string) {
   const chip = tag("span", "orca-env", environment);
   chip.title = environment;
@@ -339,7 +334,7 @@ function sessionNode(t: Tab, key: string) {
   return row;
 }
 
-// A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
+// A project: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
 function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
@@ -382,9 +377,6 @@ function emptyNode(text: string) {
   return view.state === "ready" ? tag("div", "feed-empty", text) : tag("div");
 }
 
-// A row of the project list: a project of this machine or an SSH host.
-type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions" | "environment">;
-
 // Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A project opens when work appears in it that the last read did not have (a working session, or the project's own work with no such session), also when the user closed it; work that went on leaves it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing. A project the list no longer holds is forgotten by `opened`.
 function trackWorking() {
   if (view === null || (view.state !== "ready" && here?.state !== "ready")) return;
@@ -410,21 +402,15 @@ function trackWorking() {
   for (const k of keys) if ([...now.get(k)!].some((id) => !workingIds.get(k)?.has(id))) opened.add(k);
   workingOrder = [...keys.filter((k) => !kept.includes(k)), ...kept];
   workingIds = now;
-  const known = new Set([...mix.projects.map((p) => p.key), ...mix.hosts.map((h) => h.key), ...ssh.map((t) => `ssh:${t.id}`)]);
+  const known = new Set(mix.projects.map((p) => p.key));
   for (const k of opened) if (!known.has(k)) opened.delete(k);
 }
 
-// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
-function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
-  const all: ProjectRow[] = mix.projects;
+// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them).
+function projectRows(): OrcaProject[] {
+  const all = mix.projects;
   const rest = all.filter((p) => !workingOrder.includes(p.key));
-  const local: ProjectRow[] = [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...rest.filter((p) => p.sessions > 0), ...rest.filter((p) => p.sessions === 0)];
-  const hosts: ProjectRow[] = ssh.map((t) => {
-    const host = mix.hosts.find((h) => h.key === `ssh:${t.id}`);
-    return { key: `ssh:${t.id}`, name: t.label, status: host?.status ?? "idle", sessions: host?.sessions ?? 0, environment: host === undefined ? null : placeOf(host) };
-  });
-  for (const h of mix.hosts) if (!hosts.some((r) => r.key === h.key)) hosts.push(h);
-  return { local, hosts };
+  return [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...rest.filter((p) => p.sessions > 0), ...rest.filter((p) => p.sessions === 0)];
 }
 
 // The search text (A-19), trimmed, and as a regular expression (`partMatcher` of dom.ts: special characters escaped, a case-folded part of a name). The expression is made once for each drawing (null while nothing is typed); its capture group serves `split` below.
@@ -442,15 +428,14 @@ function nameNodes(name: string, re: RegExp | null): (string | HTMLElement)[] {
 
 // The rows the list shows: all of them, or those whose name holds the search text. Only the name is searched (not the sessions under a project), so the sessions of an open project that the search leaves out go with its row.
 function visibleRows(re: RegExp | null) {
-  const { local, hosts } = projectRows();
-  if (re === null) return { local, hosts };
-  return { local: local.filter((r) => re.test(r.name)), hosts: hosts.filter((r) => re.test(r.name)) };
+  const rows = projectRows();
+  return re === null ? rows : rows.filter((r) => re.test(r.name));
 }
 
 // The keys of the rows the keys of the search field can reach, in the order of the list (none while nothing is typed), and the one they are on.
 function reachable(rows = visibleRows(matcher())) {
   if (needle() === "") return [];
-  return [...rows.local, ...rows.hosts].map((r) => r.key);
+  return rows.map((r) => r.key);
 }
 function cursorKey(rows = visibleRows(matcher())) {
   const keys = reachable(rows);
@@ -459,10 +444,7 @@ function cursorKey(rows = visibleRows(matcher())) {
 
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const { local, hosts } = rows;
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, placeOf(r), openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => !isDocument(t)), r.key === on, re);
-  const nodes: HTMLElement[] = local.map(node);
-  if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
+  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, r.sessions, placeOf(r), openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => !isDocument(t)), r.key === on, re));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
@@ -478,7 +460,7 @@ function drawFeed() {
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.hosts.map(rowOf), ssh, needle(), on, projectKey, sessions, selectedTab()]);
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, projectKey, sessions, selectedTab()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -625,33 +607,26 @@ function syncDiff(tabs: Tab[]) {
   showDiffs(placements, filesShown());
 }
 
-// The id of the SSH host of the selected row, when this machine's Orca lists it: only such a host has a scratchpad (A-30), because Rust finds the host in that list. The row of a host that only the target (a saved environment) lists gives none.
-function scratchHost(): string | null {
-  return projectKey !== null && ssh.some((t) => `ssh:${t.id}` === projectKey) ? projectKey.slice("ssh:".length) : null;
-}
-
-// The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project. An SSH host's row has no worktree to read with no tab, and the tab of one of its scratchpad files is in none: both give the scratchpad folder of the host (A-30; `host` is its id, and `path` is empty), which the pane lists in place of a worktree. A host that this machine does not list has no scratchpad, so its row gives none with no tab.
-function filesWorktree(tabs: Tab[]): { path: string; label: string; host: string | null; environment: string | null } | null {
+// The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project.
+function filesWorktree(tabs: Tab[]): { path: string; label: string; environment: string | null } | null {
   const tab = tabOfId(tabs, selectedTab() ?? "");
-  if (tab !== undefined && tab.path !== "") return { path: tab.path, label: tab.where, host: null, environment: tab.environment };
-  const host = scratchHost();
-  if (host !== null) return { path: "", label: SSH_SCRATCH_DIR, host, environment: projectPlace(projectKey!) };
-  if (tab !== undefined || projectKey === null || projectKey.startsWith("ssh:")) return null;
+  if (tab !== undefined && tab.path !== "") return { path: tab.path, label: tab.where, environment: tab.environment };
+  if (tab !== undefined || projectKey === null) return null;
   const main = mix.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
   // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
   // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
   if (tabs.some((t) => !isDocument(t) || t.path !== main?.path)) return null;
-  return main === undefined ? null : { path: main.path, label: worktreeLabel(main), host: null, environment: placeOf(main) };
+  return main === undefined ? null : { path: main.path, label: worktreeLabel(main), environment: placeOf(main) };
 }
 
 // The file pane follows its worktree and the files open in it.
 function drawFiles(tabs: Tab[]) {
   const worktree = filesWorktree(tabs);
   const target = worktree?.environment ?? null;
-  // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
+  // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch. It is the git branch, not Orca's name of the worktree.
   const listed = worktree === null ? undefined : mix.worktrees.find((w) => w.path === worktree.path && placeOf(w) === target);
-  const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
-  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch, host: worktree.host }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
+  const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) ? listed.gitBranch : null;
+  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
 
 // A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
@@ -659,7 +634,7 @@ function openFile(relative: string, jump: { line: number; character: number } | 
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative, worktree.host, outside);
+  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative, outside);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();
@@ -676,7 +651,7 @@ function askDefinition(query: DefinitionQuery) {
 // The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
 function openDiff(relative: string, commit: DiffCommit | null = null) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
-  if (worktree === null || worktree.host !== null || projectKey === null || view === null) return;
+  if (worktree === null || projectKey === null || view === null) return;
   started = null;
   const id = openDiffTab(worktree.environment, projectKey, worktree.path, relative, commit);
   chooseTab(id);
@@ -695,7 +670,7 @@ function drawStarted() {
   box.replaceChildren(...(waiting ? [tag("span", "spin"), tag("span", "sp", "セッションを始めました。一覧に現れるのを待っています…")] : [tag("span", "sp", "セッションを始めました。Orca の画面で開けます。")]));
 }
 
-// Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held (and the SSH hosts);
+// Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held;
 // a failed read keeps the rows, worktrees, projects and terminals held while the target is the same; a missing command empties them.
 function adopt(read: OrcaOverview) {
   const next = !read.known && view !== null ? { ...read, target: view.target, environments: view.environments } : read;
@@ -703,7 +678,6 @@ function adopt(read: OrcaOverview) {
   // A target that changed (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
   if (view !== null && next.target !== view.target) forgetNotices();
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, hosts: view!.hosts, terminals: view!.terminals } : next;
-  if (read.known) ssh = read.ssh;
   // The count and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked.
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
@@ -726,14 +700,13 @@ function adoptHere(read: OrcaLocal | null | undefined) {
 // Puts the lists of the target and of this machine in one (A-33): this machine's first, and the projects newest first as each list is (a stable sort keeps this machine's first on a tie). The sidebar's count and the side pane of A-9 read `view`, not this.
 function remix() {
   if (view === null || view.target === null || here === null) {
-    mix = { rows: view?.rows ?? [], worktrees: view?.worktrees ?? [], projects: view?.projects ?? [], hosts: view?.hosts ?? [], terminals: view?.terminals ?? [] };
+    mix = { rows: view?.rows ?? [], worktrees: view?.worktrees ?? [], projects: view?.projects ?? [], terminals: view?.terminals ?? [] };
     return;
   }
   mix = {
     rows: [...here.rows, ...view.rows],
     worktrees: [...here.worktrees, ...view.worktrees],
     projects: [...here.projects, ...view.projects].sort((a, b) => b.atMs - a.atMs),
-    hosts: [...here.hosts, ...view.hosts],
     terminals: [...here.terminals, ...view.terminals],
   };
 }
@@ -1132,28 +1105,27 @@ async function closeTab(tab: Tab) {
   reread(tab.environment);
 }
 
-// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it (a pane with one tab cannot be split, so it has no split); and on a file of a worktree it copies the file's path and its path from the worktree, as the menu of the file pane does (A-18), after a line when the split is there. A scratchpad file of an SSH host has no path to copy (A-30). A tab with neither has no menu.
+// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it (a pane with one tab cannot be split, so it has no split); and on a file of a worktree it copies the file's path and its path from the worktree, as the menu of the file pane does (A-18), after a line when the split is there. A tab with neither has no menu.
 function openTabMenu(anchor: Element, tab: string, pane: string) {
   const item = (label: string, icon: string, pick: () => unknown): MenuItem => ({ label, color: "var(--accent)", icon, current: false, pick });
   const split = (panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) >= 2;
   const file = projectKey === null ? undefined : filesOf(projectPlace(projectKey), projectKey).find((f) => f.id === tab);
   const items: MenuItem[] = split ? [item("右に分割", COLUMNS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "right" })), item("下に分割", ROWS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "bottom" }))] : [];
-  if (file !== undefined && file.host === null && !file.outside) {
+  if (file !== undefined && !file.outside) {
     const [path, from] = [`${file.path.replace(/\/+$/, "")}/${file.relative}`, file.relative];
     items.push({ ...item("パスのコピー", COPY_PATH_SVG, () => void copyText(path, "パスをコピーしました")), divider: split }, item("相対パスをコピー", COPY_PATH_SVG, () => void copyText(from, "相対パスをコピーしました")));
   }
   if (items.length > 0) openMenu(anchor, items);
 }
 
-// The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project (or SSH host) selected in the list pane, and the scratchpad is a file of that worktree; for an SSH host's row it is a file of the host's own scratchpad folder (A-30), which asks for no worktree, and it is not offered for a host that this machine does not list.
+// The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project selected in the list pane, and the scratchpad is a file of that worktree.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
-  const item = (label: string, icon: string, pick: () => void, disabled = false) => ({ label, color: "var(--accent)", icon, current: false, disabled, pick });
-  const host = scratchHost();
+  const item = (label: string, icon: string, pick: () => void) => ({ label, color: "var(--accent)", icon, current: false, pick });
   openMenu(anchor, [
     item("Claude を起動", CLAUDE_SVG, () => chooseWorktree(anchor, (w) => start("claude", w))),
     item("ターミナルを開く", TERMINAL_SVG, () => chooseWorktree(anchor, (w) => start("terminal", w))),
-    item("スクラッチパッド", SCRATCHPAD_SVG, () => (host === null ? chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, null, placeOf(w))) : askScratchpad(anchor, "", host, projectPlace(projectKey!))), host === null && projectKey.startsWith("ssh:")),
+    item("スクラッチパッド", SCRATCHPAD_SVG, () => chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w)))),
   ]);
 }
 
@@ -1165,17 +1137,17 @@ function chooseWorktree(anchor: Element, act: (worktree: OrcaWorktree) => void) 
   else openWorktreeDialog(anchor, mine, null, act);
 }
 
-// Asks for the name of the scratchpad file in the worktree at `path` (A-29), or with `host` on that SSH host (A-30; `path` is then empty). The file opens in the project that was selected when it was asked for; a selection made meanwhile leaves it made and not opened.
-function askScratchpad(anchor: Element, path: string, host: string | null, environment: string | null) {
+// Asks for the name of the scratchpad file in the worktree at `path` (A-29). The file opens in the project that was selected when it was asked for; a selection made meanwhile leaves it made and not opened.
+function askScratchpad(anchor: Element, path: string, environment: string | null) {
   if (view === null || projectKey === null) return;
   const from = projectKey;
-  openScratchpad(anchor, host === null ? { path, environment } : { host }, (file) => {
+  openScratchpad(anchor, { path, environment }, (file) => {
     if (projectKey !== from || projectPlace(from) !== environment) return;
     started = null;
-    const id = openEditorFile(environment, from, path, file, host);
+    const id = openEditorFile(environment, from, path, file);
     chooseTab(id);
     draw();
-    rereadScratchpad(environment, path, host);
+    rereadScratchpad(environment, path);
   });
 }
 
