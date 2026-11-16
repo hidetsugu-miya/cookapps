@@ -7,11 +7,11 @@ import type { OrcaStatus } from "./OrcaStatus";
  */
 export type OrcaRow = { group: OrcaGroup, repo: string, branch: string, 
 /**
- * The one line of the row: the first line of the conversation's name, else of the prompt (not pasted data), the task, or the title of the pane's terminal.
+ * The one line of the row: the first line of the conversation's name, else of the prompt, the task, or the title of the pane's terminal; only what the owner or Claude wrote, never a message of the harness, data or the output of a process.
  */
 line: string, 
 /**
- * The first line of the agent's last answer, which the list shows after the line; `None` when it has none.
+ * The first line of the agent's last answer, which the list shows after the line; `None` when it has none, or when it is data, the output of a process or a message of the harness.
  */
 reply: string | null, 
 /**

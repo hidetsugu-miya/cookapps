@@ -86,9 +86,9 @@ pub struct OrcaRow {
     pub group: OrcaGroup,
     pub repo: String,
     pub branch: String,
-    /// The one line of the row: the first line of the conversation's name, else of the prompt (not pasted data), the task, or the title of the pane's terminal.
+    /// The one line of the row: the first line of the conversation's name, else of the prompt, the task, or the title of the pane's terminal; only what the owner or Claude wrote, never a message of the harness, data or the output of a process.
     pub line: String,
-    /// The first line of the agent's last answer, which the list shows after the line; `None` when it has none.
+    /// The first line of the agent's last answer, which the list shows after the line; `None` when it has none, or when it is data, the output of a process or a message of the harness.
     pub reply: Option<String>,
     /// How many of the agent's subagents are at work (A-8); 0 when it has none.
     pub subagents: u32,
@@ -433,11 +433,78 @@ fn text_lines(text: &str) -> impl Iterator<Item = String> + '_ {
         .filter(|l| !l.is_empty())
 }
 
-/// The first line of `text` that still has text once its tags are taken off, cut to `LINE_LIMIT` characters.
+/// The elements Claude Code's harness puts into a message that nobody typed: what it injects (`<event>` with its `<result>` and `<log>`, `<task-notification>`, `<system-reminder>`) and what a command printed.
+/// The element and everything inside it is neither the owner's question nor Claude's answer.
+const HARNESS_ELEMENTS: [&str; 9] = [
+    "event",
+    "result",
+    "log",
+    "task-notification",
+    "system-reminder",
+    "local-command-stdout",
+    "local-command-stderr",
+    "local-command-caveat",
+    "user-prompt-submit-hook",
+];
+
+/// How many bytes of `s`, which starts with `<`, a harness element takes: its tag and what it holds up to its closing tag, or up to the end of `s` when it is never closed (a message cut inside it) or its opening tag is cut;
+/// the opening tag alone for `<name/>`. `None` when `s` does not start with the opening of a harness element.
+fn harness_element_len(s: &str) -> Option<usize> {
+    let body = s.strip_prefix('<')?;
+    let name = HARNESS_ELEMENTS.iter().find(|name| {
+        body.strip_prefix(**name).is_some_and(|r| {
+            r.is_empty() || r.starts_with(|c: char| c.is_whitespace() || matches!(c, '/' | '>'))
+        })
+    })?;
+    Some(match tag_len(s) {
+        None => s.len(),
+        Some(open) if s[..open].ends_with("/>") => open,
+        Some(open) => s[open..]
+            .find(&format!("</{name}>"))
+            .map_or(s.len(), |i| open + i + name.len() + 3),
+    })
+}
+
+/// `text` without its harness elements (`HARNESS_ELEMENTS`, with what they hold); what is between a pair of backticks stays as it is, as in `without_tags`.
+fn without_harness_elements(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(['<', '`']) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        if let Some(inner) = after.strip_prefix('`') {
+            let end = inner.find('`').map_or(1, |i| i + 2);
+            out.push_str(&after[..end]);
+            rest = &after[end..];
+            continue;
+        }
+        if let Some(len) = harness_element_len(after) {
+            rest = &after[len..];
+        } else {
+            out.push('<');
+            rest = &after[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether a line opens as the output of a process (`[stderr] …`, `[stdout] …`), which no one wrote as a question or an answer.
+fn is_process_output(line: &str) -> bool {
+    line.starts_with("[stderr]") || line.starts_with("[stdout]")
+}
+
+/// The first line of `text` that the owner or Claude wrote, cut to `LINE_LIMIT` characters: `text` without its harness elements (`HARNESS_ELEMENTS`) and then without its XML tags, the first line that still has text.
+/// `None` when nothing is left, or when what is left opens as data or as the output of a process (`is_pasted_data`, `is_process_output`; the first three lines are read, so that an object over several lines is found).
+/// Only the first `LINE_READ_LIMIT` characters are read.
 fn first_text_line(text: &str) -> Option<String> {
-    text_lines(text)
-        .next()
-        .map(|l| l.chars().take(LINE_LIMIT).collect())
+    let text = without_harness_elements(&text.chars().take(LINE_READ_LIMIT).collect::<String>());
+    let head: Vec<String> = text_lines(&text).take(3).collect();
+    let first = head.first()?;
+    if is_process_output(first) || is_pasted_data(&head.join(" ")) {
+        return None;
+    }
+    Some(first.chars().take(LINE_LIMIT).collect())
 }
 
 /// What follows a quoted string at the start of `s` (the string holds no quote inside).
@@ -485,21 +552,12 @@ fn is_pasted_data(text: &str) -> bool {
     })
 }
 
-/// The first line of a prompt that has text once its tags are off, cut to `LINE_LIMIT` characters; `None` when the prompt opens as pasted data (the first lines are read, so that an object over several lines is found).
-fn prompt_label(prompt: &str) -> Option<String> {
-    let head: Vec<String> = text_lines(prompt).take(3).collect();
-    let first = head.first()?;
-    if is_pasted_data(&head.join(" ")) {
-        return None;
-    }
-    Some(first.chars().take(LINE_LIMIT).collect())
-}
-
-/// The text of a row's line: the first line of the conversation's name, else of the prompt (`prompt_label`), the task's title, or the title of the pane's terminal without its status mark; each without its XML tags, and the next one when nothing is left.
+/// The text of a row's line: the first line of the conversation's name, else of the prompt, the task's title, or the title of the pane's terminal without its status mark (`first_text_line`: only what the owner or Claude wrote, never a message of the harness, data or the output of a process).
+/// The prompt of Orca is the last message sent to Claude, so it is a message of the harness (an `<event>` that holds a result) whenever one came after the owner's question: then the next one is taken, and the conversation's name, which Claude gave to the question, comes first.
 fn line_of(agent: &Value, terminal_title: Option<&str>) -> String {
     text_of(agent, "conversationName")
         .and_then(first_text_line)
-        .or_else(|| text_of(agent, "prompt").and_then(prompt_label))
+        .or_else(|| text_of(agent, "prompt").and_then(first_text_line))
         .or_else(|| text_of(agent, "taskTitle").and_then(first_text_line))
         .or_else(|| terminal_title.and_then(|t| first_text_line(without_status_mark(t))))
         .unwrap_or_default()
@@ -2322,7 +2380,7 @@ mod tests {
         a["prompt"] = json!(
             "<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\n[late output from eval #1851]\n</event>"
         );
-        assert_eq!(line_of(&a, None), "[late output from eval #1851]");
+        assert_eq!(line_of(&a, None), "");
         a["conversationName"] = json!("Gmail返信エディター");
         assert_eq!(line_of(&a, None), "Gmail返信エディター");
         a["conversationName"] = json!("<b>Name</b>");
@@ -2399,6 +2457,95 @@ mod tests {
             a["prompt"] = json!(prompt);
             assert_eq!(line_of(&a, None), prompt, "{prompt}");
         }
+    }
+
+    #[test]
+    fn a_message_of_the_harness_is_no_line_whatever_it_holds() {
+        let mut a = agent("tabA:leaf1", "working");
+        a.as_object_mut().unwrap().remove("taskTitle");
+        // The shapes seen in the list of a real Orca (2026-11-16), and the elements the harness puts in a prompt.
+        for prompt in [
+            "<event kind=\"repl-eval\" at=\"2026-11-16T09:34:08.063Z\" eval=\"12\" status=\"settled\">\n<result>cr2: recent: [{\"conclusion\":\"SUCCESS\",\"name\":\"build\"}]</result>\n</event>",
+            "<event kind=\"repl-eval\" status=\"settled\"> <result>st:  M apps/wonder-web/src/features/param/stor",
+            "<event kind=\"repl-eval\" status=\"settled\"> <result>sb: #!/usr/bin/env python3 # 読み取り</result></event>",
+            "<event kind=\"repl-eval\" at=\"2026-11-16T09:34:08.063Z\" eval=\"12\" ms=\"48\" status=",
+            "<event",
+            "<event>\n<log>[stderr] ⚠ 1 tool call(s) still running at scr</log>\n</event>",
+            "<task-notification>\nBackground command finished\n</task-notification>",
+            "<system-reminder>\nAs you answer\n</system-reminder>",
+            "<local-command-stdout>Compacted</local-command-stdout>",
+            "<event kind=\"x\"/>",
+            "<event/><system-reminder>a</system-reminder>",
+            "[stderr] ⚠ 1 tool call(s) still running at scr",
+            "[stdout] done",
+        ] {
+            a["prompt"] = json!(prompt);
+            assert_eq!(line_of(&a, None), "", "{prompt}");
+            assert_eq!(line_of(&a, Some("◑ Terminal title")), "Terminal title", "{prompt}");
+            a["conversationName"] = json!("Conversation");
+            assert_eq!(line_of(&a, Some("◑ Terminal title")), "Conversation", "{prompt}");
+            a.as_object_mut().unwrap().remove("conversationName");
+        }
+    }
+
+    #[test]
+    fn the_text_the_owner_typed_stays_a_line_beside_a_message_of_the_harness() {
+        let mut a = agent("tabA:leaf1", "working");
+        for (prompt, line) in [
+            (
+                "Fix the list\n<system-reminder>x</system-reminder>",
+                "Fix the list",
+            ),
+            ("<event kind=\"x\">r</event>\nFix the list", "Fix the list"),
+            (
+                "<system-reminder>a</system-reminder> Fix the list",
+                "Fix the list",
+            ),
+            ("<event/>Fix the list", "Fix the list"),
+            ("Fix the `<event>` element", "Fix the `<event>` element"),
+            ("Fix <eventual> list", "Fix  list"),
+            ("<events> list", "list"),
+            ("Fix [stderr] output", "Fix [stderr] output"),
+        ] {
+            a["prompt"] = json!(prompt);
+            assert_eq!(line_of(&a, None), line, "{prompt}");
+        }
+    }
+
+    #[test]
+    fn a_harness_element_is_found_in_the_text_that_is_read_only() {
+        let long = format!("<event {}", "a=\"b\" ".repeat(LINE_READ_LIMIT));
+        assert_eq!(first_text_line(&long), None);
+        let late = format!("{}<event>x</event>Fix", " ".repeat(LINE_READ_LIMIT));
+        assert_eq!(first_text_line(&late), None);
+    }
+
+    #[test]
+    fn the_reply_is_the_answer_of_claude_and_never_data_or_a_message_of_the_harness() {
+        let reply = |message: Value| {
+            let mut a = agent("tabA:leaf1", "working");
+            a["lastAssistantMessage"] = message;
+            rows_of(&ps(&[a]), &terminals())[0].reply.clone()
+        };
+        for data in [
+            "{\"attributes\":{\"created_at\":\"2026-11-16T09:34:08Z\",\"phase\":\"started\"},\"id\":1}",
+            "{\n  \"attributes\": {}\n}",
+            "[{\"conclusion\":\"SUCCESS\"}]",
+            "{ a: { isAsync: true } }",
+            "[stderr] ⚠ 1 tool call(s) still running at scr",
+            "<event kind=\"repl-eval\"> <result>st:  M apps/",
+            "<system-reminder>\nAs you answer\n</system-reminder>",
+        ] {
+            assert_eq!(reply(json!(data)), None, "{data}");
+        }
+        assert_eq!(
+            reply(json!("確認しました。\n{\"a\":1}")).as_deref(),
+            Some("確認しました。")
+        );
+        assert_eq!(
+            reply(json!("<system-reminder>x</system-reminder>\n直しました")).as_deref(),
+            Some("直しました")
+        );
     }
 
     #[test]
@@ -2490,16 +2637,15 @@ mod tests {
 
     #[test]
     fn the_first_text_line_skips_lines_that_are_only_tags() {
-        let event =
-            "<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\nFix the list\n</event>";
-        assert_eq!(first_text_line(event).as_deref(), Some("Fix the list"));
-        let notice = "<task-notification>\nBackground command finished\n</task-notification>";
+        let wrapped = "<section kind=\"x\">\nFix the list\n</section>";
+        assert_eq!(first_text_line(wrapped).as_deref(), Some("Fix the list"));
+        let notice = "<note>\nBackground command finished\n</note>";
         assert_eq!(
             first_text_line(notice).as_deref(),
             Some("Background command finished")
         );
         let reminder = "<system-reminder>\n  As you answer\nmore\n</system-reminder>";
-        assert_eq!(first_text_line(reminder).as_deref(), Some("As you answer"));
+        assert_eq!(first_text_line(reminder), None);
         assert_eq!(first_text_line("\n  plain\nnext").as_deref(), Some("plain"));
         assert_eq!(first_text_line("<a>\n<b/>\n</a>"), None);
         assert_eq!(first_text_line("  \n"), None);
@@ -2510,11 +2656,12 @@ mod tests {
     #[test]
     fn the_line_shows_the_text_inside_the_tags_and_moves_on_when_there_is_none() {
         let mut a = agent("tabA:leaf1", "working");
-        a["prompt"] =
-            json!("<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\nFix the list");
+        a["prompt"] = json!(
+            "<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\nresult\n</event>\nFix the list"
+        );
         assert_eq!(line_of(&a, None), "Fix the list");
         a["prompt"] = json!("<system-reminder>\n</system-reminder>");
-        a["taskTitle"] = json!("<task-notification>Task done</task-notification>");
+        a["taskTitle"] = json!("<b>Task done</b>");
         assert_eq!(line_of(&a, None), "Task done");
         a["taskTitle"] = json!("<a/>");
         a["conversationName"] = json!("<b>\n</b>");

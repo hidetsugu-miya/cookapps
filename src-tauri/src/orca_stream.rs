@@ -1092,6 +1092,24 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_whose_prompt_is_a_message_of_the_harness_is_named_by_its_terminal_title() {
+        // The stream's `agentStatus` has no `conversationName`, so the row of a saved environment is named by the title of its pane's terminal, as the row of this machine is.
+        let mut tab = claude_tab("t1", Some("term_c"), "working", 2_000);
+        tab["title"] = json!("◑ 質問の題名");
+        tab["agentStatus"]["prompt"] = json!(
+            "<event kind=\"repl-eval\" at=\"2026-11-16T09:34:08.063Z\"> <result>st:  M apps/wonder-web/src/features/param/stor"
+        );
+        tab["agentStatus"]["lastAssistantMessage"] =
+            json!("{\"attributes\":{\"created_at\":\"2026-11-16T09:34:08Z\"},\"id\":1}");
+        let tabs = held(&snapshots(&[("r1::/w/a", vec![tab])]));
+        let OrcaStreamEvent::List { rows, .. } = list_of(&ps(), &tabs) else {
+            panic!()
+        };
+        assert_eq!(rows[0].line, "質問の題名");
+        assert_eq!(rows[0].reply, None);
+    }
+
+    #[test]
     fn a_tab_without_a_terminal_is_a_row_that_takes_no_keys() {
         let tabs = held(&snapshots(&[(
             "r1::/w/a",
