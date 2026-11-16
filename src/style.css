@@ -56,6 +56,12 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .tooltip { position: fixed; z-index: 20; pointer-events: none; padding: 4px 8px; border-radius: 6px; background: var(--side); color: var(--on-accent); font-size: calc(12px * var(--fs)); white-space: nowrap; }
 
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* A-35: a low footer under every screen, the bell at its right end; the count is the unread of the inbox and of the Slack list added up. */
+#footer { flex: none; box-sizing: border-box; height: 28px; display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; border-top: 1px solid var(--line); background: var(--bar); }
+.footer-btn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
+.footer-btn:hover { background: var(--soft); }
+.footer-btn svg { width: 15px; height: 15px; }
+.footer-count { box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--dot); color: var(--on-accent); font-size: calc(11px * var(--fs)); font-weight: bold; line-height: 16px; text-align: center; }
 header { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
 h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }

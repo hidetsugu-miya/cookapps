@@ -76,3 +76,15 @@ The 「ログ」 tab (the last tab, after アップデート, as in the owner's 
 No new setting, no new call to an outside service, no new Tauri permission (the folder is opened from Rust, as the other modules open a URL). The tab shows no text that explains what to do (`frontend.md`).
 
 Unit tests (`cargo test`) are those of `app_log.rs`: the cleaning of the text (spaces, the cut, the mask of each kind of secret and words that only mention one), the entry (time, place, an empty text), the line (one line of JSON that reads back, bad lines left out), the dropping of old lines and the size cap, the newest-first read, and a write, read and cap against a temporary folder. E2E (`settings.e2e.ts`, 「settings: log」) checks the tab: its place, the read each time it is shown, the table, the filter, the empty note, the copy, the opening of the folder and the failed read and open; the tab order and the arrow keys are in 「settings: tabs」. The opening of the folder itself (the system's call) is not checked.
+
+## A-35 Footer with the unread count
+
+Every screen has a low footer at the bottom of the window, to the right of the green icon column (`#footer`, the last child of `#content`, 28px high, with a line above it). It is shown on every screen, and nothing in it moves with the screen. At its right end is a button with the icon of a bell (`#footer-bell`, `aria-label` 「通知」). The button opens nothing in this requirement: the pane that it opens is a later part (#726).
+
+Why. The unread of the inbox and of the Slack list were told by two counts on the green icon column, and nowhere in one number. The owner wanted one place that sums them up, and that the later parts can use (#723, issue #725).
+
+The count. The button shows the sum of the unread count of the inbox (`nav-mail`) and the unread count of the Slack list (`nav-slack`): `setNavCount` in `ts/view.ts` keeps the number of each, and a change of either draws the sum again (`setFooterCount` in `ts/footer.ts`). The number is shown from 1, as `99+` from 100, and not at all for 0; the footer and the button stay while it is 0. The label of the button carries the count, 「通知（未読 {n} 件）」, and is 「通知」 for 0. The counts of Todo and of Orca are not in the sum. The Slack count in the sum is the number itself, not the `20+` that the Slack button shows above 20.
+
+No new command, no saved setting and no new call to an outside service. The footer shows no text that explains what to do (`frontend.md`).
+
+E2E (`footer.e2e.ts`) checks the footer on the inbox, the calendar, Todo, the settings and Slack (at the bottom of the window, to the right of the column, the bell at its right end), the sum of the two counts and the label, the sum drawn again when the Slack count changes, the footer and the bell with no number for 0, and `99+`.
