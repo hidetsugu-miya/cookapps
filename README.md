@@ -112,7 +112,7 @@ Apple の公証を受けていないので、ブラウザでダウンロード�
 | [機能の一覧](docs/features.md) | できることのすべて |
 | [セットアップと起動](docs/setup.md) | OAuth クライアントの作り方、ソースからの起動 |
 | [Slack](docs/slack.md) | ワークスペースの追加、未読とチャンネルの履歴、投稿、要約 |
-| [Orca](docs/orca.md) | セッションの一覧、ターミナル、Claude への渡し方 |
+| [Orca](docs/orca.md) | セッションの一覧、ターミナル、Claude への渡し方、司令塔と子のセッション |
 | [Claude](docs/claude-integration.md) | 要約、接続方式、モデルの選び方 |
 | [MCP サーバー](docs/mcp.md) | Claude Code から受信トレイと予定、データベースの接続を扱う |
 
