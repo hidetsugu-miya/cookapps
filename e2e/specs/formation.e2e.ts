@@ -117,6 +117,52 @@ describe("development screen: orchestration mode", () => {
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
+  it("has the restart button at the right end of the orchestrator's header, with the icon only", async () => {
+    await openFormation();
+    const button = $("#formation-restart");
+    await expect(button).toHaveAttribute("aria-label", "司令塔を再起動");
+    expect(await button.getText()).toBe("");
+    expect(await browser.execute(() => document.querySelectorAll("#formation-restart svg").length)).toBe(1);
+    const place = await browser.execute(() => {
+      const head = document.getElementById("formation-head")!.getBoundingClientRect();
+      const button = document.getElementById("formation-restart")!.getBoundingClientRect();
+      const title = document.querySelector("#formation-head h1")!.getBoundingClientRect();
+      return { fromRight: Math.round(head.right - button.right), afterTitle: button.left >= title.right, children: document.getElementById("formation-head")!.lastElementChild!.id };
+    });
+    expect(place.children).toBe("formation-restart");
+    expect(place.afterTitle).toBe(true);
+    expect(place.fromRight).toBeLessThan(40);
+  });
+
+  it("ends the running process and starts a new one with the keyboard when the restart button is pressed, and calls no Orca command", async () => {
+    await openFormation();
+    await waitForStarts(1);
+    await sendClaudeCode({ kind: "output", data: "old conversation" });
+    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("old conversation"));
+    await $("#formation-restart").click();
+    await waitForStarts(2);
+    expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation", launch: 1 }]);
+    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation", builtinTools: true, skill: null }, { id: "formation", builtinTools: true, skill: null }]);
+    // The screen is new, and the terminal takes the keys.
+    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("old conversation");
+    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
+    await sendClaudeCode({ kind: "output", data: "new conversation" });
+    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("new conversation"));
+    for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input", "formation_launch", "formation_close"]) expect(await callsOf(command)).toEqual([]);
+  });
+
+  it("starts a new process when the restart button is pressed after the process ended", async () => {
+    await openFormation();
+    await waitForStarts(1);
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
+    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Claude Code が終わりました"));
+    await $("#formation-restart").click();
+    await waitForStarts(2);
+    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation" }, { id: "formation" }]);
+    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("Claude Code が終わりました");
+    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
+  });
+
   it("starts nothing for the orchestrator while Orca is the mode", async () => {
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
