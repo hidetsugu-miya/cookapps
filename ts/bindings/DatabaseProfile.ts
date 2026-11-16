@@ -9,15 +9,16 @@ export type DatabaseProfile = {
  */
 id: string, name: string, username: string, 
 /**
- * The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets a free port as `COOKAPPS_PORT` and listens there.
+ * The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets the port of the connection as `COOKAPPS_PORT` and listens there.
  * Empty when the connection goes straight to the host and the port. Old files have none (`default`).
  */
 script: string, 
 /**
- * The host of a connection with no script. A connection with a script does not use it: the script opens the way, so `check` leaves it empty.
+ * The host MySQL is logged in to, with a script or without one (a script opens the way to it).
  */
 dbHost: string, 
 /**
- * A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese. 0 for a connection with a script.
+ * A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese.
+ * A file saved while a connection with a script needed none (#719) may hold 0, which `check_address` refuses until the owner puts a port in.
  */
 dbPort: number, };

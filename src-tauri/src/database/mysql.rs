@@ -4,7 +4,7 @@
 //! The session is made read only at once (`SET SESSION TRANSACTION READ ONLY`), so that MySQL itself refuses a write.
 //! TLS is the one the app already has (rustls with `aws_lc_rs`, the feature `tls-rustls-aws-lc-rs` of sqlx): it is used when the server offers it (`MySqlSslMode::Preferred`),
 //! which is also what carries the password of `caching_sha2_password`; the RSA path of sqlx (the crate `rsa`) is not built in.
-//! A connection that goes over a network (no script, and a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
+//! A connection that goes over a network (a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
 //! The time zone and the `sql_mode` of the session are the server's own: sqlx's defaults (`time_zone='+00:00'`, `PIPES_AS_CONCAT`, `NO_ENGINE_SUBSTITUTION`) are turned off, so a TIMESTAMP and `NOW()` read as any other client reads them and `||` is OR.
 //! The decisions (what an error of sqlx or of the server is, and what the screen is told for it) are pure functions.
 //! A script that was ready while MySQL does not answer (what it opened does not reach the DB) is a failure of its own and never reads as a refused login.
@@ -32,7 +32,7 @@ pub(super) fn shorten(text: &str) -> String {
     }
 }
 
-/// Where the MySQL server is reached. `scripted` is true when `host` and `port` are the port that the script of the connection opened (D-1), which changes what a failure is told as.
+/// Where the MySQL server is reached: the host and the port of the connection (D-1). `scripted` is true when the connection has a script that was run to open the way to them, which changes what a failure is told as.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Endpoint {
     pub host: String,
@@ -136,7 +136,7 @@ fn classify(error: &sqlx::Error) -> Failure {
     }
 }
 
-/// How TLS is asked for. The port of a script is on `127.0.0.1`; a host that is the machine itself (`localhost`, a loopback address) goes nowhere on the network.
+/// How TLS is asked for. A host that is the machine itself (`localhost`, a loopback address) goes nowhere on the network, with a script or without one.
 /// Any other host is reached over a network, and TLS is required there: with `Preferred` an attacker on the way could make the server look as if it had no TLS, and the password would go in plain text.
 fn ssl_mode_of(endpoint: &Endpoint) -> MySqlSslMode {
     let loopback = endpoint.host.eq_ignore_ascii_case("localhost")
@@ -144,7 +144,7 @@ fn ssl_mode_of(endpoint: &Endpoint) -> MySqlSslMode {
             .host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback());
-    if endpoint.scripted || loopback {
+    if loopback {
         MySqlSslMode::Preferred
     } else {
         MySqlSslMode::Required
@@ -552,24 +552,26 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_over_a_network_requires_tls_and_one_to_this_machine_or_to_the_port_of_a_script_does_not(
+    fn a_connection_over_a_network_requires_tls_and_one_to_this_machine_does_not_with_a_script_or_without(
     ) {
-        for host in [
-            "db.example.com",
-            "10.0.0.5",
-            "2001:db8::1",
-            "127.0.0.1.example.com",
-        ] {
-            assert!(matches!(at(host, false), MySqlSslMode::Required), "{host}");
+        for scripted in [false, true] {
+            for host in [
+                "db.example.com",
+                "10.0.0.5",
+                "2001:db8::1",
+                "127.0.0.1.example.com",
+            ] {
+                assert!(
+                    matches!(at(host, scripted), MySqlSslMode::Required),
+                    "{host} {scripted}"
+                );
+            }
+            for host in ["127.0.0.1", "127.1.2.3", "::1", "localhost", "LocalHost"] {
+                assert!(
+                    matches!(at(host, scripted), MySqlSslMode::Preferred),
+                    "{host} {scripted}"
+                );
+            }
         }
-        for host in ["127.0.0.1", "127.1.2.3", "::1", "localhost", "LocalHost"] {
-            assert!(matches!(at(host, false), MySqlSslMode::Preferred), "{host}");
-        }
-        // The port of a script is on 127.0.0.1.
-        assert!(matches!(at("127.0.0.1", true), MySqlSslMode::Preferred));
-        assert!(matches!(
-            at("db.example.com", true),
-            MySqlSslMode::Preferred
-        ));
     }
 }

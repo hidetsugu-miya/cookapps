@@ -564,21 +564,35 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_session_whose_script_has_ended_is_closed_and_told_with_the_end_of_the_script() {
-        use super::super::script::{start_on, Timing};
+        use super::super::script::{
+            start,
+            support::{free_port, listen_later},
+            Timing,
+        };
         let dir =
             std::env::temp_dir().join(format!("cookapps-session-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let (up_port, down_port) = (free_port(), free_port());
+        let _up = listen_later(up_port);
         let timing = Timing {
             ready: Duration::from_secs(10),
             grace: Duration::from_millis(300),
         };
         let scripts = Scripts::default();
-        let running = start_on(&dir, "sleep 30", port, timing).await.unwrap();
-        let ending = start_on(&dir, "sleep 1\necho gone >&2\nexit 2", port, timing)
+        let running = start(&dir, "127.0.0.1", up_port, "sleep 30", timing)
             .await
             .unwrap();
+        // Each listener comes up after its own script is run, so that the port is free when it is.
+        let _down = listen_later(down_port);
+        let ending = start(
+            &dir,
+            "127.0.0.1",
+            down_port,
+            "sleep 1\necho gone >&2\nexit 2",
+            timing,
+        )
+        .await
+        .unwrap();
         let running = scripts.insert(running).await;
         let ending = scripts.insert(ending).await;
         let sessions = Sessions::default();
