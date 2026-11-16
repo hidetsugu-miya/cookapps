@@ -967,7 +967,7 @@ describe("database: tree", () => {
     it("draws the tab レコード, selected, in place of the table list", async () => {
       await openTable();
       expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
-      await expect($("#database-work [role='tab']")).toHaveAttribute("aria-selected", "true");
+      await expect($("#database-work [role='tab'][aria-selected='true']")).toHaveText("レコード");
       expect(await count("#database-work table.database-tables")).toBe(0);
     });
 
@@ -1306,7 +1306,7 @@ describe("database: tree", () => {
       expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", "", ""]);
       expect(await count("#database-work input")).toBe(1);
       expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
-      await $("#database-work .database-grid tbody td:nth-child(2)").doubleClick();
+      await $("#database-work .database-grid tbody tr:first-child td:nth-child(2)").doubleClick();
       expect(await count("#database-work input")).toBe(1);
       expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
     });
