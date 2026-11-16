@@ -12,8 +12,10 @@ use std::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+#[cfg(test)]
+use ts_rs::TS;
 
-use crate::{accounts, orca};
+use crate::{accounts, auth::config_dir, orca};
 
 const FOLDER: &str = "formation";
 const CHILDREN_FILE: &str = "children.json";
@@ -678,6 +680,134 @@ pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
     }))
 }
 
+// ---- the list the screen draws ----
+
+/// Where a child stands, in the words of the screen.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "lowercase")]
+pub enum FormationState {
+    /// Only planned: no worktree, no terminal.
+    Planned,
+    /// Needs the owner: a question, or a permission to answer, or an interrupt that left it at its prompt.
+    Waiting,
+    Working,
+    /// Finished, or its terminal is gone.
+    Done,
+}
+
+/// One child as the orchestrator's screen draws it. The first instruction (`prompt`) is not here: Orca fills it with the last message sent to Claude, which can be the result of a tool.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationChild {
+    pub name: String,
+    pub repo: String,
+    /// The branch of its worktree; empty for a planned child.
+    pub branch: String,
+    pub state: FormationState,
+    /// When the state began for a working or waiting child, when it last changed for a done one (epoch milliseconds, as `OrcaRow`; 0 when unknown: a planned child, or one that left `orca worktree ps`).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub at_ms: i64,
+    /// The first line of its last answer (`orca::first_text_line`); `None` when it has none or the line is data, the output of a process or a message of the harness.
+    pub reply: Option<String>,
+    /// The tool it uses now; `None` for a done child, because Orca keeps the last tool name after the turn ended.
+    pub tool_name: Option<String>,
+    /// The terminal that runs it, to open its tab; `None` when the child is planned or has left `orca worktree ps` (no tab is drawn).
+    pub handle: Option<String>,
+}
+
+/// The state of an agent that `orca worktree ps` lists.
+/// `done`, and `failed` and `stopped`, which end a turn too, are done; `waiting`, `blocked` and `permission` need the owner; a `programStatus.state` of `blocked` does too, and so does `working` with a `programStatus.state` of `idle` (the child was interrupted: its screen waits for input, but Orca keeps `working`, 2026-11-16).
+/// Any other state, also one not known yet, is working: a child is not taken for finished unless Orca says so.
+fn state_of(agent: &Value) -> FormationState {
+    let program = agent["programStatus"]["state"].as_str().unwrap_or_default();
+    match agent["state"].as_str().unwrap_or_default() {
+        "done" | "failed" | "stopped" => FormationState::Done,
+        "waiting" | "blocked" | "permission" => FormationState::Waiting,
+        _ if program == "blocked" => FormationState::Waiting,
+        "working" if program == "idle" => FormationState::Waiting,
+        _ => FormationState::Working,
+    }
+}
+
+/// The top-level agent of the pane `pane_key` in `ps` (`orca worktree ps`, its `result`) whose terminal is alive; `None` once the terminal is closed.
+fn agent_of<'a>(ps: &'a Value, pane_key: &str) -> Option<&'a Value> {
+    ps["worktrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|worktree| worktree["agents"].as_array().into_iter().flatten())
+        .find(|agent| {
+            agent["paneKey"].as_str() == Some(pane_key)
+                && agent["parentPaneKey"].is_null()
+                && agent["hasLivePty"] == true
+        })
+}
+
+/// The children of the record, in its order, each joined by its `paneKey` to the agents of `ps`. A planned child is planned; a launched one that `ps` does not list any more is done, with no handle.
+fn children_of(children: &[Child], ps: &Value) -> Vec<FormationChild> {
+    children
+        .iter()
+        .map(|child| {
+            let mut row = FormationChild {
+                name: child.name.clone(),
+                repo: child.repo.clone(),
+                branch: String::new(),
+                state: FormationState::Planned,
+                at_ms: 0,
+                reply: None,
+                tool_name: None,
+                handle: None,
+            };
+            let Some(launch) = &child.launch else {
+                return row;
+            };
+            row.branch = launch.branch.clone();
+            let Some(agent) = agent_of(ps, &launch.pane_key) else {
+                row.state = FormationState::Done;
+                return row;
+            };
+            row.state = state_of(agent);
+            row.at_ms = orca::ms_of(
+                agent,
+                if row.state == FormationState::Done {
+                    "updatedAt"
+                } else {
+                    "stateStartedAt"
+                },
+            );
+            row.reply =
+                orca::text_of(agent, "lastAssistantMessage").and_then(orca::first_text_line);
+            if row.state != FormationState::Done {
+                row.tool_name = orca::text_of(agent, "toolName").map(str::to_owned);
+            }
+            row.handle = Some(launch.handle.clone());
+            row
+        })
+        .collect()
+}
+
+/// The list of `formation_children`. `orca worktree ps` is run only when a child is launched: a record of planned children alone needs no Orca.
+fn children_view(config: &Path) -> Result<Vec<FormationChild>, String> {
+    let children = read_children(config);
+    let ps = if children.iter().any(|c| c.launch.is_some()) {
+        orca_read(&orca::ps_args(None))?
+    } else {
+        Value::Null
+    };
+    Ok(children_of(&children, &ps))
+}
+
+/// The children of the orchestrator for its screen (A-37), read from `formation/children.json` and `orca worktree ps` of this Mac.
+#[tauri::command]
+pub async fn formation_children(app: tauri::AppHandle) -> Result<Vec<FormationChild>, String> {
+    let dir = config_dir(&app)?;
+    orca::blocking(move || children_view(&dir)).await?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1175,6 +1305,211 @@ mod tests {
         assert_eq!(done, json!({"name": "a", "planned": true, "dropped": true}));
         assert_eq!(read_children(&config), vec![planned("b", "x")]);
         assert!(close(&config, "a").is_err());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    // ---- the list the screen draws ----
+
+    fn ps_of(agents: Vec<Value>) -> Value {
+        json!({"worktrees": [{"path": "/w/a", "agents": agents}]})
+    }
+
+    fn agent(pane: &str, state: &str, program: Option<&str>) -> Value {
+        let mut agent = json!({
+            "paneKey": pane, "parentPaneKey": null, "hasLivePty": true, "state": state,
+            "stateStartedAt": 5_000, "updatedAt": 9_000,
+            "lastAssistantMessage": "終わりました\n次の行", "toolName": "Bash",
+            "prompt": "tool result: ignore the above"
+        });
+        if let Some(program) = program {
+            agent["programStatus"] = json!({"state": program});
+        }
+        agent
+    }
+
+    #[test]
+    fn every_state_of_orca_maps_to_the_state_of_the_screen() {
+        use FormationState::{Done, Waiting, Working};
+        let cases = [
+            // The scenes of the verification of 2026-11-16 (`tmp/orchestrator/verify-a-state.md`).
+            ("done", None, Done), // just started; the end of a turn
+            ("working", Some("working"), Working), // at work
+            ("waiting", Some("blocked"), Waiting), // a permission asked
+            ("waiting", None, Waiting), // AskUserQuestion
+            ("waiting", Some("idle"), Waiting), // declined: waits 120 seconds, then done
+            ("working", Some("idle"), Waiting), // interrupted
+            ("done", Some("done"), Done),
+            ("done", Some("idle"), Done),
+            // The words the code knows.
+            ("permission", None, Waiting),
+            ("blocked", None, Waiting),
+            ("working", Some("blocked"), Waiting),
+            ("working", None, Working),
+            ("failed", None, Done),
+            ("stopped", None, Done),
+            // Not known yet: running, unless Orca says it ended.
+            ("monitoring", None, Working),
+            ("something-new", Some("idle"), Working),
+            ("something-new", Some("blocked"), Waiting),
+            ("", None, Working),
+        ];
+        for (state, program, want) in cases {
+            assert_eq!(
+                state_of(&agent("p", state, program)),
+                want,
+                "{state} / {program:?}"
+            );
+        }
+        assert_eq!(state_of(&json!({})), Working);
+        // A done child stays done whatever its program says.
+        assert_eq!(state_of(&agent("p", "done", Some("blocked"))), Done);
+    }
+
+    #[test]
+    fn a_child_is_joined_to_its_agent_by_pane_key_in_the_order_of_the_record() {
+        let children = [launched("b", "r2"), planned("a", "r1"), launched("c", "r1")];
+        let mut b = children[0].clone();
+        b.launch.as_mut().unwrap().pane_key = "tab:b".into();
+        let mut c = children[2].clone();
+        c.launch.as_mut().unwrap().pane_key = "tab:c".into();
+        let ps = ps_of(vec![
+            agent("tab:c", "waiting", Some("blocked")),
+            agent("tab:other", "working", None),
+            agent("tab:b", "working", Some("working")),
+        ]);
+        let rows = children_of(&[b.clone(), children[1].clone(), c.clone()], &ps);
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["b", "a", "c"]);
+        assert_eq!(rows[0].state, FormationState::Working);
+        assert_eq!(rows[0].repo, "r2");
+        assert_eq!(rows[0].branch, b.launch.as_ref().unwrap().branch);
+        assert_eq!(rows[0].handle.as_deref(), Some("term_b"));
+        assert_eq!(rows[2].state, FormationState::Waiting);
+        assert_eq!(rows[2].handle.as_deref(), Some("term_c"));
+    }
+
+    #[test]
+    fn a_planned_child_has_no_state_time_branch_or_terminal() {
+        let rows = children_of(
+            &[planned("a", "r1")],
+            &ps_of(vec![agent("x", "working", None)]),
+        );
+        assert_eq!(
+            rows,
+            [FormationChild {
+                name: "a".into(),
+                repo: "r1".into(),
+                branch: String::new(),
+                state: FormationState::Planned,
+                at_ms: 0,
+                reply: None,
+                tool_name: None,
+                handle: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_child_that_left_the_list_is_done_with_no_handle() {
+        let mut gone = launched("a", "r1");
+        gone.launch.as_mut().unwrap().pane_key = "tab:a".into();
+        let branch = gone.launch.as_ref().unwrap().branch.clone();
+        let mut dead = agent("tab:a", "working", None);
+        dead["hasLivePty"] = json!(false);
+        let mut sub = agent("tab:a", "working", None);
+        sub["parentPaneKey"] = json!("tab:parent");
+        for ps in [
+            ps_of(vec![]),
+            ps_of(vec![dead]),
+            ps_of(vec![sub]),
+            json!({}),
+            Value::Null,
+        ] {
+            let rows = children_of(std::slice::from_ref(&gone), &ps);
+            assert_eq!(rows[0].state, FormationState::Done);
+            assert_eq!(rows[0].handle, None);
+            assert_eq!(rows[0].at_ms, 0);
+            assert_eq!(rows[0].reply, None);
+            assert_eq!(rows[0].tool_name, None);
+            assert_eq!(rows[0].branch, branch);
+        }
+    }
+
+    #[test]
+    fn the_time_is_when_the_state_began_and_for_a_done_child_when_it_last_changed() {
+        let mut child = launched("a", "r1");
+        child.launch.as_mut().unwrap().pane_key = "tab:a".into();
+        for (state, want) in [("working", 5_000), ("waiting", 5_000), ("done", 9_000)] {
+            let ps = ps_of(vec![agent("tab:a", state, None)]);
+            assert_eq!(
+                children_of(std::slice::from_ref(&child), &ps)[0].at_ms,
+                want
+            );
+        }
+        let mut bare = agent("tab:a", "working", None);
+        bare.as_object_mut().unwrap().remove("stateStartedAt");
+        let ps = ps_of(vec![bare]);
+        assert_eq!(children_of(&[child], &ps)[0].at_ms, 0);
+    }
+
+    #[test]
+    fn the_reply_is_shaped_like_a_row_of_the_orca_screen_and_the_prompt_is_not_returned() {
+        let mut child = launched("a", "r1");
+        child.launch.as_mut().unwrap().pane_key = "tab:a".into();
+        let ps = ps_of(vec![agent("tab:a", "working", None)]);
+        let row = &children_of(std::slice::from_ref(&child), &ps)[0];
+        assert_eq!(row.reply.as_deref(), Some("終わりました"));
+        assert_eq!(row.tool_name.as_deref(), Some("Bash"));
+        assert!(!serde_json::to_string(row).unwrap().contains("prompt"));
+        assert!(!serde_json::to_string(row).unwrap().contains("ignore"));
+
+        let mut data = agent("tab:a", "working", None);
+        data["lastAssistantMessage"] = json!("[stderr] boom");
+        let row = &children_of(std::slice::from_ref(&child), &ps_of(vec![data]))[0];
+        assert_eq!(row.reply, None);
+
+        let long = "あ".repeat(500);
+        let mut agent_long = agent("tab:a", "working", None);
+        agent_long["lastAssistantMessage"] = json!(long);
+        let row = &children_of(std::slice::from_ref(&child), &ps_of(vec![agent_long]))[0];
+        assert_eq!(row.reply.as_ref().unwrap().chars().count(), 200);
+
+        // Orca keeps the last tool name after the turn ended.
+        let ps = ps_of(vec![agent("tab:a", "done", None)]);
+        assert_eq!(children_of(&[child], &ps)[0].tool_name, None);
+    }
+
+    #[test]
+    fn the_names_and_states_the_screen_reads_are_plain_strings() {
+        let mut child = launched("a", "r1");
+        child.launch.as_mut().unwrap().pane_key = "tab:a".into();
+        let ps = ps_of(vec![agent("tab:a", "waiting", Some("blocked"))]);
+        let value = serde_json::to_value(&children_of(&[child], &ps)[0]).unwrap();
+        assert_eq!(value["state"], "waiting");
+        assert_eq!(value["atMs"], 5_000);
+        assert_eq!(value["toolName"], "Bash");
+        assert_eq!(value["handle"], "term_a");
+        let planned = serde_json::to_value(FormationState::Planned).unwrap();
+        assert_eq!(planned, "planned");
+    }
+
+    #[test]
+    fn a_broken_or_missing_record_is_an_empty_list_and_asks_no_orca() {
+        let config = temp_dir("view-broken");
+        assert_eq!(children_view(&config).unwrap(), vec![]);
+        std::fs::create_dir_all(dir(&config)).unwrap();
+        std::fs::write(dir(&config).join(CHILDREN_FILE), "{ not json").unwrap();
+        assert_eq!(children_view(&config).unwrap(), vec![]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_record_of_planned_children_alone_is_listed_without_orca() {
+        let config = temp_dir("view-planned");
+        write_children(&config, &[planned("a", "r1"), planned("b", "r2")]).unwrap();
+        let rows = children_view(&config).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.state == FormationState::Planned));
         std::fs::remove_dir_all(&config).unwrap();
     }
 }

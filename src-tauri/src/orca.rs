@@ -321,7 +321,7 @@ pub(crate) fn first_line(text: &str) -> Option<String> {
         .map(|l| l.chars().take(LINE_LIMIT).collect())
 }
 
-fn ms_of(value: &Value, key: &str) -> i64 {
+pub(crate) fn ms_of(value: &Value, key: &str) -> i64 {
     // Truncation is intended: an epoch in milliseconds has no meaningful fraction.
     #[allow(clippy::cast_possible_truncation)]
     value[key].as_f64().map_or(0, |ms| ms as i64)
@@ -486,7 +486,7 @@ fn is_process_output(line: &str) -> bool {
 /// The first line of `text` that the owner or Claude wrote, cut to `LINE_LIMIT` characters: `text` without its harness elements (`HARNESS_ELEMENTS`) and then without its XML tags, the first line that still has text.
 /// `None` when nothing is left, or when what is left opens as data or as the output of a process (`is_pasted_data`, `is_process_output`; the first three lines are read, so that an object over several lines is found).
 /// Only the first `LINE_READ_LIMIT` characters are read.
-fn first_text_line(text: &str) -> Option<String> {
+pub(crate) fn first_text_line(text: &str) -> Option<String> {
     let read = text
         .char_indices()
         .nth(LINE_READ_LIMIT)
@@ -1163,7 +1163,7 @@ fn with_environment(mut args: Vec<String>, environment: Option<&str>) -> Vec<Str
     args
 }
 
-fn ps_args(environment: Option<&str>) -> Vec<String> {
+pub(crate) fn ps_args(environment: Option<&str>) -> Vec<String> {
     with_environment(
         args_of(&["worktree", "ps", "--limit", WORKTREE_LIMIT, "--json"]),
         environment,
