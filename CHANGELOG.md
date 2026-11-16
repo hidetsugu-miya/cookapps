@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.81.1
+
+A-37: the orchestration mode is two panes, the orchestrator at the left and the flow at the right, half and half (#801, #803). Until the orchestrator has recorded a child (a planned one too), the orchestrator alone takes the width. The flow pane has the tree above, with one branch from the orchestrator's card to a frame that holds the children's cards side by side, and the terminal of the selected child below. Pressing a child's card selects it and gives its terminal the keys, in place of the tabs of the middle column, which is gone, and so is the button that closed and opened the flow pane. 「自動で追う」 is at the right end of the flow's heading, and brings the card it moves to into view.
+
+A-37: the orchestrator's header has a restart button at its right end, which ends the orchestrator and starts a new one, also after `exit` (#802). It cannot be pressed again until the new start has answered. The children are not touched.
+
 ## v0.81.0
 
 A-5, A-37: the Orca button of the side menu opens the development screen, with a code icon and the label 「開発」 (#795). The screen has two modes, Orca and the orchestration, switched by two buttons at the left end of the footer, which show only on this screen. Orca is the mode at each start, and "Orca の画面で開く" opens the Orca mode. The count and the working yellow of the button are as they were.
