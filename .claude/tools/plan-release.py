@@ -306,7 +306,11 @@ def validate_plan(plan, free, fixed, states, parents=frozenset()):
         lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}, which is not one, in the same tier",
     )
 
-    # cycle
+    # cycle. A parent closes only when all its parts are out, so a blocker that is a parent waits for each of its parts.
+    parts = {}
+    for i in free:
+        if i.parent in parents:
+            parts.setdefault(i.parent, []).append(i.number)
     color = {}
 
     def visit(n, path):
@@ -315,7 +319,7 @@ def validate_plan(plan, free, fixed, states, parents=frozenset()):
         if color.get(n) == 1:
             return path[path.index(n) :] + [n]
         color[n] = 1
-        for b in blocked_by.get(n, []):
+        for b in blocked_by.get(n, []) + parts.get(n, []):
             found = visit(b, path + [n])
             if found:
                 return found
