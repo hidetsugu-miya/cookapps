@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.78.0
+
+A-34: in the Orca editor, a right click with the Command key on a name in a Ruby file looks up its definition with ruby-lsp (#696, #700). The top row of the file pane has a third icon, "定義", after "ファイル" and "履歴", and the press switches the pane to it: one row for each place, with the file, the line and the folder, or, for a place outside the worktree, the gem, its version and the mark "gem". A row opens to the lines around the definition, and "タブで開く" opens the file in a tab of the work pane at that line; a file of a gem opens in a read only tab (#699, #700). A right click without the Command key is as it was.
+
+A-34: the app starts ruby-lsp itself, in the way the worktree shows: with `docker compose exec` in the service that mounts the worktree when its folder has a compose file, else with `bundle exec ruby-lsp` on the host when `Gemfile.lock` lists `ruby-lsp`; a worktree of a saved environment is reached through this Mac's `ssh` (#697, #698). The part "言語サーバー" under the definitions shows the state of the server (索引中, 動作中 or 停止中) and holds the command, the path of the worktree where it runs, the service, the ssh host and "自動で起動", saved for each repository in `lsp-settings.json` of the config folder; "自動に戻す" brings back what was decided, and the restart button starts the server again with the new settings (#697, #701). With "自動で起動" on, the server starts when a Ruby file of the worktree is opened, and it stops when no tab of the worktree is open, when the worktree is gone from the Orca list, and when the app ends (#701). When the container of the service is not running, "コンテナを起動" starts it and then the server; the app never starts a container by itself (#701). Before each look-up, the Ruby files that changed on the disk are told to the server (#698).
+
 ## v0.77.0
 
 T-8: a right click on a project in the side list of the Todo screen opens a menu with "移動", "アーカイブ" and "削除" (#707, #708). "アーカイブ" archives the project at once, and its tasks stay in Todoist. "削除" asks first, and then deletes the project with its sections and tasks for good. "移動" lists "一番上の階層" and the projects it may go under, and makes it the last sub-project of the one picked. A project can also be dragged onto another project, to become its last sub-project, or onto the heading "プロジェクト", to move to the top level (#709). The sub-projects go along in every case. "インボックス" and "今日" have no menu.
