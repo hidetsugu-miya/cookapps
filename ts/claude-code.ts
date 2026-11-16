@@ -2,13 +2,19 @@
 // No Orca is in between. Claude Code gets only the tools of `tsunagiai-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), and a saved skill when the screen gives one.
 // A screen that holds a pane gives it a host element and an `owner` (the name of the pane), shows it with `showClaudeCode` while it is in view, hides it with `hideClaudeCode` (the process goes on, and what it prints is drawn into the hidden terminal),
 // and ends it with `closeClaudeCode` when the pane is closed or the screen no longer needs it (the process and what it started are ended). A message of a failed start or of the end of the process is drawn in the terminal.
+// The orchestrator of A-37 is the pane `kind: "formation"`: Rust runs it in `formation/` of the config directory (its own `CLAUDE.md`, the tools of `tsunagiai-mcp --formation`, Claude Code's own tools on) when the id of the pane is `FORMATION_ID`.
 // `onEnd` is told when the process ends by itself with the exit code 0 (not when its start failed or it ended with an exit code or a signal, which stay drawn in the terminal), so a screen can drop the pane.
 import type { SkillScreen } from "./bindings/SkillScreen";
 import { hideTerminals, isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
+// The id of the orchestrator's pane: Rust takes the pane of this id for the orchestrator.
+export const FORMATION_ID = "formation";
+
 export interface ClaudeCodeOptions {
-  // The id of the pane: Rust names the process by it, and starting an id again ends the process it had.
+  // The id of the pane: Rust names the process by it, and starting an id again ends the process it had. With `kind: "formation"` it is `FORMATION_ID` whatever is given.
   id: string;
+  // The orchestrator (A-37) in place of a pane of a screen: the pane id is `FORMATION_ID`, and Claude Code's own tools are on.
+  kind?: "formation";
   // Leaves Claude Code's own tools on (the database screen does; the others never).
   builtinTools?: boolean;
   // A saved skill that Claude Code is given with `--plugin-dir` (A-32).
@@ -20,8 +26,9 @@ export interface ClaudeCodeOptions {
 // Shows the terminal of the pane in `host` and gives it the keyboard when it is new. The first show starts the process, with the size of `host`; a later one only draws it again.
 export function showClaudeCode(host: HTMLElement, options: ClaudeCodeOptions, owner: string) {
   host.classList.add("claude-code-pane");
-  const pty = { builtinTools: options.builtinTools ?? false, skill: options.skill ?? null, onEnd: options.onEnd };
-  showTerminals([{ id: options.id, source: { kind: "pty", handle: options.id, path: "", environment: null, pty }, host }], options.id, owner);
+  const id = options.kind === "formation" ? FORMATION_ID : options.id;
+  const pty = { builtinTools: options.kind === "formation" || (options.builtinTools ?? false), skill: options.skill ?? null, onEnd: options.onEnd };
+  showTerminals([{ id, source: { kind: "pty", handle: id, path: "", environment: null, pty }, host }], id, owner);
 }
 
 // Whether the pane `owner` shows the terminal `id` in `host`, so that showing it again would change nothing.

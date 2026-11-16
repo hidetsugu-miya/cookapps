@@ -34,6 +34,13 @@ const FOLDER: &str = "claude-code";
 const MCP_FILE: &str = "mcp.json";
 const SCRIPT_FILE: &str = "start.sh";
 const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
+/// A-37: the orchestrator is the pane with this id (the screen names its pane so), and it runs in `formation/` of the config directory, not in `claude-code/`.
+const FORMATION_ID: &str = "formation";
+const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
+/// The fixed text of the orchestrator's `CLAUDE.md`: its role and its steps. It holds nothing that comes from outside.
+const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
+/// The argument that makes `tsunagiai-mcp` offer the tools of the orchestrator (`formation_*`), which the panes' own `mcp.json` does not pass.
+const FORMATION_MCP_ARG: &str = "--formation";
 /// The name the MCP server has in Claude Code (`mcp__tsunagiai__...`), as in `.mcp.json` of the repository.
 const MCP_NAME: &str = "tsunagiai";
 const MCP_BINARY: &str = "tsunagiai-mcp";
@@ -78,10 +85,10 @@ pub fn claude_code_dir(config: &Path) -> PathBuf {
     config.join(FOLDER)
 }
 
-/// The text of `mcp.json`: the one MCP server, `tsunagiai-mcp` at `mcp`.
-fn mcp_config(mcp: &Path) -> String {
+/// The text of `mcp.json`: the one MCP server, `tsunagiai-mcp` at `mcp`, started with `args`.
+fn mcp_config(mcp: &Path, args: &[&str]) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
-        "mcpServers": { MCP_NAME: { "command": mcp.to_string_lossy(), "args": [] } }
+        "mcpServers": { MCP_NAME: { "command": mcp.to_string_lossy(), "args": args } }
     }))
     .unwrap_or_default()
 }
@@ -101,6 +108,19 @@ fn launch_script(claude: &Path, mcp_config: &Path, builtin_tools: bool) -> Strin
          # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
          exec {claude}{tools} --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {config} \"$@\"\n",
+        claude = sh_quote(&claude.to_string_lossy()),
+        config = sh_quote(&mcp_config.to_string_lossy()),
+    )
+}
+
+/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named `formation`, in the `auto` permission mode, and reading the project settings of its folder too.
+/// Only the two paths the app decided and the fixed flags are in it.
+fn formation_script(claude: &Path, mcp_config: &Path) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
+         PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
+         exec {claude} -n {FORMATION_ID} --permission-mode auto --setting-sources user,project --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
         config = sh_quote(&mcp_config.to_string_lossy()),
     )
@@ -191,13 +211,27 @@ fn write_files(
         SCRIPT_FILE
     };
     let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
-    crate::accounts::write_atomic(&dir, MCP_FILE, &mcp_config(mcp))?;
+    crate::accounts::write_atomic(&dir, MCP_FILE, &mcp_config(mcp, &[]))?;
     crate::accounts::write_atomic(
         &dir,
         script,
         &launch_script(claude, &dir.join(MCP_FILE), builtin_tools),
     )?;
     Ok(dir.join(script))
+}
+
+/// Writes `CLAUDE.md`, `mcp.json` and the launch script in `formation/` of `config` and answers the script's path. The other files of the folder stay.
+fn write_formation_files(config: &Path, claude: &Path, mcp: &Path) -> Result<PathBuf, String> {
+    let dir = crate::formation::dir(config);
+    let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
+    crate::accounts::write_atomic(&dir, FORMATION_CLAUDE_MD_FILE, FORMATION_CLAUDE_MD)?;
+    crate::accounts::write_atomic(&dir, MCP_FILE, &mcp_config(mcp, &[FORMATION_MCP_ARG]))?;
+    crate::accounts::write_atomic(
+        &dir,
+        SCRIPT_FILE,
+        &formation_script(claude, &dir.join(MCP_FILE)),
+    )?;
+    Ok(dir.join(SCRIPT_FILE))
 }
 
 // ---- the pseudo terminal ----
@@ -382,6 +416,25 @@ impl Reader {
     }
 }
 
+/// Whether a variable of the environment makes a Claude Code of ours take its pane for Orca's: Orca's own (`ORCA_*`, which its state hooks read) and those of its orchestration (`CLAUDE_CODE_MESSAGING_*`).
+/// They are in the environment when `tauri dev` runs in a terminal of Orca.
+fn is_orca_env(name: &str) -> bool {
+    name.starts_with("ORCA_") || name.starts_with("CLAUDE_CODE_MESSAGING_")
+}
+
+/// Takes the variables of Orca out of what `command` inherits.
+fn remove_orca_env(command: &mut CommandBuilder) {
+    let names: Vec<String> = command
+        .iter_full_env_as_str()
+        .map(|(name, _)| name)
+        .filter(|name| is_orca_env(name))
+        .map(str::to_owned)
+        .collect();
+    for name in names {
+        command.env_remove(name);
+    }
+}
+
 /// Opens the pseudo terminal and starts the process in it.
 fn open(
     spec: &Spec,
@@ -401,6 +454,7 @@ fn open(
     let mut command = CommandBuilder::new(&spec.program);
     command.args(&spec.args);
     command.cwd(&spec.cwd);
+    remove_orca_env(&mut command);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     for change in &spec.env {
@@ -562,10 +616,11 @@ fn check_size(viewport: OrcaViewport) -> Result<(u16, u16), String> {
     Err("ターミナルの大きさが正しくありません".to_owned())
 }
 
-/// What a start needs: the files written, the sign-in read, the skill's plugin folder made.
+/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `formation` is the orchestrator (A-37): its own folder and script, and the built-in tools always on.
 fn prepare(
     config: &Path,
     exe: &Path,
+    formation: bool,
     builtin_tools: bool,
     skill: Option<ClaudeCodeSkill>,
     (cols, rows): (u16, u16),
@@ -576,11 +631,21 @@ fn prepare(
     let plugin = skill
         .map(|s| skills::plugin_for(config, &s.name, s.screen))
         .transpose()?;
-    let script = write_files(config, &claude, &mcp, builtin_tools)?;
+    let (script, cwd) = if formation {
+        (
+            write_formation_files(config, &claude, &mcp)?,
+            crate::formation::dir(config),
+        )
+    } else {
+        (
+            write_files(config, &claude, &mcp, builtin_tools)?,
+            claude_code_dir(config),
+        )
+    };
     let spec = Spec {
         program: "/bin/sh".to_owned(),
         args: launch_args(&script, plugin.as_ref().map(CallPlugin::path)),
-        cwd: claude_code_dir(config),
+        cwd,
         env: connection.env(),
         cols,
         rows,
@@ -588,7 +653,7 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id`: its output and its end go through `channel`. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
+/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation` is the orchestrator of A-37): its output and its end go through `channel`. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
 /// and `skill` is a saved skill that it is given. A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 pub async fn claude_code_start(
@@ -606,7 +671,8 @@ pub async fn claude_code_start(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sessions = sessions.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let (spec, plugin) = prepare(&config, &exe, builtin_tools, skill, size)?;
+        let formation = id == FORMATION_ID;
+        let (spec, plugin) = prepare(&config, &exe, formation, builtin_tools, skill, size)?;
         sessions.start(
             &id,
             &spec,
@@ -679,15 +745,32 @@ mod tests {
 
     #[test]
     fn the_mcp_config_names_only_tsunagiai_mcp() {
-        let config: serde_json::Value = serde_json::from_str(&mcp_config(Path::new(
-            "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp",
-        )))
+        let config: serde_json::Value = serde_json::from_str(&mcp_config(
+            Path::new("/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp"),
+            &[],
+        ))
         .unwrap();
         assert_eq!(
             config,
             serde_json::json!({"mcpServers": {"tsunagiai": {
                 "command": "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp",
                 "args": []
+            }}})
+        );
+    }
+
+    #[test]
+    fn the_orchestrators_mcp_config_passes_formation_and_nothing_else_changes() {
+        let config: serde_json::Value = serde_json::from_str(&mcp_config(
+            Path::new("/app/tsunagiai-mcp"),
+            &["--formation"],
+        ))
+        .unwrap();
+        assert_eq!(
+            config,
+            serde_json::json!({"mcpServers": {"tsunagiai": {
+                "command": "/app/tsunagiai-mcp",
+                "args": ["--formation"]
             }}})
         );
     }
@@ -745,6 +828,32 @@ mod tests {
             false,
         );
         assert!(script.contains(r"exec '/Users/o'\''neil/claude' --tools ''"));
+    }
+
+    #[test]
+    fn the_orchestrators_script_keeps_the_built_in_tools_and_reads_the_project_settings() {
+        let script = formation_script(
+            Path::new("/Users/x/.local/bin/claude"),
+            Path::new("/c/app/formation/mcp.json"),
+        );
+        assert_eq!(
+            script,
+            "#!/bin/sh\n\
+             # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
+             PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
+             exec '/Users/x/.local/bin/claude' -n formation --permission-mode auto --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formation/mcp.json' \"$@\"\n"
+        );
+        assert!(!script.contains("--tools"));
+    }
+
+    #[test]
+    fn a_path_with_a_quote_stays_one_word_of_the_orchestrators_script() {
+        let script = formation_script(
+            Path::new("/Users/o'neil/claude"),
+            Path::new("/c/o'neil/mcp.json"),
+        );
+        assert!(script.contains(r"exec '/Users/o'\''neil/claude' -n formation"));
+        assert!(script.contains(r"--mcp-config '/c/o'\''neil/mcp.json' "));
     }
 
     #[test]
@@ -839,6 +948,96 @@ mod tests {
         assert!(mcp.contains("/app/tsunagiai-mcp"));
         assert!(!config.join("claude-code/mcp.json.tmp").exists());
         std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_orchestrators_files_are_written_in_its_folder_and_the_other_files_stay() {
+        let config = temp_dir("formation-files");
+        let dir = config.join("formation");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("children.json"), "[]").unwrap();
+        let script = write_formation_files(
+            &config,
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+        )
+        .unwrap();
+        assert_eq!(script, dir.join("start.sh"));
+        let script_text = std::fs::read_to_string(&script).unwrap();
+        assert!(script_text.contains("-n formation --permission-mode auto"));
+        assert!(script_text.contains(&format!(
+            "--mcp-config '{}'",
+            dir.join("mcp.json").display()
+        )));
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            mcp["mcpServers"]["tsunagiai"]["args"],
+            serde_json::json!(["--formation"])
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
+            FORMATION_CLAUDE_MD
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("children.json")).unwrap(),
+            "[]"
+        );
+        // The folder of the other panes is not touched.
+        assert!(!config.join("claude-code").exists());
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_orchestrators_claude_md_names_the_tools_and_the_rules_of_the_steps() {
+        for needle in [
+            "formation_launch",
+            "formation_plan",
+            "formation_close",
+            "SendMessage",
+            "AskUserQuestion",
+            "英小文字、数字、ハイフン",
+        ] {
+            assert!(FORMATION_CLAUDE_MD.contains(needle), "{needle}");
+        }
+    }
+
+    #[test]
+    fn the_variables_of_orca_and_its_orchestration_are_the_ones_taken_out() {
+        for name in [
+            "ORCA_PANE_KEY",
+            "ORCA_TERMINAL_HANDLE",
+            "ORCA_",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_",
+        ] {
+            assert!(is_orca_env(name), "{name}");
+        }
+        for name in [
+            "PATH",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "TSUNAGIAI_ORCA_X",
+            "ORCA",
+            "orca_pane",
+        ] {
+            assert!(!is_orca_env(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_command_loses_the_variables_of_orca_and_keeps_the_others() {
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.env("ORCA_PANE_KEY", "tab:1");
+        command.env("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/s");
+        command.env("TSUNAGIAI_KEEP", "yes");
+        remove_orca_env(&mut command);
+        assert_eq!(command.get_env("ORCA_PANE_KEY"), None);
+        assert_eq!(command.get_env("CLAUDE_CODE_MESSAGING_SOCKET"), None);
+        assert_eq!(
+            command.get_env("TSUNAGIAI_KEEP"),
+            Some(std::ffi::OsStr::new("yes"))
+        );
     }
 
     #[test]
