@@ -4,10 +4,10 @@ title: Claude との連携（MCP）
 
 # Claude との連携（MCP）
 
-`cookapps-mcp` は、Claude Code から cookapps の受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
+`tsunagiai-mcp` は、Claude Code から cookapps の受信トレイと予定と、データベースの画面の接続を扱うためのローカルの MCP サーバーです。
 stdio で動き、ネットワークのポートは開きません。
 cookapps アプリが起動していなくても使えます。
-データベースの画面の Claude Code のペインでは、アプリが自分の中の `cookapps-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
+データベースの画面の Claude Code のペインでは、アプリが自分の中の `tsunagiai-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
 
 この文書は AI に読ませて設定を任せられるように、手順と確認方法を順に書いています。
 
@@ -15,10 +15,10 @@ cookapps アプリが起動していなくても使えます。
 
 - macOS か Windows で動かすこと。
 - cookapps アプリで、使いたいアカウントにログイン済みであること。
-  - `cookapps-mcp` は、アプリと同じ設定フォルダの `client_secret.json` と `accounts.json` を読みます。
+  - `tsunagiai-mcp` は、アプリと同じ設定フォルダの `client_secret.json` と `accounts.json` を読みます。
     macOS では `~/Library/Application Support/jp.mysis.tsunagiai/`、Windows では `%APPDATA%\jp.mysis.tsunagiai\` です。
   - リフレッシュトークンもアプリと同じ OS の資格情報の保管場所の項目（サービス名 `jp.mysis.tsunagiai`。macOS ではキーチェーン、Windows では資格情報マネージャー）から読みます。
-- `cookapps-mcp` はログインを行いません。アカウントの追加と再ログインは、アプリで行います。
+- `tsunagiai-mcp` はログインを行いません。アカウントの追加と再ログインは、アプリで行います。
 - データベースの接続のツールは、アプリと同じ設定フォルダの `database-profiles.json` を読み書きし、パスワードはアプリと同じ資格情報の保管場所の項目（サービス名 `jp.mysis.tsunagiai.database`）から読みます（接続先やユーザーを変える保存では、その項目を消します）。パスワードを登録するのは、アプリの接続の編集ペインだけです。
 - `~/.cargo/bin`（Windows では `%USERPROFILE%\.cargo\bin`）が `PATH` に入っていること。
 
@@ -29,11 +29,11 @@ cookapps アプリが起動していなくても使えます。
 リポジトリのルートで実行します。
 
 ```sh
-cargo install --path src-tauri --bin cookapps-mcp --locked
+cargo install --path src-tauri --bin tsunagiai-mcp --locked
 ```
 
-`~/.cargo/bin/cookapps-mcp` ができれば完了です（Windows では `%USERPROFILE%\.cargo\bin\cookapps-mcp.exe`）。
-`command -v cookapps-mcp`（Windows の PowerShell では `Get-Command cookapps-mcp`）で、パスが出ることを確かめます。
+`~/.cargo/bin/tsunagiai-mcp` ができれば完了です（Windows では `%USERPROFILE%\.cargo\bin\tsunagiai-mcp.exe`）。
+`command -v tsunagiai-mcp`（Windows の PowerShell では `Get-Command tsunagiai-mcp`）で、パスが出ることを確かめます。
 コードを更新したときも、同じコマンドで入れ直します。
 
 ### 2. Claude Code に登録する
@@ -47,8 +47,8 @@ cargo install --path src-tauri --bin cookapps-mcp --locked
 ```json
 {
   "mcpServers": {
-    "cookapps": {
-      "command": "cookapps-mcp"
+    "tsunagiai": {
+      "command": "tsunagiai-mcp"
     }
   }
 }
@@ -62,27 +62,27 @@ cargo install --path src-tauri --bin cookapps-mcp --locked
 ユーザーのスコープに登録します。
 
 ```sh
-claude mcp add --scope user cookapps -- cookapps-mcp
+claude mcp add --scope user tsunagiai -- tsunagiai-mcp
 ```
 
 ユーザーのスコープで登録したら、`.mcp.json` の承認は不要です。
 
 #### Claude Desktop に登録する場合
 
-Claude Desktop の設定ファイルの `mcpServers` に、`cookapps-mcp` の絶対パスで登録します。
+Claude Desktop の設定ファイルの `mcpServers` に、`tsunagiai-mcp` の絶対パスで登録します。
 設定ファイルの場所は、macOS が `~/Library/Application Support/Claude/claude_desktop_config.json`、Windows が `%APPDATA%\Claude\claude_desktop_config.json` です。
 
 ```json
 {
   "mcpServers": {
-    "cookapps": {
-      "command": "C:\\Users\\{ユーザー名}\\.cargo\\bin\\cookapps-mcp.exe"
+    "tsunagiai": {
+      "command": "C:\\Users\\{ユーザー名}\\.cargo\\bin\\tsunagiai-mcp.exe"
     }
   }
 }
 ```
 
-macOS では `command` に `/Users/{ユーザー名}/.cargo/bin/cookapps-mcp` を指定します。
+macOS では `command` に `/Users/{ユーザー名}/.cargo/bin/tsunagiai-mcp` を指定します。
 
 ### 3. 読み取りのツールだけを許可する
 
@@ -92,10 +92,10 @@ Claude Code の設定ファイル（`~/.claude/settings.json` など）の `perm
 {
   "permissions": {
     "allow": [
-      "mcp__cookapps__list_inbox",
-      "mcp__cookapps__get_thread",
-      "mcp__cookapps__list_events",
-      "mcp__cookapps__db_profiles"
+      "mcp__tsunagiai__list_inbox",
+      "mcp__tsunagiai__get_thread",
+      "mcp__tsunagiai__list_events",
+      "mcp__tsunagiai__db_profiles"
     ]
   }
 }
@@ -109,7 +109,7 @@ Claude Code の設定ファイル（`~/.claude/settings.json` など）の `perm
 ### 4. つながったことを確かめる
 
 ```sh
-claude mcp get cookapps
+claude mcp get tsunagiai
 ```
 
 `Status` が `✔ Connected` なら完了です。
@@ -117,7 +117,7 @@ Claude Code の中では、`/mcp` で `cookapps` の 9 つのツールが見え�
 
 macOS では、最初にツールを呼んだとき、キーチェーンへのアクセスの許可を求められることがあります。
 「常に許可」を選びます。
-`cookapps-mcp` を入れ直すと、また求められることがあります。
+`tsunagiai-mcp` を入れ直すと、また求められることがあります。
 
 ## ツール
 
@@ -146,7 +146,7 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 
 | 症状 | 対処 |
 |---|---|
-| `claude mcp get cookapps` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v cookapps-mcp`（Windows の PowerShell では `Get-Command cookapps-mcp`）でパスが出るかを確かめる |
+| `claude mcp get tsunagiai` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v tsunagiai-mcp`（Windows の PowerShell では `Get-Command tsunagiai-mcp`）でパスが出るかを確かめる |
 | 「再ログインが必要です」と返る | cookapps アプリでそのアカウントに再ログインする |
 | 「OAuth クライアント JSON を読めません」と返る | アプリの[セットアップ](setup.md#セットアップ)を済ませる |
 | macOS で、ツールを呼ぶたびにキーチェーンの許可を求められる | 許可のダイアログで「常に許可」を選ぶ |

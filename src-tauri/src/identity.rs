@@ -1,6 +1,6 @@
 //! The app's identifier and its config folder.
 //! The folder is named after the identifier (Tauri's `app_config_dir`), so a change of the identifier leaves the settings in the folder of the old one:
-//! `migrate_config_dir` copies them over once, and `cookapps-mcp`, which builds the path itself, goes through the same function.
+//! `migrate_config_dir` copies them over once, and `tsunagiai-mcp`, which builds the path itself, goes through the same function.
 
 use std::{
     fs,
@@ -47,7 +47,7 @@ pub fn migrate_config_dir(new: &Path) -> Result<(), String> {
         let _ = fs::remove_dir_all(&staging);
     }
     match moved {
-        // Another process (the app and `cookapps-mcp` start together) moved it first.
+        // Another process (the app and `tsunagiai-mcp` start together) moved it first.
         Err(_) if new.is_dir() => Ok(()),
         Err(e) => Err(format!("設定フォルダの引っ越しに失敗: {e}")),
         Ok(()) => Ok(()),

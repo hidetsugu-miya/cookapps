@@ -720,55 +720,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
-name = "cookapps"
-version = "0.0.0"
-dependencies = [
- "base64 0.23.1",
- "block2",
- "chrono",
- "crypto_secretbox",
- "dirs",
- "emojis",
- "encoding_rs",
- "futures-util",
- "getrandom 0.4.3",
- "hkdf",
- "keyring",
- "keyring-core",
- "libc",
- "objc2",
- "objc2-core-foundation",
- "objc2-core-text",
- "objc2-foundation",
- "portable-pty",
- "pulldown-cmark",
- "reqwest",
- "rmcp",
- "rusqlite",
- "rustls",
- "salsa20 0.11.0",
- "schemars 1.2.3",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "similar",
- "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tauri-plugin-updater",
- "tauri-plugin-wdio",
- "tauri-plugin-wdio-webdriver",
- "tokio",
- "tokio-tungstenite",
- "ts-rs",
- "url",
- "x25519-dalek",
-]
-
-[[package]]
 name = "cookie"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5839,6 +5790,55 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "termcolor",
+]
+
+[[package]]
+name = "tsunagiai"
+version = "0.0.0"
+dependencies = [
+ "base64 0.23.1",
+ "block2",
+ "chrono",
+ "crypto_secretbox",
+ "dirs",
+ "emojis",
+ "encoding_rs",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hkdf",
+ "keyring",
+ "keyring-core",
+ "libc",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "objc2-foundation",
+ "portable-pty",
+ "pulldown-cmark",
+ "reqwest",
+ "rmcp",
+ "rusqlite",
+ "rustls",
+ "salsa20 0.11.0",
+ "schemars 1.2.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "similar",
+ "sqlx",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tauri-plugin-updater",
+ "tauri-plugin-wdio",
+ "tauri-plugin-wdio-webdriver",
+ "tokio",
+ "tokio-tungstenite",
+ "ts-rs",
+ "url",
+ "x25519-dalek",
 ]
 
 [[package]]

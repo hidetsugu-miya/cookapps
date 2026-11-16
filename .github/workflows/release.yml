@@ -141,6 +141,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           dir=src-tauri/target/release/bundle/macos
-          scripts/make-latest-json.sh "$TAG" "$dir/cookapps.app.tar.gz.sig" "$GITHUB_REPOSITORY" > latest.json
-          gh release create "$TAG" --title "$TAG" --notes "cookapps $TAG" \
-            "$dir/cookapps.app.tar.gz" "$dir/cookapps.app.tar.gz.sig" latest.json
+          scripts/make-latest-json.sh "$TAG" "$dir/tsunagiai.app.tar.gz.sig" "$GITHUB_REPOSITORY" > latest.json
+          gh release create "$TAG" --title "$TAG" --notes "tsunagiai $TAG" \
+            "$dir/tsunagiai.app.tar.gz" "$dir/tsunagiai.app.tar.gz.sig" latest.json

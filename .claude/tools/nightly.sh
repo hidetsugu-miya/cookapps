@@ -21,7 +21,7 @@ cd "$main" || exit 1
 mkdir -p .claude/nightly
 log="$(pwd -P)/.claude/nightly/${skill}-$(date +%Y-%m-%d).log"
 notify() {
-  osascript -e "display notification \"$1\" with title \"cookapps 夜間 ${skill}\"" >/dev/null 2>&1 || true
+  osascript -e "display notification \"$1\" with title \"tsunagiai 夜間 ${skill}\"" >/dev/null 2>&1 || true
 }
 # A lock left by a run that died without its trap (power loss, SIGKILL) is taken over when its PID is gone or now runs another command.
 lock=".claude/nightly/${skill}.lock"

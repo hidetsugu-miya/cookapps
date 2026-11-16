@@ -22,7 +22,7 @@ tools: Read, Grep, Glob, Bash
 - Orca の worktree とこの PC への書き込み（A-18 の保存は読んだ時点から変わっていないときだけか、A-25 のブランチの切り替えは `local`・`remote` だけで新規作成をしないか、A-22 のコピーは保存ダイアログで選んだ場所だけに新しい一時ファイルから置くか、パスの区切りや制御文字を弾くか）
 - Slack への投稿（S-21 の投稿、S-23 の Claude への依頼による投稿。宛先と本文を決めるのが Rust で、モデルの答えや外から来た本文だけで投稿されないか。リンクやメンションの混入）
 - メール本文の表示（CSP、iframe の sandbox、XSS）
-- Tauri のコマンドと capabilities、MCP サーバー（`cookapps-mcp`）が外から受け取る値の検証
+- Tauri のコマンドと capabilities、MCP サーバー（`tsunagiai-mcp`）が外から受け取る値の検証
 - 外部への通信の宛先と TLS
 - 依存の追加（`Cargo.toml`、`package.json`）
 

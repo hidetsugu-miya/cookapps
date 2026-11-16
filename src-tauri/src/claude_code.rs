@@ -2,7 +2,7 @@
 //! Claude Code runs in a folder of its own, `claude-code/` in the app config directory, which holds a launch script and the `--mcp-config` file. The script is written by the app in a fixed form
 //! (only paths the app decided are in it: nothing that comes from a mail, a message or a Todo), and it starts `claude --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {the file}` (the built-in tools stay on when the screen asks, as the database screen does).
 //! `manual` asks for every tool that writes, whatever `defaultMode` the owner's settings hold, and `--setting-sources user` leaves out the project and local settings of the shared folder, so an "always allow" chosen in one pane does not reach the others.
-//! The MCP config names `cookapps-mcp` next to the app's own executable (`Contents/MacOS/` in the bundle) and nothing else; the child is started as an argument array, with no shell of ours in between except `/bin/sh` running the script.
+//! The MCP config names `tsunagiai-mcp` next to the app's own executable (`Contents/MacOS/` in the bundle) and nothing else; the child is started as an argument array, with no shell of ours in between except `/bin/sh` running the script.
 //! A session is a process group of its own (the pseudo terminal makes the child a session leader): closing a pane, the end of the app, and a screen that no longer takes the output stop the whole group.
 //! What the terminal prints and the keys typed are only in the channel of the pane: no log line, no error text.
 
@@ -34,9 +34,9 @@ const FOLDER: &str = "claude-code";
 const MCP_FILE: &str = "mcp.json";
 const SCRIPT_FILE: &str = "start.sh";
 const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
-/// The name the MCP server has in Claude Code (`mcp__cookapps__...`), as in `.mcp.json` of the repository.
-const MCP_NAME: &str = "cookapps";
-const MCP_BINARY: &str = "cookapps-mcp";
+/// The name the MCP server has in Claude Code (`mcp__tsunagiai__...`), as in `.mcp.json` of the repository.
+const MCP_NAME: &str = "tsunagiai";
+const MCP_BINARY: &str = "tsunagiai-mcp";
 /// The characters one send of keys may carry (the screen sends at most half of it).
 const INPUT_LIMIT: usize = 100_000;
 /// The most cells a side of the terminal may have.
@@ -78,7 +78,7 @@ pub fn claude_code_dir(config: &Path) -> PathBuf {
     config.join(FOLDER)
 }
 
-/// The text of `mcp.json`: the one MCP server, `cookapps-mcp` at `mcp`.
+/// The text of `mcp.json`: the one MCP server, `tsunagiai-mcp` at `mcp`.
 fn mcp_config(mcp: &Path) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "mcpServers": { MCP_NAME: { "command": mcp.to_string_lossy(), "args": [] } }
@@ -116,7 +116,7 @@ fn launch_args(script: &Path, plugin_dir: Option<&Path>) -> Vec<String> {
     args
 }
 
-/// `cookapps-mcp` next to the executable `exe`: in the app bundle it is `Contents/MacOS/cookapps-mcp`.
+/// `tsunagiai-mcp` next to the executable `exe`: in the app bundle it is `Contents/MacOS/tsunagiai-mcp`.
 fn mcp_binary(exe: &Path) -> PathBuf {
     let name = if cfg!(windows) {
         format!("{MCP_BINARY}.exe")
@@ -126,7 +126,7 @@ fn mcp_binary(exe: &Path) -> PathBuf {
     exe.with_file_name(name)
 }
 
-/// `cookapps-mcp` for `exe`, or why there is none (a development build has it only after `cargo build --bin cookapps-mcp`).
+/// `tsunagiai-mcp` for `exe`, or why there is none (a development build has it only after `cargo build --bin tsunagiai-mcp`).
 fn checked_mcp_binary(exe: &Path) -> Result<PathBuf, String> {
     let path = mcp_binary(exe);
     if path.is_file() {
@@ -581,7 +581,7 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id`: its output and its end go through `channel`. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `cookapps-mcp` otherwise),
+/// Starts Claude Code in a pseudo terminal for the pane `id`: its output and its end go through `channel`. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
 /// and `skill` is a saved skill that it is given. A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 pub async fn claude_code_start(
@@ -671,15 +671,15 @@ mod tests {
     }
 
     #[test]
-    fn the_mcp_config_names_only_cookapps_mcp() {
+    fn the_mcp_config_names_only_tsunagiai_mcp() {
         let config: serde_json::Value = serde_json::from_str(&mcp_config(Path::new(
-            "/Applications/cookapps.app/Contents/MacOS/cookapps-mcp",
+            "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp",
         )))
         .unwrap();
         assert_eq!(
             config,
-            serde_json::json!({"mcpServers": {"cookapps": {
-                "command": "/Applications/cookapps.app/Contents/MacOS/cookapps-mcp",
+            serde_json::json!({"mcpServers": {"tsunagiai": {
+                "command": "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp",
                 "args": []
             }}})
         );
@@ -756,21 +756,21 @@ mod tests {
     fn the_mcp_server_is_next_to_the_executable() {
         assert_eq!(
             mcp_binary(Path::new(
-                "/Applications/cookapps.app/Contents/MacOS/cookapps"
+                "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai"
             )),
-            PathBuf::from("/Applications/cookapps.app/Contents/MacOS/cookapps-mcp")
+            PathBuf::from("/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp")
         );
     }
 
     #[test]
     fn a_missing_mcp_server_is_a_japanese_message_with_the_path() {
         let dir = temp_dir("no-mcp");
-        let exe = dir.join("cookapps");
+        let exe = dir.join("tsunagiai");
         let message = checked_mcp_binary(&exe).unwrap_err();
-        assert!(message.contains("cookapps-mcp が見つかりません"));
-        assert!(message.contains(&dir.join("cookapps-mcp").display().to_string()));
-        std::fs::write(dir.join("cookapps-mcp"), "").unwrap();
-        assert_eq!(checked_mcp_binary(&exe).unwrap(), dir.join("cookapps-mcp"));
+        assert!(message.contains("tsunagiai-mcp が見つかりません"));
+        assert!(message.contains(&dir.join("tsunagiai-mcp").display().to_string()));
+        std::fs::write(dir.join("tsunagiai-mcp"), "").unwrap();
+        assert_eq!(checked_mcp_binary(&exe).unwrap(), dir.join("tsunagiai-mcp"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -805,7 +805,7 @@ mod tests {
         let script = write_files(
             &config,
             Path::new("/bin/claude"),
-            Path::new("/app/cookapps-mcp"),
+            Path::new("/app/tsunagiai-mcp"),
             false,
         )
         .unwrap();
@@ -816,7 +816,7 @@ mod tests {
         let with_tools = write_files(
             &config,
             Path::new("/bin/claude"),
-            Path::new("/app/cookapps-mcp"),
+            Path::new("/app/tsunagiai-mcp"),
             true,
         )
         .unwrap();
@@ -829,7 +829,7 @@ mod tests {
             .unwrap()
             .contains("--tools ''"));
         let mcp = std::fs::read_to_string(config.join("claude-code/mcp.json")).unwrap();
-        assert!(mcp.contains("/app/cookapps-mcp"));
+        assert!(mcp.contains("/app/tsunagiai-mcp"));
         assert!(!config.join("claude-code/mcp.json.tmp").exists());
         std::fs::remove_dir_all(config).unwrap();
     }

@@ -15,13 +15,13 @@ Around the run it uses four more tools. `nightly-limit.sh` answers whether a run
 `plan-release.py apply` leaves out the closed and the fixed issues of a plan, and saves the plan it accepted, as `.claude/plan.json` of the main checkout (gitignored, written through a temporary file), which `next` reads.
 `clean-target.sh` keeps `src-tauri/target` from growing with the old output of cookapps itself.
 It runs every day at 21:00 and needs no argument.
-In the main checkout and in every worktree, it deletes what has nothing modified in the last 24 hours, or nothing newer than the `src-tauri/Cargo.toml` of that checkout, and nothing while cargo or rustc runs: the entries of `incremental/` in each profile, and the entries of cookapps itself (`cookapps-*`, `cookapps_lib-*`, `libcookapps_lib-*`, `cookapps_mcp-*`) in `deps/`, `build/` and `.fingerprint/`.
+In the main checkout and in every worktree, it deletes what has nothing modified in the last 24 hours, or nothing newer than the `src-tauri/Cargo.toml` of that checkout, and nothing while cargo or rustc runs: the entries of `incremental/` in each profile, and the entries of the app itself (`tsunagiai-*`, `tsunagiai_lib-*`, `libtsunagiai_lib-*`, `tsunagiai_mcp-*`, and the same names with `cookapps` for the output built before the rename) in `deps/`, `build/` and `.fingerprint/`.
 The second condition removes the output built before the last change of `Cargo.toml` without waiting 24 hours, because the version is fixed at `0.0.0` and `Cargo.toml` changes only with the dependencies or features, which change the hash of cookapps's own output, and nothing uses the old one again.
 The output of dependency crates stays.
 It also deletes the files of `.claude/ci/` and `.claude/e2e/` (the records and logs of `run-ci.sh` and `run-e2e.sh`) in the main checkout that are older than 30 days; `check-ci.sh` and `check-e2e.sh` read only the record of HEAD.
 It deletes the `logs/hooks-*.log` of the main checkout that are older than 30 days.
 It prints the size of each target before and after, and appends it to `.claude/nightly/clean-target-{date}.log` (deleted after 30 days).
-The launchd plists are `~/Library/LaunchAgents/jp.mysis.cookapps.ship.plist` (00:30, running `nightly.sh ship`, label `jp.mysis.cookapps.ship`) and `jp.mysis.cookapps.clean-target.plist` (21:00, running `clean-target.sh`), outside the repository. After a change to a plist, `launchctl bootout gui/$(id -u)/{label}` and `launchctl bootstrap gui/$(id -u) {plist}` load it again.
+The launchd plists are `~/Library/LaunchAgents/jp.mysis.tsunagiai.ship.plist` (00:30, running `nightly.sh ship`, label `jp.mysis.tsunagiai.ship`) and `jp.mysis.tsunagiai.clean-target.plist` (21:00, running `clean-target.sh`), outside the repository. After a change to a plist, `launchctl bootout gui/$(id -u)/{label}` and `launchctl bootstrap gui/$(id -u) {plist}` load it again.
 A gate that stops a command is a finding about the change, not an obstacle to route around.
 
 ```text

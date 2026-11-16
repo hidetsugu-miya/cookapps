@@ -90,7 +90,7 @@ describe("claude code pane", () => {
   });
 
   it("draws the message of a start that fails in the terminal and sends no key to it", async () => {
-    await boot({ inbox: inbox(), claude_code_start: rejects("cookapps-mcp が見つかりません（/app/cookapps-mcp）") });
+    await boot({ inbox: inbox(), claude_code_start: rejects("tsunagiai-mcp が見つかりません（/app/tsunagiai-mcp）") });
     await browser.execute((host) => {
       const el = document.createElement("div");
       el.id = host;
@@ -99,7 +99,7 @@ describe("claude code pane", () => {
     }, HOST);
     await show("pane-1");
     await waitForCalls("claude_code_start");
-    await shows("cookapps-mcp が見つかりません");
+    await shows("tsunagiai-mcp が見つかりません");
     const input = await mock("claude_code_input", null);
     await $(`#${HOST} .orca-term-box:not([hidden]) .xterm-screen`).click();
     await browser.keys(["1"]);
@@ -174,7 +174,7 @@ describe("claude code pane", () => {
   });
 
   it("starts again a pane whose start failed when it is shown again", async () => {
-    await boot({ inbox: inbox(), claude_code_start: rejects("cookapps-mcp が見つかりません（/app/cookapps-mcp）") });
+    await boot({ inbox: inbox(), claude_code_start: rejects("tsunagiai-mcp が見つかりません（/app/tsunagiai-mcp）") });
     await browser.execute((host) => {
       const el = document.createElement("div");
       el.id = host;
@@ -183,7 +183,7 @@ describe("claude code pane", () => {
     }, HOST);
     await show("pane-1");
     await waitForCalls("claude_code_start");
-    await shows("cookapps-mcp が見つかりません");
+    await shows("tsunagiai-mcp が見つかりません");
     await call("hideClaudeCode");
     await mock("claude_code_start", 1);
     await show("pane-1");

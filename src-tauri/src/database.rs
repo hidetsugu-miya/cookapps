@@ -5,7 +5,7 @@
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
 //! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
-//! `cookapps-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
+//! `tsunagiai-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod mysql;
@@ -272,7 +272,7 @@ pub fn save(
     view(passwords, saved)
 }
 
-/// `save` with no password and with the lock of the app's own save (D-8: `cookapps-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
+/// `save` with no password and with the lock of the app's own save (D-8: `tsunagiai-mcp` saves a connection and never sets its password). The lock covers this process only; the file is replaced whole through `write_atomic`, so the other process never reads a half written file.
 /// The saved password is kept only while the connection logs in as the saved one does (`same_login`); an edit of the user, the script, the host or the port deletes it first,
 /// so that a test of the connection never sends it to another place than the one it was saved for (D-2). The input is checked before the deletion, so a refused save deletes nothing.
 pub fn save_without_password(
@@ -407,7 +407,7 @@ enum TestWay {
 }
 
 /// The way a test of `typed` goes (D-2). An open connection holds the port of its script, so a test that started the script again would meet its own connection's script on that port.
-/// What is open is the session, not the saved file: `cookapps-mcp` may have saved another script, host or port since it was opened, and the saved file then says nothing of what listens.
+/// What is open is the session, not the saved file: `tsunagiai-mcp` may have saved another script, host or port since it was opened, and the saved file then says nothing of what listens.
 /// A typed connection with no script has no script to start, so it is tested as any other.
 fn test_way(opened: Option<&Login>, typed: &DatabaseProfile) -> Result<TestWay, String> {
     let Some(opened) = opened else {
@@ -1571,7 +1571,7 @@ mod tests {
         // Not open: the script is started as before.
         assert_eq!(test_way(None, &opened_with), Ok(TestWay::OwnScript));
         // Open, and the user, the script, the host or the port is not the open one's: the script would meet the open connection's.
-        // This includes a file that `cookapps-mcp` saved after the session was opened, with the pane reading it and the test going out as typed (#720): the typed login is the saved one, and not the open one.
+        // This includes a file that `tsunagiai-mcp` saved after the session was opened, with the pane reading it and the test going out as typed (#720): the typed login is the saved one, and not the open one.
         let moved: [fn(&mut DatabaseProfile); 4] = [
             |p| p.username = "other".to_owned(),
             |p| p.script = "exec other-forward".to_owned(),

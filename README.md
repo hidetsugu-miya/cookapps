@@ -84,7 +84,7 @@
 macOS（Apple Silicon）のターミナルで実行します。
 
 ```sh
-curl -fsSL https://github.com/hidetsugu-miya/cookapps/releases/latest/download/cookapps.app.tar.gz | tar xz -C /Applications
+curl -fsSL https://github.com/hidetsugu-miya/cookapps/releases/latest/download/tsunagiai.app.tar.gz | tar xz -C /Applications
 ```
 
 Apple の公証を受けていないので、ブラウザでダウンロードしたものは macOS に止められます。

@@ -2,7 +2,7 @@
 // Its header has the title and the buttons 接続をテスト, キャンセル and 保存; under it are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
 // Saving runs `save`; a refusal (the reason Rust gives, in Japanese) shows under the fields and the pane stays with what was typed. キャンセル and Escape close it.
 // "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers, or the error (with the last lines of the script's standard error), under the fields.
-// The icon at the right end of the header opens and closes the Claude Code pane at the right of the edit pane (A-36, `ts/claude-code.ts`; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through cookapps-mcp (D-8).
+// The icon at the right end of the header opens and closes the Claude Code pane at the right of the edit pane (A-36, `ts/claude-code.ts`; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through tsunagiai-mcp (D-8).
 // Pressing it again hides the pane and the process goes on; closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) ends the process. While the edit pane of a saved connection is open, the list is read at an interval, and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The interval stops when the edit pane is closed or the connection is gone from the list.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";

@@ -8,7 +8,7 @@
 //! and, once it was ready, when it ends: the connection is then closed. The error holds the last lines of the script's standard error.
 //! The script runs in a process group of its own, which is sent SIGTERM when the connection is closed and the app exits, and SIGKILL when it is still there after a few seconds.
 //!
-//! `start` takes the folder for the script file as a `&Path`, so that `cookapps-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
+//! `start` takes the folder for the script file as a `&Path`, so that `tsunagiai-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
 //! The decisions (the shebang, the lines kept, the words of an error) are pure functions.
 
 use std::{
@@ -149,7 +149,7 @@ fn in_use_text(host: &str, port: u16) -> String {
     format!("{host}:{port} は、スクリプトを実行する前から使われています。{IN_USE_TAIL}")
 }
 
-/// Whether `text` is the error of a port that was in use before the script was run (`cookapps-mcp` adds its own hint to it).
+/// Whether `text` is the error of a port that was in use before the script was run (`tsunagiai-mcp` adds its own hint to it).
 pub fn is_in_use_text(text: &str) -> bool {
     text.ends_with(IN_USE_TAIL)
 }
@@ -342,7 +342,7 @@ impl Script {
 }
 
 impl Drop for Script {
-    /// A `Script` that is dropped while its group may still run (the runtime ended before `supervise` could end it, as when `cookapps-mcp` ends while `db_test` waits) kills the group,
+    /// A `Script` that is dropped while its group may still run (the runtime ended before `supervise` could end it, as when `tsunagiai-mcp` ends while `db_test` waits) kills the group,
     /// because `kill_on_drop` reaches only the first process and a child of the script (a `session-manager-plugin`, for instance) would stay. After `supervise` has ended the group (`done` is set) nothing is sent, as the id may be another process's by then.
     fn drop(&mut self) {
         if self.pgid > 0 && self.done.borrow().is_none() {

@@ -53,7 +53,7 @@ Todo の要約プロンプトを編集すると、編集した指示が同じ場
 
 ### macOS の場合
 
-`/Applications` に `cookapps.app` として入れます。
+`/Applications` に `tsunagiai.app` として入れます。
 キーチェーンに Apple Development 証明書（Apple ID で作れる無料のもので足ります）が入っている前提です。
 
 ```sh
@@ -61,7 +61,7 @@ npm install
 scripts/install-app.sh
 ```
 
-スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/cookapps.app` に置きます。
+スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/tsunagiai.app` に置きます。
 cookapps が起動中のときは、終了してからやり直します。
 古い版はゴミ箱へ移します。
 署名の証明書は、キーチェーンの最初の Apple Development 証明書を使います。

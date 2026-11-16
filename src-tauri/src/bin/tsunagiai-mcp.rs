@@ -2,15 +2,15 @@
 
 use std::path::PathBuf;
 
-use cookapps_lib::{
+use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, transport::stdio, ServiceExt};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use tsunagiai_lib::{
     auth::Auth,
     calendar,
     database::{self, script::Scripts, DatabaseProfile, Keychain},
     gmail, identity,
 };
-use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, transport::stdio, ServiceExt};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 fn relogin(account: &str) -> String {
     format!("{account} は再ログインが必要です。cookapps アプリで再ログインしてください")

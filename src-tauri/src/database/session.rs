@@ -110,7 +110,7 @@ fn to_table((name, engine, rows, data, index): TableRow) -> DatabaseTable {
 }
 
 struct Session {
-    /// The login the session was opened with (not the saved file's, which `cookapps-mcp` may change meanwhile): what the script of the session listens for.
+    /// The login the session was opened with (not the saved file's, which `tsunagiai-mcp` may change meanwhile): what the script of the session listens for.
     login: Login,
     /// The script to end with the session; none when the connection goes straight to its host.
     script: Option<u64>,
