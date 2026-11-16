@@ -578,29 +578,41 @@ mod tests {
     async fn a_session_whose_script_has_ended_is_closed_and_told_with_the_end_of_the_script() {
         use super::super::script::{
             start,
-            support::{free_port, listen_later},
+            support::{free_port, listen_after},
             Timing,
         };
         let dir =
             std::env::temp_dir().join(format!("tsunagiai-session-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (up_port, down_port) = (free_port(), free_port());
-        let _up = listen_later(up_port);
+        let (up_marker, down_marker) = (dir.join("up"), dir.join("down"));
+        let _ = std::fs::remove_file(&up_marker);
+        let _ = std::fs::remove_file(&down_marker);
+        let _up = listen_after(up_port, up_marker.clone());
         let timing = Timing {
             ready: Duration::from_secs(10),
             grace: Duration::from_millis(300),
         };
         let scripts = Scripts::default();
-        let running = start(&dir, "127.0.0.1", up_port, "sleep 30", timing)
-            .await
-            .unwrap();
+        let running = start(
+            &dir,
+            "127.0.0.1",
+            up_port,
+            &format!("touch '{}'\nsleep 30", up_marker.display()),
+            timing,
+        )
+        .await
+        .unwrap();
         // Each listener comes up after its own script is run, so that the port is free when it is.
-        let _down = listen_later(down_port);
+        let _down = listen_after(down_port, down_marker.clone());
         let ending = start(
             &dir,
             "127.0.0.1",
             down_port,
-            "sleep 1\necho gone >&2\nexit 2",
+            &format!(
+                "touch '{}'\nsleep 1\necho gone >&2\nexit 2",
+                down_marker.display()
+            ),
             timing,
         )
         .await

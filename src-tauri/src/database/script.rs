@@ -503,10 +503,10 @@ impl Scripts {
     }
 }
 
-/// What the tests of the scripts and of the sessions share: a port that is free now, and a listener that comes up a little after the script is run, as a script's own does.
+/// What the tests of the scripts and of the sessions share: a port that is free now, and a listener that comes up after the script is run, as a script's own does.
 #[cfg(test)]
 pub(super) mod support {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{path::PathBuf, sync::mpsc, thread, time::Duration};
 
     /// A port that is free now (bound and let go at once).
     pub fn free_port() -> u16 {
@@ -514,16 +514,25 @@ pub(super) mod support {
         listener.local_addr().unwrap().port()
     }
 
-    /// Listens on `port` from 300 ms after the call until it is dropped.
+    /// Listens on `port` from when it is told to until it is dropped.
     pub struct Later {
         stop: Option<mpsc::Sender<()>>,
         thread: Option<thread::JoinHandle<()>>,
     }
 
-    pub fn listen_later(port: u16) -> Later {
+    /// Listens on `port` from when the file `marker` exists (the script makes it as its first line, so `start` has looked at the port already) until it is dropped.
+    pub fn listen_after(port: u16, marker: PathBuf) -> Later {
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(300));
+            // A drop of `Later` ends the wait: the channel is disconnected.
+            while !marker.exists() {
+                if !matches!(
+                    stopped.recv_timeout(Duration::from_millis(5)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    return;
+                }
+            }
             let _listener = std::net::TcpListener::bind(("127.0.0.1", port));
             let _ = stopped.recv();
         });
@@ -627,7 +636,7 @@ mod tests {
 
     #[cfg(unix)]
     mod running {
-        use super::support::{free_port, listen_later};
+        use super::support::{free_port, listen_after};
         use super::*;
 
         const HOST: &str = "127.0.0.1";
@@ -708,8 +717,8 @@ mod tests {
         async fn is_ready_when_the_port_answers_and_is_given_the_port_in_the_environment() {
             let dir = Dir::new("ready");
             let port = free_port();
-            let _listener = listen_later(port);
             let out = dir.file("port");
+            let _listener = listen_after(port, out.clone());
             let body = format!(
                 "echo \"${PORT_ENV} ${OLD_PORT_ENV}\" > '{}'\nsleep 30",
                 out.display()
@@ -740,8 +749,8 @@ mod tests {
         async fn runs_a_body_with_its_own_interpreter_line() {
             let dir = Dir::new("shebang");
             let port = free_port();
-            let _listener = listen_later(port);
             let out = dir.file("shell");
+            let _listener = listen_after(port, out.clone());
             let body = format!(
                 "#!/bin/bash\necho \"$BASH_VERSION\" > '{}'\nsleep 30",
                 out.display()
@@ -822,12 +831,13 @@ mod tests {
         async fn tells_that_it_ended_after_it_was_ready() {
             let dir = Dir::new("after");
             let port = free_port();
-            let _listener = listen_later(port);
+            let up = dir.file("up");
+            let _listener = listen_after(port, up.clone());
             let script = start(
                 &dir.0,
                 HOST,
                 port,
-                "sleep 1\necho oops >&2\nexit 3",
+                &format!("touch '{}'\nsleep 1\necho oops >&2\nexit 3", up.display()),
                 quick(10_000),
             )
             .await
@@ -852,8 +862,8 @@ mod tests {
         async fn sigkills_a_group_that_ignores_sigterm_after_the_grace() {
             let dir = Dir::new("stubborn");
             let port = free_port();
-            let _listener = listen_later(port);
             let pid_file = dir.file("pid");
+            let _listener = listen_after(port, pid_file.clone());
             let body = format!(
                 "trap '' TERM\necho $$ > '{}'\nwhile true; do sleep 0.1; done",
                 pid_file.display()
@@ -874,8 +884,8 @@ mod tests {
         fn a_script_dropped_after_its_runtime_ended_takes_its_children_with_it() {
             let dir = Dir::new("drop");
             let port = free_port();
-            let _listener = listen_later(port);
             let pid_file = dir.file("pid");
+            let _listener = listen_after(port, pid_file.clone());
             let body = format!("sleep 300 &\necho $! > '{}'\nwait", pid_file.display());
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let script = runtime
@@ -898,12 +908,14 @@ mod tests {
         async fn ends_a_script_with_sigterm_at_once() {
             let dir = Dir::new("term");
             let port = free_port();
-            let _listener = listen_later(port);
+            let up = dir.file("up");
+            let _listener = listen_after(port, up.clone());
             let timing = Timing {
                 ready: Duration::from_secs(10),
                 grace: Duration::from_secs(3),
             };
-            let script = start(&dir.0, HOST, port, "sleep 30", timing).await.unwrap();
+            let body = format!("touch '{}'\nsleep 30", up.display());
+            let script = start(&dir.0, HOST, port, &body, timing).await.unwrap();
             let started = Instant::now();
             script.stop().await;
             assert!(
@@ -929,7 +941,7 @@ mod tests {
             assert!(!ran.exists(), "the script is not run");
             // The same port, once it is free, is taken by the script.
             drop(listener);
-            let _listener = listen_later(port);
+            let _listener = listen_after(port, ran);
             let script = start(&dir.0, HOST, port, &body, quick(10_000))
                 .await
                 .unwrap();
@@ -955,10 +967,13 @@ mod tests {
 
         #[tokio::test]
         async fn scripts_open_with_the_host_and_the_port_of_the_connection_and_close_by_id() {
+            let dir = Dir::new("open");
             let port = free_port();
-            let _listener = listen_later(port);
+            let up = dir.file("up");
+            let _listener = listen_after(port, up.clone());
             let scripts = Scripts::default();
-            let id = scripts.open(HOST, port, "sleep 30").await.unwrap();
+            let body = format!("touch '{}'\nsleep 30", up.display());
+            let id = scripts.open(HOST, port, &body).await.unwrap();
             assert_eq!(scripts.exited(id).await, None);
             scripts.close(id).await;
             assert!(scripts.open.lock().await.is_empty());
@@ -968,9 +983,11 @@ mod tests {
         async fn scripts_open_close_and_tell_the_end_by_id() {
             let dir = Dir::new("scripts");
             let port = free_port();
-            let _listener = listen_later(port);
+            let up = dir.file("up");
+            let _listener = listen_after(port, up.clone());
             let scripts = Scripts::default();
-            let script = start(&dir.0, HOST, port, "sleep 30", quick(10_000))
+            let body = format!("touch '{}'\nsleep 30", up.display());
+            let script = start(&dir.0, HOST, port, &body, quick(10_000))
                 .await
                 .unwrap();
             scripts.open.lock().await.insert(5, script);
