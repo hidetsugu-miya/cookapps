@@ -57,13 +57,13 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 
 // Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
-// `pty` is what a pty is started with: whether Claude Code keeps its own tools, and the saved skill it is given.
+// `pty` is what a pty is started with: whether Claude Code keeps its own tools, and the saved skill it is given; `onEnd` is called when its process ends by itself (not when it could not start).
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
   path: string;
   environment: string | null;
-  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null };
+  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; onEnd?: () => void };
 }
 
 // A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
@@ -525,7 +525,9 @@ function startPty(instance: Instance) {
   const channel = new window.__TAURI__.core.Channel<ClaudeCodeEvent>();
   instance.channel = channel;
   channel.onmessage = (event) => {
-    if (instance.channel === channel) drawPty(instance, event);
+    if (instance.channel !== channel) return;
+    drawPty(instance, event);
+    if (event.kind === "ended") instance.source.pty?.onEnd?.();
   };
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };

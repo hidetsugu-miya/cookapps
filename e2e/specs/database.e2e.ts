@@ -347,26 +347,28 @@ describe("database: edit", () => {
   });
 });
 
-describe("database: edit pane, Claude Code and reload", () => {
+describe("database: edit pane, the Claude tab and reload", () => {
   const toggle = () => $("#database-edit-terminal");
   const fast = timers({ databaseProfiles: 250 });
-  const pane = () => $("#database-claude");
-  // The commands of the Orca terminals (D-7) and of the choice of a worktree, none of which the Claude Code pane calls.
+  const pane = () => $("#database-terminal");
+  const tab = () => $("#database-claude-tab");
+  const tabClose = () => $('#database-terminal-tabs [role="presentation"]:first-child .icon-btn');
+  // The commands of the Orca terminals (D-7) and of the choice of a worktree, none of which the Claude tab calls.
   const orcaCommands = ["orca_terminal_create", "orca_stream_terminal", "orca_terminal_read", "orca_stream_input"];
   const noOrca = async () => {
     for (const command of orcaCommands) expect(await callsOf(command)).toEqual([]);
     await expect($('.pop[role="dialog"]')).not.toExist();
   };
 
-  it("has an icon button with no text at the right end of the header of the edit pane, and the pane closed with no process", async () => {
+  it("has an icon button with no text at the right end of the header of the edit pane, and the pane at the right closed with no process", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-label", "Claude Code");
+    await expect(toggle()).toHaveAttribute("aria-label", "ターミナル");
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
     expect((await toggle().getText()).trim()).toBe("");
     await expect(toggle().$("svg")).toExist();
     await expect(pane()).not.toBeDisplayed();
-    await expect($("#database-claude-split")).not.toBeDisplayed();
+    await expect($("#database-terminal-split")).not.toBeDisplayed();
     expect(await callsOf("claude_code_start")).toEqual([]);
     const atEnd = await browser.execute(() => {
       const head = document.querySelector(".database-edit-head")!.getBoundingClientRect();
@@ -377,103 +379,126 @@ describe("database: edit pane, Claude Code and reload", () => {
     expect(atEnd.gap).toBeLessThanOrEqual(32);
   });
 
-  it("opens the Claude Code pane at the right of the edit pane, started with this screen's id and the built-in tools, and no Orca command or worktree choice", async () => {
+  it("opens the pane at the right of the edit pane with the Claude tab first and selected, started with the built-in tools, and no Orca command or worktree choice", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
     await toggle().click();
     await expect(toggle()).toHaveAttribute("aria-pressed", "true");
     await expect(pane()).toBeDisplayed();
-    await expect($("#database-claude-split")).toBeDisplayed();
+    await expect($("#database-terminal-split")).toBeDisplayed();
     await expect($("#database-form")).toBeDisplayed();
-    await expect($("#database-terminal")).not.toBeDisplayed();
     const order = await browser.execute(() => {
       const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
-      return left("database-edit") < left("database-claude-split") && left("database-claude-split") < left("database-claude");
+      return left("database-edit") < left("database-terminal-split") && left("database-terminal-split") < left("database-terminal");
     });
     expect(order).toBe(true);
+    expect(await textsOf('#database-terminal-tabs [role="tab"]')).toEqual(["Claude"]);
+    await expect(tab()).toHaveAttribute("aria-selected", "true");
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "database-edit", builtinTools: true, skill: null });
-    await expect($("#database-claude-body.claude-code-pane")).toBeDisplayed();
+    expect(start).toMatchObject({ id: "database-claude", builtinTools: true, skill: null });
+    await expect($("#database-claude-term.claude-code-pane")).toBeDisplayed();
     await noOrca();
   });
 
-  it("shows the pane again with the next press after Claude Code ended, and starts it again", async () => {
+  it("opens the same pane from the icon of the work pane, with the icons in step, and starts the process once", async () => {
+    await openDatabase();
+    await $("#database-terminal-toggle").click();
+    await expect(tab()).toBeDisplayed();
+    await waitForCalls("claude_code_start");
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await toggle().click();
+    await expect(pane()).not.toBeDisplayed();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await $("#database-form").$("button=キャンセル").click();
+    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "false");
+    await $("#database-terminal-toggle").click();
+    await expect(pane()).toBeDisplayed();
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+  });
+
+  it("closes the pane with a second press and shows it again with a third, starting the process once and ending nothing", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-terminal-split")).not.toBeDisplayed();
+    await expect($("#database-form")).toBeDisplayed();
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await expect(pane()).toBeDisplayed();
+    await expect(tab()).toHaveAttribute("aria-selected", "true");
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+    await noOrca();
+  });
+
+  it("keeps the process and the pane when the edit pane is closed, and keeps the process when the screen is left", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#database-form").$("button=キャンセル").click();
+    await expect($("#database-pane")).toBeDisplayed();
+    await expect(pane()).toBeDisplayed();
+    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
+    await $("#nav-mail").click();
+    await $("#nav-database").click();
+    await expect(pane()).toBeDisplayed();
+    await expect(tab()).toHaveAttribute("aria-selected", "true");
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await browser.pause(300);
+    expect(await callsOf(close)).toEqual([]);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+  });
+
+  it("drops the Claude tab and closes the pane when the process ends, and starts it again when the pane is opened", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
     await toggle().click();
     await waitForCalls("claude_code_start");
     await sendClaudeCode({ kind: "output", data: "old screen" });
     await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
-    await toggle().click();
+    await expect(tab()).not.toExist();
     await expect(pane()).not.toBeDisplayed();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "false");
     await toggle().click();
-    await expect(pane()).toBeDisplayed();
+    await expect(tab()).toBeDisplayed();
     expect((await waitForCalls("claude_code_start", 2)).length).toBe(2);
     await noOrca();
   });
 
-  it("hides the pane with a second press and shows it again with a third, starting the process once and ending nothing", async () => {
+  it("drops the Claude tab with its close button, ends the process, and closes the pane when no other tab is left", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
     await toggle().click();
     await waitForCalls("claude_code_start");
     const close = await mock("claude_code_close", null);
-    await toggle().click();
+    await expect(tabClose()).toHaveAttribute("aria-label", "閉じる");
+    await tabClose().click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-claude", launch: 1 }]);
+    await expect(tab()).not.toExist();
+    await expect(pane()).not.toBeDisplayed();
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await expect(pane()).not.toBeDisplayed();
-    await expect($("#database-claude-split")).not.toBeDisplayed();
-    await expect($("#database-form")).toBeDisplayed();
     await toggle().click();
-    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
-    await expect(pane()).toBeDisplayed();
-    expect((await callsOf("claude_code_start")).length).toBe(1);
-    expect(await callsOf(close)).toEqual([]);
-    await noOrca();
+    expect((await waitForCalls("claude_code_start", 2)).length).toBe(2);
   });
 
-  it("ends the process when the edit pane is closed, and the next edit pane starts with the pane closed", async () => {
+  it("keeps the Claude tab and the message of a start that failed", async () => {
     await openDatabase();
-    await pickFromMenu("p1", 1);
-    await toggle().click();
-    await waitForCalls("claude_code_start");
-    const close = await mock("claude_code_close", null);
-    await $("#database-form").$("button=キャンセル").click();
-    expect(await waitForCalls(close)).toEqual([{ id: "database-edit", launch: 1 }]);
-    await expect(pane()).not.toBeDisplayed();
-    await expect($("#database-claude-split")).not.toBeDisplayed();
-    await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await expect(pane()).not.toBeDisplayed();
-  });
-
-  it("ends the process when the screen is left", async () => {
-    await openDatabase();
-    await pickFromMenu("p1", 1);
-    await toggle().click();
-    await waitForCalls("claude_code_start");
-    const close = await mock("claude_code_close", null);
-    await $("#nav-mail").click();
-    expect(await waitForCalls(close)).toEqual([{ id: "database-edit", launch: 1 }]);
-    await $("#nav-database").click();
-    await expect($("#database-pane")).toBeDisplayed();
-    await expect(pane()).not.toBeDisplayed();
-  });
-
-  it("leaves the terminal pane of the work pane (D-7) alone: its icon does not follow, and it does not start Claude Code", async () => {
-    await openDatabase();
+    await mock("claude_code_start", rejects("Claude Code が見つかりません。入れてから、もう一度試してください"));
     await $("#database-terminal-toggle").click();
-    await expect($("#database-terminal")).toBeDisplayed();
-    await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await expect(pane()).not.toBeDisplayed();
-    await expect($("#database-terminal")).toBeDisplayed();
-    await toggle().click();
+    await waitForCalls("claude_code_start");
+    await browser.waitUntil(async () => (await $("#database-claude-term .xterm-rows").getText()).includes("Claude Code が見つかりません"), { timeoutMsg: "the message of the failed start was never drawn" });
+    await expect(tab()).toBeDisplayed();
     await expect(pane()).toBeDisplayed();
-    await toggle().click();
-    await expect($("#database-terminal")).toBeDisplayed();
-    await $("#database-form").$("button=キャンセル").click();
-    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
-    expect((await callsOf("claude_code_start")).length).toBe(1);
   });
 
   it("takes what was saved elsewhere into the fields that were not changed by hand, and leaves the ones that were", async () => {
@@ -2108,7 +2133,7 @@ describe("database: terminal pane", () => {
     expect(atEnd.gap).toBeLessThanOrEqual(32);
   });
 
-  it("opens the pane at the right of the work pane with the divider between them, and closes it with a second press, calling nothing", async () => {
+  it("opens the pane at the right of the work pane with the divider between them, and closes it with a second press, reading no connection", async () => {
     await openDatabase();
     const before = await callsOf("database_profiles");
     await toggle().click();
@@ -2121,8 +2146,9 @@ describe("database: terminal pane", () => {
       return left("database-pane") < left("database-terminal-split") && left("database-terminal-split") < left("database-terminal");
     });
     expect(order).toBe(true);
-    expect(await count("#database-terminal-body > *")).toBe(0);
-    expect((await $("#database-terminal-body").getText()).trim()).toBe("");
+    // The pane starts Claude Code: the Claude tab is the only tab, and its box the only child of the body.
+    expect(await textsOf('#database-terminal-tabs [role="tab"]')).toEqual(["Claude"]);
+    expect(await count("#database-terminal-body > *")).toBe(1);
     await toggle().click();
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
     await expect($("#database-terminal")).not.toBeDisplayed();
@@ -2196,7 +2222,9 @@ describe("database: terminal pane, terminals", () => {
     await plus().click();
     await $(`.orca-dest-pop button[data-path="${path}"]`).click();
   };
-  const tabs = () => textsOf('#database-terminal-tabs [role="tab"]');
+  // The tabs of the terminals: the fixed Claude tab, the first of the strip, is left out.
+  const termTab = '#database-terminal-tabs [role="tab"]:not(#database-claude-tab)';
+  const tabs = () => textsOf(termTab);
   const screenText = () => $(".database-terminal-term .xterm-rows").getText();
   const waitScreen = (text: string) => browser.waitUntil(async () => (await screenText()).includes(text), { timeoutMsg: `the terminal never showed "${text}"` });
   // The terminal opened in example-api, and mirrored.
@@ -2209,15 +2237,15 @@ describe("database: terminal pane, terminals", () => {
     return create;
   }
 
-  it("has a plus with no text after an empty strip of tabs, and an empty body", async () => {
+  it("has a plus with no text after a strip that holds the Claude tab only, and a body that holds its box only", async () => {
     await openPane();
     await expect(plus()).toHaveAttribute("aria-label", "ターミナルを開く");
     await expect(plus()).toHaveAttribute("aria-haspopup", "dialog");
     expect((await plus().getText()).trim()).toBe("");
     await expect(plus().$("svg")).toExist();
     await expect($("#database-terminal-tabs")).toHaveAttribute("role", "tablist");
-    expect(await count("#database-terminal-tabs > *")).toBe(0);
-    expect(await count("#database-terminal-body > *")).toBe(0);
+    expect(await count("#database-terminal-tabs > *")).toBe(1);
+    expect(await count("#database-terminal-body > *")).toBe(1);
     const order = await browser.execute(() => document.getElementById("database-terminal-tabs")!.getBoundingClientRect().left < document.getElementById("database-terminal-plus")!.getBoundingClientRect().left);
     expect(order).toBe(true);
   });
@@ -2232,14 +2260,15 @@ describe("database: terminal pane, terminals", () => {
     await browser.keys("Escape");
     await expect($(".orca-dest-pop")).not.toExist();
     expect(await callsOf(create)).toEqual([]);
-    expect(await count("#database-terminal-body > *")).toBe(0);
+    expect(await count("#database-terminal-body > *")).toBe(1);
   });
 
   it("opens a plain terminal in the worktree picked, with its tab, and draws its screen by the mirror", async () => {
     const create = await openTerminal();
     expect(await callsOf(create)).toEqual([{ path: apiPath, environment: null }]);
     expect(await tabs()).toEqual(["example-api ・ main"]);
-    await expect($('#database-terminal-tabs [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($(termTab)).toHaveAttribute("aria-selected", "true");
+    await expect($("#database-claude-tab")).toHaveAttribute("aria-selected", "false");
     expect(await count("#database-terminal-body > .database-terminal-term")).toBe(1);
     expect(await count("#database-terminal-body > .pending")).toBe(0);
     expect((await callsOf("orca_terminal_read"))[0]).toEqual({ handle: zsh });
@@ -2290,9 +2319,10 @@ describe("database: terminal pane, terminals", () => {
   it("forgets the terminal, with its tab and its reads, when the list no longer holds it", async () => {
     await openTerminal();
     await mock("orca_overview", unlisted());
-    await waitForCount("#database-terminal-tabs > *", 0);
+    await waitForCount("#database-terminal-tabs > *", 1);
     await waitForCount(".database-terminal-term", 0);
-    expect(await count("#database-terminal-body > *")).toBe(0);
+    expect(await count("#database-terminal-body > *")).toBe(1);
+    await expect($("#database-claude-tab")).toHaveAttribute("aria-selected", "true");
     const read = await mock("orca_terminal_read", ["$"]);
     await browser.pause(400);
     expect(await callsOf(read)).toEqual([]);
@@ -2303,7 +2333,7 @@ describe("database: terminal pane, terminals", () => {
     const read = await mock("orca_terminal_read", ["$ late"]);
     await mock("orca_terminal_create", created);
     await pick(apiPath);
-    await expect($('#database-terminal-tabs [role="tab"]')).toExist();
+    await expect($(termTab)).toExist();
     await browser.pause(400);
     expect(await callsOf(read)).toEqual([]);
     await mock("orca_overview", listed());
@@ -2342,7 +2372,7 @@ describe("database: terminal pane, terminals", () => {
     });
     const watches = () => browser.execute(() => (window as unknown as { __watches: number }).__watches);
     await release(create, created);
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
     const overview = await mock("orca_overview", listed());
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     await browser.pause(600);
@@ -2359,9 +2389,10 @@ describe("database: terminal pane, terminals", () => {
   const app = "term_example-app_zsh";
   const appPath = "/work/example-app";
   const bothListed = () => orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-api", "zsh"), orcaTerminal("example-app", "zsh")] });
-  const tabButton = (n: number) => $(`#database-terminal-tabs [role="presentation"]:nth-child(${n}) [role="tab"]`);
-  const closeButton = (n: number) => $(`#database-terminal-tabs [role="presentation"]:nth-child(${n}) .icon-btn`);
-  const selection = () => browser.execute(() => [...document.querySelectorAll('#database-terminal-tabs [role="tab"]')].map((e) => e.getAttribute("aria-selected")));
+  // The Claude tab is the first of the strip, so the n-th terminal tab is the (n + 1)-th child.
+  const tabButton = (n: number) => $(`#database-terminal-tabs [role="presentation"]:nth-child(${n + 1}) [role="tab"]`);
+  const closeButton = (n: number) => $(`#database-terminal-tabs [role="presentation"]:nth-child(${n + 1}) .icon-btn`);
+  const selection = () => browser.execute(() => [...document.querySelectorAll('#database-terminal-tabs [role="tab"]:not(#database-claude-tab)')].map((e) => e.getAttribute("aria-selected")));
   const readHandles = async () => [...new Set(((await callsOf("orca_terminal_read")) as { handle: string }[]).map((c) => c.handle))];
   // The two terminals, example-api first and example-app second (selected), mirrored.
   async function openTwo(list = bothListed()) {
@@ -2372,7 +2403,7 @@ describe("database: terminal pane, terminals", () => {
     await waitScreen("$ pwd");
     await mock("orca_terminal_create", { paneKey: null, handle: app });
     await pick(appPath);
-    await waitForCount('#database-terminal-tabs [role="tab"]', 2);
+    await waitForCount(termTab, 2);
   }
 
   it("gives a second terminal a second tab that is selected, and keeps the first", async () => {
@@ -2425,7 +2456,7 @@ describe("database: terminal pane, terminals", () => {
     await waitScreen("$ pwd");
     await mock("orca_terminal_create", { paneKey: null, handle: app });
     await pick(appPath);
-    await waitForCount('#database-terminal-tabs [role="tab"]', 2);
+    await waitForCount(termTab, 2);
     await browser.pause(400);
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     await browser.pause(600);
@@ -2449,7 +2480,7 @@ describe("database: terminal pane, terminals", () => {
     const close = await mock("orca_close", null);
     await closeButton(1).click();
     expect(await waitForCalls(close)).toEqual([{ handle: zsh, environment: null }]);
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
     expect(await tabs()).toEqual(["example-app ・ feat/a"]);
     expect(await selection()).toEqual(["true"]);
     await mock("orca_terminal_read", ["$ pwd"]);
@@ -2457,19 +2488,21 @@ describe("database: terminal pane, terminals", () => {
     expect(await readHandles()).toEqual([app]);
   });
 
-  it("selects the tab before the one closed when the last tab is closed, and empties the pane when none is left", async () => {
+  it("selects the tab before the one closed when the last tab is closed, and selects the Claude tab when no terminal is left", async () => {
     await openTwo();
     const close = await mock("orca_close", null);
     await closeButton(2).click();
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
     expect(await tabs()).toEqual(["example-api ・ main"]);
     expect(await selection()).toEqual(["true"]);
     await browser.waitUntil(async () => ((await callsOf("orca_terminal_read")) as { handle: string }[]).at(-1)?.handle === zsh, { timeoutMsg: "the first terminal was not shown again" });
     await closeButton(1).click();
     expect((await waitForCalls(close, 2)).map((c) => (c as { handle: string }).handle)).toEqual([app, zsh]);
-    await waitForCount("#database-terminal-tabs > *", 0);
+    await waitForCount("#database-terminal-tabs > *", 1);
     await waitForCount(".database-terminal-term", 0);
-    expect(await count("#database-terminal-body > *")).toBe(0);
+    expect(await count("#database-terminal-body > *")).toBe(1);
+    await expect($("#database-claude-tab")).toHaveAttribute("aria-selected", "true");
+    await expect($("#database-claude-term")).toBeDisplayed();
     const read = await mock("orca_terminal_read", ["$"]);
     await browser.pause(600);
     expect(await callsOf(read)).toEqual([]);
@@ -2480,7 +2513,7 @@ describe("database: terminal pane, terminals", () => {
     await tabButton(1).click();
     await mock("orca_close", null);
     await closeButton(1).click();
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
     expect(await tabs()).toEqual(["example-app ・ feat/a"]);
     expect(await selection()).toEqual(["true"]);
   });
@@ -2495,7 +2528,7 @@ describe("database: terminal pane, terminals", () => {
     const close = await mock("orca_close", null);
     await closeButton(1).click();
     expect(await waitForCalls(close)).toEqual([{ handle: zsh, environment: "Studio" }]);
-    await waitForCount("#database-terminal-tabs > *", 0);
+    await waitForCount("#database-terminal-tabs > *", 1);
   });
 
   it("keeps the close button off while the close is on its way, and drops the tab when Orca has closed it", async () => {
@@ -2505,9 +2538,9 @@ describe("database: terminal pane, terminals", () => {
     await waitForCalls(close);
     await expect(closeButton(1)).toBeDisabled();
     await expect(closeButton(2)).toBeEnabled();
-    expect(await count('#database-terminal-tabs [role="tab"]')).toBe(2);
+    expect(await count(termTab)).toBe(2);
     await release(close, null);
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
   });
 
   it("keeps the tab and says Rust's message when the close fails, reads the list again, and clears the notice at the next press", async () => {
@@ -2522,19 +2555,78 @@ describe("database: terminal pane, terminals", () => {
     await expect(closeButton(1)).toBeEnabled();
     await mock("orca_close", null);
     await closeButton(1).click();
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
     expect(await count("#database-terminal-body > .pending")).toBe(0);
   });
 
   it("forgets a terminal that Orca closed, whether or not its tab is selected, and keeps the other with its reads", async () => {
     await openTwo();
     await mock("orca_overview", orcaOverview([], worktreesOf(), { terminals: [orcaTerminal("example-app", "zsh")] }));
-    await waitForCount('#database-terminal-tabs [role="tab"]', 1);
+    await waitForCount(termTab, 1);
     expect(await tabs()).toEqual(["example-app ・ feat/a"]);
     expect(await selection()).toEqual(["true"]);
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     expect(((await waitForCalls(read))[0] as { handle: string }).handle).toBe(app);
     expect(await count(".database-terminal-term")).toBe(1);
+  });
+
+  it("shows the Claude tab first, selects the terminal that is opened, and shows the Claude box again when its tab is pressed", async () => {
+    await openTerminal();
+    expect(await textsOf('#database-terminal-tabs [role="tab"]')).toEqual(["Claude", "example-api ・ main"]);
+    await expect($("#database-claude-term")).not.toBeDisplayed();
+    await expect($(".database-terminal-term")).toBeDisplayed();
+    await $("#database-claude-tab").click();
+    await expect($("#database-claude-tab")).toHaveAttribute("aria-selected", "true");
+    expect(await selection()).toEqual(["false"]);
+    await expect($("#database-claude-term")).toBeDisplayed();
+    await expect($(".database-terminal-term")).not.toBeDisplayed();
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    await tabButton(1).click();
+    expect(await selection()).toEqual(["true"]);
+    await expect($("#database-claude-term")).not.toBeDisplayed();
+  });
+
+  it("drops the Claude tab with its close button and keeps the pane and the terminal, which is selected", async () => {
+    await openTerminal();
+    await $("#database-claude-tab").click();
+    const close = await mock("claude_code_close", null);
+    await closeButton(0).click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-claude", launch: 1 }]);
+    await expect($("#database-claude-tab")).not.toExist();
+    await expect($("#database-terminal")).toBeDisplayed();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    expect(await tabs()).toEqual(["example-api ・ main"]);
+    expect(await selection()).toEqual(["true"]);
+    await mock("orca_terminal_read", ["$ pwd"]);
+    await waitScreen("$ pwd");
+  });
+
+  it("drops the Claude tab when its process ends, keeps the pane while a terminal is open, and starts Claude Code again when the pane is opened after the terminals are gone", async () => {
+    await openTerminal();
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await expect($("#database-claude-tab")).not.toExist();
+    await expect($("#database-terminal")).toBeDisplayed();
+    expect(await tabs()).toEqual(["example-api ・ main"]);
+    await toggle().click();
+    await toggle().click();
+    expect((await waitForCalls("claude_code_start", 2)).length).toBe(2);
+    await expect($("#database-claude-tab")).toBeDisplayed();
+  });
+
+  it("keeps the process of Claude Code when the pane is closed and when another screen is shown", async () => {
+    await openPane();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await toggle().click();
+    await expect($("#database-terminal")).not.toBeDisplayed();
+    await toggle().click();
+    await $("#nav-mail").click();
+    await browser.pause(400);
+    await $("#nav-database").click();
+    await expect($("#database-claude-tab")).toBeDisplayed();
+    await expect($("#database-claude-term")).toBeDisplayed();
+    expect(await callsOf(close)).toEqual([]);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
   });
 
   it("says in the pane that Orca is missing, and opens no dialog", async () => {
