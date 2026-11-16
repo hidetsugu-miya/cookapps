@@ -506,12 +506,55 @@ impl Scripts {
 /// What the tests of the scripts and of the sessions share: a port that is free now, and a listener that comes up after the script is run, as a script's own does.
 #[cfg(test)]
 pub(super) mod support {
-    use std::{path::PathBuf, sync::mpsc, thread, time::Duration};
+    use std::{
+        path::PathBuf,
+        sync::{
+            atomic::{AtomicU16, Ordering},
+            mpsc, OnceLock,
+        },
+        thread,
+        time::Duration,
+    };
 
-    /// A port that is free now (bound and let go at once).
+    /// The ports of `free_port`: 10000 to 29999, in `WINDOWS` windows of `WINDOW` ports.
+    const FIRST_PORT: u16 = 10_000;
+    const WINDOW: u16 = 100;
+    const WINDOWS: u32 = 200;
+
+    /// A port that nothing answers on now, outside the range the OS gives to outgoing connections (49152 and up on macOS, 32768 and up on Linux).
+    /// It is never bound, even for an instant: a script that another test starts in that instant is forked with the listener's file and holds it until its `exec`, and `start` of this test then finds the port answering before its script is run.
+    /// The tests of the process take the ports one after another, so no two of them have the same one, and the process has a window of `WINDOW` ports that no other test process has (`window`).
     pub fn free_port() -> u16 {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        listener.local_addr().unwrap().port()
+        static NEXT: AtomicU16 = AtomicU16::new(0);
+        let (window, _) = window();
+        loop {
+            let port = FIRST_PORT + window * WINDOW + NEXT.fetch_add(1, Ordering::Relaxed) % WINDOW;
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            if std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_err() {
+                return port;
+            }
+        }
+    }
+
+    /// The window of ports of this process: the first of the `WINDOWS` whose file in the temporary folder it can lock, from the one its id gives. The lock is kept (with the file) until the process ends.
+    fn window() -> &'static (u16, std::fs::File) {
+        static WINDOW_OF_PROCESS: OnceLock<(u16, std::fs::File)> = OnceLock::new();
+        WINDOW_OF_PROCESS.get_or_init(|| {
+            let first = std::process::id() % WINDOWS;
+            (0..WINDOWS)
+                .find_map(|step| {
+                    let window = u16::try_from((first + step) % WINDOWS).unwrap();
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(false)
+                        .open(std::env::temp_dir().join(format!("tsunagiai-test-ports-{window}")))
+                        .ok()?;
+                    file.try_lock().ok()?;
+                    Some((window, file))
+                })
+                .expect("a window of ports that no other test process has")
+        })
     }
 
     /// Listens on `port` from when it is told to until it is dropped.
@@ -940,7 +983,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(300)).await;
             assert!(!ran.exists(), "the script is not run");
             // The same port, once it is free, is taken by the script.
+            // A script that another test forks at the moment of the drop holds the listener's file until its `exec`: the port is free when nothing answers.
             drop(listener);
+            let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+            for _ in 0..500 {
+                if std::net::TcpStream::connect(addr).is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             let _listener = listen_after(port, ran);
             let script = start(&dir.0, HOST, port, &body, quick(10_000))
                 .await
