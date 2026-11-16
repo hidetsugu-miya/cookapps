@@ -1,6 +1,6 @@
 ---
 name: harness-scout
-description: "つなぎあいの開発の仕組み（hook、skill とそれが動かす .claude/tools/、agent）の改善候補を探す役。記述を今のコードと要件に突き合わせ、直近 7 日の hook のログと夜間ログ、直近の引き継ぎ Discussion から、止まったゲート、長引いたレビュー、繰り返された指示を拾い、根拠付きの候補を最大 5 件返す。編集しない。improvement-proposal と ship の夜の実行の手順の中で起動する。"
+description: "つなぎAIの開発の仕組み（hook、skill とそれが動かす .claude/tools/、agent）の改善候補を探す役。記述を今のコードと要件に突き合わせ、直近 7 日の hook のログと夜間ログ、直近の引き継ぎ Discussion から、止まったゲート、長引いたレビュー、繰り返された指示を拾い、根拠付きの候補を最大 5 件返す。編集しない。improvement-proposal と ship の夜の実行の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---

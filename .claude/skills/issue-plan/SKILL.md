@@ -1,6 +1,6 @@
 ---
 name: issue-plan
-description: Creates or updates a つなぎあい issue, splits a point:5 or point:8 issue into parts under a milestone named for the feature, and orders the open issues by how they relate. Use whenever an issue is created, when a needs:owner decision is settled, and on 「issue にして」「並べ直して」, instead of running gh issue create alone.
+description: Creates or updates a つなぎAI issue, splits a point:5 or point:8 issue into parts under a milestone named for the feature, and orders the open issues by how they relate. Use whenever an issue is created, when a needs:owner decision is settled, and on 「issue にして」「並べ直して」, instead of running gh issue create alone.
 ---
 
 # issue-plan

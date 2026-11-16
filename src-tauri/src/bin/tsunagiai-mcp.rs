@@ -13,7 +13,7 @@ use tsunagiai_lib::{
 };
 
 fn relogin(account: &str) -> String {
-    format!("{account} は再ログインが必要です。つなぎあいアプリで再ログインしてください")
+    format!("{account} は再ログインが必要です。つなぎAIアプリで再ログインしてください")
 }
 
 fn json(value: &impl Serialize) -> Result<String, String> {
@@ -84,7 +84,7 @@ struct DbTestArgs {
 /// The error of a port in use before the script, with the way out that only the app can be told of: `db_test` cannot know that tsunagiai holds the port with its own open connection (D-8).
 fn with_open_hint(error: String) -> String {
     if database::script::is_in_use_text(&error) {
-        format!("{error}。つなぎあいでこの接続を開いているときは、切断してからテストしてください")
+        format!("{error}。つなぎAIでこの接続を開いているときは、切断してからテストしてください")
     } else {
         error
     }

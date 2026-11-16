@@ -13,7 +13,7 @@
       "csp": "default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self'"
     },
     "windows": [
-      { "title": "つなぎあい", "width": 1200, "height": 820, "dragDropEnabled": false, "titleBarStyle": "Overlay", "hiddenTitle": true, "trafficLightPosition": { "x": 9, "y": 20 } }
+      { "title": "つなぎAI", "width": 1200, "height": 820, "dragDropEnabled": false, "titleBarStyle": "Overlay", "hiddenTitle": true, "trafficLightPosition": { "x": 9, "y": 20 } }
     ]
   },
   "plugins": {
@@ -25,6 +25,9 @@
   "bundle": {
     "active": true,
     "targets": ["app", "nsis"],
-    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "files": { "Resources/ja.lproj/InfoPlist.strings": "macos/ja.lproj/InfoPlist.strings" }
+    }
   }
 }
