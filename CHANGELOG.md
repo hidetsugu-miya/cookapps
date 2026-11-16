@@ -1,7 +1,15 @@
 # Changelog
 
 The newest version comes first.
-The project was named cookup until v0.14.6.
+The project was named cookup until v0.14.6, and cookapps until v0.80.0.
+
+## v0.80.1
+
+The app is renamed from cookapps to つなぎあい (tsunagiai) (#750, #751, #752). Its identifier is `jp.mysis.tsunagiai`. At its first start the app copies the settings folder of `jp.mysis.cookapps` into its own, and it copies each keychain item the first time it uses it; the old folder and items are kept. An update puts the new app in the place of the old one, so it stays at `/Applications/cookapps.app` until you rename it to `tsunagiai.app`.
+
+The MCP server is now `tsunagiai-mcp` (#751): register it again as `docs/mcp.md` describes, and point Claude Desktop at the new path. The release file is `tsunagiai.app.tar.gz`.
+
+D-1: a pre-script gets the port of the connection as `TSUNAGIAI_PORT`, and as `COOKAPPS_PORT` too, so that the scripts saved before keep working (#752). A-30: the scratchpad of an SSH host is `~/.local/share/tsunagiai/scratchpad/`, and the old folder on the host is moved there the first time it is used. A-32: saved skills keep working.
 
 ## v0.80.0
 
