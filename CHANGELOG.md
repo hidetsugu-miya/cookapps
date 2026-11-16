@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.80.3
+
+D-1: the buttons "接続をテスト", "キャンセル" and "保存" of the edit pane are in a row at its bottom, under the fields, and no longer in its header: "接続をテスト" at the left end, "キャンセル" and "保存" at the right end (#772).
+
+D-7, A-36: the edit pane has no Claude Code pane of its own any more. Claude Code runs in the tab "Claude", which is always the first tab of the pane at the right of the database screen (#773). The icon of the header of the work pane and the icon of the header of the edit pane open and close that same pane, and opening it starts Claude Code when it is not running. Closing the pane, leaving the screen and closing the edit pane do not end Claude Code: opening the pane again shows the same one. The tab goes when Claude Code ends with the exit code 0 and when its close button is pressed, and the pane closes when no other tab is left. When Claude Code ends with another exit code, the tab and its message stay until the close button is pressed.
+
+A-6, A-8: a session row of the Orca list shows only your question and Claude's answer (#760). What Claude Code's harness puts in the conversation (such as `<event>`), a `[stderr]` line, pasted data and an answer that is JSON are left out.
+
+A-35: the footer is a size larger, and so are its bell and badge (#761). A row of the pane of the unread shows its text on up to 3 lines, and a mail shows the start of its body after its subject (#759).
+
+A-8, A-30: the Orca list no longer shows SSH hosts, neither their heading nor their rows, and their sessions are not counted on the Orca button or in the Dock badge (#784, #785). The scratchpad of an SSH host is retired. The files in `~/.local/share/tsunagiai/scratchpad/` on a host are left where they are.
+
 ## v0.80.2
 
 The app shows its name as つなぎAI: in the window title, in Finder and the Dock, and on its screens (#764). The README and the documentation use the name too. The app file, the settings folder and the identifier keep the name `tsunagiai`, so nothing moves.
