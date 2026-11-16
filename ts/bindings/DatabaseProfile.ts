@@ -9,13 +9,10 @@ export type DatabaseProfile = {
  */
 id: string, name: string, username: string, 
 /**
- * Whether the connection goes through an AWS Systems Manager port forward. When it does not, only the host and the port are used.
+ * The body of the script that opens the way to the database (D-1): it runs before MySQL is logged in to, gets a free port as `COOKAPPS_PORT` and listens there.
+ * Empty when the connection goes straight to the host and the port. Old files have none (`default`).
  */
-useSsm: boolean, awsProfile: string, region: string, 
-/**
- * The `Name` tag of the instance to forward through.
- */
-bastionName: string, dbHost: string, 
+script: string, dbHost: string, 
 /**
  * A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese.
  */

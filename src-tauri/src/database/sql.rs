@@ -19,10 +19,9 @@ use sqlx::{
 use ts_rs::TS;
 
 use super::{
-    mysql::{query_failure, QueryFailure, READ_ONLY},
+    mysql::{query_failure, shorten, QueryFailure, READ_ONLY},
     records::{cells_of, cells_tsv, quote_identifier, DatabaseCell},
     session::format_rows,
-    ssm::shorten,
 };
 
 /// The rows of a result that are kept. One row more is read, to know that the result is longer.

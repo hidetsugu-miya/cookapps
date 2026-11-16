@@ -27,8 +27,18 @@ function input(name: string, value: string, type = "text") {
   return node;
 }
 
+// The script that opens the way to the database (D-1): several lines of code, so a text area.
+function area(name: string, value: string) {
+  const node = tag("textarea");
+  node.name = name;
+  node.value = value;
+  node.rows = 6;
+  node.spellcheck = false;
+  return node;
+}
+
 // A field: its name above, and `status` (a label with a dot) at the right of the name.
-function field(label: string, control: HTMLInputElement, status?: Node) {
+function field(label: string, control: HTMLInputElement | HTMLTextAreaElement, status?: Node) {
   const row = tag("label", "database-field");
   const head = tag("span", "database-label", label);
   if (status) head.append(status);
@@ -55,34 +65,18 @@ export function openDatabaseForm(
   const name = input("name", initial?.name ?? "");
   const username = input("username", initial?.username ?? "");
   const password = input("password", "", "password");
-  const useSsm = input("useSsm", "", "checkbox");
-  useSsm.checked = initial?.useSsm ?? false;
-  const awsProfile = input("awsProfile", initial?.awsProfile ?? "");
-  const region = input("region", initial?.region ?? "");
-  const bastionName = input("bastionName", initial?.bastionName ?? "");
+  const script = area("script", initial?.script ?? "");
   const dbHost = input("dbHost", initial?.dbHost ?? "");
   const dbPort = input("dbPort", String(initial?.dbPort ?? 3306), "number");
 
   const saved = initial?.passwordSaved ? tag("span", "status ok", "保存済み") : undefined;
-  const check = tag("label", "database-check");
-  check.append(useSsm, "SSM 経由で接続する");
-  // Without SSM only the host and the port are used.
-  const ssm = tag("div", "database-ssm");
-  ssm.hidden = !useSsm.checked;
-  ssm.append(field("AWS のプロファイル名", awsProfile), field("リージョン", region), field("踏み台の名前", bastionName));
-  useSsm.onchange = () => {
-    ssm.hidden = !useSsm.checked;
-  };
 
   // The fields as typed, in the shape that Rust takes.
   const typed = (): DatabaseProfile => ({
     id: initial?.id ?? "",
     name: name.value,
     username: username.value,
-    useSsm: useSsm.checked,
-    awsProfile: awsProfile.value,
-    region: region.value,
-    bastionName: bastionName.value,
+    script: script.value,
     dbHost: dbHost.value,
     dbPort: portOf(dbPort.value),
   });
@@ -128,7 +122,7 @@ export function openDatabaseForm(
   form.setAttribute("role", "dialog");
   form.setAttribute("aria-modal", "true");
   form.setAttribute("aria-label", title);
-  form.append(tag("h2", "", title), field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), check, ssm, field("DB のホスト", dbHost), field("ポート", dbPort), result, err, actions);
+  form.append(tag("h2", "", title), field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), field("事前スクリプト", script), field("DB のホスト", dbHost), field("ポート", dbPort), result, err, actions);
   form.onsubmit = async (e) => {
     e.preventDefault();
     err.hidden = true;

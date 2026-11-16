@@ -15,8 +15,6 @@ e2e = ["dep:keyring-core", "dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdr
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "credentials-login", "sso"] }
-aws-sdk-ssm = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crypto_secretbox = "0.1"
@@ -51,6 +49,10 @@ tokio = { version = "1", features = ["net", "io-util", "macros", "process", "rt"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 url = "2"
 x25519-dalek = "3"
+
+# The script of a database connection runs in a process group of its own, which is sent signals (`database/script.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # External images on macOS are fetched through NSURLSession (see `images/macos.rs`). The families of the fonts on the Mac come from CoreText (`fonts.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]

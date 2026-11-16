@@ -3,7 +3,7 @@ import { orcaOverview as placedOverview, streamList as placedStream, studio } fr
 import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
-const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
+const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", passwordSaved: true });
 
 // The app with `profiles` saved, and the database screen open.
 async function openDatabase(profiles = [direct, tunnel], fixtures: Record<string, unknown> = {}) {
@@ -33,8 +33,8 @@ const pickFromMenu = async (id: string, item: 1 | 2 | 3) => {
   await $(`.menu button[role="menuitem"]:nth-child(${item})`).click();
 };
 const field = (name: string) => $(`#database-form [name="${name}"]`);
-// The profile that the popup sends when it is filled in as a connection with no SSM.
-const typed = { id: "", name: "Example new", username: "reader", useSsm: false, awsProfile: "", region: "", bastionName: "", dbHost: "db.example.com", dbPort: 3306 };
+// The profile that the popup sends when it is filled in as a connection with no script.
+const typed = { id: "", name: "Example new", username: "reader", script: "", dbHost: "db.example.com", dbPort: 3306 };
 const fillDirect = async () => {
   await field("name").setValue("Example new");
   await field("username").setValue("reader");
@@ -109,23 +109,22 @@ describe("database", () => {
 });
 
 describe("database: register", () => {
-  it("opens a popup from the plus, with the fields of a connection with no SSM, the port 3306 and the AWS fields hidden", async () => {
+  it("opens a popup from the plus, with the fields of a connection, the port 3306 and an empty script", async () => {
     await openDatabase([]);
     await $("#database-add").click();
     await expect($("#database-form")).toBeDisplayed();
     await expect($("#database-form")).toHaveAttribute("aria-label", "接続を追加");
     await expect($("#database-form h2")).toHaveText("接続を追加");
     await expect(field("dbPort")).toHaveValue("3306");
-    await expect(field("useSsm")).not.toBeSelected();
-    await expect(field("awsProfile")).not.toBeDisplayed();
-    await expect(field("region")).not.toBeDisplayed();
-    await expect(field("bastionName")).not.toBeDisplayed();
+    await expect(field("script")).toBeDisplayed();
+    await expect(field("script")).toHaveValue("");
+    await expect($("#database-form label.database-field:has([name=script]) .database-label")).toHaveText("事前スクリプト");
     expect(await browser.execute(() => document.activeElement?.getAttribute("name"))).toBe("name");
     expect(await count("#database-form [placeholder]")).toBe(0);
     await expect($("#database-form .status")).not.toExist();
   });
 
-  it("saves a connection with no SSM, sends the id empty and the password, closes, and draws the list that Rust answers next", async () => {
+  it("saves a connection with no script, sends the id empty and the password, closes, and draws the list that Rust answers next", async () => {
     await openDatabase([direct]);
     const save = await mock("database_profile_save", databaseProfile("p3", "Example new", { passwordSaved: true }));
     await mock("database_profiles", [direct, databaseProfile("p3", "Example new")]);
@@ -139,23 +138,17 @@ describe("database: register", () => {
     expect(await names()).toEqual(["Example direct", "Example new"]);
   });
 
-  it("shows the three AWS fields with the checkbox, and sends them", async () => {
+  it("sends the script as typed, with its line breaks", async () => {
     await openDatabase([]);
     const save = await mock("database_profile_save", databaseProfile("p3", "Example new"));
     await mock("database_profiles", [databaseProfile("p3", "Example new")]);
     await $("#database-add").click();
     await fillDirect();
-    await field("useSsm").click();
-    await expect(field("awsProfile")).toBeDisplayed();
-    await expect(field("region")).toBeDisplayed();
-    await expect(field("bastionName")).toBeDisplayed();
-    await field("awsProfile").setValue("work");
-    await field("region").setValue("ap-northeast-1");
-    await field("bastionName").setValue("bastion");
+    await field("script").setValue("#!/bin/sh\nexec forward-port $COOKAPPS_PORT");
     await field("dbPort").setValue("3307");
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
-      { profile: { ...typed, useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbPort: 3307 }, password: "" },
+      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $COOKAPPS_PORT", dbPort: 3307 }, password: "" },
     ]);
     await expect($("#database-form")).not.toExist();
   });
@@ -233,10 +226,7 @@ describe("database: edit", () => {
     await expect(field("username")).toHaveValue("reader");
     await expect(field("password")).toHaveValue("");
     await expect($("#database-form .status.ok")).toHaveText("保存済み");
-    await expect(field("useSsm")).toBeSelected();
-    await expect(field("awsProfile")).toHaveValue("work");
-    await expect(field("region")).toHaveValue("ap-northeast-1");
-    await expect(field("bastionName")).toHaveValue("bastion");
+    await expect(field("script")).toHaveValue("'+SC+'");
     await expect(field("dbHost")).toHaveValue("db.internal.example.com");
     await expect(field("dbPort")).toHaveValue("3306");
   });
@@ -246,7 +236,7 @@ describe("database: edit", () => {
     await pickFromMenu("p1", 1);
     await expect(field("name")).toHaveValue("Example direct");
     await expect($("#database-form .status")).not.toExist();
-    await expect(field("awsProfile")).not.toBeDisplayed();
+    await expect(field("script")).toHaveValue("");
   });
 
   it("saves with the id of the connection and an empty password, and draws the renamed row", async () => {
@@ -258,7 +248,7 @@ describe("database: edit", () => {
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
       {
-        profile: { id: "p2", name: "Example renamed", username: "reader", useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", dbPort: 3306 },
+        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", dbPort: 3306 },
         password: "",
       },
     ]);
@@ -371,7 +361,7 @@ describe("database: test the connection", () => {
     await probe().click();
     expect(await waitForCalls(test)).toEqual([
       {
-        profile: { id: "p2", name: "Example tunnel", username: "reader", useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", dbPort: 3307 },
+        profile: { id: "p2", name: "Example tunnel", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", dbPort: 3307 },
         password: "",
       },
     ]);
@@ -512,7 +502,7 @@ describe("database: tree", () => {
 
   it("shows the error of a connection that cannot be opened under it, with a gray dot, and opens again on the next press", async () => {
     await openDatabase();
-    const message = "AWS の認証が切れています。手元で aws login を行ってから、もう一度お試しください";
+    const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required";
     const connect = await mock("database_connect", rejects(message));
     await row("p1").click();
     await waitForCalls(connect);
@@ -1758,10 +1748,10 @@ describe("database: tree", () => {
 
   it("closes the tree on a disconnect that fails and shows its error", async () => {
     await openTree();
-    const closed = await mock("database_disconnect", rejects("AWS への接続が時間内に終わりませんでした"));
+    const closed = await mock("database_disconnect", rejects("接続を閉じられませんでした"));
     await pickFromMenu("p1", 2);
     await waitForCalls(closed);
-    await expect($("#error")).toHaveText("AWS への接続が時間内に終わりませんでした");
+    await expect($("#error")).toHaveText("接続を閉じられませんでした");
     expect(await keys()).toEqual(["p1", "p2"]);
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
   });

@@ -207,7 +207,7 @@ pub fn run() {
         .manage(update::Installed::default())
         .manage(orca::OrcaMirror::default())
         .manage(orca_stream::OrcaStream::default())
-        .manage(database::ssm::Tunnels::default())
+        .manage(database::script::Scripts::default())
         .manage(database::session::Sessions::default())
         .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
@@ -416,14 +416,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build tauri application")
         .run(|app, event| {
-            // The open connections of the database screen, and their port forwards (a plugin process and an SSM session each), and the language servers of the Orca editor (A-34): close them with the app.
+            // The open connections of the database screen, and their scripts (a process group each), and the language servers of the Orca editor (A-34): close them with the app.
             if let tauri::RunEvent::Exit = event {
                 let servers = app.state::<lsp::server::LspServers>();
                 tauri::async_runtime::block_on(servers.close_all());
                 let sessions = app.state::<database::session::Sessions>();
                 tauri::async_runtime::block_on(sessions.close_all());
-                let tunnels = app.state::<database::ssm::Tunnels>();
-                tauri::async_runtime::block_on(tunnels.close_all());
+                let scripts = app.state::<database::script::Scripts>();
+                tauri::async_runtime::block_on(scripts.close_all());
             }
         });
 }

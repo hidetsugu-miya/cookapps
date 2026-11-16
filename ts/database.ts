@@ -1,6 +1,6 @@
 // The database screen (D-1, D-3 to D-6): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure, SQL) of the table that was pressed.
 // This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
-// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
+// Rust holds the open connections (the session and its script); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
@@ -189,7 +189,7 @@ async function save(profile: DatabaseProfile, password: string) {
   throw failure;
 }
 
-// The version that the server of the connection as typed answers; Rust opens the tunnel, logs in, reads it and closes the tunnel.
+// The version that the server of the connection as typed answers; Rust starts the script of the connection, logs in, reads it and ends the script.
 const test = (profile: DatabaseProfile, password: string) => invoke("database_test", { profile, password });
 
 async function remove(profile: DatabaseProfileView, anchor: Element) {
