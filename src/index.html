@@ -627,6 +627,7 @@
         <div id="orca-files-bar" data-tauri-drag-region>
           <button id="orca-files-mode-files" class="icon-btn orca-files-mode" type="button" aria-label="ファイル" aria-pressed="true"></button>
           <button id="orca-files-mode-history" class="icon-btn orca-files-mode" type="button" aria-label="履歴" aria-pressed="false"></button>
+          <button id="orca-files-mode-definition" class="icon-btn orca-files-mode" type="button" aria-label="定義" aria-pressed="false"></button>
           <button id="orca-files-toggle" class="icon-btn orca-files-toggle" type="button" aria-label="ファイル欄" aria-pressed="true"></button>
         </div>
         <header id="orca-files-head">
@@ -636,6 +637,40 @@
         <div id="orca-history" hidden>
           <div id="orca-history-list"></div>
           <div id="orca-history-files"></div>
+        </div>
+        <div id="orca-definition" hidden>
+          <div id="orca-definition-head"></div>
+          <div id="orca-definition-list"></div>
+          <section id="orca-lsp" aria-label="言語サーバー" hidden>
+            <div id="orca-lsp-head">
+              <span id="orca-lsp-title">言語サーバー</span>
+              <span id="orca-lsp-state" role="status"><span id="orca-lsp-dot" class="orca-lsp-dot"></span><span id="orca-lsp-state-text"></span></span>
+              <button id="orca-lsp-restart" class="icon-btn" type="button" aria-label="再起動"></button>
+            </div>
+            <p id="orca-lsp-note" class="orca-file-note fail" role="alert" hidden></p>
+            <button id="orca-lsp-container" class="text-btn" type="button" hidden>コンテナを起動</button>
+            <div class="orca-lsp-row">
+              <label for="orca-lsp-command">起動コマンド</label>
+              <input id="orca-lsp-command" type="text" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="orca-lsp-row">
+              <label for="orca-lsp-mount">パスの対応</label>
+              <div class="orca-lsp-pair"><input id="orca-lsp-mount" type="text" autocomplete="off" spellcheck="false"><span aria-hidden="true">↔</span><span>worktree</span></div>
+            </div>
+            <div id="orca-lsp-service-row" class="orca-lsp-row" hidden>
+              <label for="orca-lsp-service">サービス</label>
+              <select id="orca-lsp-service"></select>
+            </div>
+            <div id="orca-lsp-ssh-row" class="orca-lsp-row" hidden>
+              <label for="orca-lsp-ssh">ssh の接続先</label>
+              <input id="orca-lsp-ssh" type="text" autocomplete="off" spellcheck="false">
+            </div>
+            <label id="orca-lsp-auto-label"><input id="orca-lsp-auto" type="checkbox">自動で起動</label>
+            <div id="orca-lsp-foot">
+              <span id="orca-lsp-method" class="orca-lsp-chip" hidden></span>
+              <button id="orca-lsp-reset" class="text-btn" type="button">自動に戻す</button>
+            </div>
+          </section>
         </div>
       </aside>
     </section>

@@ -1773,6 +1773,16 @@ async fn cached_host_and_project_of(
     Ok((host_id, project))
 }
 
+/// The worktree at `path` must be one of the target's list (as the reads confirm it) and its project the repository `project`: for a call that runs a command in the worktree, so that no other path or project is taken for it.
+pub(crate) async fn check_worktree_of_project(
+    path: &str,
+    environment: Option<&str>,
+    project: &str,
+) -> Result<(), String> {
+    let (_, key) = cached_host_and_project_of(path, environment).await?;
+    check_same_repo(&key, project)
+}
+
 /// The repository asked for must be the project of the worktree: the remote branches are read from the repository, and a worktree of another project must not stand for it.
 fn check_same_repo(project: &str, repo: &str) -> Result<(), String> {
     if project == repo {

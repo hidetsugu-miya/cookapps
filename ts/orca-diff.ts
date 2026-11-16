@@ -299,6 +299,9 @@ export function openDiff(target: string | null, project: string, path: string, r
   return d.id;
 }
 
+// Whether a difference of a file of the worktree at `path` is open in any project (A-34: a tab of the worktree).
+export const hasDiffIn = (target: string | null, path: string) => [...diffs.values()].some((d) => d.target === target && d.path === path);
+
 // The open diffs of the project, in the order they were opened.
 export const diffsOf = (target: string | null, project: string) => [...diffs.values()].filter((d) => d.target === target && d.project === project);
 

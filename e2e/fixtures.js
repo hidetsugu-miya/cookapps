@@ -118,6 +118,13 @@ const answers = {
   orca_stream_input: null,
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
+  // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).
+  lsp_status: { state: "stopped", reason: "notStarted" },
+  lsp_start: { state: "indexing" },
+  lsp_stop: null,
+  lsp_restart: { state: "indexing" },
+  lsp_container_start: null,
+  lsp_launch: { method: "none", candidates: [], service: null, command: null, mount: null },
   // A-14: the two default themes, with example colors (a spec that chooses among themes gives `terminalThemes` of e2e/support.ts); a spec that presses a select mocks `terminal_theme_set`.
   terminal_themes: {
     themes: [
@@ -165,6 +172,9 @@ const computed = {
     }
     return { weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) => (firstDay + i) % 7), days };
   },
+  // A-34: the settings of a repository that has none saved, and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
+  lsp_settings: ({ environment, project }) => ({ environment, project, autoStart: true, command: null, mount: null, service: null, sshHost: null }),
+  lsp_settings_set: ({ settings }) => settings,
   orca_panes: ({ environment, project, tabs, op }) => {
     const key = JSON.stringify([environment, project]);
     if (op?.kind === "select" && tabs.includes(op.tab)) selectedIn[key] = op.tab;

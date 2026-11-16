@@ -23,6 +23,12 @@ import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
+import type { LspLaunch } from "./bindings/LspLaunch";
+import type { LspLocation } from "./bindings/LspLocation";
+import type { LspOutsideFile } from "./bindings/LspOutsideFile";
+import type { LspPlace } from "./bindings/LspPlace";
+import type { LspRepoSettings } from "./bindings/LspRepoSettings";
+import type { LspStatus } from "./bindings/LspStatus";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
@@ -340,6 +346,30 @@ export interface Commands {
   orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
   // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
+  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language server: the saved ones, else the unset ones (`autoStart` true, nothing replaced).
+  lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
+  // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings with nothing set take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute and a text with a control character are errors.
+  lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
+  // A-34: how ruby-lsp is started in `worktree` of the project `project` of `environment` (null: this machine): read from the worktree just now (a saved environment's through the ssh Host of its settings), with the settings applied.
+  lsp_launch: { args: { environment: string | null; project: string; worktree: string }; result: LspLaunch };
+  // A-34: starts ruby-lsp for `worktree` of the project `project` of `environment` (null: this machine) and answers its state (`indexing`). A server that is there and not stopped is left as it is; a stopped one is started again. How it is started is read from the worktree by Rust; a failure of that or of the process is the state `stopped` with its message, told by the event `lsp-status` (`LspStatusEvent`).
+  lsp_start: { args: { environment: string | null; project: string; worktree: string }; result: LspStatus };
+  // A-34: stops the server of `worktree` and starts it again (the restart of the screen), as `lsp_start` does, and answers its state (`indexing`). The places outside the worktree that the stopped server gave stay known to the new one.
+  lsp_restart: { args: { environment: string | null; project: string; worktree: string }; result: LspStatus };
+  // A-34: stops the server of `worktree` (`shutdown`, `exit`, then its standard input is closed). A worktree with none is no error.
+  lsp_stop: { args: { environment: string | null; worktree: string }; result: null };
+  // A-34: the state of the server of `worktree`: `indexing`, `running`, or `stopped` with the reason (`notStarted` when there is none, `containerDown` when the container of the service does not run, `failed` with a message).
+  lsp_status: { args: { environment: string | null; worktree: string }; result: LspStatus };
+  // A-34: the places of the definition of the name at `line` and `character` (UTF-16 units, the index of a JavaScript string) of the file `relative` of `worktree`, whose text `text` is sent as the whole text of the file. A place inside the worktree has its path from the worktree; one outside has the absolute path on the server's side and `outside`. Nothing found is an empty list.
+  lsp_definition: { args: { environment: string | null; worktree: string; relative: string; text: string; line: number; character: number }; result: LspLocation[] };
+  // A-34: the text, read only, of the file `path` outside `worktree` (an absolute path on the server's side) that the server of that worktree gave as a definition with `outside`; any other path is an error. It is read the way the server is started (cat on this machine, `docker compose exec -T` in its service, ssh in front for a saved environment). A file over 1 MiB, one that is not UTF-8 and one that cannot be read are errors.
+  lsp_read_outside: { args: { environment: string | null; project: string; worktree: string; path: string }; result: LspOutsideFile };
+  // A-34: starts the container of the service that ruby-lsp runs in for `worktree` (`docker compose up -d {service}`, run the way the server is started: this machine, or through ssh for a saved environment). Only the method `compose` has a container; any other is an error. The server is not started by it.
+  lsp_container_start: { args: { environment: string | null; project: string; worktree: string }; result: null };
+  // A-34: the Ruby name at the UTF-16 unit `character` of `line`, the text of one line of the editor (a name may have `@`, `@@` or `$` before it and `?` or `!` after it); null where there is none.
+  lsp_word: { args: { line: string; character: number }; result: string | null };
+  // A-34: how the definition pane draws each of `locations`, in order: the file and its line (from 1), the folder in the worktree or the gem and the folder in it, and whether it is outside the worktree. It reads and asks for nothing.
+  lsp_places: { args: { locations: LspLocation[] }; result: LspPlace[] };
   // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/cookapps/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
   ssh_scratch_list: { args: { host: string }; result: string[] };
   // A-30: the text of the scratchpad file `name` of the SSH host, as `orca_file_read` answers it (the signature is of the bytes on the host). A missing file, one over 384 KiB, one that is not UTF-8 and one with mixed line ends are errors.

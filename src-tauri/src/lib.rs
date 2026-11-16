@@ -11,6 +11,7 @@ pub mod ghostty;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
+pub mod lsp;
 pub mod mail_address;
 pub mod mail_send;
 pub mod markdown_patch;
@@ -208,6 +209,7 @@ pub fn run() {
         .manage(orca_stream::OrcaStream::default())
         .manage(database::ssm::Tunnels::default())
         .manage(database::session::Sessions::default())
+        .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
@@ -358,6 +360,18 @@ pub fn run() {
             orca_files::orca_commit_file_diff,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
+            lsp::lsp_settings,
+            lsp::lsp_settings_set,
+            lsp::lsp_launch,
+            lsp::server::lsp_start,
+            lsp::server::lsp_stop,
+            lsp::server::lsp_restart,
+            lsp::server::lsp_status,
+            lsp::server::lsp_definition,
+            lsp::outside::lsp_read_outside,
+            lsp::container::lsp_container_start,
+            lsp::view::lsp_word,
+            lsp::view::lsp_places,
             ssh_scratch::ssh_scratch_list,
             ssh_scratch::ssh_scratch_read,
             ssh_scratch::ssh_scratch_write,
@@ -402,8 +416,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build tauri application")
         .run(|app, event| {
-            // The open connections of the database screen, and their port forwards (a plugin process and an SSM session each): close them with the app.
+            // The open connections of the database screen, and their port forwards (a plugin process and an SSM session each), and the language servers of the Orca editor (A-34): close them with the app.
             if let tauri::RunEvent::Exit = event {
+                let servers = app.state::<lsp::server::LspServers>();
+                tauri::async_runtime::block_on(servers.close_all());
                 let sessions = app.state::<database::session::Sessions>();
                 tauri::async_runtime::block_on(sessions.close_all());
                 let tunnels = app.state::<database::ssm::Tunnels>();
