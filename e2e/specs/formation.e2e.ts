@@ -6,6 +6,8 @@ const visible = (selector: string) => browser.execute((s) => document.querySelec
 const pressed = (id: string) => browser.execute((i) => document.getElementById(i)!.getAttribute("aria-pressed"), id);
 const nameOf = (id: string) => browser.execute((i) => [...document.querySelectorAll<HTMLElement>(`#${i} .footer-mode-name`)].filter((e) => !e.hidden).map((e) => e.textContent), id);
 const starts = async () => (await callsOf("claude_code_start")).length;
+// The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
+const pressRestart = () => browser.execute(() => document.getElementById("formation-restart")!.click());
 const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
 
 async function openFormation() {
@@ -56,7 +58,9 @@ describe("development screen: orchestration mode", () => {
   });
 
   it("switches to the orchestration with its three columns, and the name moves to its icon", async () => {
+    await boot({ inbox: inbox(), formation_children: [formationChild("api-update", "planned")] });
     await openFormation();
+    await expect($("#formation-flow")).toBeDisplayed();
     await expect($("#orca")).not.toBeDisplayed();
     expect(await pressed("footer-mode-orca")).toBe("false");
     expect(await pressed("footer-mode-formation")).toBe("true");
@@ -113,6 +117,69 @@ describe("development screen: orchestration mode", () => {
     await $("#footer-mode-formation").click();
     await waitForStarts(2);
     expect(await callsOf("claude_code_close")).toEqual([]);
+  });
+
+  it("has the restart button at the right end of the orchestrator's header, with the icon only", async () => {
+    await openFormation();
+    const button = $("#formation-restart");
+    await expect(button).toHaveAttribute("aria-label", "司令塔を再起動");
+    expect(await button.getText()).toBe("");
+    expect(await browser.execute(() => document.querySelectorAll("#formation-restart svg").length)).toBe(1);
+    const place = await browser.execute(() => {
+      const head = document.getElementById("formation-head")!.getBoundingClientRect();
+      const button = document.getElementById("formation-restart")!.getBoundingClientRect();
+      const title = document.querySelector("#formation-head h1")!.getBoundingClientRect();
+      return { fromRight: Math.round(head.right - button.right), afterTitle: button.left >= title.right, children: document.getElementById("formation-head")!.lastElementChild!.id };
+    });
+    expect(place.children).toBe("formation-restart");
+    expect(place.afterTitle).toBe(true);
+    expect(place.fromRight).toBeLessThan(40);
+  });
+
+  it("ends the running process and starts a new one with the keyboard when the restart button is pressed, and calls no Orca command", async () => {
+    await openFormation();
+    await waitForStarts(1);
+    await sendClaudeCode({ kind: "output", data: "old conversation" });
+    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("old conversation"));
+    await pressRestart();
+    await waitForStarts(2);
+    expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation", launch: 1 }]);
+    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation", builtinTools: true, skill: null }, { id: "formation", builtinTools: true, skill: null }]);
+    // The screen is new, and the terminal takes the keys.
+    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("old conversation");
+    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
+    await sendClaudeCode({ kind: "output", data: "new conversation" });
+    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("new conversation"));
+    for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input", "formation_launch", "formation_close"]) expect(await callsOf(command)).toEqual([]);
+  });
+
+  it("leaves the restart button off until the new start has answered, so a second press starts nothing", async () => {
+    await openFormation();
+    await waitForStarts(1);
+    const start = await mock("claude_code_start", holds);
+    await pressRestart();
+    await waitForCalls(start);
+    await expect($("#formation-restart")).toBeDisabled();
+    await pressRestart();
+    await browser.pause(300);
+    expect(await starts()).toBe(1);
+    await release(start, 1);
+    await expect($("#formation-restart")).toBeEnabled();
+    await mock("claude_code_start", 1);
+    await pressRestart();
+    await waitForStarts(1);
+  });
+
+  it("starts a new process when the restart button is pressed after the process ended", async () => {
+    await openFormation();
+    await waitForStarts(1);
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
+    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Claude Code が終わりました"));
+    await pressRestart();
+    await waitForStarts(2);
+    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation" }, { id: "formation" }]);
+    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("Claude Code が終わりました");
+    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
   });
 
   it("starts nothing for the orchestrator while Orca is the mode", async () => {
@@ -414,11 +481,84 @@ describe("orchestration mode: the flow pane", () => {
     expect(await cardNames()).toEqual(["api-update"]);
   });
 
-  it("says that the first read failed", async () => {
+  it("shows no flow pane when the first read failed, because no child is known", async () => {
     await openFlow(rejects("Orca に届きません"));
-    await expect($("#formation-flow-error")).toBeDisplayed();
-    await expect($("#formation-flow-error")).toHaveText("Orca に届きません");
+    await waitForCalls("formation_children", 1);
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-children")).not.toBeDisplayed();
     expect(await cardNames()).toEqual([]);
+  });
+
+  it("keeps the columns of the last read that worked when a read fails", async () => {
+    await openFlow([formationChild("api-update", "working")]);
+    await expect($("#formation-flow")).toBeDisplayed();
+    await mock("formation_children", rejects("Orca に届きません"));
+    await expect($("#formation-flow-error")).toHaveText("Orca に届きません");
+    await expect($("#formation-children")).toBeDisplayed();
+    await expect($("#formation-flow")).toBeDisplayed();
+  });
+});
+
+// A-37: the columns appear with the first child.
+const widthOf = async (id: string) => (await rectOf(`#${id}`)).right - (await rectOf(`#${id}`)).left;
+
+describe("orchestration mode: the columns", () => {
+  it("shows the orchestrator alone, with the whole width, while no child is recorded", async () => {
+    await openFlow([]);
+    await waitForCalls("formation_children", 1);
+    await expect($("#formation-orchestrator")).toBeDisplayed();
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation")];
+    expect(Math.abs(pane.left - screen.left)).toBeLessThan(1);
+    expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
+  });
+
+  it("shows the middle and the right columns when a child, a planned one too, is recorded, and splits the rest 5:5", async () => {
+    await openFlow([]);
+    await waitForCalls("formation_children", 1);
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await mock("formation_children", [formationChild("api-update", "planned")]);
+    await expect($("#formation-children")).toBeDisplayed();
+    await expect($("#formation-flow")).toBeDisplayed();
+    const [orchestrator, children, flow] = [await widthOf("formation-orchestrator"), await widthOf("formation-children"), await widthOf("formation-flow")];
+    expect(Math.abs(orchestrator - children)).toBeLessThan(1);
+    expect(Math.round(flow)).toBe(260);
+    const [first, second] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-children")];
+    expect(Math.abs(first.right - second.left)).toBeLessThan(1);
+  });
+
+  it("hides the middle and the right columns again when the children are gone, and the orchestrator takes the width", async () => {
+    await openFlow([formationChild("api-update", "working")]);
+    await expect($("#formation-children")).toBeDisplayed();
+    await mock("formation_children", []);
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation")];
+    expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
+  });
+
+  it("keeps the flow closed with the button while the children are there, and shows no flow without children whatever the button was", async () => {
+    await openFlow([formationChild("api-update", "working")]);
+    await $("#formation-flow-toggle").click();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-children")).toBeDisplayed();
+    await mock("formation_children", []);
+    await expect($("#formation-children")).not.toBeDisplayed();
+    await mock("formation_children", [formationChild("api-update", "working")]);
+    await expect($("#formation-children")).toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-tabbar-toggle")).toBeDisplayed();
+  });
+
+  it("fits the orchestrator's terminal to its new width when the columns appear", async () => {
+    await openFlow([]);
+    const [start] = await waitForCalls("claude_code_start");
+    const wide = (start as { viewport: { cols: number } }).viewport.cols;
+    await mock("claude_code_resize", null);
+    await mock("formation_children", [formationChild("api-update", "planned")]);
+    const [resize] = await waitForCalls("claude_code_resize");
+    expect((resize as { viewport: { cols: number } }).viewport.cols).toBeLessThan(wide);
   });
 });
 
