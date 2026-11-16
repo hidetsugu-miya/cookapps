@@ -2,7 +2,7 @@
 // A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays), and the scratchpad folder of an SSH host is never read by the clock. Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // On the row of an SSH host (and on the tab of one of its scratchpad files) the tree is the host's scratchpad folder (A-30): one flat list of files, read by ssh (`ssh_scratch_list`), with the new file, the new name and the delete of that folder (`ssh_scratch_create`, `ssh_scratch_rename`, `ssh_scratch_delete`). It has no folder, so nothing is dragged, and it has no path to copy, no download, no difference, no branch and no history.
-// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the definition of a name of the editor (A-34, orca-definition.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the definition has none of.
+// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the definition of a name of the editor (A-34, orca-definition.ts, with the language server under it, orca-lsp.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the definition has none of.
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, composing, tag } from "./dom.js";
@@ -14,6 +14,7 @@ import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import { askDefinition, type DefinitionQuery, initDefinition, syncDefinition } from "./orca-definition.js";
 import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
+import { syncLsp } from "./orca-lsp.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
@@ -110,6 +111,7 @@ function syncModes() {
   for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["definition", "orca-files-mode-definition"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
   syncHistory(context === null || host ? null : { target: context.target, path: context.path }, shown && part === "history");
   syncDefinition(context === null || host ? null : { target: context.target, path: context.path });
+  syncLsp(context === null || host ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "definition");
   if (shown && part === "files" && context !== null && !listings.has("")) void readDir("");
 }
 

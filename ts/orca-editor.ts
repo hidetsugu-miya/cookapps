@@ -109,6 +109,7 @@ let autosaveMs = 1000;
 let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
 let definition: (query: DefinitionQuery) => void = () => {};
+let ruby: (target: string | null, project: string, path: string) => void = () => {};
 
 // The folder of the scratchpad files on an SSH host (A-30), as the screen shows it; Rust alone makes the real path.
 export const SSH_SCRATCH_DIR = "~/.local/share/cookapps/scratchpad/";
@@ -415,6 +416,8 @@ async function load(f: EditorFile) {
     f.read = "ready";
     f.area.disabled = false;
     setMode(f, f.mode);
+    // A Ruby file of a worktree starts its language server (A-34); a file outside the worktree belongs to a server that is there already.
+    if (f.language === "ruby" && !f.outside && f.host === null) ruby(f.target, f.project, f.path);
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -657,6 +660,9 @@ export function openFile(target: string | null, project: string, path: string, r
 // The open files of the project, in the order they were opened.
 export const filesOf = (target: string | null, project: string) => [...files.values()].filter((f) => f.target === target && f.project === project);
 
+// Whether a file is open in any project as a tab of the worktree at `path` (one outside it that a definition named counts: its tab is the worktree's), A-34.
+export const hasFileIn = (target: string | null, path: string) => [...files.values()].some((f) => f.target === target && f.path === path);
+
 // The ids of the files with typing that is not on the disk.
 export const dirtyIds = () => new Set([...files.values()].filter((f) => f.dirty).map((f) => f.id));
 
@@ -752,10 +758,11 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
   }
 }
 
-export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void }) {
+export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; ruby: (target: string | null, project: string, path: string) => void }) {
   changed = on.changed;
   fail = on.error;
   definition = on.definition;
+  ruby = on.ruby;
   // The page is going away (the window is closed): the typing that waits for its timer is sent now, for every file that can be saved.
   window.addEventListener("pagehide", () => {
     for (const f of files.values()) void flush(f);

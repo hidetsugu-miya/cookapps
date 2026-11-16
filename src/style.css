@@ -1198,6 +1198,30 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-def-line[data-hit="true"] { background: var(--effort-high-bg); }
 .orca-def-n { flex: none; width: 30px; padding-right: 6px; box-sizing: border-box; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; }
 .orca-def-text { padding: 0 8px; }
+#orca-lsp { flex: none; display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 10px 12px 12px; border-top: 1px solid var(--chip-line); background: var(--bar); font-size: calc(12px * var(--fs)); }
+#orca-lsp-head { display: flex; align-items: center; gap: 8px; }
+#orca-lsp-title { font-weight: 600; }
+#orca-lsp-state { margin-left: auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); white-space: nowrap; }
+.orca-lsp-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-idle); }
+.orca-lsp-dot[data-state="running"] { background: var(--agent-done); }
+.orca-lsp-dot[data-state="indexing"] { background: var(--agent-working); }
+.orca-lsp-dot[data-reason="failed"] { background: var(--agent-failed); }
+#orca-lsp-restart { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-lsp-restart svg { width: 14px; height: 14px; }
+#orca-lsp-note { padding: 0; }
+.orca-lsp-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px 8px; align-items: center; }
+.orca-lsp-row label { color: var(--ink-soft); }
+.orca-lsp-pair { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.orca-lsp-pair input { flex: 0 1 120px; }
+#orca-lsp :is(input[type="text"], select) { box-sizing: border-box; min-width: 0; width: 100%; height: 26px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); color: inherit; font: inherit; }
+#orca-lsp :is(#orca-lsp-command, #orca-lsp-mount) { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: calc(11px * var(--fs)); }
+#orca-lsp :is(input[type="text"], select):focus { outline: 2px solid var(--accent); border-color: transparent; }
+#orca-lsp-auto-label { display: flex; align-items: center; gap: 8px; }
+#orca-lsp-foot { display: flex; align-items: center; gap: 6px; }
+.orca-lsp-chip { padding: 0 6px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--ink-soft); font-size: calc(11px * var(--fs)); line-height: 18px; }
+#orca-lsp .text-btn { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
+#orca-lsp-container { align-self: flex-start; }
+#orca-lsp-reset { margin-left: auto; }
 .orca-edit-lock { flex: none; display: flex; color: var(--muted); }
 .orca-edit-lock svg { width: 13px; height: 13px; stroke-width: 1.8; }
 .orca-edit-state[data-state="outside"] { padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); line-height: 18px; }

@@ -28,8 +28,9 @@ import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import type { DefinitionQuery } from "./orca-definition.js";
-import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, goTo, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
+import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
+import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, showDefinition, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -781,7 +782,17 @@ function forgetGone() {
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
+// Whether the language server of the worktree at `path` of `environment` is to stop (A-34): the list that says it was read well, and it has not the worktree any more or no tab of the worktree is open (a session, a terminal, a file or a difference of any project).
+function serverGone(environment: string | null, path: string) {
+  const read = environment === view?.target ? view?.state === "ready" : environment === null && here?.state === "ready";
+  if (!read) return false;
+  if (!mix.worktrees.some((w) => w.path === path && placeOf(w) === environment)) return true;
+  const open = mix.rows.some((r) => r.paneKey !== null && r.path === path && placeOf(r) === environment) || mix.terminals.some((t) => t.path === path && placeOf(t) === environment);
+  return !open && !hasFileIn(environment, path) && !hasDiffIn(environment, path);
+}
+
 function draw() {
+  syncServers(serverGone);
   drawBadge();
   if (!shown()) return;
   drawNotice();
@@ -1296,7 +1307,8 @@ export function initOrca() {
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
-  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition });
+  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, ruby: (target, project, path) => void ensureServer({ target, project, path }) });
+  initLsp();
   initOrcaFiles({ open: (relative) => openFile(relative), definition: { inside: (relative, line, character) => openFile(relative, { line, character }), outside: (path, line, character) => openFile(path, { line, character }, true) }, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
     switched: () => {

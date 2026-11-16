@@ -6,8 +6,10 @@
 //! The server itself is in `server` (the processes that stay, one for each worktree, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
 //! The settings of a repository are saved in `lsp-settings.json` in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list.
 //! A file outside the worktree that the server gave as a definition is read, read only, by the same route (`outside`).
+//! The container of the service is started, only when the owner asks, by the same route (`container`).
 //! Nothing of a file of a worktree is kept: the answers of the two commands are used and dropped.
 
+pub mod container;
 pub mod outside;
 mod protocol;
 pub mod server;

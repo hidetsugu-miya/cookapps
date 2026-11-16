@@ -1,11 +1,14 @@
+import type { LspLaunch } from "../../ts/bindings/LspLaunch";
 import type { LspLocation } from "../../ts/bindings/LspLocation";
 import type { LspPlace } from "../../ts/bindings/LspPlace";
+import type { LspRepoSettings } from "../../ts/bindings/LspRepoSettings";
+import type { LspStatus } from "../../ts/bindings/LspStatus";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
-import { callsOf, count, mock, onceId, rejects, textsOf, timers, waitForCalls, waitForCount } from "../support";
-import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabTitles, worktrees } from "../orca-support";
+import { callsOf, count, emitEvent, holds, mock, onceId, orcaWorktree, rejects, release, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, showAgain, studio, tabTitles, worktrees } from "../orca-support";
 
-// A-34: the definition in the file pane, and the editor's Command and right button. Rust asks ruby-lsp, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, and how it draws the answers and opens them.
+// A-34: the definition in the file pane, and the editor's Command and right button. Rust asks ruby-lsp, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, and how it draws the answers and opens them. The language server under the definition is checked below too: its state and settings, and when it is started and stopped.
 describe("orca: definition (A-34)", () => {
   const dirOf = (entries: [string, boolean][]): OrcaDir => ({ entries: entries.map(([name, isDirectory]) => ({ name, path: name, isDirectory, ignored: false })), total: entries.length });
   const root = () =>
@@ -360,5 +363,338 @@ describe("orca: definition (A-34)", () => {
     await contextAt(onRails());
     await waitForCount("#orca-definition-list .orca-def", 1);
     expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails", "1 件"]);
+  });
+  // ---- the language server under the definition ----
+
+  const repo = "proj_example-app";
+  const unset = (extra: Partial<LspRepoSettings> = {}): LspRepoSettings => ({ environment: null, project: repo, autoStart: true, command: null, mount: null, service: null, sshHost: null, ...extra });
+  const composeLaunch = (extra: Partial<LspLaunch> = {}): LspLaunch => ({
+    method: "compose",
+    candidates: [{ service: "app", mount: "/application" }],
+    service: "app",
+    command: "docker compose exec -T -w /application app bundle exec ruby-lsp",
+    mount: "/application",
+    ...extra,
+  });
+  const status = (state: LspStatus["state"], extra: Partial<LspStatus> = {}): LspStatus => ({ state, ...extra });
+  const notStarted = status("stopped", { reason: "notStarted" });
+  const down = status("stopped", { reason: "containerDown", message: "サービスのコンテナが動いていません" });
+  // The event Rust sends at each change of the state of a server.
+  const tell = (next: LspStatus, at = worktree) => emitEvent("lsp-status", { environment: null, worktree: at, status: next });
+  // Sets a field as the owner leaves it: its value (or, for a check box, its state) and the `change` event.
+  const change = (id: string, value: string | boolean) =>
+    browser.execute(
+      (field, v, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const el = document.getElementById(field) as HTMLInputElement;
+        if (typeof v === "boolean") el.checked = v;
+        else el.value = v;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      id,
+      value,
+      onceId(),
+    );
+  const stateText = () => $("#orca-lsp-state-text");
+  // The file pane open on the definition, with what Rust reads for the worktree given.
+  async function showServer(launch: LspLaunch | { __e2e_reject__: string } = composeLaunch(), settings = unset(), state = status("running")) {
+    await openFiles();
+    await mock("lsp_settings", settings);
+    await mock("lsp_launch", launch);
+    await mock("lsp_status", state);
+    await mode("定義").click();
+    await expect($("#orca-lsp")).toBeDisplayed();
+    await waitForCalls("lsp_launch");
+  }
+  const worktreeArgs = { environment: null, project: repo, worktree };
+
+  it("draws the state, the way the server is started and the settings under the definition, and reads them once (A-34)", async () => {
+    await showServer(composeLaunch(), unset({ autoStart: false }));
+    await expect(stateText()).toHaveText("ruby-lsp 動作中");
+    await expect($("#orca-lsp-dot")).toHaveAttribute("data-state", "running");
+    await expect($("#orca-lsp-command")).toHaveValue("docker compose exec -T -w /application app bundle exec ruby-lsp");
+    await expect($("#orca-lsp-mount")).toHaveValue("/application");
+    await expect($("#orca-lsp-auto")).not.toBeChecked();
+    await expect($("#orca-lsp-method")).toHaveText("compose の app");
+    await expect($("#orca-lsp-service-row")).not.toBeDisplayed();
+    await expect($("#orca-lsp-ssh-row")).not.toBeDisplayed();
+    await expect($("#orca-lsp-container")).not.toBeDisplayed();
+    await expect($("#orca-lsp-note")).not.toBeDisplayed();
+    expect(await callsOf("lsp_settings")).toEqual([{ environment: null, project: repo }]);
+    expect(await callsOf("lsp_launch")).toEqual([worktreeArgs]);
+    expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree }]);
+  });
+
+  it("reads nothing while the definition is not what the pane shows (A-34)", async () => {
+    await openFiles();
+    const settings = await mock("lsp_settings", unset());
+    const launch = await mock("lsp_launch", composeLaunch());
+    await browser.pause(300);
+    expect(await callsOf(settings)).toEqual([]);
+    expect(await callsOf(launch)).toEqual([]);
+    await mode("定義").click();
+    await waitForCalls(launch);
+  });
+
+  it("follows the event of the state: indexing, running and stopped with its message, and leaves the events of other worktrees (A-34)", async () => {
+    await showServer(composeLaunch(), unset(), status("indexing"));
+    await expect(stateText()).toHaveText("ruby-lsp 索引中");
+    await expect($("#orca-lsp-dot")).toHaveAttribute("data-state", "indexing");
+    await tell(status("running"));
+    await expect(stateText()).toHaveText("ruby-lsp 動作中");
+    await tell(status("stopped", { reason: "failed", message: "ruby-lsp が終了しました: bundler: command not found: ruby-lsp" }));
+    await expect(stateText()).toHaveText("ruby-lsp 停止中");
+    await expect($("#orca-lsp-dot")).toHaveAttribute("data-reason", "failed");
+    await expect($("#orca-lsp-note")).toHaveText("ruby-lsp が終了しました: bundler: command not found: ruby-lsp");
+    await expect($("#orca-lsp-container")).not.toBeDisplayed();
+    await tell(status("running"), "/work/other");
+    await browser.pause(200);
+    await expect(stateText()).toHaveText("ruby-lsp 停止中");
+    await tell(notStarted);
+    await expect($("#orca-lsp-note")).not.toBeDisplayed();
+    await expect($("#orca-lsp-dot")).not.toHaveAttribute("data-reason");
+    await expect(stateText()).toHaveText("ruby-lsp 停止中");
+  });
+
+  it("says why the way cannot be read, with the fields left empty (A-34)", async () => {
+    await showServer(rejects("docker compose の設定を読めません"));
+    await expect($("#orca-lsp-note")).toHaveText("docker compose の設定を読めません");
+    await expect($("#orca-lsp-command")).toHaveValue("");
+    await expect($("#orca-lsp-method")).not.toBeDisplayed();
+  });
+
+  it("shows the choice of the service only when several services mount the worktree, and saves the choice (A-34)", async () => {
+    const two = composeLaunch({ candidates: [{ service: "app", mount: "/application" }, { service: "worker", mount: "/application" }] });
+    await showServer(two);
+    await expect($("#orca-lsp-service-row")).toBeDisplayed();
+    expect(await textsOf("#orca-lsp-service option")).toEqual(["app", "worker"]);
+    await expect($("#orca-lsp-service")).toHaveValue("app");
+    await change("orca-lsp-service", "worker");
+    expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ service: "worker" }) }]);
+    // The way is read again with the setting applied.
+    await waitForCalls("lsp_launch", 2);
+  });
+
+  it("saves the command and the mount as they are left, and nothing when a field is left as it was (A-34)", async () => {
+    await showServer();
+    await change("orca-lsp-command", "docker compose exec -T -w /application app bundle exec ruby-lsp");
+    await change("orca-lsp-mount", "/application");
+    await browser.pause(300);
+    expect(await callsOf("lsp_settings_set")).toEqual([]);
+    await change("orca-lsp-command", "  bundle exec ruby-lsp  ");
+    await waitForCalls("lsp_settings_set");
+    await change("orca-lsp-mount", "/srv/app");
+    expect(await waitForCalls("lsp_settings_set", 2)).toEqual([{ settings: unset({ command: "bundle exec ruby-lsp" }) }, { settings: unset({ command: "bundle exec ruby-lsp", mount: "/srv/app" }) }]);
+  });
+
+  it("saves an emptied field as not set, so the decided way is used again (A-34)", async () => {
+    await showServer(composeLaunch(), unset({ command: "bundle exec ruby-lsp" }));
+    await change("orca-lsp-command", "");
+    expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ command: null }) }]);
+  });
+
+  it("saves 「自動で起動」 (A-34)", async () => {
+    await showServer();
+    await expect($("#orca-lsp-auto")).toBeChecked();
+    await change("orca-lsp-auto", false);
+    expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ autoStart: false }) }]);
+    await change("orca-lsp-auto", true);
+    expect(await waitForCalls("lsp_settings_set", 2)).toEqual([{ settings: unset({ autoStart: false }) }, { settings: unset({ autoStart: true }) }]);
+  });
+
+  it("takes the command, the mount and the service back to what is decided with 「自動に戻す」, and keeps the rest (A-34)", async () => {
+    await showServer(composeLaunch(), unset({ command: "bundle exec ruby-lsp", mount: "/srv/app", service: "worker", autoStart: false, sshHost: "dev" }));
+    await $("#orca-lsp-reset").click();
+    expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ autoStart: false, sshHost: "dev" }) }]);
+    await waitForCalls("lsp_launch", 2);
+  });
+
+  it("has nothing to take back when nothing is replaced (A-34)", async () => {
+    await showServer();
+    await expect($("#orca-lsp-reset")).toBeDisabled();
+  });
+
+  it("says why a save was refused, and shows the settings that are saved (A-34)", async () => {
+    await showServer();
+    await mock("lsp_settings_set", rejects("パスの対応が正しくありません"));
+    await change("orca-lsp-mount", "relative");
+    await expect($("#orca-lsp-note")).toHaveText("パスの対応が正しくありません");
+    await expect($("#orca-lsp-mount")).toHaveValue("/application");
+  });
+
+  it("asks for the ssh host only for a saved environment, and saves it with that environment (A-34)", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: [], ...timers({ orcaClock: 600000 }) });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await mock("lsp_settings", unset({ environment: "Studio", sshHost: "dev" }));
+    await mock("lsp_launch", composeLaunch());
+    await mode("定義").click();
+    await expect($("#orca-lsp-ssh-row")).toBeDisplayed();
+    await expect($("#orca-lsp-ssh")).toHaveValue("dev");
+    expect(await callsOf("lsp_settings")).toEqual([{ environment: "Studio", project: repo }]);
+    expect(await callsOf("lsp_launch")).toEqual([{ environment: "Studio", project: repo, worktree }]);
+    await change("orca-lsp-ssh", "build");
+    expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ environment: "Studio", sshHost: "build" }) }]);
+  });
+
+  it("restarts the server: stops it, and starts it again once it is stopped (A-34)", async () => {
+    await showServer();
+    const stop = await mock("lsp_stop", holds);
+    const start = await mock("lsp_start", status("indexing"));
+    await $("#orca-lsp-restart").click();
+    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree }]);
+    expect(await callsOf(start)).toEqual([]);
+    await release(stop, null);
+    expect(await waitForCalls(start)).toEqual([worktreeArgs]);
+    await expect(stateText()).toHaveText("ruby-lsp 索引中");
+  });
+
+  it("offers to start the container when it is down, and starts the server again after it (A-34)", async () => {
+    await showServer(composeLaunch(), unset(), down);
+    await expect(stateText()).toHaveText("ruby-lsp 停止中");
+    await expect($("#orca-lsp-note")).toHaveText("サービスのコンテナが動いていません");
+    await expect($("#orca-lsp-container")).toBeDisplayed();
+    await expect($("#orca-lsp-container")).toHaveText("コンテナを起動");
+    const up = await mock("lsp_container_start", holds);
+    const start = await mock("lsp_start", status("indexing"));
+    await $("#orca-lsp-container").click();
+    expect(await waitForCalls(up)).toEqual([worktreeArgs]);
+    await expect($("#orca-lsp-container")).toBeDisabled();
+    expect(await callsOf(start)).toEqual([]);
+    await release(up, null);
+    expect(await waitForCalls(start)).toEqual([worktreeArgs]);
+    await expect(stateText()).toHaveText("ruby-lsp 索引中");
+    await expect($("#orca-lsp-container")).not.toBeDisplayed();
+  });
+
+  it("says why the container did not start, starts no server, and leaves the button (A-34)", async () => {
+    await showServer(composeLaunch(), unset(), down);
+    const start = await mock("lsp_start", status("indexing"));
+    await mock("lsp_container_start", rejects("コンテナを起動できません: no such service: app"));
+    await $("#orca-lsp-container").click();
+    await expect($("#orca-lsp-note")).toHaveText("コンテナを起動できません: no such service: app");
+    expect(await callsOf(start)).toEqual([]);
+    await expect($("#orca-lsp-container")).toBeEnabled();
+  });
+
+  it("starts the server when a Ruby file of the worktree is opened and the server is not started (A-34)", async () => {
+    await openFiles();
+    await mock("lsp_status", notStarted);
+    await mock("lsp_settings", unset());
+    const start = await mock("lsp_start", status("indexing"));
+    await openFileWith("a.rb", text(source));
+    expect(await waitForCalls(start)).toEqual([worktreeArgs]);
+    expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree }]);
+    expect(await callsOf("lsp_settings")).toEqual([{ environment: null, project: repo }]);
+  });
+
+  it("does not start it when 「自動で起動」 is off, or for a file that is not Ruby (A-34)", async () => {
+    await openFiles();
+    await mock("lsp_status", notStarted);
+    const settings = await mock("lsp_settings", unset({ autoStart: false }));
+    const start = await mock("lsp_start", status("indexing"));
+    await openFileWith("a.rb", text(source));
+    await waitForCalls(settings);
+    await browser.pause(300);
+    expect(await callsOf(start)).toEqual([]);
+    await mock("lsp_settings", unset());
+    await openFileWith("notes.txt", text("Rails is here\n", "plaintext", null));
+    await browser.pause(300);
+    expect(await callsOf(start)).toEqual([]);
+    expect(await callsOf("lsp_settings")).toEqual([]);
+  });
+
+  for (const [name, state] of [
+    ["running", status("running")],
+    ["indexing", status("indexing")],
+    ["ended with an error", status("stopped", { reason: "failed", message: "ruby-lsp が終了しました" })],
+    ["ended with the container down", down],
+  ] as const) {
+    it(`starts nothing when the server is ${name} (A-34)`, async () => {
+      await openFiles();
+      const asked = await mock("lsp_status", state);
+      const settings = await mock("lsp_settings", unset());
+      const start = await mock("lsp_start", status("indexing"));
+      await openFileWith("a.rb", text(source));
+      await waitForCalls(asked);
+      await browser.pause(300);
+      expect(await callsOf(start)).toEqual([]);
+      expect(await callsOf(settings)).toEqual([]);
+    });
+  }
+
+  it("asks once for a worktree, not for each Ruby file (A-34)", async () => {
+    await define();
+    await waitForCalls("lsp_start");
+    await waitForCount("#orca-definition-list .orca-def", 3);
+    await mock("orca_file_read", text(rows(40), "ruby"));
+    await press(0, "open");
+    await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
+    await browser.pause(300);
+    expect(await callsOf("lsp_start")).toEqual([worktreeArgs]);
+  });
+
+  // The app with a project that has no session: its tabs are the files that are opened.
+  async function openWithoutSession() {
+    await openOrca(orcaOverview([], [orcaWorktree("example-app", "main")]), { orca_files_list: root(), orca_files_ignored: [], editor_settings: { autosaveMs: 100 }, ...timers({ orcaClock: 600000 }) });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+  }
+  const closeFileTab = () => $('.orca-tab[data-file="true"] .orca-tab-close').click();
+
+  it("stops the server when the last tab of the worktree is closed (A-34)", async () => {
+    await openWithoutSession();
+    await mock("lsp_status", notStarted);
+    const start = await mock("lsp_start", status("indexing"));
+    const stop = await mock("lsp_stop", null);
+    await openFileWith("a.rb", text(source));
+    await waitForCalls(start);
+    await browser.pause(300);
+    expect(await callsOf(stop)).toEqual([]);
+    await closeFileTab();
+    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree }]);
+    await expect($('.orca-tab[data-file="true"]')).not.toExist();
+  });
+
+  it("keeps the server while another tab of the worktree is open (A-34)", async () => {
+    await openFiles();
+    await mock("lsp_status", notStarted);
+    const start = await mock("lsp_start", status("indexing"));
+    const stop = await mock("lsp_stop", null);
+    await openFileWith("a.rb", text(source));
+    await waitForCalls(start);
+    await closeFileTab();
+    await expect($('.orca-tab[data-file="true"]')).not.toExist();
+    await browser.pause(400);
+    expect(await callsOf(stop)).toEqual([]);
+  });
+
+  it("stops the server when the worktree is gone from the list of Orca (A-34)", async () => {
+    await openFiles();
+    await mock("lsp_status", notStarted);
+    const start = await mock("lsp_start", status("indexing"));
+    const stop = await mock("lsp_stop", null);
+    await openFileWith("a.rb", text(source));
+    await waitForCalls(start);
+    expect(await callsOf(stop)).toEqual([]);
+    // The tab of the file is still open: only the list changes.
+    await mock("orca_overview", orcaOverview(sample(), [orcaWorktree("example-api", "main")]));
+    await showAgain();
+    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree }]);
+  });
+
+  it("starts the server again when a Ruby file is opened after it was stopped (A-34)", async () => {
+    await openWithoutSession();
+    await mock("lsp_status", notStarted);
+    const start = await mock("lsp_start", status("indexing"));
+    const stop = await mock("lsp_stop", null);
+    await openFileWith("a.rb", text(source));
+    await waitForCalls(start);
+    await closeFileTab();
+    await waitForCalls(stop);
+    await openFileWith("a.rb", text(source));
+    await waitForCalls(start, 2);
   });
 });
