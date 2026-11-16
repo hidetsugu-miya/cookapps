@@ -452,7 +452,8 @@ describe("orca: definition (A-34)", () => {
     await expect(stateText()).toHaveText("ruby-lsp 停止中");
     await tell(notStarted);
     await expect($("#orca-lsp-note")).not.toBeDisplayed();
-    await expect($("#orca-lsp-dot")).not.toHaveAttribute("data-reason");
+    // The reason is the one Rust told (it was `failed` just before), so the dot is no longer red.
+    await expect($("#orca-lsp-dot")).toHaveAttribute("data-reason", "notStarted");
     await expect(stateText()).toHaveText("ruby-lsp 停止中");
   });
 
@@ -485,6 +486,22 @@ describe("orca: definition (A-34)", () => {
     await waitForCalls("lsp_settings_set");
     await change("orca-lsp-mount", "/srv/app");
     expect(await waitForCalls("lsp_settings_set", 2)).toEqual([{ settings: unset({ command: "bundle exec ruby-lsp" }) }, { settings: unset({ command: "bundle exec ruby-lsp", mount: "/srv/app" }) }]);
+  });
+
+  it("leaves the text of the field that is being typed in when the save of another field ends (A-34)", async () => {
+    await showServer();
+    // The owner is typing in the mount when the save of the command ends and the fields are drawn again.
+    await browser.execute(() => {
+      const mount = document.getElementById("orca-lsp-mount") as HTMLInputElement;
+      mount.focus();
+      mount.value = "/srv/typed";
+    });
+    await change("orca-lsp-command", "bundle exec ruby-lsp");
+    await waitForCalls("lsp_settings_set");
+    await waitForCalls("lsp_launch", 2);
+    await expect($("#orca-lsp-mount")).toHaveValue("/srv/typed");
+    // The field that is not being typed in shows what was read.
+    await expect($("#orca-lsp-command")).toHaveValue("docker compose exec -T -w /application app bundle exec ruby-lsp");
   });
 
   it("saves an emptied field as not set, so the decided way is used again (A-34)", async () => {

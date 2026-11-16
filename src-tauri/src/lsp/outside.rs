@@ -1,19 +1,19 @@
 //! A-34: reading, read only, a file outside the worktree that ruby-lsp gave as a definition (a gem, for example).
 //!
-//! Only a path that the server of that (place, worktree) answered as a definition outside the worktree is read (`LspServers::knows_outside`); any other path is refused before anything is run. The way is the one the server is started by (`lsp::plan_for`, `lsp::run_on`): `cat` on this machine, `docker compose exec -T {service} cat` in the service of compose, and, for a saved environment, the same through ssh. The path is the server's own (the path inside the container for compose). Nothing is written, and nothing of the file is kept.
-
-use std::path::Path;
+//! Only a path that the server of that (place, worktree) answered as a definition outside the worktree is read (`LspServers::outside_way`); any other path is refused before anything is run. The way is the one the server was started by, kept with it (`server::Way`, so the worktree is not read again, and a setting changed since the start does not send the read to another container or host), run by `lsp::run_on`: `cat` on this machine, `docker compose exec -T {service} cat` in the service of compose, and, for a saved environment, the same through ssh. The path is the server's own (the path inside the container for compose). Nothing is written, and nothing of the file is kept.
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::State;
 #[cfg(test)]
 use ts_rs::TS;
 
 use super::{
-    plan_for, run_on, server::LspServers, shell_quote, LspLaunch, LspMethod, Route, MAX_TEXT,
+    run_on,
+    server::{LspServers, Way},
+    shell_quote, LspMethod, Route, MAX_TEXT,
 };
 use crate::{
-    auth::config_dir,
+    orca_files::check_worktree_of_project,
     ssh_scratch::{failure, Ran},
 };
 
@@ -54,10 +54,10 @@ fn check_path(path: &str) -> Result<(), String> {
 }
 
 /// The command, run in the worktree, that prints the file `path` of the server's side: `docker compose exec -T {service} cat -- {path}` when the server runs in a service of compose, `cat -- {path}` when it runs on the host, and none when there is no way decided. The service and the path are quoted, and `--` ends the options of `cat`.
-fn cat_command(launch: &LspLaunch, path: &str) -> Result<String, String> {
+fn cat_command(way: &Way, path: &str) -> Result<String, String> {
     check_path(path)?;
     let path = shell_quote(path);
-    match (launch.method, launch.service.as_deref()) {
+    match (way.method, way.service.as_deref()) {
         (LspMethod::Compose, Some(service)) => Ok(format!(
             "docker compose exec -T {} cat -- {path}",
             shell_quote(service)
@@ -78,25 +78,20 @@ fn text_of(ran: Ran) -> Result<String, String> {
     String::from_utf8(ran.stdout).map_err(|_| NOT_UTF8.into())
 }
 
-/// The text of the file `path` of the server's side, for the worktree `worktree` of the project `project` of `environment`, read by `run` (a command, its folder's route and the most bytes to keep) the way the server is started there. It does not ask whether the server gave `path`.
+/// The text of the file `path` of the server's side, read by `run` (a command, its folder's route and the most bytes to keep) the way the server of the worktree `worktree` was started (`way`). It does not ask whether the server gave `path`.
 fn read_outside(
-    dir: &Path,
-    environment: Option<&str>,
-    project: &str,
+    way: &Way,
     worktree: &str,
     path: &str,
-    mut run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
+    run: impl FnOnce(&Route, &str, &str, usize) -> Result<Ran, String>,
 ) -> Result<String, String> {
-    check_path(path)?;
-    let (route, launch) = plan_for(dir, environment, project, worktree, &mut run)?;
-    let command = cat_command(&launch, path)?;
-    text_of(run(&route, worktree, &command, MAX_FILE + 1)?)
+    let command = cat_command(way, path)?;
+    text_of(run(&way.route, worktree, &command, MAX_FILE + 1)?)
 }
 
-/// The text of the file `path`, outside the worktree `worktree` of the project `project` of `environment` (`None`: this machine), that ruby-lsp gave as a definition (A-34). A path that the server of that worktree did not give is refused.
+/// The text of the file `path`, outside the worktree `worktree` of the project `project` of `environment` (`None`: this machine), that ruby-lsp gave as a definition (A-34). A path that the server of that worktree did not give is refused, and so is a worktree that is not one of Orca's list or not of that project.
 #[tauri::command]
 pub async fn lsp_read_outside(
-    app: AppHandle,
     servers: State<'_, LspServers>,
     environment: Option<String>,
     project: String,
@@ -104,22 +99,13 @@ pub async fn lsp_read_outside(
     path: String,
 ) -> Result<LspOutsideFile, String> {
     check_path(&path)?;
-    if !servers
-        .knows_outside(environment.as_deref(), &worktree, &path)
+    let way = servers
+        .outside_way(environment.as_deref(), &worktree, &path)
         .await
-    {
-        return Err(NOT_KNOWN.into());
-    }
-    let dir = config_dir(&app)?;
+        .ok_or(NOT_KNOWN)?;
+    check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     tokio::task::spawn_blocking(move || {
-        let text = read_outside(
-            &dir,
-            environment.as_deref(),
-            &project,
-            &worktree,
-            &path,
-            run_on,
-        )?;
+        let text = read_outside(&way, &worktree, &path, run_on)?;
         Ok(LspOutsideFile { path, text })
     })
     .await
@@ -129,20 +115,16 @@ pub async fn lsp_read_outside(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp::{LspCandidate, LspRepoSettings};
-    use serde_json::json;
-    use std::path::PathBuf;
 
     const WT: &str = "/Users/x/orca/workspaces/app/feature";
     const GEM: &str = "/usr/local/bundle/gems/rack-3.1.0/lib/rack.rb";
 
-    fn launch(method: LspMethod, service: Option<&str>) -> LspLaunch {
-        LspLaunch {
+    fn way(method: LspMethod, service: Option<&str>) -> Way {
+        Way {
+            mount: "/app".into(),
+            route: Route::Local,
             method,
-            candidates: Vec::<LspCandidate>::new(),
             service: service.map(str::to_owned),
-            command: None,
-            mount: None,
         }
     }
 
@@ -152,15 +134,6 @@ mod tests {
             stdout: stdout.to_vec(),
             stderr: stderr.into(),
         }
-    }
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "cookapps-lsp-outside-{}-{name}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
     }
 
     // ---- the path ----
@@ -208,7 +181,7 @@ mod tests {
     #[test]
     fn in_compose_the_file_is_read_in_the_service_that_runs_the_server() {
         assert_eq!(
-            cat_command(&launch(LspMethod::Compose, Some("app")), GEM).unwrap(),
+            cat_command(&way(LspMethod::Compose, Some("app")), GEM).unwrap(),
             format!("docker compose exec -T app cat -- {GEM}")
         );
     }
@@ -216,7 +189,7 @@ mod tests {
     #[test]
     fn on_the_host_the_file_is_read_by_cat_alone() {
         assert_eq!(
-            cat_command(&launch(LspMethod::Host, None), GEM).unwrap(),
+            cat_command(&way(LspMethod::Host, None), GEM).unwrap(),
             format!("cat -- {GEM}")
         );
     }
@@ -224,15 +197,15 @@ mod tests {
     #[test]
     fn the_service_and_the_path_are_quoted_and_a_dash_ends_the_options_of_cat() {
         assert_eq!(
-            cat_command(&launch(LspMethod::Compose, Some("a b;c")), "/x/it's $(id)").unwrap(),
+            cat_command(&way(LspMethod::Compose, Some("a b;c")), "/x/it's $(id)").unwrap(),
             r"docker compose exec -T 'a b;c' cat -- '/x/it'\''s $(id)'"
         );
         assert_eq!(
-            cat_command(&launch(LspMethod::Host, None), "/-n").unwrap(),
+            cat_command(&way(LspMethod::Host, None), "/-n").unwrap(),
             "cat -- /-n"
         );
         assert_eq!(
-            cat_command(&launch(LspMethod::Host, None), "/a`b`;&|>").unwrap(),
+            cat_command(&way(LspMethod::Host, None), "/a`b`;&|>").unwrap(),
             "cat -- '/a`b`;&|>'"
         );
     }
@@ -240,11 +213,11 @@ mod tests {
     #[test]
     fn with_no_way_decided_or_no_service_there_is_no_command() {
         assert_eq!(
-            cat_command(&launch(LspMethod::None, None), GEM),
+            cat_command(&way(LspMethod::None, None), GEM),
             Err(NO_WAY.into())
         );
         assert_eq!(
-            cat_command(&launch(LspMethod::Compose, None), GEM),
+            cat_command(&way(LspMethod::Compose, None), GEM),
             Err(NO_WAY.into())
         );
     }
@@ -252,11 +225,11 @@ mod tests {
     #[test]
     fn a_path_that_is_refused_makes_no_command() {
         assert_eq!(
-            cat_command(&launch(LspMethod::Host, None), "-n"),
+            cat_command(&way(LspMethod::Host, None), "-n"),
             Err(BAD_PATH.into())
         );
         assert_eq!(
-            cat_command(&launch(LspMethod::Host, None), "/a\nb"),
+            cat_command(&way(LspMethod::Host, None), "/a\nb"),
             Err(BAD_PATH.into())
         );
     }
@@ -303,22 +276,11 @@ mod tests {
 
     // ---- the whole read ----
 
-    fn compose_config() -> String {
-        json!({"services": {"app": {"volumes": [
-            {"type": "bind", "source": WT, "target": "/app"}
-        ]}}})
-        .to_string()
-    }
-
     #[test]
     fn the_file_is_read_in_the_service_of_compose_in_the_worktree_with_a_limit_one_over() {
-        let dir = temp_dir("compose");
-        let config = compose_config();
         let mut seen = Vec::new();
         let text = read_outside(
-            &dir,
-            None,
-            "repo-1",
+            &way(LspMethod::Compose, Some("app")),
             WT,
             GEM,
             |route, worktree, command, limit| {
@@ -328,75 +290,46 @@ mod tests {
                     command.to_owned(),
                     limit,
                 ));
-                Ok(if command.contains("docker compose config") {
-                    ran(0, config.as_bytes(), "")
-                } else if command.contains("Gemfile.lock") {
-                    ran(0, b"", "")
-                } else {
-                    ran(0, b"module Rack; end\n", "")
-                })
+                Ok(ran(0, b"module Rack; end\n", ""))
             },
         )
         .unwrap();
         assert_eq!(text, "module Rack; end\n");
-        let last = seen.last().unwrap();
+        // One run, with the route and the service the server was started by.
         assert_eq!(
-            last,
-            &(
+            seen,
+            vec![(
                 Route::Local,
                 WT.to_owned(),
                 format!("docker compose exec -T app cat -- {GEM}"),
                 MAX_FILE + 1
-            )
+            )]
         );
-        assert!(seen
-            .iter()
-            .all(|(route, wt, _, _)| *route == Route::Local && wt == WT));
     }
 
     #[test]
     fn on_the_host_it_is_cat_and_for_a_saved_environment_it_goes_through_its_ssh_host() {
-        let dir = temp_dir("ssh");
-        crate::lsp::set_settings(
-            &dir,
-            LspRepoSettings {
-                ssh_host: Some("dev".into()),
-                ..LspRepoSettings::unset(Some("srv"), "repo-1")
-            },
-        )
-        .unwrap();
+        let ssh = Way {
+            route: Route::Ssh { host: "dev".into() },
+            ..way(LspMethod::Host, None)
+        };
         let mut seen = Vec::new();
-        let text = read_outside(
-            &dir,
-            Some("srv"),
-            "repo-1",
-            WT,
-            GEM,
-            |route, _, command, _| {
-                seen.push((route.clone(), command.to_owned()));
-                Ok(if command.contains("Gemfile.lock") {
-                    ran(0, b"DEPENDENCIES\n  ruby-lsp\n", "")
-                } else if command.starts_with("cat -- ") {
-                    ran(0, b"x = 1\n", "")
-                } else {
-                    ran(0, b"", "")
-                })
-            },
-        )
+        let text = read_outside(&ssh, WT, GEM, |route, _, command, _| {
+            seen.push((route.clone(), command.to_owned()));
+            Ok(ran(0, b"x = 1\n", ""))
+        })
         .unwrap();
         assert_eq!(text, "x = 1\n");
         assert_eq!(
-            seen.last().unwrap(),
-            &(Route::Ssh { host: "dev".into() }, format!("cat -- {GEM}"))
+            seen,
+            vec![(Route::Ssh { host: "dev".into() }, format!("cat -- {GEM}"))]
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_refused_path_runs_nothing() {
-        let dir = temp_dir("refused");
         let mut runs = 0;
-        let err = read_outside(&dir, None, "repo-1", WT, "-n", |_, _, _, _| {
+        let err = read_outside(&way(LspMethod::Host, None), WT, "-n", |_, _, _, _| {
             runs += 1;
             Ok(ran(0, b"", ""))
         })
@@ -406,25 +339,20 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_with_no_way_to_start_the_server_reads_nothing() {
-        let dir = temp_dir("noway");
-        let mut commands = Vec::new();
-        let err = read_outside(&dir, None, "repo-1", WT, GEM, |_, _, command, _| {
-            commands.push(command.to_owned());
+    fn a_server_with_no_way_to_read_runs_nothing() {
+        let mut runs = 0;
+        let err = read_outside(&way(LspMethod::None, None), WT, GEM, |_, _, _, _| {
+            runs += 1;
             Ok(ran(0, b"", ""))
         })
         .unwrap_err();
         assert_eq!(err, NO_WAY);
-        assert!(
-            commands.iter().all(|c| !c.contains("cat -- ")),
-            "{commands:?}"
-        );
+        assert_eq!(runs, 0);
     }
 
     #[test]
     fn a_failed_run_is_told() {
-        let dir = temp_dir("failed");
-        let err = read_outside(&dir, None, "repo-1", WT, GEM, |_, _, _, _| {
+        let err = read_outside(&way(LspMethod::Host, None), WT, GEM, |_, _, _, _| {
             Err("ssh を実行できません".into())
         })
         .unwrap_err();

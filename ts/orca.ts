@@ -782,9 +782,11 @@ function forgetGone() {
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
-// Whether the language server of the worktree at `path` of `environment` is to stop (A-34): the list that says it was read well, and it has not the worktree any more or no tab of the worktree is open (a session, a terminal, a file or a difference of any project).
+// Whether the language server of the worktree at `path` of `environment` is to stop (A-34): no tab of the worktree is open (a session, a terminal, a file or a difference of any project), or it has not the worktree any more in a list that was read well. A place that the screen does not list now (another saved environment than the one it shows) has no session or terminal tab open, so it needs no list: its server stops when no file or difference of the worktree is open.
 function serverGone(environment: string | null, path: string) {
-  const read = environment === view?.target ? view?.state === "ready" : environment === null && here?.state === "ready";
+  const listed = environment === view?.target || (environment === null && here !== null);
+  if (!listed) return !hasFileIn(environment, path) && !hasDiffIn(environment, path);
+  const read = environment === view?.target ? view?.state === "ready" : here?.state === "ready";
   if (!read) return false;
   if (!mix.worktrees.some((w) => w.path === path && placeOf(w) === environment)) return true;
   const open = mix.rows.some((r) => r.paneKey !== null && r.path === path && placeOf(r) === environment) || mix.terminals.some((t) => t.path === path && placeOf(t) === environment);

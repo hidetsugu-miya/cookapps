@@ -6,9 +6,10 @@ use std::{path::Path, time::Duration};
 
 use tauri::AppHandle;
 
-use super::{plan_for, run_on, shell_quote, spawn_of, LspLaunch, LspMethod, Route};
+use super::{check_worktree, plan_for, run_on, shell_quote, spawn_of, LspLaunch, LspMethod, Route};
 use crate::{
     auth::config_dir,
+    orca_files::check_worktree_of_project,
     ssh_scratch::{failure, run_process, shared_control, Ran},
 };
 
@@ -71,6 +72,8 @@ pub async fn lsp_container_start(
     project: String,
     worktree: String,
 ) -> Result<(), String> {
+    check_worktree(&worktree)?;
+    check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
         start_container(

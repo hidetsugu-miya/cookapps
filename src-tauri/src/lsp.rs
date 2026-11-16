@@ -1,12 +1,13 @@
 //! A-34: how ruby-lsp is started for a worktree of the Orca screen, and the settings of each repository that say otherwise.
 //!
 //! The way is decided from what the worktree holds, in this order: a service of `docker compose config --format json` that bind mounts the worktree (`docker compose exec -T -w {mount} {service} bundle exec ruby-lsp`, the path of the worktree there being the mount's target), else a `Gemfile.lock` that lists `ruby-lsp` (`bundle exec ruby-lsp` on the host), else none. `decide` is a pure function of the two texts.
-//! The texts are read by one command each, run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
+//! The texts are read by one command each (the `Gemfile.lock` only when no service of compose mounts the worktree), run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
 //! What the definition pane draws of an answer (the name under the mouse, the place of each definition) is decided in `view`, from texts alone.
 //! The server itself is in `server` (the processes that stay, one for each worktree, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
 //! The settings of a repository are saved in `lsp-settings.json` in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list.
 //! A file outside the worktree that the server gave as a definition is read, read only, by the same route (`outside`).
 //! The container of the service is started, only when the owner asks, by the same route (`container`).
+//! The Ruby files that changed on the disk are told to the server before each question (`watch`, with `server::LspServers::refresh`).
 //! Nothing of a file of a worktree is kept: the answers of the two commands are used and dropped.
 
 pub mod container;
@@ -14,6 +15,7 @@ pub mod outside;
 mod protocol;
 pub mod server;
 pub mod view;
+mod watch;
 
 use std::{path::Path, sync::Mutex};
 
@@ -26,6 +28,7 @@ use ts_rs::TS;
 use crate::{
     accounts::write_atomic,
     auth::config_dir,
+    orca_files::check_worktree_of_project,
     ssh_scratch::{check_host, failure, run_process, shared_control, ssh_args, Ran, SSH, TIMEOUT},
 };
 
@@ -358,8 +361,11 @@ fn read_text(
     Ok((!text.trim().is_empty()).then_some(text))
 }
 
-/// Reads the compose configuration (`docker compose config --format json`, only when the folder has a compose file) and the `Gemfile.lock` of the worktree that `run` runs its commands in.
-fn collect(run: &mut impl FnMut(&str, usize) -> Result<Ran, String>) -> Result<Inputs, String> {
+/// Reads the compose configuration (`docker compose config --format json`, only when the folder has a compose file) and, unless a service of it mounts `worktree` (then the `Gemfile.lock` decides nothing), the `Gemfile.lock` of the worktree that `run` runs its commands in.
+fn collect(
+    run: &mut impl FnMut(&str, usize) -> Result<Ran, String>,
+    worktree: &str,
+) -> Result<Inputs, String> {
     let has_file = COMPOSE_FILES
         .map(|file| format!("[ -f {file} ]"))
         .join(" || ");
@@ -368,11 +374,19 @@ fn collect(run: &mut impl FnMut(&str, usize) -> Result<Ran, String>) -> Result<I
         &format!("if {has_file}; then docker compose config --format json; fi"),
         NOT_COMPOSE,
     )?;
-    let gemfile_lock = read_text(
-        run,
-        "if [ -f Gemfile.lock ]; then cat Gemfile.lock; fi",
-        NOT_LOCK,
-    )?;
+    let in_compose = match &compose {
+        Some(config) => !candidates(worktree, config)?.is_empty(),
+        None => false,
+    };
+    let gemfile_lock = if in_compose {
+        None
+    } else {
+        read_text(
+            run,
+            "if [ -f Gemfile.lock ]; then cat Gemfile.lock; fi",
+            NOT_LOCK,
+        )?
+    };
     Ok(Inputs {
         compose,
         gemfile_lock,
@@ -525,7 +539,10 @@ fn plan_for(
     check_worktree(worktree)?;
     let settings = settings_of(dir, environment, project)?;
     let route = route_of(environment, project, &settings)?;
-    let inputs = collect(&mut |command, limit| run(&route, worktree, command, limit))?;
+    let inputs = collect(
+        &mut |command, limit| run(&route, worktree, command, limit),
+        worktree,
+    )?;
     let launch = decide(
         worktree,
         inputs.compose.as_deref(),
@@ -579,6 +596,8 @@ pub async fn lsp_launch(
     project: String,
     worktree: String,
 ) -> Result<LspLaunch, String> {
+    check_worktree(&worktree)?;
+    check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
         launch_for(&dir, environment.as_deref(), &project, &worktree, run_on)
@@ -971,14 +990,17 @@ mod tests {
     #[test]
     fn collect_reads_the_compose_configuration_and_the_gemfile_lock() {
         let mut commands = Vec::new();
-        let inputs = collect(&mut |command, _limit| {
-            commands.push(command.to_owned());
-            Ok(if command.contains("docker compose") {
-                ran(0, "{\"services\":{}}", "")
-            } else {
-                ran(0, LOCK, "")
-            })
-        })
+        let inputs = collect(
+            &mut |command, _limit| {
+                commands.push(command.to_owned());
+                Ok(if command.contains("docker compose") {
+                    ran(0, "{\"services\":{}}", "")
+                } else {
+                    ran(0, LOCK, "")
+                })
+            },
+            WT,
+        )
         .unwrap();
         assert_eq!(
             inputs,
@@ -997,7 +1019,7 @@ mod tests {
 
     #[test]
     fn a_worktree_with_neither_has_neither() {
-        let inputs = collect(&mut |_, _| Ok(ran(0, "", ""))).unwrap();
+        let inputs = collect(&mut |_, _| Ok(ran(0, "", "")), WT).unwrap();
         assert_eq!(
             inputs,
             Inputs {
@@ -1009,44 +1031,53 @@ mod tests {
 
     #[test]
     fn a_failed_docker_is_an_error_with_the_last_line_of_its_message() {
-        let err = collect(&mut |command, _| {
-            Ok(if command.contains("docker compose") {
-                ran(127, "", "sh: docker: not found\n")
-            } else {
-                ran(0, "", "")
-            })
-        })
+        let err = collect(
+            &mut |command, _| {
+                Ok(if command.contains("docker compose") {
+                    ran(127, "", "sh: docker: not found\n")
+                } else {
+                    ran(0, "", "")
+                })
+            },
+            WT,
+        )
         .unwrap_err();
         assert_eq!(err, format!("{NOT_COMPOSE}: sh: docker: not found"));
     }
 
     #[test]
     fn a_failed_connection_is_told_as_one() {
-        let err = collect(&mut |_, _| {
-            Ok(ran(
-                255,
-                "",
-                "ssh: connect to host dev port 22: Connection refused",
-            ))
-        })
+        let err = collect(
+            &mut |_, _| {
+                Ok(ran(
+                    255,
+                    "",
+                    "ssh: connect to host dev port 22: Connection refused",
+                ))
+            },
+            WT,
+        )
         .unwrap_err();
         assert!(err.starts_with("接続できません"), "{err}");
-        let err = collect(&mut |_, _| Err("ssh を実行できません".into())).unwrap_err();
+        let err = collect(&mut |_, _| Err("ssh を実行できません".into()), WT).unwrap_err();
         assert_eq!(err, "ssh を実行できません");
     }
 
     #[test]
     fn an_answer_over_the_limit_or_not_utf8_is_an_error() {
         let big = "x".repeat(READ_MAX + 1);
-        let err = collect(&mut |_, _| Ok(ran(0, &big, ""))).unwrap_err();
+        let err = collect(&mut |_, _| Ok(ran(0, &big, "")), WT).unwrap_err();
         assert_eq!(err, TOO_LARGE);
-        let err = collect(&mut |_, _| {
-            Ok(Ran {
-                code: Some(0),
-                stdout: vec![0xff, 0xfe],
-                stderr: String::new(),
-            })
-        })
+        let err = collect(
+            &mut |_, _| {
+                Ok(Ran {
+                    code: Some(0),
+                    stdout: vec![0xff, 0xfe],
+                    stderr: String::new(),
+                })
+            },
+            WT,
+        )
         .unwrap_err();
         assert_eq!(err, NOT_UTF8);
     }
@@ -1054,12 +1085,47 @@ mod tests {
     #[test]
     fn collect_asks_for_one_byte_more_than_it_accepts() {
         let mut limits = Vec::new();
-        collect(&mut |_, limit| {
-            limits.push(limit);
-            Ok(ran(0, "", ""))
-        })
+        collect(
+            &mut |_, limit| {
+                limits.push(limit);
+                Ok(ran(0, "", ""))
+            },
+            WT,
+        )
         .unwrap();
         assert_eq!(limits, vec![READ_MAX + 1, READ_MAX + 1]);
+    }
+
+    #[test]
+    fn the_gemfile_lock_is_not_read_when_a_service_of_compose_mounts_the_worktree() {
+        let config = compose(json!({"app": {"volumes": [bind(WT, "/app")]}}));
+        let mut commands = Vec::new();
+        let inputs = collect(
+            &mut |command, _| {
+                commands.push(command.to_owned());
+                Ok(ran(0, &config, ""))
+            },
+            WT,
+        )
+        .unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(inputs.compose.as_deref(), Some(config.as_str()));
+        assert_eq!(inputs.gemfile_lock, None);
+        // A compose file whose services do not mount it leaves the decision to the lock, which is read.
+        let other = compose(json!({"db": {"image": "mysql"}}));
+        let mut commands = Vec::new();
+        collect(
+            &mut |command, _| {
+                commands.push(command.to_owned());
+                Ok(ran(0, &other, ""))
+            },
+            WT,
+        )
+        .unwrap();
+        assert_eq!(commands.len(), 2);
+        // A broken one is the error it is for `decide`.
+        let err = collect(&mut |_, _| Ok(ran(0, "nope", "")), WT).unwrap_err();
+        assert_eq!(err, BAD_COMPOSE);
     }
 
     // ---- the settings file ----
@@ -1292,7 +1358,8 @@ mod tests {
         assert_eq!(got.service.as_deref(), Some("worker"));
         assert_eq!(got.mount.as_deref(), Some("/srv"));
         assert_eq!(got.candidates.len(), 2);
-        assert_eq!(seen, vec![(Route::Local, WT.to_owned()); 2]);
+        // Only the compose configuration is read: a service mounts the worktree, so the lock decides nothing.
+        assert_eq!(seen, vec![(Route::Local, WT.to_owned())]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

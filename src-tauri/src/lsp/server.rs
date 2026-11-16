@@ -3,7 +3,7 @@
 //! A server is started by `lsp_start` and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
 //! The state is `indexing` from the start to the end of the progress ruby-lsp shows (`protocol::Progress`), `running` after it, and `stopped` with a reason when the process is gone. A service of compose whose container does not run is told as `containerDown`, so that the screen can offer to start it; starting the container is not done here. Each change of the state is told by the event `lsp-status` (`LspStatusEvent`), and `lsp_status` answers the state as it is.
 //! A server is stopped by `shutdown` and `exit`, and then by closing its standard input, which ends ruby-lsp, through `docker compose exec` and `ssh` as well; a process that is still there after a moment is killed.
-//! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::knows_outside`): they are the only ones that are read from outside the worktree.
+//! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which Ruby files changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered.
 
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
@@ -35,10 +35,11 @@ use super::{
         notification, read_frame, request, response, server_path, uri_of, Frame, Incoming,
         LspLocation, Progress,
     },
-    run_on, spawn_of, Route, Spawn,
+    run_on, spawn_of, watch, LspMethod, Route, Spawn,
 };
 use crate::{
     auth::config_dir,
+    orca_files::check_worktree_of_project,
     ssh_scratch::{failure, shared_control, Ran},
 };
 
@@ -54,6 +55,8 @@ const STDERR_KEEP: usize = 16 * 1024;
 const MAX_PENDING: usize = 32;
 /// The longest text of a file that is sent.
 const MAX_DOC: usize = 1024 * 1024;
+/// How long the look at the files of the disk before a question is waited for.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most paths outside the worktree that are remembered for a server.
 const MAX_OUTSIDE: usize = 10_000;
 
@@ -153,10 +156,15 @@ pub struct LspStatusEvent {
 
 // ---- the state from the end of a process ----
 
-/// Whether the standard error of `docker compose exec` says that the container of the service does not run (`service "app" is not running` of compose v2, `No container found` of the older ones, and the daemon's `... is not running`).
+/// Whether the standard error of `docker compose exec` says that the container of the service does not run (`service "app" is not running` of compose v2, `No container found` of the older ones, and the daemon's `... is not running`). Only its last line is read: that is where `docker compose exec` says it, and a server that ended for another reason may have said it earlier.
 fn container_down(stderr: &str) -> bool {
-    let lower = stderr.to_lowercase();
-    lower.contains("is not running") || lower.contains("no container found")
+    let last = stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .to_lowercase();
+    last.contains("is not running") || last.contains("no container found")
 }
 
 /// The state of a server whose process ended (or never ran): `reason` is what ended it, `code` the exit code of the process and `stderr` what it printed on its standard error.
@@ -227,6 +235,8 @@ pub(crate) enum Cmd {
         character: u32,
         reply: oneshot::Sender<Result<Value, String>>,
     },
+    /// Files of the worktree that changed on the disk (`watch::message`): the notice `workspace/didChangeWatchedFiles`, as it is to be sent.
+    Changed(Value),
     Stop,
 }
 
@@ -284,6 +294,27 @@ async fn sync_document<W: AsyncWrite + Unpin>(
             )
         }
     };
+    send(writer, &message, limit).await
+}
+
+/// The questions that wait for an answer: the file each is about, and where the answer goes.
+type Pending = HashMap<i64, (String, oneshot::Sender<Result<Value, String>>)>;
+
+/// Tells the server that the editor no longer has the file `uri` open (`didClose`), unless it is open and a question about it is still waiting: the server answers from the text it was given, and an open file is not re-read from the disk when it changes there (`workspace/didChangeWatchedFiles`), so a file is kept open only while it is asked about.
+async fn close_unused<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    docs: &mut HashMap<String, (i64, u64)>,
+    pending: &Pending,
+    uri: &str,
+    limit: Duration,
+) -> Result<(), String> {
+    if pending.values().any(|(asked, _)| asked == uri) || docs.remove(uri).is_none() {
+        return Ok(());
+    }
+    let message = notification(
+        "textDocument/didClose",
+        json!({"textDocument": {"uri": uri}}),
+    );
     send(writer, &message, limit).await
 }
 
@@ -372,7 +403,7 @@ where
     let mut initialized = false;
     let mut grace_at: Option<Instant> = None;
     let mut progress = Progress::default();
-    let mut pending: HashMap<i64, oneshot::Sender<Result<Value, String>>> = HashMap::new();
+    let mut pending: Pending = HashMap::new();
     let mut docs: HashMap<String, (i64, u64)> = HashMap::new();
     loop {
         tokio::select! {
@@ -395,8 +426,11 @@ where
                         publish(status_of(&progress, true));
                     }
                     Incoming::Response { id, result } => {
-                        if let Some(reply) = pending.remove(&id) {
+                        if let Some((uri, reply)) = pending.remove(&id) {
                             let _ = reply.send(result);
+                            if let Err(e) = close_unused(writer, &mut docs, &pending, &uri, timing.write).await {
+                                return End::Died(e);
+                            }
                         }
                     }
                     Incoming::Request { id, method } => {
@@ -427,12 +461,30 @@ where
                     }
                     return End::Closed;
                 }
+                Some(Cmd::Changed(message)) => {
+                    if initialized {
+                        if let Err(e) = send(writer, &message, timing.write).await {
+                            return End::Died(e);
+                        }
+                    }
+                }
                 Some(Cmd::Definition { uri, text, line, character, reply }) => {
                     if !initialized {
                         let _ = reply.send(Err(NOT_READY.into()));
                         continue;
                     }
-                    pending.retain(|_, reply| !reply.is_closed());
+                    // A question that nobody waits for any more is dropped, and its file is closed when no other question needs it.
+                    let abandoned: Vec<String> = pending
+                        .values()
+                        .filter(|(_, reply)| reply.is_closed())
+                        .map(|(asked, _)| asked.clone())
+                        .collect();
+                    pending.retain(|_, (_, reply)| !reply.is_closed());
+                    for asked in abandoned {
+                        if let Err(e) = close_unused(writer, &mut docs, &pending, &asked, timing.write).await {
+                            return End::Died(e);
+                        }
+                    }
                     if pending.len() >= MAX_PENDING {
                         let _ = reply.send(Err(BUSY.into()));
                         continue;
@@ -445,7 +497,7 @@ where
                     if let Err(e) = send(writer, &request(next_id, "textDocument/definition", params), timing.write).await {
                         return End::Died(e);
                     }
-                    pending.insert(next_id, reply);
+                    pending.insert(next_id, (uri, reply));
                 }
             },
             () = sleep_until(grace_at.unwrap_or(deadline)), if grace_at.is_some() => {
@@ -523,13 +575,22 @@ async fn run_spawn(ctx: &mut Ctx, spawn: &Spawn, mount: &str, timing: &Timing) {
     }
 }
 
-/// How the server of a worktree is started, read from the worktree: the process, and the path the worktree has where it runs. Blocking (it runs the commands of `lsp::plan_for`).
+/// How a server was started, as it was decided when it started: where its worktree is, the path the worktree has where it runs, and the method and the service. What it needs later (reading a file of its side, looking at the disk) goes by this and not by what the worktree says then, which may have changed.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Way {
+    pub mount: String,
+    pub route: Route,
+    pub method: LspMethod,
+    pub service: Option<String>,
+}
+
+/// How the server of a worktree is started, read from the worktree: the process, and how it was decided. Blocking (it runs the commands of `lsp::plan_for`).
 fn plan(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     worktree: &str,
-) -> Result<(Spawn, String), String> {
+) -> Result<(Spawn, Way), String> {
     let (route, launch) = plan_for(dir, environment, project, worktree, run_on)?;
     let command = launch.command.ok_or(NO_WAY)?;
     let mount = launch.mount.unwrap_or_else(|| worktree.to_owned());
@@ -537,9 +598,15 @@ fn plan(
         Route::Local => None,
         Route::Ssh { .. } => shared_control(),
     };
+    let spawn = spawn_of(&route, worktree, &command, control.as_deref());
     Ok((
-        spawn_of(&route, worktree, &command, control.as_deref()),
-        mount,
+        spawn,
+        Way {
+            mount,
+            route,
+            method: launch.method,
+            service: launch.service,
+        },
     ))
 }
 
@@ -552,8 +619,9 @@ async fn run_server(mut ctx: Ctx, dir: PathBuf, key: Key, project: String) {
     .map_err(|e| e.to_string())
     .and_then(|planned| planned);
     match planned {
-        Ok((spawn, mount)) => {
-            *ctx.mount.lock().unwrap_or_else(|e| e.into_inner()) = Some(mount.clone());
+        Ok((spawn, way)) => {
+            let mount = way.mount.clone();
+            *ctx.way.lock().unwrap_or_else(|e| e.into_inner()) = Some(way);
             run_spawn(&mut ctx, &spawn, &mount, &Timing::DEFAULT).await;
         }
         Err(message) => ctx.publisher.set(LspStatus::failed(message)),
@@ -600,17 +668,24 @@ impl Publisher {
 pub(crate) struct Ctx {
     rx: mpsc::UnboundedReceiver<Cmd>,
     publisher: Publisher,
-    /// The path the worktree has where the server runs, set by the task once it is known.
-    mount: Arc<Mutex<Option<String>>>,
+    /// How the server is started, set by the task once it is known.
+    way: Arc<Mutex<Option<Way>>>,
+}
+
+/// What the app knows of the files of the worktree on the disk: when it last looked, and the `*.rb` files it saw then (`None` before the first look).
+struct Watch {
+    at: Instant,
+    known: Option<HashSet<String>>,
 }
 
 struct Server {
     status: Arc<Mutex<LspStatus>>,
-    mount: Arc<Mutex<Option<String>>>,
+    way: Arc<Mutex<Option<Way>>>,
     commands: mpsc::UnboundedSender<Cmd>,
     task: Mutex<Option<JoinHandle<()>>>,
     /// The paths outside the worktree that the server answered as a definition.
     outside: Mutex<HashSet<String>>,
+    watch: tokio::sync::Mutex<Watch>,
 }
 
 impl Server {
@@ -619,6 +694,11 @@ impl Server {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// How the server was started; none until the task has read it.
+    fn way(&self) -> Option<Way> {
+        self.way.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Asks the task to stop, and waits for it for a while; a task that is still there is ended (its process is killed with it).
@@ -653,14 +733,17 @@ impl LspServers {
                 return status;
             }
         }
+        // The places that the server of a definition gave stay known to the one that replaces it: the list that shows them is still on the screen.
+        let mut outside = HashSet::new();
         if let Some(old) = servers.remove(&key) {
             if let Some(task) = old.task.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 task.abort();
             }
+            outside = std::mem::take(&mut *old.outside.lock().unwrap_or_else(|e| e.into_inner()));
         }
         let (commands, rx) = mpsc::unbounded_channel();
         let status = Arc::new(Mutex::new(LspStatus::indexing()));
-        let mount = Arc::new(Mutex::new(None));
+        let way = Arc::new(Mutex::new(None));
         let publisher = Publisher {
             key: key.clone(),
             status: status.clone(),
@@ -669,16 +752,20 @@ impl LspServers {
         let task = tokio::spawn(run(Ctx {
             rx,
             publisher,
-            mount: mount.clone(),
+            way: way.clone(),
         }));
         servers.insert(
             key,
             Arc::new(Server {
                 status,
-                mount,
+                way,
                 commands,
                 task: Mutex::new(Some(task)),
-                outside: Mutex::new(HashSet::new()),
+                outside: Mutex::new(outside),
+                watch: tokio::sync::Mutex::new(Watch {
+                    at: Instant::now(),
+                    known: None,
+                }),
             }),
         );
         LspStatus::indexing()
@@ -710,7 +797,7 @@ impl LspServers {
         futures_util::future::join_all(servers.iter().map(|server| server.finish())).await;
     }
 
-    /// The places that the server of `key` gives as the definition of the name at a position of the file `relative` of the worktree, whose text is `text` (the whole of it, as the editor holds it now). The paths of the places are from the worktree, or, when `outside`, the server's (and remembered, for `knows_outside`).
+    /// The places that the server of `key` gives as the definition of the name at a position of the file `relative` of the worktree, whose text is `text` (the whole of it, as the editor holds it now). The paths of the places are from the worktree, or, when `outside`, the server's (and remembered, for `outside_way`).
     pub(crate) async fn definition(
         &self,
         key: &Key,
@@ -723,12 +810,7 @@ impl LspServers {
         if server.status().state == LspState::Stopped {
             return Err(STOPPED.into());
         }
-        let mount = server
-            .mount
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or(NOT_READY)?;
+        let mount = server.way().ok_or(NOT_READY)?.mount;
         if text.len() > MAX_DOC {
             return Err(TOO_LARGE.into());
         }
@@ -759,21 +841,56 @@ impl LspServers {
         Ok(found)
     }
 
-    /// Whether the server of `key` gave `path` as a definition outside the worktree: only such a path may be read from the server's side.
-    pub async fn knows_outside(
+    /// How the server of the worktree was started, when it gave `path` as a definition outside the worktree: only such a path may be read from the server's side, and it is read the way the server was started (`Way`), not the way the worktree says now.
+    pub(crate) async fn outside_way(
         &self,
         environment: Option<&str>,
         worktree: &str,
         path: &str,
-    ) -> bool {
-        let key = key_of(environment, worktree);
-        match self.get(&key).await {
-            Some(server) => server
-                .outside
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(path),
-            None => false,
+    ) -> Option<Way> {
+        let server = self.get(&key_of(environment, worktree)).await?;
+        let known = server
+            .outside
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(path);
+        known.then(|| server.way()).flatten()
+    }
+
+    /// Tells the server of `key` which Ruby files of the worktree changed on the disk since the last look (`watch`): `run` runs the listing in the worktree by the route of the server. It is one run, within `REFRESH_TIMEOUT`; a listing that fails is left out and tried again at the next question, and the question goes on without it.
+    pub(crate) async fn refresh<F>(&self, key: &Key, run: F)
+    where
+        F: FnOnce(&Route, &str, &str, usize) -> Result<Ran, String> + Send + 'static,
+    {
+        let Some(server) = self.get(key).await else {
+            return;
+        };
+        let Some(way) = server.way() else {
+            return;
+        };
+        let mut watch = server.watch.lock().await;
+        let looked_at = Instant::now();
+        let command = watch::command(watch::minutes_since(looked_at.duration_since(watch.at)));
+        let (route, worktree) = (way.route.clone(), key.worktree.clone());
+        let ran = timeout(
+            REFRESH_TIMEOUT,
+            tokio::task::spawn_blocking(move || run(&route, &worktree, &command, watch::LIMIT)),
+        )
+        .await;
+        let Ok(Ok(Ok(ran))) = ran else {
+            return;
+        };
+        if ran.code != Some(0) {
+            return;
+        }
+        let listing = watch::parse(&String::from_utf8_lossy(&ran.stdout));
+        let changes = watch::changes(&listing, watch.known.as_ref());
+        watch.at = looked_at;
+        if let Some(all) = listing.all {
+            watch.known = Some(all.into_iter().collect());
+        }
+        if let Some(message) = watch::message(&way.mount, &changes) {
+            let _ = server.commands.send(Cmd::Changed(message));
         }
     }
 }
@@ -804,6 +921,7 @@ pub async fn lsp_start(
     worktree: String,
 ) -> Result<LspStatus, String> {
     check_worktree(&worktree)?;
+    check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
     let key = key_of(environment.as_deref(), &worktree);
     let run_key = key.clone();
@@ -850,14 +968,10 @@ pub async fn lsp_definition(
     line: u32,
     character: u32,
 ) -> Result<Vec<LspLocation>, String> {
+    let key = key_of(environment.as_deref(), &worktree);
+    servers.refresh(&key, run_on).await;
     servers
-        .definition(
-            &key_of(environment.as_deref(), &worktree),
-            &relative,
-            text,
-            line,
-            character,
-        )
+        .definition(&key, &relative, text, line, character)
         .await
 }
 
@@ -1093,9 +1207,14 @@ mod tests {
             "",
             "bundler: command not found: ruby-lsp",
             "Cannot connect to the Docker daemon",
+            // Said earlier by a server that ended for another reason.
+            "service \"app\" is not running\nbundler: command not found: ruby-lsp\n",
+            "No container found for app_1\n/usr/bin/ruby: segfault\n\n",
         ] {
             assert!(!container_down(stderr), "{stderr}");
         }
+        // The last line that has text is the one read.
+        assert!(container_down("warn\nservice \"app\" is not running\n\n"));
     }
 
     #[test]
@@ -1192,8 +1311,19 @@ mod tests {
         run.stop().await;
     }
 
+    /// Waits until the stand-in has received `count` calls that have a method.
+    async fn until_calls(run: &Run, count: usize) {
+        for _ in 0..1000 {
+            if run.calls().len() >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("calls: {:?}", run.methods());
+    }
+
     #[tokio::test]
-    async fn the_text_is_sent_whole_as_an_open_then_as_a_change_only_when_it_differs() {
+    async fn the_text_is_sent_whole_as_an_open_and_the_file_is_closed_once_it_is_answered() {
         let run = run(Plan::new());
         run.plan.end.notify_one();
         run.until_states(2).await;
@@ -1204,25 +1334,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got["uri"], "file:///app/b.rb");
-        run.definition("file:///app/a.rb", "x = 1\n", 0, 0)
-            .await
-            .unwrap();
         run.definition("file:///app/a.rb", "x = 2\n", 0, 0)
             .await
             .unwrap();
         run.definition("file:///app/other.rb", "y\n", 0, 0)
             .await
             .unwrap();
+        // 2 calls of the handshake, then an open, the question and a close for each question.
+        until_calls(&run, 2 + 9).await;
         assert_eq!(
             run.methods()[2..],
             [
                 "textDocument/didOpen",
                 "textDocument/definition",
-                "textDocument/definition",
-                "textDocument/didChange",
-                "textDocument/definition",
+                "textDocument/didClose",
                 "textDocument/didOpen",
                 "textDocument/definition",
+                "textDocument/didClose",
+                "textDocument/didOpen",
+                "textDocument/definition",
+                "textDocument/didClose",
             ]
         );
         let log = run.calls();
@@ -1235,11 +1366,101 @@ mod tests {
             json!({"textDocument": {"uri": "file:///app/a.rb"}, "position": {"line": 0, "character": 4}})
         );
         assert_eq!(
-            log[5]["params"],
-            json!({"textDocument": {"uri": "file:///app/a.rb", "version": 2}, "contentChanges": [{"text": "x = 2\n"}]})
+            log[4]["params"],
+            json!({"textDocument": {"uri": "file:///app/a.rb"}})
+        );
+        // The file is opened again with its new text, not changed.
+        assert_eq!(
+            log[5]["params"]["textDocument"],
+            json!({"uri": "file:///app/a.rb", "languageId": "ruby", "version": 1, "text": "x = 2\n"})
         );
         drop(log);
         run.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_notice_of_changed_files_is_sent_as_it_is_and_the_next_question_follows_it() {
+        let run = run(Plan::new());
+        run.plan.end.notify_one();
+        run.until_states(2).await;
+        let notice = crate::lsp::watch::message(
+            "/app",
+            &[crate::lsp::watch::Change {
+                path: "lib/a.rb".into(),
+                kind: 2,
+            }],
+        )
+        .unwrap();
+        run.commands.send(Cmd::Changed(notice.clone())).unwrap();
+        run.definition("file:///app/a.rb", "x\n", 0, 0)
+            .await
+            .unwrap();
+        until_calls(&run, 2 + 4).await;
+        assert_eq!(
+            run.methods()[2..],
+            [
+                "workspace/didChangeWatchedFiles",
+                "textDocument/didOpen",
+                "textDocument/definition",
+                "textDocument/didClose",
+            ]
+        );
+        assert_eq!(run.calls()[2]["params"], notice["params"]);
+        run.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_file_is_closed_only_when_no_other_question_about_it_waits() {
+        let uri = "file:///app/a.rb";
+        let mut docs: HashMap<String, (i64, u64)> = HashMap::new();
+        docs.insert(uri.into(), (1, 7));
+        let (other, _keep) = oneshot::channel();
+        let mut pending: Pending = HashMap::new();
+        pending.insert(5, (uri.into(), other));
+        let mut written: Vec<u8> = Vec::new();
+        close_unused(
+            &mut written,
+            &mut docs,
+            &pending,
+            uri,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(written.is_empty());
+        assert!(docs.contains_key(uri));
+        // Another file's question does not keep it open.
+        pending.clear();
+        let (third, _keep) = oneshot::channel();
+        pending.insert(6, ("file:///app/b.rb".into(), third));
+        close_unused(
+            &mut written,
+            &mut docs,
+            &pending,
+            uri,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        let text = String::from_utf8(written.clone()).unwrap();
+        assert!(
+            text.contains(r#""method":"textDocument/didClose""#),
+            "{text}"
+        );
+        assert!(text.contains(r#""uri":"file:///app/a.rb""#), "{text}");
+        assert!(docs.is_empty());
+        // A file that is not open is not closed.
+        written.clear();
+        close_unused(
+            &mut written,
+            &mut docs,
+            &pending,
+            uri,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(written.is_empty());
     }
 
     #[tokio::test]
@@ -1425,6 +1646,15 @@ mod tests {
         )
     }
 
+    fn way_of(mount: &str) -> Way {
+        Way {
+            mount: mount.into(),
+            route: Route::Local,
+            method: LspMethod::Compose,
+            service: Some("app".into()),
+        }
+    }
+
     /// The task of a server that talks to the stand-in, with `/app` as its mount.
     fn standin(
         plan: Plan,
@@ -1435,7 +1665,7 @@ mod tests {
                 started.fetch_add(1, Ordering::SeqCst);
                 let (client, server) = tokio::io::duplex(64 * 1024);
                 tokio::spawn(serve(server, Arc::default(), plan));
-                *ctx.mount.lock().unwrap() = Some("/app".into());
+                *ctx.way.lock().unwrap() = Some(way_of("/app"));
                 let publisher = ctx.publisher.clone();
                 let (reader, writer) = split(client);
                 if let End::Died(reason) =
@@ -1638,15 +1868,20 @@ mod tests {
             ]
         );
         let gem = "/usr/local/bundle/gems/rack-3.1.0/lib/rack.rb";
-        assert!(servers.knows_outside(None, "/w/a", gem).await);
-        assert!(!servers.knows_outside(None, "/w/a", "/etc/passwd").await);
-        assert!(
-            !servers
-                .knows_outside(None, "/w/a", "app/models/user.rb")
-                .await
+        // The way it was started by comes with the path.
+        assert_eq!(
+            servers.outside_way(None, "/w/a", gem).await,
+            Some(way_of("/app"))
         );
-        assert!(!servers.knows_outside(Some("srv"), "/w/a", gem).await);
-        assert!(!servers.knows_outside(None, "/w/other", gem).await);
+        assert_eq!(servers.outside_way(None, "/w/a", "/etc/passwd").await, None);
+        assert_eq!(
+            servers
+                .outside_way(None, "/w/a", "app/models/user.rb")
+                .await,
+            None
+        );
+        assert_eq!(servers.outside_way(Some("srv"), "/w/a", gem).await, None);
+        assert_eq!(servers.outside_way(None, "/w/other", gem).await, None);
         servers.close_all().await;
     }
 
@@ -1746,7 +1981,7 @@ mod tests {
                 status: Arc::new(Mutex::new(LspStatus::indexing())),
                 emit,
             },
-            mount: Arc::default(),
+            way: Arc::default(),
         };
         (ctx, commands, events)
     }

@@ -74,13 +74,14 @@ function drawState() {
   container.disabled = busy !== null;
 }
 
-// The fields, from what was read. Only a read or a save redraws them: a field that is being typed in is not touched by the state.
+// The fields, from what was read. Only a read or a save redraws them: a field that is being typed in is not touched by the state, nor by a read or a save that ends while it is typed in.
 function drawFields() {
   if (pane === null) return;
   const ready = settings !== null;
   const set = (id: string, value: string) => {
     const input = $(id) as HTMLInputElement;
-    input.value = value;
+    // The field that is being typed in keeps its text: a save of another field ends meanwhile and draws these.
+    if (input !== document.activeElement) input.value = value;
     input.disabled = !ready;
   };
   set("orca-lsp-command", launch?.command ?? "");
