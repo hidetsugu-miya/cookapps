@@ -1,6 +1,6 @@
 //! A-34: how ruby-lsp is started for a worktree of the Orca screen, and the settings of each repository that say otherwise.
 //!
-//! The way is decided from what the worktree holds, in this order: a service of `docker compose config --format json` that bind mounts the worktree (`docker compose exec -T {service} bundle exec ruby-lsp`, the path of the worktree there being the mount's target), else a `Gemfile.lock` that lists `ruby-lsp` (`bundle exec ruby-lsp` on the host), else none. `decide` is a pure function of the two texts.
+//! The way is decided from what the worktree holds, in this order: a service of `docker compose config --format json` that bind mounts the worktree (`docker compose exec -T -w {mount} {service} bundle exec ruby-lsp`, the path of the worktree there being the mount's target), else a `Gemfile.lock` that lists `ruby-lsp` (`bundle exec ruby-lsp` on the host), else none. `decide` is a pure function of the two texts.
 //! The texts are read by one command each, run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
 //! The server itself is in `server` (the processes that stay, one for each worktree, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
 //! The settings of a repository are saved in `lsp-settings.json` in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list.
@@ -226,7 +226,8 @@ fn resolve(launch: Launch, settings: &LspRepoSettings, worktree: &str) -> LspLau
     let (decided_command, decided_mount) = match (method, chosen) {
         (LspMethod::Compose, Some(c)) => (
             Some(format!(
-                "docker compose exec -T {} {RUBY_LSP}",
+                "docker compose exec -T -w {} {} {RUBY_LSP}",
+                shell_quote(&c.mount),
                 shell_quote(&c.service)
             )),
             Some(c.mount.clone()),
@@ -264,7 +265,7 @@ pub(crate) fn shell_quote(text: &str) -> String {
     }
 }
 
-/// The script that runs `command` in `worktree`, for `sh -c`: the folders of `docker` are added to PATH, then it goes to the worktree. The worktree is quoted; `command` is shell text and is not (the owner's own, or one that `resolve` made with the service quoted).
+/// The script that runs `command` in `worktree`, for `sh -c`: the folders of `docker` are added to PATH, then it goes to the worktree. The worktree is quoted; `command` is shell text and is not (the owner's own, or one that `resolve` made with the mount and the service quoted).
 pub(crate) fn script(worktree: &str, command: &str) -> String {
     format!(
         "PATH=\"$PATH:{EXTRA_PATH}\"; export PATH; cd {} && {command}",
@@ -759,7 +760,7 @@ mod tests {
                 method: LspMethod::Compose,
                 candidates: vec![cand("app", "/app"), cand("worker", "/srv")],
                 service: Some("app".into()),
-                command: Some("docker compose exec -T app bundle exec ruby-lsp".into()),
+                command: Some("docker compose exec -T -w /app app bundle exec ruby-lsp".into()),
                 mount: Some("/app".into()),
             }
         );
@@ -777,7 +778,7 @@ mod tests {
         assert_eq!(got.mount.as_deref(), Some("/srv"));
         assert_eq!(
             got.command.as_deref(),
-            Some("docker compose exec -T worker bundle exec ruby-lsp")
+            Some("docker compose exec -T -w /srv worker bundle exec ruby-lsp")
         );
         let stale = LspRepoSettings {
             service: Some("gone".into()),
@@ -791,8 +792,19 @@ mod tests {
         let launch = Launch::Compose(vec![cand("a b;c", "/app")]);
         assert_eq!(
             resolve(launch, &settings(), WT).command.as_deref(),
-            Some("docker compose exec -T 'a b;c' bundle exec ruby-lsp")
+            Some("docker compose exec -T -w /app 'a b;c' bundle exec ruby-lsp")
         );
+    }
+
+    #[test]
+    fn a_mount_is_quoted_in_the_command() {
+        let launch = Launch::Compose(vec![cand("app", "/my work/it's;x")]);
+        let got = resolve(launch, &settings(), WT);
+        assert_eq!(
+            got.command.as_deref(),
+            Some(r"docker compose exec -T -w '/my work/it'\''s;x' app bundle exec ruby-lsp")
+        );
+        assert_eq!(got.mount.as_deref(), Some("/my work/it's;x"));
     }
 
     #[test]
