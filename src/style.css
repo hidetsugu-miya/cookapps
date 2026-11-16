@@ -99,10 +99,10 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
 #main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }
-#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar, #todo-main::-webkit-scrollbar, #settings::-webkit-scrollbar, #slack-feed::-webkit-scrollbar,, #slack-side-feed::-webkit-scrollbar, #orca-feed::-webkit-scrollbar, #st-msgs::-webkit-scrollbar { width: 12px; }
-#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track, #todo-main::-webkit-scrollbar-track, #settings::-webkit-scrollbar-track, #slack-feed::-webkit-scrollbar-track,, #slack-side-feed::-webkit-scrollbar-track, #orca-feed::-webkit-scrollbar-track, #st-msgs::-webkit-scrollbar-track { background: var(--bar); }
-#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb, #todo-main::-webkit-scrollbar-thumb, #settings::-webkit-scrollbar-thumb, #slack-feed::-webkit-scrollbar-thumb,, #slack-side-feed::-webkit-scrollbar-thumb, #orca-feed::-webkit-scrollbar-thumb, #st-msgs::-webkit-scrollbar-thumb { background: var(--chip-line); border-radius: 6px; border: 3px solid var(--bar); }
-#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover,, #slack-side-feed::-webkit-scrollbar-thumb:hover, #orca-feed::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
+#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar, #todo-main::-webkit-scrollbar, #settings::-webkit-scrollbar, #slack-feed::-webkit-scrollbar,, #slack-side-feed::-webkit-scrollbar, #orca-feed::-webkit-scrollbar, #formation-flow-body::-webkit-scrollbar, #st-msgs::-webkit-scrollbar { width: 12px; }
+#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track, #todo-main::-webkit-scrollbar-track, #settings::-webkit-scrollbar-track, #slack-feed::-webkit-scrollbar-track,, #slack-side-feed::-webkit-scrollbar-track, #orca-feed::-webkit-scrollbar-track, #formation-flow-body::-webkit-scrollbar-track, #st-msgs::-webkit-scrollbar-track { background: var(--bar); }
+#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb, #todo-main::-webkit-scrollbar-thumb, #settings::-webkit-scrollbar-thumb, #slack-feed::-webkit-scrollbar-thumb,, #slack-side-feed::-webkit-scrollbar-thumb, #orca-feed::-webkit-scrollbar-thumb, #formation-flow-body::-webkit-scrollbar-thumb, #st-msgs::-webkit-scrollbar-thumb { background: var(--chip-line); border-radius: 6px; border: 3px solid var(--bar); }
+#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover,, #slack-side-feed::-webkit-scrollbar-thumb:hover, #orca-feed::-webkit-scrollbar-thumb:hover, #formation-flow-body::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
 
 #login { display: flex; justify-content: center; padding: 64px; }
 #relogin { margin-bottom: 8px; }
@@ -1003,8 +1003,57 @@ button.status:hover { filter: brightness(.95); }
 #formation { flex: 1; min-height: 0; display: flex; }
 #formation-orchestrator { flex: none; width: 36%; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 #formation-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#formation-children { flex: 1; min-width: 0; min-height: 0; }
-#formation-flow { flex: none; width: 260px; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
+#formation-children { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* The strip of the children's tabs (the tabs are another issue's): the button that opens the flow is at its right end while the flow is closed, and the switch of the tabs that follows the child that waits goes at the left of it. */
+#formation-tabbar { flex: none; display: flex; align-items: center; gap: 6px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); background: var(--bar); }
+#formation-tabs { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; }
+#formation-flow { flex: none; width: 260px; box-sizing: border-box; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bar); }
+#formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px 0 16px; border-bottom: 1px solid var(--line); }
+#formation-flow-head h2 { flex: none; }
+#formation-flow-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
+/* The same button and place as the file pane's of Orca (.orca-files-toggle): pressed (a soft ground, the accent) while the pane is open. The count of the children that wait is at its corner while the pane is closed. */
+.formation-flow-toggle { position: relative; flex: none; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
+.formation-flow-toggle svg { width: var(--header-ic); height: var(--header-ic); }
+.formation-flow-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+.formation-flow-badge { position: absolute; top: -5px; right: -7px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--bar); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+#formation-flow-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 6px 14px 10px; }
+#formation-flow-error { margin: 0 0 10px; overflow-wrap: anywhere; }
+/* The tree: the orchestrator's card, and the children under it in a line with a branch to each card. A planned child is dashed and faint, with a hollow dot. */
+#formation-flow-root { cursor: default; }
+#formation-flow-list { list-style: none; margin: 14px 0 0; padding: 0; position: relative; }
+#formation-flow-list::before { content: ""; position: absolute; left: 5px; top: -14px; height: 14px; border-left: 2px solid var(--chip-line); }
+#formation-flow-list li { --c: var(--chip-line); position: relative; padding: 3px 0 3px 22px; }
+#formation-flow-list li[data-state="working"] { --c: var(--agent-working); }
+#formation-flow-list li[data-state="waiting"] { --c: var(--agent-question); }
+#formation-flow-list li[data-state="done"] { --c: var(--agent-done); }
+#formation-flow-list li::before { content: ""; position: absolute; left: 5px; top: 0; bottom: 0; border-left: 2px solid var(--chip-line); }
+#formation-flow-list li:last-child::before { bottom: auto; height: 50%; }
+#formation-flow-list li::after { content: ""; position: absolute; left: 5px; top: 50%; width: 17px; border-top: 2px solid var(--c); }
+#formation-flow-list li[data-state="planned"]::after { border-top-style: dashed; }
+.formation-card { display: grid; gap: 2px; width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 9px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; text-align: left; }
+button.formation-card { cursor: pointer; }
+.formation-card[data-state="working"] { border-color: color-mix(in srgb, var(--agent-working) 55%, var(--line)); }
+.formation-card[data-state="waiting"] { border-color: var(--agent-question); background: color-mix(in srgb, var(--agent-question) 10%, var(--surface)); }
+.formation-card[data-state="done"] { border-color: color-mix(in srgb, var(--agent-done) 45%, var(--line)); }
+.formation-card[data-state="planned"] { border: 1.5px dashed var(--chip-line); background: transparent; }
+.formation-card[aria-pressed="true"] { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
+.formation-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.formation-card-row + .formation-card-row { justify-content: flex-start; gap: 6px; }
+.formation-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); font-weight: 700; }
+.formation-card[data-state="planned"] .formation-card-name { color: var(--muted); font-weight: 600; }
+.formation-card-role { flex: none; padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); font-size: calc(10.5px * var(--fs)); line-height: 17px; }
+.formation-card-time { flex: none; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: calc(11px * var(--fs)); }
+.formation-card-state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: calc(11px * var(--fs)); font-weight: 700; white-space: nowrap; }
+.formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }
+.formation-card[data-state="planned"] .formation-card-state { color: var(--muted); font-weight: 600; }
+.formation-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-idle); }
+.formation-card[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
+.formation-card[data-state="waiting"] .formation-dot { background: var(--agent-question); }
+.formation-card[data-state="done"] .formation-dot { background: var(--agent-done); }
+.formation-card[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
+.formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
+.formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
+@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }

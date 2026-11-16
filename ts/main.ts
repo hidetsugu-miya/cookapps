@@ -7,6 +7,7 @@ import { initClaude, refreshClaude } from "./claude.js";
 import { initDatabase } from "./database.js";
 import { initEditorSettings } from "./editor-settings.js";
 import { initFontSettings } from "./font-settings.js";
+import { initFormationFlow } from "./formation-flow.js";
 import { initGhostty } from "./ghostty.js";
 import { initHint } from "./hint.js";
 import { initInbox, load, showKeptInbox } from "./inbox.js";
@@ -64,6 +65,7 @@ initSlackChannel();
 initSlackClaude();
 initSlackThread();
 initOrca();
+initFormationFlow();
 initFileDrops();
 initDatabase();
 

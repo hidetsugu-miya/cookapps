@@ -682,8 +682,24 @@
         </header>
         <div id="formation-term"></div>
       </section>
-      <section id="formation-children" aria-label="子"></section>
-      <aside id="formation-flow" aria-label="流れ"></aside>
+      <section id="formation-children" aria-label="子">
+        <div id="formation-tabbar" data-tauri-drag-region>
+          <div id="formation-tabs" role="tablist" aria-label="子"></div>
+          <button id="formation-tabbar-toggle" class="icon-btn formation-flow-toggle" type="button" aria-label="流れ" aria-pressed="true" hidden><span class="formation-flow-badge" aria-hidden="true" hidden></span></button>
+        </div>
+      </section>
+      <aside id="formation-flow" aria-label="流れ">
+        <header id="formation-flow-head" data-tauri-drag-region>
+          <h2>流れ</h2>
+          <span id="formation-flow-count"></span>
+          <button id="formation-flow-toggle" class="icon-btn formation-flow-toggle" type="button" aria-label="流れ" aria-pressed="true"></button>
+        </header>
+        <div id="formation-flow-body">
+          <p id="formation-flow-error" class="pending fail" role="alert" hidden></p>
+          <div id="formation-flow-root" class="formation-card"><span class="formation-card-row"><span class="formation-card-name">formation</span><span class="formation-card-role">司令塔</span></span></div>
+          <ul id="formation-flow-list"></ul>
+        </div>
+      </aside>
     </section>
     <section id="slack-compose" hidden>
       <header data-tauri-drag-region="deep">
