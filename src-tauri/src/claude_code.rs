@@ -1077,6 +1077,8 @@ mod tests {
             "formation_launch",
             "formation_plan",
             "formation_close",
+            "formation_environments",
+            "オーナーに聞きます",
             "SendMessage",
             "AskUserQuestion",
             "英小文字、数字、ハイフン",
