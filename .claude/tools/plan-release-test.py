@@ -191,6 +191,16 @@ class Validation(unittest.TestCase):
         self.assertTrue(any("#5, which is open but not planned" in p for p in pr.validate_plan(plan, self.free, self.fixed, states)))
         self.assertEqual(pr.validate_plan(plan, self.free, self.fixed, states, {5}), [])
 
+    def test_a_part_may_not_wait_for_its_parent_nor_for_a_parent_whose_part_waits_for_it(self):
+        free = [mk(1, parent=5), mk(2, parent=5), mk(3)]
+        states = {1: "open", 2: "open", 3: "open", 5: "open"}
+        own = {"order": [1, 2, 3], "blocked_by": {"1": [5]}}
+        self.assertEqual(pr.validate_plan(own, free, [], states, {5}), ["blocked_by: cycle #1 -> #5 -> #1"])
+        through = {"order": [3, 1, 2], "blocked_by": {"3": [5], "2": [3]}}
+        self.assertEqual(pr.validate_plan(through, free, [], states, {5}), ["blocked_by: cycle #2 -> #3 -> #5 -> #2"])
+        fine = {"order": [3, 1, 2], "blocked_by": {"3": [5]}}
+        self.assertEqual(pr.validate_plan(fine, free, [], states, {5}), [])
+
     def test_keys_of_an_older_plan_are_ignored(self):
         plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "touches": {"32": ["ts/a.ts"]}}
         self.assertEqual(self.check(plan), [])
