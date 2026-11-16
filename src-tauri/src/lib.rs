@@ -8,6 +8,7 @@ pub mod claude_code;
 pub mod database;
 mod disk_cache;
 pub mod fonts;
+pub mod formation;
 pub mod ghostty;
 pub mod gmail;
 pub mod identity;

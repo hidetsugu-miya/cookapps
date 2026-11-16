@@ -111,6 +111,7 @@ Add more accounts from "Add account" in the Google tab of the settings screen.
 Install it with `cargo install --path src-tauri --bin tsunagiai-mcp --locked`.
 The setup is in `docs/mcp.md`.
 The tools are `list_inbox`, `get_thread`, `list_events` and `db_profiles` (read), `archive`, `set_read` and `trash` (write), and `db_profile_save` and `db_test` (the connections of the database screen: save one with its script, and try it, D-8).
+Started with the argument `--formation` (the `mcp.json` of the orchestrator, A-37), it also offers `formation_plan`, `formation_launch` and `formation_close` (`formation.rs`: the children of the orchestrator and their record `formation/children.json`); no other client is offered them, because `formation_launch` starts a Claude Code in auto mode.
 
 ## Tests
 
