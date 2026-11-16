@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.80.0
+
+A-36: Claude Code can run in a pane of the app, as a terminal that the app opens itself, with no Orca in between (#730). It runs `claude` in the folder `claude-code/` of the config folder, with `cookapps-mcp` as its only MCP server, and with `--permission-mode manual`, so that Claude Code asks before every tool that writes. It signs in the way the Claude tab chose (the subscription or the API key), and the font, the colors and the keys are those of the Orca terminals. A pane that is hidden keeps Claude Code running, and a pane whose Claude Code has ended starts it again when it is shown again. When `claude` or `cookapps-mcp` cannot be found, the pane says so.
+
+D-1: the icon at the right end of the header of the edit pane opens the Claude Code pane at the right of the edit pane, in place of the terminal pane of D-7 (#720). Claude Code there keeps its built-in tools, so that it can run `aws` and other commands to try a pre-script, and it saves and tests the connection through `cookapps-mcp`; the edit pane reads the saved connection into the fields that were not changed by hand, as before. Closing the edit pane or leaving the screen ends Claude Code. The terminal pane of D-7 keeps its own icon in the header of the work pane, and both panes can be open.
+
+D-1, D-2: the edit pane has no tabs "直接" and "スクリプト経由" any more (#745). Every connection has a host and a port, and the pre-script is optional. The app picks no free port: the script gets the connection's own port as `COOKAPPS_PORT`, is to listen at the connection's host and port, and MySQL is logged in to there. When something already answers at that host and port before the script is run, the connection fails and the script is not run. TLS is required for every host that is not this Mac, with a script or without one. A connection saved with a script and no host shows an empty host and the port 3306 in the edit pane, and cannot be opened or tested until a host and a port are saved. "接続をテスト" on a connection that is open in the app starts no script when the user, the script, the host and the port are the ones it was opened with: it logs in through the open connection's way, and the connection stays open.
+
+D-8: `db_profile_save` of `cookapps-mcp` always takes `db_host` and `db_port`, with a script or without one, and a change of the user, the script, the host or the port deletes the saved password (#745). When the port is in use before the script is run, the error of `db_test` adds that a connection open in cookapps has to be closed before the test.
+
+S-13, S-19, A-35: "ウォッチ" no longer lowers the Slack unread count of the side menu and the footer for a moment: the unread messages of a watched thread still count, as the next read showed (#746).
+
 ## v0.79.0
 
 A-35: every screen has a low footer at the bottom of the window, with a bell at its right end that shows the unread threads of the inbox and the unread messages of the Slack list added up ("99+" from 100, no number for 0) (#725). The bell opens a pane from the right that lists those mails and Slack messages mixed, the newest first, each with the sender, the channel for Slack, the time, and the subject of a mail or one line of a message; a press on a row opens the thread on its screen (#726). The bell, the close button and a press outside the pane close it. While the pointer or the focus is on a row, the row shows buttons: "ゴミ箱へ移動" and "アーカイブ" for a mail, and "既読にする" and "ウォッチ" for a Slack message (#727). The row goes from the pane at once, and "元に戻す" of the notice brings a mail back.
