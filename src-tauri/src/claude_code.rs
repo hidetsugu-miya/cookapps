@@ -60,8 +60,8 @@ const ID_LIMIT: usize = 200;
 pub enum ClaudeCodeEvent {
     /// What the terminal printed.
     Output { data: String },
-    /// The process ended (`message` says how, in Japanese). Nothing follows.
-    Ended { message: String },
+    /// The process ended (`message` says how, in Japanese; `clean` is true only when it ended by itself with the exit code 0). Nothing follows.
+    Ended { message: String, clean: bool },
 }
 
 /// A saved skill that the pane's Claude Code is given with `--plugin-dir` (A-32).
@@ -243,6 +243,15 @@ fn take_text(pending: &mut Vec<u8>, bytes: &[u8]) -> String {
     }
 }
 
+/// The end of the process as the pane gets it: the words, and whether it was an exit with the code 0 (a failed read of the status, an exit code and a signal are not).
+fn ended_event(status: std::io::Result<portable_pty::ExitStatus>) -> ClaudeCodeEvent {
+    let clean = matches!(&status, Ok(status) if status.success());
+    ClaudeCodeEvent::Ended {
+        message: ended_text(status),
+        clean,
+    }
+}
+
 /// How the process ended, for the pane.
 fn ended_text(status: std::io::Result<portable_pty::ExitStatus>) -> String {
     match status {
@@ -367,9 +376,7 @@ impl Reader {
         let status = self.child.wait();
         self.ended.store(true, Ordering::SeqCst);
         if taken {
-            (self.sink)(ClaudeCodeEvent::Ended {
-                message: ended_text(status),
-            });
+            (self.sink)(ended_event(status));
         }
         inner.forget(id, seq);
     }
@@ -877,6 +884,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_an_exit_with_the_code_0_is_a_clean_end() {
+        use portable_pty::ExitStatus;
+        let clean = |status| match ended_event(status) {
+            ClaudeCodeEvent::Ended { clean, .. } => clean,
+            other => panic!("{other:?}"),
+        };
+        assert!(clean(Ok(ExitStatus::with_exit_code(0))));
+        assert!(!clean(Ok(ExitStatus::with_exit_code(3))));
+        assert!(!clean(Ok(ExitStatus::with_signal("Terminated"))));
+        assert!(!clean(Err(std::io::Error::other("no status"))));
+    }
+
     // ---- real pseudo terminals, running short commands (never `claude`) ----
 
     const WAIT: Duration = Duration::from_secs(10);
@@ -909,7 +929,7 @@ mod tests {
                         return (text, None);
                     }
                 }
-                Ok(ClaudeCodeEvent::Ended { message }) => return (text, Some(message)),
+                Ok(ClaudeCodeEvent::Ended { message, .. }) => return (text, Some(message)),
                 Err(_) => {}
             }
         }

@@ -464,7 +464,7 @@ describe("database: edit pane, the Claude tab and reload", () => {
     await toggle().click();
     await waitForCalls("claude_code_start");
     await sendClaudeCode({ kind: "output", data: "old screen" });
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
     await expect(tab()).not.toExist();
     await expect(pane()).not.toBeDisplayed();
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
@@ -473,6 +473,24 @@ describe("database: edit pane, the Claude tab and reload", () => {
     await expect(tab()).toBeDisplayed();
     expect((await waitForCalls("claude_code_start", 2)).length).toBe(2);
     await noOrca();
+  });
+
+  it("keeps the Claude tab, the pane and the message when the process ends with an exit code", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました（終了コード 3）", clean: false });
+    await browser.waitUntil(async () => (await $("#database-claude-term .xterm-rows").getText()).includes("終了コード 3"), { timeoutMsg: "the message of the end was never drawn" });
+    await browser.pause(300);
+    await expect(tab()).toBeDisplayed();
+    await expect(pane()).toBeDisplayed();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    const close = await mock("claude_code_close", null);
+    await tabClose().click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-claude", launch: 1 }]);
+    await expect(tab()).not.toExist();
+    await expect(pane()).not.toBeDisplayed();
   });
 
   it("drops the Claude tab with its close button, ends the process, and closes the pane when no other tab is left", async () => {
@@ -2603,7 +2621,7 @@ describe("database: terminal pane, terminals", () => {
 
   it("drops the Claude tab when its process ends, keeps the pane while a terminal is open, and starts Claude Code again when the pane is opened after the terminals are gone", async () => {
     await openTerminal();
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
     await expect($("#database-claude-tab")).not.toExist();
     await expect($("#database-terminal")).toBeDisplayed();
     expect(await tabs()).toEqual(["example-api ・ main"]);

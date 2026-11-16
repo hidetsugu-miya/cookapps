@@ -3,4 +3,4 @@
 /**
  * What a pane's channel carries.
  */
-export type ClaudeCodeEvent = { "kind": "output", data: string, } | { "kind": "ended", message: string, };
+export type ClaudeCodeEvent = { "kind": "output", data: string, } | { "kind": "ended", message: string, clean: boolean, };

@@ -1,6 +1,6 @@
 // The terminal pane of the database screen (D-7): a pane at the right of the work pane that the icon at the right end of the work pane's header opens and closes, and a divider between them that is dragged.
 // Whether it is open is the `aria-pressed` of the icon, and its width is the divider's (ts/split.ts); both are kept in memory only.
-// Its head is a strip of tabs with a plus. The first tab is the fixed "Claude" tab (A-36): opening the pane starts Claude Code in it when none runs (the built-in tools on, as the database screen runs `aws`), and it goes when the process ends by itself or its close button is pressed; closing the pane, leaving the screen and closing the edit pane do not end it. The plus asks Orca for its worktrees, lets the user pick one (the dialog of A-16) and opens a plain terminal there (`orca_terminal_create`); the terminal is drawn by ts/orca-terminal.ts (A-8, A-12), with this pane as its owner.
+// Its head is a strip of tabs with a plus. The first tab is the fixed "Claude" tab (A-36): opening the pane starts Claude Code in it when none runs (the built-in tools on, as the database screen runs `aws`), and it goes when the process ends by itself with the exit code 0 or its close button is pressed (an end with an exit code or a signal keeps it, with the message in its box); closing the pane, leaving the screen and closing the edit pane do not end it. The plus asks Orca for its worktrees, lets the user pick one (the dialog of A-16) and opens a plain terminal there (`orca_terminal_create`); the terminal is drawn by ts/orca-terminal.ts (A-8, A-12), with this pane as its owner.
 // Each terminal the plus opened has a tab, in the order they were opened, and the newest is selected. A tab is pressed to show its terminal, and its close button (the one of the tabs of the Orca screen) closes the terminal in Orca (`orca_close`).
 // Only the selected terminal is shown: a tick (every second) shows it when the pane is in view, and lets the others go (`hideTerminals`: their streams or reads end), as it lets all of them go when the pane is closed, the screen is left or the window is hidden. It also reads Orca's list, as long as the pane is in view, to see that each terminal is still there: first until the list holds it, then at the period of the Orca clock; a terminal the list lacks is forgotten, with its tab.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
@@ -291,8 +291,9 @@ function closeClaude() {
   claudeHost?.remove();
   claudeHost = null;
   if (selected === CLAUDE_ID) selected = terminals[0]?.handle ?? null;
-  if (terminals.length === 0) return setDatabaseTerminalOpen(false);
+  // The strip is drawn before the pane closes, or the tab that went would stay in it.
   draw();
+  if (terminals.length === 0) return setDatabaseTerminalOpen(false);
   void tick();
 }
 

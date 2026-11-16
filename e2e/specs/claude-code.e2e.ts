@@ -69,7 +69,7 @@ describe("claude code pane", () => {
     await waitForCalls("claude_code_start");
     await sendClaudeCode({ kind: "output", data: "$ claude\r\n> 日本語の出力" });
     await shows("日本語の出力");
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました（終了コード 3）" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました（終了コード 3）", clean: false });
     await shows("終了コード 3");
   });
 
@@ -82,7 +82,7 @@ describe("claude code pane", () => {
     await browser.keys(["1", "Enter"]);
     await browser.waitUntil(async () => (await typed(input)) === "1\r", { timeoutMsg: "the keys were not sent" });
     expect((await callsOf(input)).every((c) => (c as { id: string }).id === "pane-1")).toBe(true);
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
     await shows("Claude Code が終わりました");
     await browser.keys(["2"]);
     await browser.pause(300);
@@ -162,7 +162,7 @@ describe("claude code pane", () => {
     await waitForCalls("claude_code_start");
     await sendClaudeCode({ kind: "output", data: "old screen" });
     await shows("old screen");
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました" });
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
     await shows("Claude Code が終わりました");
     await call("hideClaudeCode");
     await show("pane-1");

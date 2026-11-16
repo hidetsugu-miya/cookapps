@@ -57,7 +57,7 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 
 // Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
-// `pty` is what a pty is started with: whether Claude Code keeps its own tools, and the saved skill it is given; `onEnd` is called when its process ends by itself (not when it could not start).
+// `pty` is what a pty is started with: whether Claude Code keeps its own tools, and the saved skill it is given; `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
@@ -527,7 +527,7 @@ function startPty(instance: Instance) {
   channel.onmessage = (event) => {
     if (instance.channel !== channel) return;
     drawPty(instance, event);
-    if (event.kind === "ended") instance.source.pty?.onEnd?.();
+    if (event.kind === "ended" && event.clean) instance.source.pty?.onEnd?.();
   };
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
@@ -535,7 +535,7 @@ function startPty(instance: Instance) {
   instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, channel }).then(
     (launch) => launch,
     (e) => {
-      if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e) });
+      if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e), clean: false });
       return null;
     },
   );
