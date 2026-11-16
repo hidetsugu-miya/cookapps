@@ -1,5 +1,5 @@
 // The database screen (D-1, D-3 to D-6): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure, SQL) of the table that was pressed.
-// This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
+// This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the edit pane (database-form.ts) only asks for the fields.
 // Rust holds the open connections (the session and its script); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
@@ -184,7 +184,7 @@ async function save(profile: DatabaseProfile, password: string) {
   if (profile.id !== "") await dropClosed();
   await load();
   if (failure === null) return;
-  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the popup would save it again as a new one. It closes, and the error is shown on the screen.
+  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and the error is shown on the screen.
   if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showError(failure);
   throw failure;
 }

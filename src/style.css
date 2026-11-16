@@ -1692,7 +1692,7 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #st-reply, #sc-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
 #st-error, #sc-error { margin: 0 0 8px; }
 
-/* D-1, D-3: the database screen is the column of connections (like #slack-side, with its divider), which open into databases and tables, and the work pane, which holds the tables of the database that was pressed last. The popup that registers or edits a connection is in the middle of a dimmed screen. */
+/* D-1, D-3: the database screen is the column of connections (like #slack-side, with its divider), which open into databases and tables, and the work pane, which holds the tables of the database that was pressed last. The edit pane that registers or edits a connection takes the place of the work pane. */
 #database { flex: 1; min-height: 0; display: flex; }
 #database-side { flex: none; width: clamp(15%, var(--side-w, 20%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #database-side-split { flex: none; }
@@ -1783,18 +1783,24 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .database-cell[data-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .database-cell[data-kind="null"], .database-cell[data-kind="binary"] { color: var(--muted); font-style: italic; }
-.scrim.scrim-center { justify-content: center; align-items: center; }
-.database-form { width: 420px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow-y: auto; box-sizing: border-box; padding: 20px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); display: flex; flex-direction: column; gap: 12px; }
-.database-form h2 { flex: none; font-size: calc(15px * var(--fs)); }
+/* D-1: the edit pane of a connection takes the place of the work pane: its header has the title and the buttons, and under it are the fields. */
+#database-edit { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#database-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.database-edit-head { flex: none; display: flex; align-items: center; gap: 12px; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+.database-edit-head h1 { min-width: 0; }
+.database-edit-actions { display: flex; gap: 8px; margin-left: auto; }
+.database-edit-actions .text-btn:disabled { opacity: .4; cursor: default; }
+.database-edit-actions .text-btn:disabled:hover { background: var(--surface); }
+.database-edit-body { flex: 1; min-height: 0; overflow-y: auto; box-sizing: border-box; width: 100%; max-width: 560px; padding: 16px 24px; font-size: calc(13px * var(--fs)); display: flex; flex-direction: column; gap: 12px; }
 .database-field { display: flex; flex-direction: column; gap: 4px; }
 .database-label { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--muted); }
-.database-form input:not([type="checkbox"]) { height: 32px; min-width: 0; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
-.database-form input:not([type="checkbox"]):focus { outline: 2px solid var(--accent); border-color: transparent; }
-.database-check { display: flex; align-items: center; gap: 8px; }
-.database-check input { margin: 0; accent-color: var(--accent); }
-.database-ssm { display: flex; flex-direction: column; gap: 12px; }
-.database-form .err { margin: 0; font-size: calc(12px * var(--fs)); }
-.database-form .database-test { margin: 0; }
+.database-edit-body input { height: 32px; min-width: 0; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
+.database-edit-body input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-way { display: flex; flex-direction: column; gap: 12px; }
+.database-script-text { box-sizing: border-box; width: 100%; min-height: 200px; resize: vertical; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); line-height: 1.5; }
+.database-script-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-edit-body .database-tabs { margin-bottom: 0; }
+.database-edit-body .err { margin: 0; font-size: calc(12px * var(--fs)); }
+.database-edit-body .database-test { margin: 0; }
 .database-test.status { align-self: flex-start; }
-.database-test.err { font-size: calc(12px * var(--fs)); }
-.database-form .popup-actions { justify-content: flex-end; }
+.database-test.err { font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }

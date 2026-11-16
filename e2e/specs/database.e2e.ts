@@ -33,7 +33,9 @@ const pickFromMenu = async (id: string, item: 1 | 2 | 3) => {
   await $(`.menu button[role="menuitem"]:nth-child(${item})`).click();
 };
 const field = (name: string) => $(`#database-form [name="${name}"]`);
-// The profile that the popup sends when it is filled in as a connection with no script.
+// The way tab of the edit pane (直接 or スクリプト経由).
+const way = (id: "direct" | "script") => $(`#database-form .database-tab[data-mode="${id}"]`);
+// The profile that the edit pane sends when it is filled in as a connection with no script.
 const typed = { id: "", name: "Example new", username: "reader", script: "", dbHost: "db.example.com", dbPort: 3306 };
 const fillDirect = async () => {
   await field("name").setValue("Example new");
@@ -78,6 +80,7 @@ describe("database", () => {
     await expect($("#database-add")).toHaveAttribute("aria-label", "接続を追加");
     expect(await textsOf("#database-side-feed")).toEqual(["Example directExample tunnel"]);
     expect(await count("#database-form")).toBe(0);
+    await expect($("#database-edit")).not.toBeDisplayed();
     expect(await count("#database input[placeholder]")).toBe(0);
   });
 
@@ -109,19 +112,49 @@ describe("database", () => {
 });
 
 describe("database: register", () => {
-  it("opens a popup from the plus, with the fields of a connection, the port 3306 and an empty script", async () => {
+  it("takes the place of the work pane from the plus, with the fields of a connection, the way 直接 selected and the port 3306", async () => {
     await openDatabase([]);
     await $("#database-add").click();
+    await expect($("#database-edit")).toBeDisplayed();
     await expect($("#database-form")).toBeDisplayed();
+    await expect($("#database-pane")).not.toBeDisplayed();
+    await expect($("#database-side")).toBeDisplayed();
     await expect($("#database-form")).toHaveAttribute("aria-label", "接続を追加");
-    await expect($("#database-form h2")).toHaveText("接続を追加");
+    await expect($("#database-form h1")).toHaveText("接続を追加");
+    expect(await textsOf("#database-form .database-edit-actions button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
+    expect(await count(".scrim")).toBe(0);
+    expect(await textsOf("#database-form .database-tab")).toEqual(["直接", "スクリプト経由"]);
+    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
+    await expect(way("script")).toHaveAttribute("aria-selected", "false");
+    await expect(field("dbHost")).toBeDisplayed();
+    await expect(field("dbPort")).toBeDisplayed();
     await expect(field("dbPort")).toHaveValue("3306");
-    await expect(field("script")).toBeDisplayed();
-    await expect(field("script")).toHaveValue("");
-    await expect($("#database-form label.database-field:has([name=script]) .database-label")).toHaveText("事前スクリプト");
+    await expect(field("script")).not.toBeDisplayed();
     expect(await browser.execute(() => document.activeElement?.getAttribute("name"))).toBe("name");
     expect(await count("#database-form [placeholder]")).toBe(0);
     await expect($("#database-form .status")).not.toExist();
+    expect(await browser.execute(() => document.getElementById("content")!.inert)).toBe(false);
+  });
+
+  it("shows the script field in place of the host and the port on スクリプト経由, and back on 直接, keeping what was typed", async () => {
+    await openDatabase([]);
+    await $("#database-add").click();
+    await field("dbHost").setValue("db.example.com");
+    await way("script").click();
+    await expect(way("script")).toHaveAttribute("aria-selected", "true");
+    await expect(way("direct")).toHaveAttribute("aria-selected", "false");
+    await expect(field("script")).toBeDisplayed();
+    await expect(field("script")).toHaveValue("");
+    await expect($("#database-form label.database-field:has([name=script]) .database-label")).toHaveText("事前スクリプト");
+    await expect(field("dbHost")).not.toBeDisplayed();
+    await expect(field("dbPort")).not.toBeDisplayed();
+    await field("script").setValue("exec forward-port $COOKAPPS_PORT");
+    await way("direct").click();
+    await expect(field("dbHost")).toBeDisplayed();
+    await expect(field("dbHost")).toHaveValue("db.example.com");
+    await expect(field("script")).not.toBeDisplayed();
+    await way("script").click();
+    await expect(field("script")).toHaveValue("exec forward-port $COOKAPPS_PORT");
   });
 
   it("saves a connection with no script, sends the id empty and the password, closes, and draws the list that Rust answers next", async () => {
@@ -134,23 +167,39 @@ describe("database: register", () => {
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([{ profile: typed, password: "secret" }]);
     await expect($("#database-form")).not.toExist();
+    await expect($("#database-edit")).not.toBeDisplayed();
+    await expect($("#database-pane")).toBeDisplayed();
     await waitForCount("#database-side-feed .database-item", 2);
     expect(await names()).toEqual(["Example direct", "Example new"]);
   });
 
-  it("sends the script as typed, with its line breaks", async () => {
+  it("sends the script as typed, with its line breaks, and no host and no port, on スクリプト経由", async () => {
     await openDatabase([]);
     const save = await mock("database_profile_save", databaseProfile("p3", "Example new"));
     await mock("database_profiles", [databaseProfile("p3", "Example new")]);
     await $("#database-add").click();
     await fillDirect();
-    await field("script").setValue("#!/bin/sh\nexec forward-port $COOKAPPS_PORT");
     await field("dbPort").setValue("3307");
+    await way("script").click();
+    await field("script").setValue("#!/bin/sh\nexec forward-port $COOKAPPS_PORT");
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
-      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $COOKAPPS_PORT", dbPort: 3307 }, password: "" },
+      { profile: { ...typed, script: "#!/bin/sh\nexec forward-port $COOKAPPS_PORT", dbHost: "", dbPort: 0 }, password: "" },
     ]);
     await expect($("#database-form")).not.toExist();
+  });
+
+  it("sends no script on 直接, also when one was typed before the way was changed back", async () => {
+    await openDatabase([]);
+    const save = await mock("database_profile_save", databaseProfile("p3", "Example new"));
+    await mock("database_profiles", [databaseProfile("p3", "Example new")]);
+    await $("#database-add").click();
+    await fillDirect();
+    await way("script").click();
+    await field("script").setValue("exec forward-port $COOKAPPS_PORT");
+    await way("direct").click();
+    await $("#database-form button[type=submit]").click();
+    expect(await waitForCalls(save)).toEqual([{ profile: typed, password: "" }]);
   });
 
   it("sends an empty or non-numeric port as 0, which Rust refuses", async () => {
@@ -163,7 +212,7 @@ describe("database: register", () => {
     expect(await waitForCalls(save)).toEqual([{ profile: { ...typed, dbPort: 0 }, password: "" }]);
   });
 
-  it("shows the reason of a refused save under the fields, keeps the popup and what was typed, and saves again", async () => {
+  it("shows the reason of a refused save under the fields, keeps the edit pane and what was typed, and saves again", async () => {
     await openDatabase([]);
     const save = await mock("database_profile_save", rejects("同じ名前の接続があります: Example new"));
     await $("#database-add").click();
@@ -185,7 +234,7 @@ describe("database: register", () => {
     await expect($("#database-form-error")).not.toExist();
   });
 
-  it("closes the popup when the keychain refuses after the connection was saved, shows the error on the screen, and lists the connection", async () => {
+  it("closes the edit pane when the keychain refuses after the connection was saved, shows the error on the screen, and lists the connection", async () => {
     await openDatabase([direct]);
     const message = "接続は保存しましたが、パスワードを保存できません: keychain is locked";
     const save = await mock("database_profile_save", rejects(message));
@@ -201,34 +250,60 @@ describe("database: register", () => {
     expect(await names()).toEqual(["Example direct", "Example new"]);
   });
 
-  it("closes on キャンセル and on Escape, calls nothing, and makes the screen behind usable again", async () => {
+  it("closes on キャンセル and on Escape, calls nothing, and gives the work pane back", async () => {
     await openDatabase([direct]);
     const save = await mock("database_profile_save", databaseProfile("p3", "x"));
     await $("#database-add").click();
     await fillDirect();
     await $("#database-form").$("button=キャンセル").click();
     await expect($("#database-form")).not.toExist();
+    await expect($("#database-edit")).not.toBeDisplayed();
+    await expect($("#database-pane")).toBeDisplayed();
     await $("#database-add").click();
     await expect(field("name")).toHaveValue("");
     await browser.keys("Escape");
     await expect($("#database-form")).not.toExist();
+    await expect($("#database-pane")).toBeDisplayed();
     expect(await callsOf(save)).toEqual([]);
-    expect(await browser.execute(() => document.getElementById("content")!.inert)).toBe(false);
+  });
+
+  it("closes when the screen is left", async () => {
+    await openDatabase([direct]);
+    await $("#database-add").click();
+    await expect($("#database-form")).toBeDisplayed();
+    await $("#nav-mail").click();
+    await expect($("#database-form")).not.toExist();
+    await $("#nav-database").click();
+    await expect($("#database-pane")).toBeDisplayed();
+    await expect($("#database-edit")).not.toBeDisplayed();
   });
 });
 
 describe("database: edit", () => {
-  it("opens the popup from the menu of a row with the fields filled and a saved password shown as a status, not the password", async () => {
+  it("opens the edit pane from the menu of a row with the fields filled, スクリプト経由 selected for a connection with a script, and a saved password shown as a status, not the password", async () => {
     await openDatabase();
     await pickFromMenu("p2", 1);
     await expect($("#database-form")).toHaveAttribute("aria-label", "接続を編集");
+    await expect($("#database-form h1")).toHaveText("接続を編集");
+    await expect($("#database-pane")).not.toBeDisplayed();
     await expect(field("name")).toHaveValue("Example tunnel");
     await expect(field("username")).toHaveValue("reader");
     await expect(field("password")).toHaveValue("");
     await expect($("#database-form .status.ok")).toHaveText("保存済み");
-    await expect(field("script")).toHaveValue("'+SC+'");
-    await expect(field("dbHost")).toHaveValue("db.internal.example.com");
+    await expect(way("script")).toHaveAttribute("aria-selected", "true");
+    await expect(field("script")).toBeDisplayed();
+    await expect(field("script")).toHaveValue('exec forward-port "$COOKAPPS_PORT"');
+    await expect(field("dbHost")).not.toBeDisplayed();
+    await expect(field("dbPort")).not.toBeDisplayed();
+  });
+
+  it("selects 直接 for a connection with no script, with its host and port", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await expect(way("direct")).toHaveAttribute("aria-selected", "true");
+    await expect(field("dbHost")).toHaveValue("db.example.com");
     await expect(field("dbPort")).toHaveValue("3306");
+    await expect(field("script")).not.toBeDisplayed();
   });
 
   it("shows no saved-password status for a connection with none", async () => {
@@ -236,7 +311,6 @@ describe("database: edit", () => {
     await pickFromMenu("p1", 1);
     await expect(field("name")).toHaveValue("Example direct");
     await expect($("#database-form .status")).not.toExist();
-    await expect(field("script")).toHaveValue("");
   });
 
   it("saves with the id of the connection and an empty password, and draws the renamed row", async () => {
@@ -248,7 +322,7 @@ describe("database: edit", () => {
     await $("#database-form button[type=submit]").click();
     expect(await waitForCalls(save)).toEqual([
       {
-        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", dbPort: 3306 },
+        profile: { id: "p2", name: "Example renamed", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "", dbPort: 0 },
         password: "",
       },
     ]);
@@ -319,20 +393,20 @@ describe("database: delete", () => {
 });
 
 describe("database: test the connection", () => {
-  const probe = () => $("#database-form .popup-actions button:nth-child(2)");
+  const probe = () => $("#database-form .database-edit-actions button:nth-child(1)");
   const result = () => $("#database-test-result");
 
-  it("has the button 接続をテスト between 保存 and キャンセル, with nothing shown and nothing called before it is pressed", async () => {
+  it("has the button 接続をテスト before キャンセル and 保存 in the header, with nothing shown and nothing called before it is pressed", async () => {
     const test = await mock("database_test", "8.0.36");
     await openDatabase([]);
     await $("#database-add").click();
-    expect(await textsOf("#database-form .popup-actions button")).toEqual(["保存", "接続をテスト", "キャンセル"]);
+    expect(await textsOf("#database-form .database-edit-actions button")).toEqual(["接続をテスト", "キャンセル", "保存"]);
     await expect(probe()).toHaveAttribute("type", "button");
     await expect(result()).not.toBeDisplayed();
     expect(await callsOf(test)).toEqual([]);
   });
 
-  it("sends the fields as typed and the typed password, shows the version as a status, and saves nothing and keeps the popup", async () => {
+  it("sends the fields as typed and the typed password, shows the version as a status, and saves nothing and keeps the edit pane", async () => {
     await openDatabase([direct]);
     const test = await mock("database_test", "8.0.36");
     const save = await mock("database_profile_save", databaseProfile("p3", "x"));
@@ -347,6 +421,7 @@ describe("database: test the connection", () => {
     await expect(result()).toHaveElementClass("ok");
     await expect(result()).toHaveAttribute("role", "status");
     await expect($("#database-form")).toBeDisplayed();
+    await expect($("#database-pane")).not.toBeDisplayed();
     await expect(probe()).toBeEnabled();
     await expect($("#database-form-error")).not.toBeDisplayed();
     expect(await callsOf(save)).toEqual([]);
@@ -357,20 +432,31 @@ describe("database: test the connection", () => {
     await openDatabase();
     const test = await mock("database_test", "5.7.44-log");
     await pickFromMenu("p2", 1);
-    await field("dbPort").setValue("3307");
+    await field("script").setValue("exec other-forward");
     await probe().click();
     expect(await waitForCalls(test)).toEqual([
       {
-        profile: { id: "p2", name: "Example tunnel", username: "reader", script: "exec forward-port \"$COOKAPPS_PORT\"", dbHost: "db.internal.example.com", dbPort: 3307 },
+        profile: { id: "p2", name: "Example tunnel", username: "reader", script: "exec other-forward", dbHost: "", dbPort: 0 },
         password: "",
       },
     ]);
     await expect(result()).toHaveText("MySQL 5.7.44-log");
   });
 
-  it("shows the error as it is, in the danger color, keeps the popup, and a second test replaces it", async () => {
+  it("tests a connection with no script with its host and port and an empty script", async () => {
+    await openDatabase();
+    const test = await mock("database_test", "8.0.36");
+    await pickFromMenu("p1", 1);
+    await field("dbPort").setValue("3307");
+    await probe().click();
+    expect(await waitForCalls(test)).toEqual([
+      { profile: { id: "p1", name: "Example direct", username: "reader", script: "", dbHost: "db.example.com", dbPort: 3307 }, password: "" },
+    ]);
+  });
+
+  it("shows the error as it is, in the danger color, keeps the edit pane, and a second test replaces it", async () => {
     await openDatabase([]);
-    const message = "トンネルは開きましたが、MySQL が応えません。踏み台から DB のホストとポートに届くか（DB のセキュリティグループが踏み台からの接続を許しているか）を確かめてください";
+    const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: no route to host / connection refused";
     const test = await mock("database_test", rejects(message));
     await $("#database-add").click();
     await fillDirect();
@@ -406,7 +492,7 @@ describe("database: test the connection", () => {
     await expect(result()).toHaveText("MySQL へのログインに失敗しました。ユーザー名とパスワードを確かめてください: Access denied");
   });
 
-  it("draws nothing when the popup was closed while the test was on its way, and a new popup shows no answer", async () => {
+  it("draws nothing when the edit pane was closed while the test was on its way, and a new one shows no answer", async () => {
     await openDatabase([]);
     const test = await mock("database_test", holds);
     await $("#database-add").click();

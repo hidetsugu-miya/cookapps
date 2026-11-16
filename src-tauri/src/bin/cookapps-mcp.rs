@@ -63,9 +63,11 @@ struct DbProfileSaveArgs {
     username: String,
     /// The whole script that opens the way to the database, or an empty text for none. It runs before the login, gets a free port in the environment variable COOKAPPS_PORT and must listen on 127.0.0.1 at that port. A save replaces the saved script with this text.
     script: String,
-    /// Host of the database. With a script, the host is what the script reaches, and MySQL is logged in to at 127.0.0.1 and COOKAPPS_PORT.
+    /// Host of the database, needed when there is no script. With a script, leave it out: the script reaches the database, and MySQL is logged in to at 127.0.0.1 and COOKAPPS_PORT.
+    #[serde(default)]
     db_host: String,
-    /// Port of the database, 1 to 65535.
+    /// Port of the database, 1 to 65535, needed when there is no script. With a script, leave it out.
+    #[serde(default)]
     db_port: u32,
 }
 
@@ -260,6 +262,18 @@ mod tests {
         let new = args(None).into_profile();
         assert_eq!((new.id.as_str(), new.script.as_str()), ("", "exec forward"));
         assert_eq!(args(Some("abc")).into_profile().id, "abc");
+    }
+
+    #[test]
+    fn a_save_with_a_script_needs_no_host_and_no_port() {
+        let args: DbProfileSaveArgs = serde_json::from_value(serde_json::json!({
+            "name": "dev",
+            "username": "reader",
+            "script": "exec forward"
+        }))
+        .unwrap();
+        let profile = args.into_profile();
+        assert_eq!((profile.db_host.as_str(), profile.db_port), ("", 0));
     }
 
     #[test]
