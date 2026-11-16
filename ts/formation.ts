@@ -1,6 +1,6 @@
 // The orchestration mode of the development screen (A-37): three columns, the orchestrator's terminal at the left, the children's tabs and terminals in the middle (formation-tabs.ts) and the flow at the right (formation-flow.ts).
 // The mode is kept only while the app runs; the first one is Orca.
-import { closeClaudeCode, FORMATION_ID, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
+import { claudeCodeStarted, closeClaudeCode, FORMATION_ID, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { startCount, startFlow, stopFlow } from "./formation-flow.js";
 import { hideTabs } from "./formation-tabs.js";
@@ -27,11 +27,17 @@ export function showFormation() {
 }
 
 // The restart button of the header: ends the orchestrator's process if it is running (or has ended), and begins a new one with the keyboard, as a first show does (A-37). The children are not touched.
+// The button is off until the new start has answered, because two starts of the pane's id at once could end each other's process.
 export function initFormation() {
   $("formation-restart").innerHTML = RELOAD_SVG;
-  $("formation-restart").onclick = () => {
+  const button = $<HTMLButtonElement>("formation-restart");
+  button.onclick = () => {
+    button.disabled = true;
     closeClaudeCode(FORMATION_ID, OWNER);
     showClaudeCode($("formation-term"), { id: FORMATION_ID, kind: "formation" }, OWNER);
+    void claudeCodeStarted(FORMATION_ID).then(() => {
+      button.disabled = false;
+    });
   };
 }
 

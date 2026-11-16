@@ -5,7 +5,7 @@
 // The orchestrator of A-37 is the pane `kind: "formation"`: Rust runs it in `formation/` of the config directory (its own `CLAUDE.md`, the tools of `tsunagiai-mcp --formation`, Claude Code's own tools on) when the id of the pane is `FORMATION_ID`.
 // `onEnd` is told when the process ends by itself with the exit code 0 (not when its start failed or it ended with an exit code or a signal, which stay drawn in the terminal), so a screen can drop the pane.
 import type { SkillScreen } from "./bindings/SkillScreen";
-import { hideTerminals, isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
+import { hideTerminals, isShowing, releaseTerminal, showTerminals, whenStarted } from "./orca-terminal.js";
 
 // The id of the orchestrator's pane: Rust takes the pane of this id for the orchestrator.
 export const FORMATION_ID = "formation";
@@ -45,3 +45,6 @@ export function hideClaudeCode(owner: string) {
 export function closeClaudeCode(id: string, owner: string) {
   releaseTerminal(id, owner);
 }
+
+// Resolves when the start of the process of the pane `id` has answered, so a screen can leave a restart alone until then.
+export const claudeCodeStarted = whenStarted;

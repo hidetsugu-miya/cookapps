@@ -688,6 +688,9 @@ export function pruneTerminals(keep: (id: string, source: TermSource) => boolean
   for (const [id, instance] of [...instances]) if (instance.owner === ORCA_SCREEN && !keep(id, instance.source)) dropTerminal(id);
 }
 
+// Resolves when the start of the process of the pty terminal `id` has answered (at once when it has none).
+export const whenStarted = (id: string) => (instances.get(id)?.ready ?? Promise.resolve(null)).then(() => {});
+
 // Forgets the terminal of the handle `id` that the pane `owner` made (its session was forgotten, or the pane shows another). One the Orca screen took since stays: it is the screen's to forget.
 export function releaseTerminal(id: string, owner: string) {
   const instance = instances.get(id);

@@ -6,6 +6,8 @@ const visible = (selector: string) => browser.execute((s) => document.querySelec
 const pressed = (id: string) => browser.execute((i) => document.getElementById(i)!.getAttribute("aria-pressed"), id);
 const nameOf = (id: string) => browser.execute((i) => [...document.querySelectorAll<HTMLElement>(`#${i} .footer-mode-name`)].filter((e) => !e.hidden).map((e) => e.textContent), id);
 const starts = async () => (await callsOf("claude_code_start")).length;
+// The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
+const pressRestart = () => browser.execute(() => document.getElementById("formation-restart")!.click());
 const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
 
 async function openFormation() {
@@ -139,7 +141,7 @@ describe("development screen: orchestration mode", () => {
     await waitForStarts(1);
     await sendClaudeCode({ kind: "output", data: "old conversation" });
     await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("old conversation"));
-    await $("#formation-restart").click();
+    await pressRestart();
     await waitForStarts(2);
     expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation", launch: 1 }]);
     expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation", builtinTools: true, skill: null }, { id: "formation", builtinTools: true, skill: null }]);
@@ -151,12 +153,29 @@ describe("development screen: orchestration mode", () => {
     for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input", "formation_launch", "formation_close"]) expect(await callsOf(command)).toEqual([]);
   });
 
+  it("leaves the restart button off until the new start has answered, so a second press starts nothing", async () => {
+    await openFormation();
+    await waitForStarts(1);
+    const start = await mock("claude_code_start", holds);
+    await pressRestart();
+    await waitForCalls(start);
+    await expect($("#formation-restart")).toBeDisabled();
+    await pressRestart();
+    await browser.pause(300);
+    expect(await starts()).toBe(1);
+    await release(start, 1);
+    await expect($("#formation-restart")).toBeEnabled();
+    await mock("claude_code_start", 1);
+    await pressRestart();
+    await waitForStarts(1);
+  });
+
   it("starts a new process when the restart button is pressed after the process ended", async () => {
     await openFormation();
     await waitForStarts(1);
     await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
     await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Claude Code が終わりました"));
-    await $("#formation-restart").click();
+    await pressRestart();
     await waitForStarts(2);
     expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation" }, { id: "formation" }]);
     expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("Claude Code が終わりました");
@@ -539,7 +558,7 @@ describe("orchestration mode: the columns", () => {
     await mock("claude_code_resize", null);
     await mock("formation_children", [formationChild("api-update", "planned")]);
     const [resize] = await waitForCalls("claude_code_resize");
-    expect((resize as { cols: number }).cols).toBeLessThan(wide);
+    expect((resize as { viewport: { cols: number } }).viewport.cols).toBeLessThan(wide);
   });
 });
 
