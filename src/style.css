@@ -1689,11 +1689,16 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-side-head .icon-btn { flex: none; color: var(--ink-soft); }
 #database-side-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
 #database-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-#database-header, #database-terminal-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#database-header, #database-terminal-head, #database-claude-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #database-header h1 { min-width: 0; }
 #database-header .icon-btn { flex: none; margin-left: auto; }
 #database-header .icon-btn:hover:not(:disabled) { background: var(--hover); }
 #database-header .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+/* D-1, A-36: the Claude Code pane at the right of the edit pane, 35% of the screen at first, between 25% and 50% (ts/split.ts; the clamp holds the same range). */
+#database-claude-split { flex: none; }
+#database-claude { flex: none; width: clamp(25%, var(--claude-w, 35%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); }
+#database-claude-head { padding: 0 6px; }
+#database-claude-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* D-7: the terminal pane at the right of the work pane, 35% of the screen at first, between 25% and 50% (ts/split.ts; the clamp holds the same range). */
 #database-terminal-split { flex: none; }
 #database-terminal { flex: none; width: clamp(25%, var(--terminal-w, 35%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bar); }

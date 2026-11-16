@@ -330,18 +330,27 @@ describe("database: edit", () => {
   });
 });
 
-describe("database: edit pane, terminal and reload", () => {
+describe("database: edit pane, Claude Code and reload", () => {
   const toggle = () => $("#database-edit-terminal");
   const fast = timers({ databaseProfiles: 250 });
+  const pane = () => $("#database-claude");
+  // The commands of the Orca terminals (D-7) and of the choice of a worktree, none of which the Claude Code pane calls.
+  const orcaCommands = ["orca_terminal_create", "orca_stream_terminal", "orca_terminal_read", "orca_stream_input"];
+  const noOrca = async () => {
+    for (const command of orcaCommands) expect(await callsOf(command)).toEqual([]);
+    await expect($('.pop[role="dialog"]')).not.toExist();
+  };
 
-  it("has an icon button with no text at the right end of the header of the edit pane, and the pane closed", async () => {
+  it("has an icon button with no text at the right end of the header of the edit pane, and the pane closed with no process", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-label", "ターミナル");
+    await expect(toggle()).toHaveAttribute("aria-label", "Claude Code");
     await expect(toggle()).toHaveAttribute("aria-pressed", "false");
     expect((await toggle().getText()).trim()).toBe("");
     await expect(toggle().$("svg")).toExist();
-    await expect($("#database-terminal")).not.toBeDisplayed();
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-claude-split")).not.toBeDisplayed();
+    expect(await callsOf("claude_code_start")).toEqual([]);
     const atEnd = await browser.execute(() => {
       const head = document.querySelector(".database-edit-head")!.getBoundingClientRect();
       const button = document.getElementById("database-edit-terminal")!.getBoundingClientRect();
@@ -353,40 +362,88 @@ describe("database: edit pane, terminal and reload", () => {
     expect(atEnd.gap).toBeLessThanOrEqual(32);
   });
 
-  it("opens the terminal pane at the right of the edit pane and closes it with a second press, and the icon of the work pane follows", async () => {
+  it("opens the Claude Code pane at the right of the edit pane, started with this screen's id and the built-in tools, and no Orca command or worktree choice", async () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
     await toggle().click();
     await expect(toggle()).toHaveAttribute("aria-pressed", "true");
-    await expect($("#database-terminal")).toBeDisplayed();
-    await expect($("#database-terminal-split")).toBeDisplayed();
+    await expect(pane()).toBeDisplayed();
+    await expect($("#database-claude-split")).toBeDisplayed();
     await expect($("#database-form")).toBeDisplayed();
+    await expect($("#database-terminal")).not.toBeDisplayed();
     const order = await browser.execute(() => {
       const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
-      return left("database-edit") < left("database-terminal-split") && left("database-terminal-split") < left("database-terminal");
+      return left("database-edit") < left("database-claude-split") && left("database-claude-split") < left("database-claude");
     });
     expect(order).toBe(true);
-    await $("#database-form").$("button=キャンセル").click();
-    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
-    await expect($("#database-terminal")).toBeDisplayed();
-    await $("#database-terminal-toggle").click();
-    await expect($("#database-terminal")).not.toBeDisplayed();
-    await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await toggle().click();
-    await toggle().click();
-    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
-    await expect($("#database-terminal")).not.toBeDisplayed();
-    await expect($("#database-terminal-split")).not.toBeDisplayed();
-    await expect($("#database-form")).toBeDisplayed();
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "database-edit", builtinTools: true, skill: null });
+    await expect($("#database-claude-body.claude-code-pane")).toBeDisplayed();
+    await noOrca();
   });
 
-  it("starts pressed when the terminal pane was open before the edit pane", async () => {
+  it("hides the pane with a second press and shows it again with a third, starting the process once and ending nothing", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-claude-split")).not.toBeDisplayed();
+    await expect($("#database-form")).toBeDisplayed();
+    await toggle().click();
+    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    await expect(pane()).toBeDisplayed();
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+    await noOrca();
+  });
+
+  it("ends the process when the edit pane is closed, and the next edit pane starts with the pane closed", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#database-form").$("button=キャンセル").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-edit" }]);
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-claude-split")).not.toBeDisplayed();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+  });
+
+  it("ends the process when the screen is left", async () => {
+    await openDatabase();
+    await pickFromMenu("p1", 1);
+    await toggle().click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#nav-mail").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "database-edit" }]);
+    await $("#nav-database").click();
+    await expect($("#database-pane")).toBeDisplayed();
+    await expect(pane()).not.toBeDisplayed();
+  });
+
+  it("leaves the terminal pane of the work pane (D-7) alone: its icon does not follow, and it does not start Claude Code", async () => {
     await openDatabase();
     await $("#database-terminal-toggle").click();
-    await pickFromMenu("p1", 1);
-    await expect(toggle()).toHaveAttribute("aria-pressed", "true");
     await expect($("#database-terminal")).toBeDisplayed();
+    await pickFromMenu("p1", 1);
+    await expect(toggle()).toHaveAttribute("aria-pressed", "false");
+    await expect(pane()).not.toBeDisplayed();
+    await expect($("#database-terminal")).toBeDisplayed();
+    await toggle().click();
+    await expect(pane()).toBeDisplayed();
+    await toggle().click();
+    await expect($("#database-terminal")).toBeDisplayed();
+    await $("#database-form").$("button=キャンセル").click();
+    await expect($("#database-terminal-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect((await callsOf("claude_code_start")).length).toBe(1);
   });
 
   it("takes what was saved elsewhere into the fields that were not changed by hand, and leaves the ones that were", async () => {
