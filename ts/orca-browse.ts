@@ -169,9 +169,16 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
     const names = shown();
     if (names.length === 0) return;
     const at = cursor === null ? -1 : names.indexOf(cursor);
-    cursor = names[at === -1 ? (step === 1 ? 0 : names.length - 1) : Math.min(names.length - 1, Math.max(0, at + step))];
-    draw();
-    list.querySelector('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+    const to = at === -1 ? (step === 1 ? 0 : names.length - 1) : Math.min(names.length - 1, Math.max(0, at + step));
+    // Only the mark moves: the rows are not drawn again, so a long list costs two rows, not all of them.
+    const rows = list.querySelectorAll<HTMLElement>(".orca-browse-row");
+    if (at !== -1) delete rows[at]?.dataset.cursor;
+    cursor = names[to];
+    if (rows[to] !== undefined) {
+      rows[to].dataset.cursor = "true";
+      rows[to].scrollIntoView({ block: "nearest" });
+    }
+    drawState();
   };
 
   const behind = [...document.querySelectorAll<HTMLElement>("#sidebar, #content")];

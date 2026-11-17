@@ -6,14 +6,12 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{
-    orca::{check_environment, message_of, read_environments},
-    orca_attach::Rpc,
-    orca_link::Connection,
-};
+use crate::{orca_attach::Rpc, orca_link::Connection};
 
 /// Characters of the path to browse (the same bound as the folder of a project to add, `PROJECT_PATH_LIMIT` in `orca.rs`).
 const PATH_LIMIT: usize = 4096;
+/// Characters of the name of an environment (the same bound as `MAX_REPO` of `orca_files.rs`).
+const ENVIRONMENT_LIMIT: usize = 256;
 /// What Orca reads as the home folder of its server. An empty path means it too (`browseDirectory` takes `path.trim() || "~"`); the call always says it, so no version of Orca has to read an empty string.
 const HOME: &str = "~";
 const NOT_READ: &str = "Orca のフォルダの一覧を読めません";
@@ -26,6 +24,17 @@ const NOT_READ: &str = "Orca のフォルダの一覧を読めません";
 pub struct BrowsedDir {
     pub resolved_path: String,
     pub folders: Vec<String>,
+}
+
+/// The name of the environment (a value from outside): only its shape is checked, not blank, no control character and at most 256 characters. Whether it is a saved one is told when the connection is opened (`load_pairing` reads only the saved environments of `orca-environments.json`), so this machine, which is no environment, is never browsed.
+fn check_environment_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty()
+        || name.chars().count() > ENVIRONMENT_LIMIT
+        || name.chars().any(char::is_control)
+    {
+        return Err("接続先が正しくありません".into());
+    }
+    Ok(())
 }
 
 /// The path to browse (a value from outside): at most 4096 characters, with no NUL. Empty is allowed: it is the home folder.
@@ -71,11 +80,7 @@ fn parse_browse(answer: &Value) -> Result<BrowsedDir, String> {
         .filter_map(folder_name)
         .map(str::to_owned)
         .collect();
-    folders.sort_by(|a, b| {
-        a.to_lowercase()
-            .cmp(&b.to_lowercase())
-            .then_with(|| a.cmp(b))
-    });
+    folders.sort_by_cached_key(|n| (n.to_lowercase(), n.clone()));
     Ok(BrowsedDir {
         resolved_path: resolved_path.to_owned(),
         folders,
@@ -91,16 +96,11 @@ async fn browse(rpc: &mut impl Rpc, path: &str) -> Result<BrowsedDir, String> {
     parse_browse(&answer)
 }
 
-/// #780: the folders in `path` of the saved environment `environment` (an empty `path` is its home folder). `environment` must be a saved one (read just now), so this machine and an SSH host are not asked, and `path` must hold no NUL and be at most 4096 characters. Only reads.
+/// #780: the folders in `path` of the saved environment `environment` (an empty `path` is its home folder). The shape of `environment` is checked here and its being a saved one by `Connection::open`, which refuses a name that `orca-environments.json` lacks, so this machine is not asked and no CLI is run; `path` must hold no NUL and be at most 4096 characters. Only reads.
 #[tauri::command]
 pub async fn orca_browse_dir(environment: String, path: String) -> Result<BrowsedDir, String> {
+    check_environment_name(&environment)?;
     check_browse_path(&path)?;
-    let name = environment.clone();
-    tokio::task::spawn_blocking(move || {
-        check_environment(&name, &read_environments().map_err(message_of)?)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
     let mut connection = Connection::open(Some(environment)).await?;
     browse(&mut connection, &path).await
 }
@@ -238,6 +238,16 @@ mod tests {
             browse(&mut rpc, "/nope").await,
             Err("Orca がエラーを返しました（runtime_error）".to_owned())
         );
+    }
+
+    #[test]
+    fn the_environment_name_is_checked() {
+        assert!(check_environment_name("Studio").is_ok());
+        assert!(check_environment_name(&"a".repeat(ENVIRONMENT_LIMIT)).is_ok());
+        for bad in ["", "  ", "a\nb", "a\0b"] {
+            assert!(check_environment_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_environment_name(&"a".repeat(ENVIRONMENT_LIMIT + 1)).is_err());
     }
 
     #[test]

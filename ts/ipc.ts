@@ -314,9 +314,9 @@ export interface Commands {
   orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
   // A-9: starts a session in a worktree with the instruction the owner wrote (`instruction`), the text of each file attached to it (`files`, A-10), the summary of the content (`summary`, empty without the content) and, when `context` is not null, the content quoted as data after them. Never run twice.
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; files: string[]; summary: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
-  // A-38: adds the folder `path` to Orca as a project (`environment` null: a folder of this Mac, else the name of a saved environment and a folder on that server). Never run twice. A failure carries the message.
-  orca_project_add: { args: { path: string; environment: string | null }; result: null };
-  // A-38: Rust opens the folder dialog of this Mac (the page gives no place and has no dialog permission), and adds the folder picked as `orca_project_add` adds one of this machine. `false` when the dialog was cancelled (nothing was added). Never run twice. A failure carries the message.
+  // A-38: adds the folder `path` on the server of the saved environment `environment` to Orca as a project. Never run twice. A failure carries the message. A folder of this Mac is added only by `orca_project_add_here`.
+  orca_project_add: { args: { path: string; environment: string }; result: null };
+  // A-38: Rust opens the folder dialog of this Mac (the page gives no place and has no dialog permission), and adds the folder picked. `false` when the dialog was cancelled (nothing was added). Never run twice. A failure carries the message.
   orca_project_add_here: { args: undefined; result: boolean };
   // A-38: the folders in `path` of the saved environment `environment` (an empty path is its home folder), for the dialog that picks the folder of a project to add. `resolvedPath` is the folder Orca opened, `folders` the names in it. A failure carries the message.
   orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };

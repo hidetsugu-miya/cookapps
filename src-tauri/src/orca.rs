@@ -1186,7 +1186,7 @@ pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     }
 }
 
-pub(crate) fn check_environment(name: &str, environments: &[String]) -> Result<(), String> {
+fn check_environment(name: &str, environments: &[String]) -> Result<(), String> {
     if environments.iter().any(|e| e == name) {
         Ok(())
     } else {
@@ -1384,7 +1384,7 @@ pub(crate) fn call(args: &[String], timeout: Duration) -> Result<Value, RunError
     parse_output(&run(args, timeout)?).map_err(RunError::Failed)
 }
 
-pub(crate) fn read_environments() -> Result<Vec<String>, RunError> {
+fn read_environments() -> Result<Vec<String>, RunError> {
     call(&args_of(&["environment", "list", "--json"]), READ_TIMEOUT)
         .map(|result| environments_of(&result))
 }
@@ -2182,13 +2182,13 @@ pub async fn orca_handoff(
     .await?
 }
 
-/// Adds the folder at `path` to Orca as a project (never run twice). `environment` is `None` for this machine, else a saved environment's name, and `path` is then the folder on that server.
+/// Adds the folder at `path` of the saved environment `environment` to Orca as a project (never run twice). This machine's folders are added only by `orca_project_add_here`, where the owner picks the folder in a dialog that Rust opens.
 #[tauri::command]
-pub async fn orca_project_add(path: String, environment: Option<String>) -> Result<(), String> {
-    blocking(move || add_project(&path, environment.as_deref())).await?
+pub async fn orca_project_add(path: String, environment: String) -> Result<(), String> {
+    blocking(move || add_project(&path, Some(&environment))).await?
 }
 
-/// Adds a folder of this machine to Orca as a project (A-38): the owner picks it in the folder dialog that Rust opens (the page gives no place), and it is added as `orca_project_add` adds one with no environment. `false` when the dialog was cancelled, and nothing is added.
+/// Adds a folder of this machine to Orca as a project (A-38): the owner picks it in the folder dialog that Rust opens (the page gives no place), and it is added with the same checks and call as a saved environment's folder, with no environment. `false` when the dialog was cancelled, and nothing is added.
 #[tauri::command]
 pub async fn orca_project_add_here(app: AppHandle, window: WebviewWindow) -> Result<bool, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();

@@ -1,4 +1,4 @@
-// The popup that adds a project to Orca (A-38), under the button of the list's header: a select of the place (this Mac, and the saved environments of A-6) and 「フォルダを選ぶ…」.
+// The popup that adds a project to Orca (A-38), under the button of the list's header: a select of the place (this Mac, and the target when it is a saved environment, A-33) and 「フォルダを選ぶ…」.
 // On this Mac Rust opens the folder dialog of the system and adds the folder picked (`orca_project_add_here`); a saved environment's folder is picked on its server (`orca-browse.ts`).
 import { tag } from "./dom.js";
 import { FOLDER_SVG } from "./icons.js";
@@ -7,7 +7,7 @@ import { closeMenu, showMenu } from "./menu.js";
 import { openBrowseDialog } from "./orca-browse.js";
 import { showError } from "./view.js";
 
-// Opens the popup under `anchor`. `environments` are the names of the saved environments, after this Mac in the select; `added` runs after a folder was added, to read the list again.
+// Opens the popup under `anchor`. `environments` are the saved environments to choose from (the target, when it is one), after this Mac in the select; `added` runs after a folder was added, to read the list again.
 export function openAddProject(anchor: Element, environments: string[], added: () => void) {
   const pop = tag("div", "menu orca-add-pop");
   pop.setAttribute("role", "dialog");

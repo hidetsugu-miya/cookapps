@@ -3639,16 +3639,23 @@ describe("orca: add a project (A-38)", () => {
     expect(await callsOf(HERE)).toEqual([]);
   });
 
-  it("lists this Mac first, then the saved environments, and starts on this Mac", async () => {
+  it("lists this Mac first, then the target when it is a saved environment, and starts on this Mac", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio));
     await press();
-    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac", "Studio", "Lab"]);
+    // Lab is saved too, but the list reads only this Mac and the target, so a project added to Lab would not show.
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac", "Studio"]);
     await expect($(".orca-add-pop select")).toHaveAttribute("aria-label", "場所");
     expect(await browser.execute(() => document.querySelector<HTMLSelectElement>(".orca-add-pop select")!.selectedIndex)).toBe(0);
   });
 
   it("has only this Mac when no environment is saved", async () => {
     await openOrca();
+    await press();
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac"]);
+  });
+
+  it("has only this Mac when this Mac is the target, although environments are saved", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab"] }));
     await press();
     expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac"]);
   });

@@ -1315,7 +1315,8 @@ export function initOrca() {
   drawListToggle(toggle, listOpen);
   $("orca-header").prepend(toggle);
   const add = $("orca-add");
-  add.onclick = () => openAddProject(add, view?.environments ?? [], () => void load("full", true));
+  // The places are this Mac and the target when it is a saved environment: those are the lists the screen reads again after the add (A-33).
+  add.onclick = () => openAddProject(add, view !== null && view.target !== null && view.environments.includes(view.target) ? [view.target] : [], () => void load("full", true));
   initPaneTree($("orca-panes"), {
     plus: (anchor, pane) => {
       focusPane(pane);
