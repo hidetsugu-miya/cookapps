@@ -51,6 +51,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .popup-actions { display: flex; gap: 8px; }
 .danger, .text-btn.danger { color: var(--danger); }
 .pop-confirm { max-width: 320px; overflow-wrap: anywhere; }
+.pop-kept { max-height: calc(100vh - 16px); overflow-y: auto; }
+.pop-lost-child { margin-bottom: 4px; font-weight: 700; color: var(--danger); }
 .pop-lost-head { margin-bottom: 2px; font-weight: 700; }
 .pop-lost { margin: 0 0 12px; padding-left: 18px; max-height: 6.4em; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); }
 .pop .pop-lost li { margin: 0; }

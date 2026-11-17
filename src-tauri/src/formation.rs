@@ -2116,18 +2116,42 @@ fn refusal_text(refusal: &Refusal) -> String {
     }
 }
 
-/// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and have no change, no untracked file and no commit no remote has), and the first one that is refused stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
+/// One child that stopped the deletion of a formation for what git says of its worktree (`kept_answer`): its name and what a forced deletion would lose.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationKeptChild {
+    pub name: String,
+    pub answer: FormationCloseAnswer,
+}
+
+/// What the screen is told of the deletion of a formation (`formation_delete`): that it was deleted, or that nothing was ended or closed because worktrees were kept for what git says of them, so that the owner can decide to force it. Any other refusal (a record that is not right, a worktree that `orca worktree ps` does not list, a child refused only when it is closed) is not this answer but an error with its message.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationDeleteAnswer {
+    /// The formation is deleted: its children are closed and its folder is gone.
+    pub deleted: bool,
+    /// Every child that the check kept, in the order of the record (none when `deleted`).
+    pub kept: Vec<FormationKeptChild>,
+}
+
+/// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and, without `force`, have no change, no untracked file and no commit no remote has). A child that is refused for what git says of it (`kept_answer`) is collected, and the answer lists them all with nothing ended, closed or deleted; the first child that is refused otherwise stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
+/// With `force` (the owner's own press on the screen, `formation_delete`) the look at git is left out as in `close_child_with`, every child is closed with `--force` and its branch, and the checks of the record, the environment and `orca worktree ps` are made as always.
 /// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
 /// Then every child is closed as `close` does, in the order of the record (a planned one is dropped from the record). A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 fn delete_with(
     config: &Path,
     formation: &str,
+    force: bool,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
     stop_orchestrator: &dyn Fn(),
-) -> Result<(), String> {
+) -> Result<FormationDeleteAnswer, String> {
     check_name(formation)?;
     migrate_legacy(config)?;
     if !dir(config, formation).is_dir() {
@@ -2135,24 +2159,41 @@ fn delete_with(
     }
     // A record that cannot be read stops the deletion before the process is touched.
     let children = read_record(config, formation)?;
+    let mut kept = Vec::new();
     for child in &children {
-        inspect_child(config, formation, &child.name, false, read, git_of).map_err(|refusal| {
-            format!(
-                "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（何も閉じておらず、司令塔のプロセスも終えていません）。{}",
-                child.name,
-                refusal_text(&refusal)
-            )
-        })?;
+        if let Err(refusal) = inspect_child(config, formation, &child.name, force, read, git_of) {
+            match kept_answer(&refusal) {
+                Some(answer) => kept.push(FormationKeptChild {
+                    name: child.name.clone(),
+                    answer,
+                }),
+                None => {
+                    return Err(format!(
+                        "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（何も閉じておらず、司令塔のプロセスも終えていません）。{}",
+                        child.name,
+                        refusal_text(&refusal)
+                    ));
+                }
+            }
+        }
+    }
+    if !kept.is_empty() {
+        return Ok(FormationDeleteAnswer {
+            deleted: false,
+            kept,
+        });
     }
     stop_orchestrator();
     for child in children {
-        close_with(config, formation, &child.name, false, read, write, git_of).map_err(|refusal| {
-            format!(
-                "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです。司令塔のプロセスは終えています）。{}",
-                child.name,
-                refusal_text(&refusal)
-            )
-        })?;
+        close_with(config, formation, &child.name, force, read, write, git_of).map_err(
+            |refusal| {
+                format!(
+                    "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです。司令塔のプロセスは終えています）。{}",
+                    child.name,
+                    refusal_text(&refusal)
+                )
+            },
+        )?;
     }
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     if !read_record(config, formation)?.is_empty() {
@@ -2162,7 +2203,11 @@ fn delete_with(
     }
     let folder = dir(config, formation);
     std::fs::remove_dir_all(&folder)
-        .map_err(|e| format!("{} を削除できません: {e}", folder.display()))
+        .map_err(|e| format!("{} を削除できません: {e}", folder.display()))?;
+    Ok(FormationDeleteAnswer {
+        deleted: true,
+        kept: Vec::new(),
+    })
 }
 
 /// The environments (this Mac and the saved ones) with the repositories of each, for the dialog that makes a formation (A-37): the same read as the orchestrator's `formation_environments`.
@@ -2195,19 +2240,21 @@ pub async fn formation_create(
     .await?
 }
 
-/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. A child that is refused in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. A failure carries the message.
+/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. Children that are kept for what git says of their worktrees are the answer (`deleted` false, nothing ended or closed), and with `force` they are closed all the same (`--force` and their branches; the commits no remote has are lost with them, and the checks of the record and of `orca worktree ps` are made also with `force`). A child that is refused otherwise in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. A failure carries the message. Not a tool of `tsunagiai-mcp`: the orchestrator runs in auto mode and could remove worktrees with no question.
 #[tauri::command]
 pub async fn formation_delete(
     app: tauri::AppHandle,
     sessions: tauri::State<'_, crate::claude_code::ClaudeCode>,
     name: String,
-) -> Result<(), String> {
+    force: bool,
+) -> Result<FormationDeleteAnswer, String> {
     let dir = config_dir(&app)?;
     let sessions = sessions.inner().clone();
     orca::blocking(move || {
         delete_with(
             &dir,
             &name,
+            force,
             &orca_read,
             &|args| orca::write(args),
             &orca_git_of,
@@ -5141,15 +5188,18 @@ mod tests {
         formation_of_children(&config, F, &[planned("p", "x")]);
         let stopped = std::cell::Cell::new(false);
         let orca = Calls::new();
-        delete_with(
+        let answer = delete_with(
             &config,
             F,
+            false,
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
             &|| stopped.set(true),
         )
         .unwrap();
+        assert!(answer.deleted);
+        assert!(answer.kept.is_empty());
         assert!(stopped.get());
         assert!(!dir(&config, F).exists());
         assert!(formation_names(&config, None).is_empty());
@@ -5164,6 +5214,7 @@ mod tests {
             let err = delete_with(
                 &config,
                 name,
+                false,
                 &|_| Ok(json!({})),
                 &|_| Ok(json!({})),
                 &no_remote_git,
@@ -5189,6 +5240,7 @@ mod tests {
         delete_with(
             &config,
             "alpha",
+            false,
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
@@ -5227,6 +5279,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
+            false,
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
@@ -5266,6 +5319,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
+            false,
             &|args| saved.read(args),
             &|args| orca.run(args),
             // The worktree is clean at the first check and has a change when the child is closed.
@@ -5289,6 +5343,151 @@ mod tests {
         std::fs::remove_dir_all(&config).unwrap();
     }
 
+    /// A formation of `a` and `b`, both of the saved environment `mac-studio`, and the list of Orca that has the worktrees of `listed` (`b` is the repository's own folder when `b_is_main`).
+    fn two_saved_children(config: &Path, b_is_main: bool) -> Saved {
+        let mut a = in_environment(launched("a", "x"), "mac-studio");
+        a.launch.as_mut().unwrap().path = REMOTE_PATH.into();
+        let mut b = in_environment(launched("b", "x"), "mac-studio");
+        b.launch.as_mut().unwrap().path = "/srv/work/b".into();
+        formation_of_children(config, "alpha", &[planned("p", "x"), a, b]);
+        let worktrees = json!([
+            {"path": REMOTE_PATH, "agents": []},
+            {"path": "/srv/work/b", "agents": [], "isMainWorktree": b_is_main},
+        ]);
+        Saved::new(Ok(json!({"worktrees": worktrees, "truncated": false})))
+    }
+
+    /// The git of the two children: `a` has a change and an untracked file, `b` a commit that no remote has.
+    fn kept_git(_: &str, path: &str) -> GitAnswers {
+        if path == REMOTE_PATH {
+            Ok(git_answers(
+                json!([
+                    {"path": "a.rs", "status": "modified", "area": "unstaged"},
+                    {"path": "new.txt", "status": "untracked", "area": "untracked"},
+                ]),
+                0,
+            ))
+        } else {
+            Ok(git_answers(json!([]), 2))
+        }
+    }
+
+    #[test]
+    fn a_deletion_without_force_answers_with_every_child_that_git_keeps_and_ends_nothing() {
+        let config = temp_dir("delete-kept");
+        let saved = two_saved_children(&config, false);
+        let orca = Calls::new();
+        let stopped = std::cell::Cell::new(false);
+        let answer = delete_with(
+            &config,
+            "alpha",
+            false,
+            &|args| saved.read(args),
+            &|args| orca.run(args),
+            &kept_git,
+            &|| stopped.set(true),
+        )
+        .unwrap();
+        assert!(!answer.deleted);
+        let kept: Vec<&str> = answer.kept.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(kept, ["a", "b"]);
+        let a = &answer.kept[0].answer;
+        assert!(!a.closed);
+        assert!(a.reason.as_deref().is_some_and(|r| !r.is_empty()));
+        assert_eq!(a.changed.len(), 1);
+        assert!(a.changed[0].contains("a.rs"), "{:?}", a.changed);
+        assert_eq!(a.untracked.len(), 1);
+        assert!(a.untracked[0].contains("new.txt"), "{:?}", a.untracked);
+        assert!(a.unpushed.is_empty());
+        let b = &answer.kept[1].answer;
+        assert!(b.changed.is_empty() && b.untracked.is_empty());
+        assert_eq!(b.unpushed.len(), 1);
+        // Nothing is ended, closed or deleted.
+        assert!(!stopped.get());
+        assert!(orca.0.borrow().is_empty());
+        assert!(dir(&config, "alpha").is_dir());
+        assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_refusal_that_force_cannot_pass_is_the_message_even_when_another_child_is_kept_for_git() {
+        let config = temp_dir("delete-kept-and-refused");
+        // `b` is the repository's own folder: that is not a refusal of git, so the answer is the message.
+        let saved = two_saved_children(&config, true);
+        let stopped = std::cell::Cell::new(false);
+        let err = delete_with(
+            &config,
+            "alpha",
+            false,
+            &|args| saved.read(args),
+            &|_| panic!("nothing is written"),
+            &kept_git,
+            &|| stopped.set(true),
+        )
+        .unwrap_err();
+        assert!(err.contains("子「b」を閉じられない"), "{err}");
+        assert!(err.contains("司令塔のプロセスも終えていません"), "{err}");
+        assert!(!stopped.get());
+        assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_forced_deletion_closes_the_children_that_git_keeps_with_force_and_asks_no_git() {
+        let config = temp_dir("delete-force");
+        let saved = two_saved_children(&config, false);
+        let orca = Calls::new();
+        let stopped = std::cell::Cell::new(0);
+        let answer = delete_with(
+            &config,
+            "alpha",
+            true,
+            &|args| saved.read(args),
+            &|args| orca.run(args),
+            &|_, _| panic!("a forced deletion asks no git"),
+            &|| stopped.set(stopped.get() + 1),
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        assert!(answer.kept.is_empty());
+        assert_eq!(stopped.get(), 1);
+        assert_eq!(
+            *orca.0.borrow(),
+            [
+                terminal_close_args("term_a", "mac-studio"),
+                worktree_rm_args(REMOTE_PATH, "mac-studio", true),
+                terminal_close_args("term_b", "mac-studio"),
+                worktree_rm_args("/srv/work/b", "mac-studio", true),
+            ]
+        );
+        assert!(!dir(&config, "alpha").exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_forced_deletion_still_stops_for_the_repositorys_own_folder() {
+        let config = temp_dir("delete-force-forged");
+        let saved = two_saved_children(&config, true);
+        let stopped = std::cell::Cell::new(false);
+        let err = delete_with(
+            &config,
+            "alpha",
+            true,
+            &|args| saved.read(args),
+            &|_| panic!("nothing is written"),
+            &|_, _| panic!("a forced deletion asks no git"),
+            &|| stopped.set(true),
+        )
+        .unwrap_err();
+        assert!(err.contains("子「b」を閉じられない"), "{err}");
+        assert!(err.contains("司令塔のプロセスも終えていません"), "{err}");
+        assert!(!stopped.get());
+        assert!(dir(&config, "alpha").is_dir());
+        assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
     #[test]
     fn a_record_that_cannot_be_read_deletes_nothing() {
         let config = temp_dir("delete-broken");
@@ -5297,6 +5496,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
+            false,
             &|_| Ok(json!({})),
             &|_| Ok(json!({})),
             &no_remote_git,
@@ -5316,6 +5516,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
+            false,
             // A tool of the orchestrator that is still at work launches a child while the first one is closed (the second read: the first is the check before the orchestrator ends).
             &|_| {
                 reads.set(reads.get() + 1);

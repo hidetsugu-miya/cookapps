@@ -134,7 +134,7 @@ const answers = {
   claude_code_close: null,
   // A-37: no children yet.
   formation_children: [],
-  formation_delete: null,
+  formation_delete: { deleted: true, kept: [] },
   formation_close_child: { closed: true, reason: null, changed: [], untracked: [], unpushed: [] },
   // A-37: one formation, `formation`, with no project and no child (no row is selected until one is pressed).
   formation_list: { formations: [{ name: "formation", projects: [], createdAt: null, counts: { planned: 0, waiting: 0, working: 0, done: 0 } }], readError: null },

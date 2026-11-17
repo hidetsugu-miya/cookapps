@@ -1356,6 +1356,15 @@ describe("orchestration mode: delete a formation", () => {
       onceId(),
     );
   const without = (name: string) => formationList(listed().formations.filter((f) => f.name !== name));
+  const done = { deleted: true, kept: [] };
+  // Two children that git keeps: `api-update` has a change and an untracked file, `web-update` a commit that no remote has.
+  const kept = {
+    deleted: false,
+    kept: [
+      { name: "api-update", answer: { closed: false, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log"], unpushed: [] } },
+      { name: "web-update", answer: { closed: false, reason: "どのリモートにも届いていないコミットがあります", changed: [], untracked: [], unpushed: ["abc1234 add a", "def5678 add b"] } },
+    ],
+  };
   async function ask(name: string) {
     await rightPress(name);
     await $('.menu button[role="menuitem"]').click();
@@ -1379,12 +1388,12 @@ describe("orchestration mode: delete a formation", () => {
   it("deletes `formation` as any other, and selects nothing when it is the shown one", async () => {
     await openList();
     await waitForStarts(1);
-    const del = await mock("formation_delete", null);
+    const del = await mock("formation_delete", done);
     await mock("formation_list", without("formation"));
     await mock("formation_children", []);
     await ask("formation");
     await yes().click();
-    expect(await waitForCalls(del)).toEqual([{ name: "formation" }]);
+    expect(await waitForCalls(del)).toEqual([{ name: "formation", force: false }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "won-2485,mail-summary");
     expect(await pressedRows()).toEqual([]);
     expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:formation" }]);
@@ -1396,7 +1405,7 @@ describe("orchestration mode: delete a formation", () => {
 
   it("asks first, with the name, and calls nothing on キャンセル", async () => {
     await openList();
-    const del = await mock("formation_delete", null);
+    const del = await mock("formation_delete", done);
     await ask("won-2485");
     await expect($('.pop[role="alertdialog"] h3')).toHaveText("won-2485 を削除しますか？");
     await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
@@ -1407,11 +1416,11 @@ describe("orchestration mode: delete a formation", () => {
 
   it("deletes the formation by its name on 削除, and takes its row off the list", async () => {
     await openList();
-    const del = await mock("formation_delete", null);
+    const del = await mock("formation_delete", done);
     await mock("formation_list", without("mail-summary"));
     await ask("mail-summary");
     await yes().click();
-    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary" }]);
+    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: false }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
     // The shown formation is another one: it stays shown, and its orchestrator is not started again.
     expect(await pressedRows()).toEqual(["formation"]);
@@ -1424,7 +1433,7 @@ describe("orchestration mode: delete a formation", () => {
     await row("won-2485").click();
     await waitForStarts(2);
     await waitForCalls("formation_children", 2);
-    const del = await mock("formation_delete", null);
+    const del = await mock("formation_delete", done);
     await mock("formation_list", formationList(listedFirst().formations.filter((f) => f.name !== "won-2485")));
     await mock("formation_children", []);
     await ask("won-2485");
@@ -1462,6 +1471,64 @@ describe("orchestration mode: delete a formation", () => {
     await expect($("#formation-list-error")).not.toBeDisplayed();
   });
 
+  it("says why the children were kept and what is lost, keeps the formation, and calls nothing more on キャンセル", async () => {
+    await openList();
+    await row("won-2485").click();
+    await waitForStarts(2);
+    const del = await mock("formation_delete", kept);
+    await ask("won-2485");
+    await yes().click();
+    expect(await waitForCalls(del)).toEqual([{ name: "won-2485", force: false }]);
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("won-2485 を削除できませんでした");
+    expect(await textsOf(".pop-lost-child")).toEqual(["子「api-update」", "子「web-update」"]);
+    await expect(confirm()).toHaveText(expect.stringContaining(kept.kept[0].answer.reason));
+    await expect(confirm()).toHaveText(expect.stringContaining(kept.kept[1].answer.reason));
+    // A kind that git did not list for a child has no head: the changed file and the untracked file of the first, the commits of the second.
+    expect(await textsOf(".pop-lost-head")).toEqual(["変更のあるファイル", "追跡していないファイル", "どのリモートにもないコミット"]);
+    expect(await textsOf(".pop-lost li")).toEqual([" M src/a.rb", "?? tmp/x.log", "abc1234 add a", "def5678 add b"]);
+    await expect(yes()).toHaveText("強制削除");
+    // Nothing was closed: the row stays, selected and shown, with no words of failure and no more calls.
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+    expect(await pressedRows()).toEqual(["won-2485"]);
+    await expect(row("won-2485")).not.toHaveAttribute("aria-busy", "true");
+    await expect($("#formation-list-error")).not.toBeDisplayed();
+    expect(await callsOf("claude_code_close")).toEqual([]);
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect(confirm()).not.toExist();
+    expect(await callsOf(del)).toHaveLength(1);
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+  });
+
+  it("deletes it with force on 強制削除, and takes its row off the list", async () => {
+    await openList();
+    const del = await mock("formation_delete", kept);
+    await ask("mail-summary");
+    await yes().click();
+    await waitForCalls(del);
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("mail-summary を削除できませんでした");
+    await mock("formation_delete", done);
+    await mock("formation_list", without("mail-summary"));
+    await yes().click();
+    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: true }]);
+    await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
+    await expect(confirm()).not.toExist();
+    await expect($("#formation-list-error")).not.toBeDisplayed();
+  });
+
+  it("shows the words of a forced deletion that is refused, and keeps the formation", async () => {
+    await openList();
+    const del = await mock("formation_delete", kept);
+    await ask("mail-summary");
+    await yes().click();
+    await waitForCalls(del);
+    const message = "子「api-update」を閉じられないので、フォーメーション「mail-summary」を削除していません（何も閉じておらず、司令塔のプロセスも終えていません）。記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです";
+    await mock("formation_delete", rejects(message));
+    await yes().click();
+    await expect($("#formation-list-error")).toHaveText(message);
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+    expect(await callsOf("claude_code_close")).toEqual([]);
+  });
+
   it("deletes one formation once while the deletion is on its way, and marks its row busy", async () => {
     await openList();
     const del = await mock("formation_delete", holds);
@@ -1474,7 +1541,7 @@ describe("orchestration mode: delete a formation", () => {
     await expect($(".menu")).not.toExist();
     expect(await callsOf(del)).toHaveLength(1);
     await mock("formation_list", without("mail-summary"));
-    await release("formation_delete", null);
+    await release("formation_delete", done);
     await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
   });
 });

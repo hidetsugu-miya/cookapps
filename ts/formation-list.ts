@@ -1,10 +1,11 @@
 // The list of the formations at the left of the orchestration mode (A-37): a row for each formation with its name, the time since it was made, its projects and the number of its children in each state (`formation_list`).
 // The formation of the selected row is the one the middle pane (its orchestrator) and the right pane (its flow) show; with no row selected (at each start, and after the selected one is deleted) neither pane is shown. The list is read on the clock of the flow (formation-flow.ts), so it is read only while the mode is shown.
 import type { FormationEntry } from "./bindings/FormationEntry";
+import type { FormationKeptChild } from "./bindings/FormationKeptChild";
 import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
-import { confirmFormationDelete } from "./hint.js";
+import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
 import { DELETE_SVG, PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
@@ -66,14 +67,16 @@ function added(entry: FormationEntry) {
   void readList();
 }
 
-// Deletes the formation `name` (the children are closed first; Rust deletes it only when all of them are). A refusal keeps the formation and shows its reason.
-async function remove(name: string) {
+// Deletes the formation `name` (the children are closed first; Rust deletes it only when all of them are). Without `force`, children that git keeps are the answer: nothing was closed, and the owner is asked to force it. A refusal that no force passes keeps the formation and shows its reason.
+async function remove(name: string, force: boolean) {
   if (deleting.has(name)) return;
   deleting.add(name);
   deleteFailure = null;
   draw();
+  let kept: FormationKeptChild[] | null = null;
   try {
-    await invoke("formation_delete", { name });
+    const answer = await invoke("formation_delete", { name, force });
+    if (!answer.deleted) kept = answer.kept;
   } catch (e) {
     deleteFailure = String(e);
     deleting.delete(name);
@@ -83,6 +86,12 @@ async function remove(name: string) {
     return;
   }
   deleting.delete(name);
+  if (kept !== null) {
+    draw();
+    const anchor = $("formation-list-feed").querySelector(`[data-formation="${CSS.escape(name)}"] .formation-row-name`) ?? $("formation-list-feed");
+    confirmFormationForce(anchor, name, kept, () => void remove(name, true));
+    return;
+  }
   // A read that began before the deletion still lists it: its answer is dropped.
   made++;
   formations = formations.filter((f) => f.name !== name);
@@ -97,7 +106,7 @@ async function remove(name: string) {
 function openRowMenu(f: FormationEntry, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   if (deleting.has(f.name)) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name)) }], { at: { x: e.clientX, y: e.clientY } });
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name, false)) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
 // Selects the formation `name`: its orchestrator and its flow are shown. `null` selects none, and neither is shown.
