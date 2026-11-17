@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.81.4
+
+A-37: the first formation, `formation`, is no longer special (#830). It can be deleted from the list's right-press menu like any other, and the list shows only the formations that have a folder. No formation is selected when the app starts, and none after the shown one is deleted: until a row is pressed, only the list and its plus are shown, and no orchestrator starts.
+
 ## v0.81.3
 
 A-37: the orchestration mode holds several formations, in three panes: the list of the formations at the left, the orchestrator of the selected one in the middle, and its flow with the session of the selected child at the right (#818 to #825). Pressing a row of the list switches the orchestrator and the flow to that formation; the restart button restarts only the shown orchestrator. The plus of the list's heading opens a dialog that takes a name and the projects (the repositories of this Mac and of the saved Orca environments); the new formation's orchestrator starts with the chosen projects as its first instruction, at each start and restart. Each formation keeps its children in a folder of its own, `formation/{name}/`, and the children recorded before are moved to the first formation, `formation`. While the Orca mode is shown, the count on the orchestration button adds up the children that wait for approval in every formation.
