@@ -344,6 +344,7 @@ pub fn run() {
             orca::orca_start,
             orca::orca_terminal_create,
             orca::orca_worktree_create,
+            orca::orca_project_add,
             orca::orca_handoff,
             orca::orca_close,
             orca::orca_terminal_read,

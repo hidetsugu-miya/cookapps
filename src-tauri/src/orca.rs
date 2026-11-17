@@ -34,6 +34,8 @@ const HOST_TTL: Duration = Duration::from_secs(60);
 const MADE_TTL: Duration = Duration::from_secs(60);
 /// Characters of a post (a send or the first prompt of a launch).
 pub(crate) const TEXT_LIMIT: usize = 100_000;
+/// Characters of the folder path of a project to add (macOS's `PATH_MAX` is 1024 bytes; a saved environment's server may allow more).
+const PROJECT_PATH_LIMIT: usize = 4096;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
 const LINE_LIMIT: usize = 200;
 /// How many characters of a line are read for its tags, so that a line of thousands of `<` costs no more than this; the line is cut to `LINE_LIMIT` afterwards.
@@ -1033,6 +1035,25 @@ pub(crate) fn check_path(path: &str) -> Result<(), String> {
     }
 }
 
+/// The folder of a project to add: not empty, with no NUL (an argument cannot hold one), at most `PROJECT_PATH_LIMIT` characters, and absolute (on a saved environment it is the path on that server, which the CLI documents as absolute too).
+fn check_project_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("フォルダを選んでください".into());
+    }
+    if path.contains('\0') {
+        return Err("フォルダの場所に使えない文字が含まれています".into());
+    }
+    if path.chars().count() > PROJECT_PATH_LIMIT {
+        return Err(format!(
+            "フォルダの場所は {PROJECT_PATH_LIMIT} 文字までです"
+        ));
+    }
+    if !Path::new(path).is_absolute() {
+        return Err("フォルダの場所は絶対パスで指定してください".into());
+    }
+    Ok(())
+}
+
 /// The handle must belong to a row of the list read just now (a top-level agent of a live terminal), or the terminal is gone.
 fn check_session(rows: &[OrcaRow], handle: &str) -> Result<(), String> {
     if rows.iter().any(|r| r.handle.as_deref() == Some(handle)) {
@@ -1246,6 +1267,24 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
     let mut args = args_of(&["terminal", "create", "--worktree"]);
     args.extend([format!("path:{path}"), "--json".into()]);
     with_environment(args, environment)
+}
+
+/// A project added by the folder at `path`. Without `kind` Orca takes the folder as a Git repository, as its own menu does; `Some("folder")` adds an ordinary directory.
+fn repo_add_args(path: &str, kind: Option<&str>, environment: Option<&str>) -> Vec<String> {
+    let mut args = args_of(&["repo", "add"]);
+    args.push(format!("--path={path}"));
+    args.extend(kind.map(|kind| format!("--kind={kind}")));
+    args.push("--json".into());
+    with_environment(args, environment)
+}
+
+/// Whether the answer of `orca repo add` says the folder is not a Git repository (`error.message` starts with `Not a valid git repository`), which is the one failure that is tried again as a folder.
+fn is_not_git(out: &str) -> bool {
+    serde_json::from_str::<Value>(out.trim()).is_ok_and(|doc| {
+        doc["ok"] == false
+            && text_of(&doc["error"], "message")
+                .is_some_and(|message| message.starts_with("Not a valid git repository"))
+    })
 }
 
 /// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
@@ -1640,6 +1679,27 @@ fn launch(
         check_start(path, environment)?;
     }
     write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
+}
+
+/// Asks `ask` to add the folder as a Git repository, and, only when the answer says it is not one, asks once more with `--kind=folder`. Any other failure is Orca's own message and is not asked again.
+fn add_with(
+    path: &str,
+    environment: Option<&str>,
+    mut ask: impl FnMut(&[String]) -> Result<String, RunError>,
+) -> Result<(), String> {
+    let out = ask(&repo_add_args(path, None, environment)).map_err(message_of)?;
+    if !is_not_git(&out) {
+        return parse_output(&out).map(|_| ());
+    }
+    let out = ask(&repo_add_args(path, Some("folder"), environment)).map_err(message_of)?;
+    parse_output(&out).map(|_| ())
+}
+
+/// Adds the folder at `path` to Orca as a project: of this machine's Orca, or of the saved environment `environment` (then `path` is a path on that server). The path and the environment are checked first, and Orca's own message is the error of a refusal. A folder that is not a Git repository is added once more as a folder (`add_with`).
+fn add_project(path: &str, environment: Option<&str>) -> Result<(), String> {
+    check_project_path(path)?;
+    check_listed(environment)?;
+    add_with(path, environment, |args| run(args, WRITE_TIMEOUT))
 }
 
 /// Opens a plain terminal in the worktree at `path` (A-16), once, with the checks of a launch.
@@ -2096,6 +2156,12 @@ pub async fn orca_handoff(
         )
     })
     .await?
+}
+
+/// Adds the folder at `path` to Orca as a project (never run twice). `environment` is `None` for this machine, else a saved environment's name, and `path` is then the folder on that server.
+#[tauri::command]
+pub async fn orca_project_add(path: String, environment: Option<String>) -> Result<(), String> {
+    blocking(move || add_project(&path, environment.as_deref())).await?
 }
 
 /// Closes the tab of the Orca terminal `handle` (a Claude session or a plain terminal).
@@ -3244,6 +3310,191 @@ mod tests {
         assert!(hosts.get(None, "/work/a", t0).is_some());
         assert!(hosts.get(Some("Studio"), "/work/a", t0).is_some());
         assert_eq!(hosts.get(Some("Lab"), "/work/a", t0), None);
+    }
+
+    #[test]
+    fn the_folder_of_a_project_to_add_is_an_absolute_path_of_a_fit_size() {
+        assert!(check_project_path("/Users/example/work").is_ok());
+        assert!(check_project_path("/").is_ok());
+        let longest = format!("/{}", "a".repeat(PROJECT_PATH_LIMIT - 1));
+        assert!(check_project_path(&longest).is_ok());
+        let too_long = format!("/{}", "a".repeat(PROJECT_PATH_LIMIT));
+        assert!(check_project_path(&too_long)
+            .unwrap_err()
+            .contains("文字まで"));
+        // The limit counts characters, not bytes.
+        let wide = format!("/{}", "あ".repeat(PROJECT_PATH_LIMIT - 1));
+        assert!(check_project_path(&wide).is_ok());
+        for empty in ["", " ", "\n"] {
+            assert_eq!(
+                check_project_path(empty).unwrap_err(),
+                "フォルダを選んでください"
+            );
+        }
+        assert!(check_project_path("/work/a\0b")
+            .unwrap_err()
+            .contains("使えない文字"));
+        for relative in ["work", "./work", "../work", "~/work", "--json", "-x"] {
+            assert_eq!(
+                check_project_path(relative).unwrap_err(),
+                "フォルダの場所は絶対パスで指定してください",
+                "{relative}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_is_added_by_its_path_in_this_machine_or_in_a_saved_environment() {
+        assert_eq!(
+            repo_add_args("/Users/example/work", None, None),
+            ["repo", "add", "--path=/Users/example/work", "--json"]
+        );
+        assert_eq!(
+            repo_add_args("/srv/work", None, Some("Studio")),
+            [
+                "repo",
+                "add",
+                "--path=/srv/work",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        // A path with blanks and a leading dash after the slash stays one argument, joined to its flag.
+        assert_eq!(
+            repo_add_args("/work/a b/--json", None, None),
+            ["repo", "add", "--path=/work/a b/--json", "--json"]
+        );
+    }
+
+    #[test]
+    fn the_answer_of_a_project_add_is_its_success_or_orcas_own_words() {
+        let ok = r#"{"ok": true, "result": {"repo": {"id": "r1"}}}"#;
+        assert!(parse_output(ok).is_ok());
+        assert!(parse_output(r#"{"ok": true}"#).is_ok());
+        let refused = r#"{"ok": false, "error": {"code": "invalid_argument", "message": "Not a git repository: /work"}}"#;
+        assert_eq!(
+            parse_output(refused).unwrap_err(),
+            "Not a git repository: /work"
+        );
+        assert_eq!(
+            parse_output(r#"{"ok": false, "error": {"code": "repo_exists"}}"#).unwrap_err(),
+            "repo_exists"
+        );
+        assert_eq!(
+            parse_output("Unknown flag --host for command: repo add").unwrap_err(),
+            "Orca の出力を読めません"
+        );
+        assert!(parse_output("").unwrap_err().contains("応答がありません"));
+    }
+
+    #[test]
+    fn a_folder_that_is_no_git_repository_is_added_as_a_folder() {
+        assert_eq!(
+            repo_add_args("/srv/work", Some("folder"), None),
+            ["repo", "add", "--path=/srv/work", "--kind=folder", "--json"]
+        );
+        assert_eq!(
+            repo_add_args("/srv/work", Some("folder"), Some("Studio")),
+            [
+                "repo",
+                "add",
+                "--path=/srv/work",
+                "--kind=folder",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+    }
+
+    /// Runs `add_with` with the answers given in order, and gives its result and the arguments it asked with.
+    fn add_answered(answers: &[&str]) -> (Result<(), String>, Vec<Vec<String>>) {
+        let mut answers = answers.iter();
+        let mut asked = Vec::new();
+        let result = add_with("/work/a", Some("Studio"), |args| {
+            asked.push(args.to_vec());
+            Ok(answers
+                .next()
+                .expect("asked more than answered")
+                .to_string())
+        });
+        (result, asked)
+    }
+
+    const ADDED: &str = r#"{"ok": true, "result": {}}"#;
+    const NOT_GIT: &str = r#"{"ok": false, "error": {"code": "runtime_error", "message": "Not a valid git repository: /work/a", "data": {"nextSteps": ["rerun this command with --kind folder."]}}}"#;
+
+    #[test]
+    fn a_git_folder_is_added_with_one_call_and_no_kind() {
+        let (result, asked) = add_answered(&[ADDED]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked, [repo_add_args("/work/a", None, Some("Studio"))]);
+    }
+
+    #[test]
+    fn a_folder_that_is_not_git_is_asked_again_once_as_a_folder() {
+        let (result, asked) = add_answered(&[NOT_GIT, ADDED]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            asked,
+            [
+                repo_add_args("/work/a", None, Some("Studio")),
+                repo_add_args("/work/a", Some("folder"), Some("Studio")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folder_refused_as_a_folder_too_is_not_asked_a_third_time() {
+        let refused = r#"{"ok": false, "error": {"code": "runtime_error", "message": "Path is not a directory: /work/a"}}"#;
+        let (result, asked) = add_answered(&[NOT_GIT, refused]);
+        assert_eq!(result, Err("Path is not a directory: /work/a".to_owned()));
+        assert_eq!(asked.len(), 2);
+        // Even the same refusal twice is not asked again.
+        let (result, asked) = add_answered(&[NOT_GIT, NOT_GIT]);
+        assert_eq!(
+            result,
+            Err("Not a valid git repository: /work/a".to_owned())
+        );
+        assert_eq!(asked.len(), 2);
+    }
+
+    #[test]
+    fn any_other_failure_of_a_project_add_is_orcas_message_and_is_not_asked_again() {
+        for out in [
+            r#"{"ok": false, "error": {"code": "runtime_error", "message": "Repo already added"}}"#,
+            r#"{"ok": false, "error": {"code": "runtime_error"}}"#,
+            r#"{"ok": false, "error": {"message": "x Not a valid git repository"}}"#,
+            r#"{"ok": true, "error": {"message": "Not a valid git repository"}}"#,
+            "Not a valid git repository: /work/a",
+            "",
+        ] {
+            let (result, asked) = add_answered(&[out]);
+            assert_eq!(result, parse_output(out).map(|_| ()), "{out}");
+            assert_eq!(asked.len(), 1, "{out}");
+        }
+        assert!(is_not_git(NOT_GIT));
+        assert!(!is_not_git(ADDED));
+    }
+
+    #[test]
+    fn a_failed_run_of_the_cli_is_its_message_and_is_not_asked_again() {
+        let mut calls = 0;
+        let result = add_with("/work/a", None, |_| {
+            calls += 1;
+            Err(RunError::Failed("Orca が時間内に応答しませんでした".into()))
+        });
+        assert_eq!(result, Err("Orca が時間内に応答しませんでした".to_owned()));
+        assert_eq!(calls, 1);
+        let result = add_with("/work/a", None, |_| Err(RunError::Missing));
+        assert_eq!(result, Err(not_installed()));
+    }
+
+    #[test]
+    fn a_project_is_not_added_when_its_path_or_environment_is_refused() {
+        // Refused before Orca is asked for anything, so this runs no process.
+        assert!(add_project("work", None).is_err());
+        assert!(add_project("", Some("Studio")).is_err());
+        assert!(add_project("/work\0", None).is_err());
     }
 
     #[test]
