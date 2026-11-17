@@ -19,7 +19,6 @@
 import type { Appearance } from "./bindings/Appearance";
 import type { ClaudeCodeEvent } from "./bindings/ClaudeCodeEvent";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
-import type { FormationProject } from "./bindings/FormationProject";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { TerminalColors } from "./bindings/TerminalColors";
 import type { TerminalSettings } from "./bindings/TerminalSettings";
@@ -58,13 +57,13 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 
 // Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
-// `pty` is what a pty is started with: whether Claude Code keeps its own tools, the saved skill it is given and, for an orchestrator, the projects its first instruction names; `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
+// `pty` is what a pty is started with: whether Claude Code keeps its own tools and the saved skill it is given; `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
   path: string;
   environment: string | null;
-  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; projects?: FormationProject[] | null; onEnd?: () => void };
+  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; onEnd?: () => void };
 }
 
 // A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
@@ -533,7 +532,7 @@ function startPty(instance: Instance) {
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   const { handle, pty } = instance.source;
-  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, projects: pty?.projects ?? null, channel }).then(
+  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, channel }).then(
     (launch) => launch,
     (e) => {
       if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e), clean: false });

@@ -429,6 +429,9 @@ pub fn run() {
             claude_code::claude_code_resize,
             claude_code::claude_code_close,
             formation::formation_children,
+            formation::formation_environments,
+            formation::formation_list,
+            formation::formation_create,
             set_badge
         ])
         .build(tauri::generate_context!())

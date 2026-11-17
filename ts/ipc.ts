@@ -16,9 +16,12 @@ import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
+import type { EnvironmentsView } from "./bindings/EnvironmentsView";
 import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
 import type { FormationChild } from "./bindings/FormationChild";
+import type { FormationEntry } from "./bindings/FormationEntry";
+import type { FormationList } from "./bindings/FormationList";
 import type { FormationProject } from "./bindings/FormationProject";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
@@ -331,8 +334,8 @@ export interface Commands {
   orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
-  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given, `projects` the projects of an orchestrator's formation (A-37), which its first instruction names. The answer is the number of this start. A failure is the message the pane shows.
-  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; projects: FormationProject[] | null; channel: unknown }; result: number };
+  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given. The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
+  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; channel: unknown }; result: number };
   // A-36: types `text` into the pane `id` as it is (no Enter is added).
   claude_code_input: { args: { id: string; text: string }; result: null };
   // A-36: the new size of the pane `id` in cells.
@@ -341,6 +344,12 @@ export interface Commands {
   claude_code_close: { args: { id: string; launch: number }; result: null };
   // A-37: the children of the formation `name`, in the order of `formation/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
+  // A-37: the environments (this Mac first, then the saved ones) with the repositories of each, read from Orca; an environment that could not be read has `ok` false and its `error`, and the others are read.
+  formation_environments: { args: undefined; result: EnvironmentsView };
+  // A-37: the formations in order of name, each with its projects, when it was created (null for the first, which exists before any is created) and the number of its children in each state (`orca worktree ps` is read once for each environment). `readError` says why no launched child could be read; the counts take them as working then.
+  formation_list: { args: undefined; result: FormationList };
+  // A-37: makes the formation `name` (the shape of a child's name, not the name of a formation or of a child) of `projects` (each an environment and a repository of `formation_environments`, by name or id and by name or path). A failure carries the message.
+  formation_create: { args: { name: string; projects: FormationProject[] }; result: FormationEntry };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.

@@ -2,9 +2,8 @@
 // No Orca is in between. Claude Code gets only the tools of `tsunagiai-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), and a saved skill when the screen gives one.
 // A screen that holds a pane gives it a host element and an `owner` (the name of the pane), shows it with `showClaudeCode` while it is in view, hides it with `hideClaudeCode` (the process goes on, and what it prints is drawn into the hidden terminal),
 // and ends it with `closeClaudeCode` when the pane is closed or the screen no longer needs it (the process and what it started are ended). A message of a failed start or of the end of the process is drawn in the terminal.
-// The orchestrator of A-37 is the pane `kind: "formation"`: Rust runs it in `formation/{name}/` of the config directory (the folder of its formation) (its own `CLAUDE.md`, the tools of `tsunagiai-mcp --formation {name}`, Claude Code's own tools on, and the projects of the formation as its first instruction) when the id of the pane is `formationPaneId(name)`.
+// The orchestrator of A-37 is the pane `kind: "formation"`: Rust runs it in `formation/{name}/` of the config directory (the folder of its formation) (its own `CLAUDE.md`, the tools of `tsunagiai-mcp --formation {name}`, Claude Code's own tools on, and the projects saved with the formation as its first instruction, which Rust reads itself) when the id of the pane is `formationPaneId(name)`.
 // `onEnd` is told when the process ends by itself with the exit code 0 (not when its start failed or it ended with an exit code or a signal, which stay drawn in the terminal), so a screen can drop the pane.
-import type { FormationProject } from "./bindings/FormationProject";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import { hideTerminals, isShowing, releaseTerminal, showTerminals, whenStarted } from "./orca-terminal.js";
 
@@ -19,8 +18,6 @@ export interface ClaudeCodeOptions {
   id: string;
   // The orchestrator (A-37) in place of a pane of a screen: the pane id is `formationPaneId(name)`, and Claude Code's own tools are on.
   kind?: "formation";
-  // The projects of the formation (`kind: "formation"` only): its first instruction names them. None: it starts with no instruction.
-  projects?: FormationProject[];
   // Leaves Claude Code's own tools on (the database screen does; the others never).
   builtinTools?: boolean;
   // A saved skill that Claude Code is given with `--plugin-dir` (A-32).
@@ -33,7 +30,7 @@ export interface ClaudeCodeOptions {
 export function showClaudeCode(host: HTMLElement, options: ClaudeCodeOptions, owner: string) {
   host.classList.add("claude-code-pane");
   const id = options.id;
-  const pty = { builtinTools: options.kind === "formation" || (options.builtinTools ?? false), skill: options.skill ?? null, projects: options.kind === "formation" ? (options.projects ?? null) : null, onEnd: options.onEnd };
+  const pty = { builtinTools: options.kind === "formation" || (options.builtinTools ?? false), skill: options.skill ?? null, onEnd: options.onEnd };
   showTerminals([{ id, source: { kind: "pty", handle: id, path: "", environment: null, pty }, host }], id, owner);
 }
 

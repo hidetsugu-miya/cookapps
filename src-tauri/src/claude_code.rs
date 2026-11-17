@@ -25,7 +25,6 @@ use ts_rs::TS;
 
 use crate::{
     claude_auth::{self, EnvChange},
-    formation::FormationProject,
     orca_stream::OrcaViewport,
     skills::{self, CallPlugin, SkillScreen},
 };
@@ -659,14 +658,13 @@ fn check_size(viewport: OrcaViewport) -> Result<(u16, u16), String> {
     Err("ターミナルの大きさが正しくありません".to_owned())
 }
 
-/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and `projects` as its first instruction.
+/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and the projects saved with its formation (`formation.json`) as its first instruction.
 fn prepare(
     config: &Path,
     exe: &Path,
     formation: Option<&str>,
     builtin_tools: bool,
     skill: Option<ClaudeCodeSkill>,
-    projects: &[FormationProject],
     (cols, rows): (u16, u16),
 ) -> Result<(Spec, Option<CallPlugin>), String> {
     let mcp = checked_mcp_binary(exe)?;
@@ -676,7 +674,8 @@ fn prepare(
         .map(|s| skills::plugin_for(config, &s.name, s.screen))
         .transpose()?;
     let (script, cwd, prompt) = if let Some(name) = formation {
-        let prompt = crate::formation::first_prompt(projects)?;
+        let prompt =
+            crate::formation::first_prompt(&crate::formation::read_projects(config, name)?)?;
         (
             write_formation_files(config, name, &claude, &mcp)?,
             crate::formation::dir(config, name),
@@ -700,10 +699,9 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. `projects` are the projects of that formation, which its first instruction names (they are read for the orchestrator only). `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
+/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
 /// and `skill` is a saved skill that it is given. A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn claude_code_start(
     app: AppHandle,
     sessions: State<'_, ClaudeCode>,
@@ -711,7 +709,6 @@ pub async fn claude_code_start(
     viewport: OrcaViewport,
     builtin_tools: bool,
     skill: Option<ClaudeCodeSkill>,
-    projects: Option<Vec<FormationProject>>,
     channel: Channel<ClaudeCodeEvent>,
 ) -> Result<u64, String> {
     check_id(&id)?;
@@ -720,15 +717,7 @@ pub async fn claude_code_start(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sessions = sessions.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let (spec, plugin) = prepare(
-            &config,
-            &exe,
-            formation_of(&id),
-            builtin_tools,
-            skill,
-            &projects.unwrap_or_default(),
-            size,
-        )?;
+        let (spec, plugin) = prepare(&config, &exe, formation_of(&id), builtin_tools, skill, size)?;
         sessions.start(
             &id,
             &spec,

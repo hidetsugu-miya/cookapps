@@ -22,6 +22,8 @@ use crate::{
 
 const FOLDER: &str = "formation";
 const CHILDREN_FILE: &str = "children.json";
+/// The file that holds what a formation is made of: its projects and the time it was made (A-37).
+const FORMATION_FILE: &str = "formation.json";
 /// The name of the formation that exists before any other (the one the screen reads for now), and the name its orchestrator has (`claude -n formation`). It is the name of the one formation that had `formation/children.json` before the record was split by formation.
 pub const ORCHESTRATOR: &str = "formation";
 /// The files of the orchestrator that `formation/` held before each formation had its own folder. The app writes them at each start, and a `CLAUDE.md` left there would be read by the orchestrators of the folders under it.
@@ -337,7 +339,7 @@ pub fn check_prompt(prompt: &str) -> Result<String, String> {
 }
 
 /// A project of a formation: a repository in an environment, as `formation_environments` lists them.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct FormationProject {
@@ -391,6 +393,34 @@ pub fn first_prompt(projects: &[FormationProject]) -> Result<Option<String>, Str
          {lines}\
          オーナーの指示を待ってください。子を起動する前に formation_environments で、この環境とリポジトリがあることを確かめてください。\n"
     )))
+}
+
+/// What `formation/{name}/formation.json` holds (`{"createdAt": ..., "projects": [...]}`, camelCase). The first formation, which exists before any is created, has no file: it has no project and no time.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Meta {
+    #[serde(default)]
+    projects: Vec<FormationProject>,
+    /// Epoch milliseconds.
+    #[serde(default)]
+    created_at: Option<u64>,
+}
+
+/// The file of `formation`: a missing one is none, but one that is there and cannot be read is an error, so that the orchestrator does not start as if the formation had no project.
+fn read_meta(config: &Path, formation: &str) -> Result<Meta, String> {
+    check_name(formation)?;
+    let path = dir(config, formation).join(FORMATION_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Meta::default()),
+        Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
+    };
+    serde_json::from_str(&text).map_err(|_| format!("{} の形式が正しくありません", path.display()))
+}
+
+/// The projects of `formation`, which the first instruction of its orchestrator names (`first_prompt`): the ones saved when it was created.
+pub fn read_projects(config: &Path, formation: &str) -> Result<Vec<FormationProject>, String> {
+    read_meta(config, formation).map(|meta| meta.projects)
 }
 
 /// A repository of `orca repo list`.
@@ -828,54 +858,112 @@ fn read_each_repos(
     })
 }
 
-/// The environments and their repositories, for `formation_environments`: this Mac first, then each saved environment, each with the repositories of its Orca, or the words of why they could not be read. The Orcas are read side by side. An environment that cannot be read does not stop the others, and a list of saved environments that cannot be read leaves this Mac's alone, with the reason.
+/// A repository of an environment as the lists draw it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct RepoView {
+    pub name: String,
+    pub path: String,
+}
+
+/// One environment of `formation_environments`: this Mac or a saved one, with the repositories of its Orca (`ok`), or the words of why they could not be read.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct EnvironmentView {
+    /// `local` for this Mac, else the name of the saved environment.
+    pub environment: String,
+    /// The id of a saved environment, when it differs from its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub id: Option<String>,
+    pub ok: bool,
+    /// The repositories, when `ok`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub repos: Option<Vec<RepoView>>,
+    /// Why they could not be read, when not `ok`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub error: Option<String>,
+    /// How this Mac is named to the owner (only this Mac has it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub label: Option<String>,
+}
+
+/// The environments (this Mac first, then each saved environment) with their repositories, as `formation_environments` answers the screen and, with a `note`, the orchestrator.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentsView {
+    /// Why the list of saved environments could not be read; only this Mac is listed then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub environment_list_error: Option<String>,
+    pub environments: Vec<EnvironmentView>,
+}
+
+/// The environments and their repositories: this Mac first, then each saved environment, each with the repositories of its Orca, or the words of why they could not be read. The Orcas are read side by side. An environment that cannot be read does not stop the others, and a list of saved environments that cannot be read leaves this Mac's alone, with the reason.
+fn environments_view(
+    saved: Result<Vec<Environment>, String>,
+    read: &(dyn Fn(&str) -> Result<Vec<Repo>, String> + Sync),
+) -> EnvironmentsView {
+    let mut environment_list_error = None;
+    let mut named: Vec<(&str, Option<&str>)> = vec![(LOCAL, None)];
+    match &saved {
+        Ok(saved) => named.extend(saved.iter().map(|e| (e.name.as_str(), Some(e.id.as_str())))),
+        Err(error) => environment_list_error = Some(error.clone()),
+    }
+    let wanted: Vec<&str> = named.iter().map(|(environment, _)| *environment).collect();
+    let environments = named
+        .iter()
+        .zip(read_each_repos(&wanted, read))
+        .map(|((environment, id), result)| {
+            let (ok, repos, error) = match result {
+                Ok(repos) => (
+                    true,
+                    Some(
+                        repos
+                            .into_iter()
+                            .map(|r| RepoView {
+                                name: r.name,
+                                path: r.path,
+                            })
+                            .collect(),
+                    ),
+                    None,
+                ),
+                Err(error) => (false, None, Some(error)),
+            };
+            EnvironmentView {
+                environment: (*environment).to_owned(),
+                id: id.filter(|id| id != environment).map(str::to_owned),
+                ok,
+                repos,
+                error,
+                label: (*environment == LOCAL).then(|| LOCAL_LABEL.to_owned()),
+            }
+        })
+        .collect();
+    EnvironmentsView {
+        environment_list_error,
+        environments,
+    }
+}
+
+/// `environments_view` for the orchestrator's tool: the same, with a note that what Orca printed is data.
 fn environments_report(
     saved: Result<Vec<Environment>, String>,
     read: &(dyn Fn(&str) -> Result<Vec<Repo>, String> + Sync),
 ) -> Value {
-    let mut report = Map::new();
-    let mut named: Vec<(&str, Option<&str>)> = vec![(LOCAL, None)];
-    match &saved {
-        Ok(saved) => named.extend(saved.iter().map(|e| (e.name.as_str(), Some(e.id.as_str())))),
-        Err(error) => {
-            report.insert("environmentListError".into(), error.clone().into());
-        }
+    let mut report = serde_json::to_value(environments_view(saved, read)).unwrap_or_default();
+    if let Value::Object(map) = &mut report {
+        map.insert("note".into(), DATA_NOTE.into());
     }
-    let wanted: Vec<&str> = named.iter().map(|(environment, _)| *environment).collect();
-    let environments: Vec<Value> = named
-        .iter()
-        .zip(read_each_repos(&wanted, read))
-        .map(|((environment, id), result)| {
-            let mut entry = Map::new();
-            entry.insert("environment".into(), (*environment).into());
-            if let Some(id) = id.filter(|id| id != environment) {
-                entry.insert("id".into(), id.into());
-            }
-            match result {
-                Ok(repos) => {
-                    entry.insert("ok".into(), true.into());
-                    entry.insert(
-                        "repos".into(),
-                        repos
-                            .iter()
-                            .map(|r| json!({ "name": r.name, "path": r.path }))
-                            .collect(),
-                    );
-                }
-                Err(error) => {
-                    entry.insert("ok".into(), false.into());
-                    entry.insert("error".into(), error.into());
-                }
-            }
-            if *environment == LOCAL {
-                entry.insert("label".into(), LOCAL_LABEL.into());
-            }
-            Value::Object(entry)
-        })
-        .collect();
-    report.insert("environments".into(), environments.into());
-    report.insert("note".into(), DATA_NOTE.into());
-    Value::Object(report)
+    report
 }
 
 /// The environments (this Mac and the saved ones) with the repositories of each, read from Orca.
@@ -1523,6 +1611,274 @@ pub async fn formation_children(
 ) -> Result<Vec<FormationChild>, String> {
     let dir = config_dir(&app)?;
     orca::blocking(move || children_view(&dir, &name)).await?
+}
+
+// ---- the list and the creation of formations ----
+
+/// How many children of a formation are in each state.
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct ChildCounts {
+    pub planned: u32,
+    pub waiting: u32,
+    pub working: u32,
+    pub done: u32,
+}
+
+fn counts_of(rows: &[FormationChild]) -> ChildCounts {
+    let mut counts = ChildCounts::default();
+    for row in rows {
+        match row.state {
+            FormationState::Planned => counts.planned += 1,
+            FormationState::Waiting => counts.waiting += 1,
+            FormationState::Working => counts.working += 1,
+            FormationState::Done => counts.done += 1,
+        }
+    }
+    counts
+}
+
+/// One formation as the list draws it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationEntry {
+    pub name: String,
+    pub projects: Vec<FormationProject>,
+    /// When it was created (epoch milliseconds); `None` for the first formation, which exists before any is created.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub created_at: Option<u64>,
+    pub counts: ChildCounts,
+}
+
+/// The answer of `formation_list`.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationList {
+    pub formations: Vec<FormationEntry>,
+    /// Why no launched child could be read from Orca, when none could: the counts then take every launched child as working, because a child is not taken for finished unless Orca says so.
+    pub read_error: Option<String>,
+}
+
+/// The formations, in order of name, with their projects, when they were created and how many children are in each state. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it.
+fn list_with(config: &Path, read: &Read<'_>) -> Result<FormationList, String> {
+    migrate_legacy(config)?;
+    let names = formation_names(config, ORCHESTRATOR);
+    let records: Vec<Vec<Child>> = names.iter().map(|n| read_children(config, n)).collect();
+    let all: Vec<Child> = records.iter().flatten().cloned().collect();
+    let (rows, read_error) = match children_view_with(&all, read) {
+        Ok(rows) => (rows, None),
+        Err(e) => (
+            all.iter()
+                .map(|child| child_row(child, &child.environment, None))
+                .collect(),
+            Some(e),
+        ),
+    };
+    let mut rows = rows.as_slice();
+    let mut formations = Vec::new();
+    for (name, children) in names.into_iter().zip(&records) {
+        let (own, rest) = rows.split_at(children.len());
+        rows = rest;
+        let meta = read_meta(config, &name).unwrap_or_default();
+        formations.push(FormationEntry {
+            name,
+            projects: meta.projects,
+            created_at: meta.created_at,
+            counts: counts_of(own),
+        });
+    }
+    Ok(FormationList {
+        formations,
+        read_error,
+    })
+}
+
+/// The environment of `wanted` among `view`, by its name or its id: exactly one, and one whose repositories were read.
+fn environment_of<'a>(
+    view: &'a EnvironmentsView,
+    wanted: &str,
+) -> Result<&'a EnvironmentView, String> {
+    let mut found = view.environments.iter().filter(|e| {
+        !wanted.is_empty() && (e.environment == wanted || e.id.as_deref() == Some(wanted))
+    });
+    let environment = match (found.next(), found.next()) {
+        (Some(environment), None) => environment,
+        (None, _) => {
+            let why = view
+                .environment_list_error
+                .as_ref()
+                .map_or_else(String::new, |e| {
+                    format!("（環境の一覧を読めませんでした: {e}）")
+                });
+            return Err(format!("「{wanted}」という環境はありません{why}"));
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "「{wanted}」という環境が複数あります。id で指定してください"
+            ))
+        }
+    };
+    if !environment.ok {
+        return Err(format!(
+            "環境「{}」のリポジトリを読めなかったので、確かめられません: {}",
+            environment.environment,
+            environment.error.as_deref().unwrap_or_default()
+        ));
+    }
+    Ok(environment)
+}
+
+/// The projects as they are saved: each environment and repository is one of `view` (an environment by its name or id, a repository by its name or path), and is kept by its name. A project of an environment that was not read, a repository the environment lacks (or has twice), and the same project twice are refused, and so is a list that the first instruction would refuse.
+fn check_projects(
+    projects: &[FormationProject],
+    view: &EnvironmentsView,
+) -> Result<Vec<FormationProject>, String> {
+    let mut checked: Vec<FormationProject> = Vec::new();
+    for project in projects {
+        let environment = environment_of(view, &project.environment)?;
+        let wanted = project.repo.trim();
+        let mut found = environment
+            .repos
+            .iter()
+            .flatten()
+            .filter(|r| !wanted.is_empty() && (r.name == wanted || r.path == wanted));
+        let repo = match (found.next(), found.next()) {
+            (Some(repo), None) => repo,
+            (None, _) => {
+                return Err(format!(
+                    "「{}」というリポジトリは環境「{}」にありません",
+                    project.repo, environment.environment
+                ))
+            }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "「{}」というリポジトリが環境「{}」に複数あります。path で指定してください",
+                    project.repo, environment.environment
+                ))
+            }
+        };
+        let project = FormationProject {
+            environment: environment.environment.clone(),
+            repo: repo.name.clone(),
+        };
+        if checked.contains(&project) {
+            return Err(format!(
+                "プロジェクト「{}」（環境: {}）が重なっています",
+                project.repo, project.environment
+            ));
+        }
+        checked.push(project);
+    }
+    first_prompt(&checked)?;
+    Ok(checked)
+}
+
+/// A formation's name must not be one of the existing formations (the first one included), and not the name of a child of any formation: a child's name is the address of its SendMessage, and a formation's name is the session name of its orchestrator.
+fn check_formation_name(
+    name: &str,
+    formations: &[String],
+    children: &[(String, Vec<Child>)],
+) -> Result<(), String> {
+    if formations.iter().any(|f| f == name) {
+        return Err(format!("フォーメーション「{name}」はもうあります"));
+    }
+    if let Some((owner, _)) = children
+        .iter()
+        .find(|(_, children)| children.iter().any(|c| c.name == name))
+    {
+        return Err(format!(
+            "「{name}」はフォーメーション「{owner}」の子の名前です。SendMessage の宛先が決まらなくなるので、別の名前にしてください"
+        ));
+    }
+    Ok(())
+}
+
+/// Makes the formation `name` with its `projects`: its folder, and in it `formation.json` (written through a temporary file and a rename). The orchestrator's own files are written when it starts. A name that is taken refuses, and nothing is made; a folder that cannot get its file is not left behind.
+fn create_with(
+    config: &Path,
+    name: &str,
+    projects: &[FormationProject],
+    view: &EnvironmentsView,
+    created_at: u64,
+) -> Result<FormationEntry, String> {
+    check_name(name)?;
+    let projects = check_projects(projects, view)?;
+    migrate_legacy(config)?;
+    let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    let formations = formation_names(config, ORCHESTRATOR);
+    let mut children = Vec::new();
+    for formation in &formations {
+        children.push((formation.clone(), read_record(config, formation)?));
+    }
+    check_formation_name(name, &formations, &children)?;
+    std::fs::create_dir_all(root(config))
+        .map_err(|e| format!("{} を作れません: {e}", root(config).display()))?;
+    let folder = dir(config, name);
+    // The folder is made with a call that fails when it is there, so two creations of one name cannot both go on.
+    std::fs::create_dir(&folder).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("フォーメーション「{name}」はもうあります")
+        } else {
+            format!("{} を作れません: {e}", folder.display())
+        }
+    })?;
+    let meta = Meta {
+        projects,
+        created_at: Some(created_at),
+    };
+    let written = serde_json::to_string_pretty(&meta)
+        .map_err(|e| e.to_string())
+        .and_then(|text| accounts::write_atomic(&folder, FORMATION_FILE, &text));
+    if let Err(e) = written {
+        let _ = std::fs::remove_dir_all(&folder);
+        return Err(e);
+    }
+    Ok(FormationEntry {
+        name: name.to_owned(),
+        projects: meta.projects,
+        created_at: meta.created_at,
+        counts: ChildCounts::default(),
+    })
+}
+
+/// The environments (this Mac and the saved ones) with the repositories of each, for the dialog that makes a formation (A-37): the same read as the orchestrator's `formation_environments`.
+#[tauri::command]
+pub async fn formation_environments() -> Result<EnvironmentsView, String> {
+    orca::blocking(|| environments_view(read_saved_environments(), &read_repos)).await
+}
+
+/// The formations of the screen (A-37): each with its projects, when it was created and the number of its children in each state.
+#[tauri::command]
+pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, String> {
+    let dir = config_dir(&app)?;
+    orca::blocking(move || {
+        list_with(&dir, &|args, timeout| {
+            orca::call(args, timeout).map_err(orca::message_of)
+        })
+    })
+    .await?
+}
+
+/// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
+#[tauri::command]
+pub async fn formation_create(
+    app: tauri::AppHandle,
+    name: String,
+    projects: Vec<FormationProject>,
+) -> Result<FormationEntry, String> {
+    let dir = config_dir(&app)?;
+    orca::blocking(move || {
+        // A name that is wrong is refused before Orca is read.
+        check_name(&name)?;
+        let view = environments_view(read_saved_environments(), &read_repos);
+        create_with(&dir, &name, &projects, &view, now_ms())
+    })
+    .await?
 }
 
 #[cfg(test)]
@@ -3752,5 +4108,326 @@ mod tests {
             .unwrap();
         assert_eq!(rows[1].state, FormationState::Working);
         assert_eq!(fake.reads_of_ps(), ["--environment=local"]);
+    }
+
+    // ---- the formations: their files, the list and the creation ----
+
+    fn view_of(environments: Vec<EnvironmentView>) -> EnvironmentsView {
+        EnvironmentsView {
+            environment_list_error: None,
+            environments,
+        }
+    }
+
+    fn read_environment(
+        environment: &str,
+        id: Option<&str>,
+        repos: &[(&str, &str)],
+    ) -> EnvironmentView {
+        EnvironmentView {
+            environment: environment.into(),
+            id: id.map(str::to_owned),
+            ok: true,
+            repos: Some(
+                repos
+                    .iter()
+                    .map(|(name, path)| RepoView {
+                        name: (*name).into(),
+                        path: (*path).into(),
+                    })
+                    .collect(),
+            ),
+            error: None,
+            label: None,
+        }
+    }
+
+    /// This Mac with `api` and `web`, and the saved environment `mac-studio` (id `e1`) with `api` and `docs`.
+    fn two_environments() -> EnvironmentsView {
+        view_of(vec![
+            read_environment(LOCAL, None, &[("api", "/w/api"), ("web", "/w/web")]),
+            read_environment(
+                "mac-studio",
+                Some("e1"),
+                &[("api", "/s/api"), ("docs", "/s/docs")],
+            ),
+        ])
+    }
+
+    #[test]
+    fn a_formation_is_made_with_its_projects_and_its_time_in_its_own_folder() {
+        let config = temp_dir("create");
+        let made = create_with(
+            &config,
+            "api-work",
+            &[project("e1", "/s/api"), project(LOCAL, "web")],
+            &two_environments(),
+            1_700_000_000_000,
+        )
+        .unwrap();
+        // The environment is kept by its name and the repository by its name, whichever the call named them by.
+        let projects = [project("mac-studio", "api"), project(LOCAL, "web")];
+        assert_eq!(made.projects, projects);
+        assert_eq!(made.created_at, Some(1_700_000_000_000));
+        assert_eq!(made.counts, ChildCounts::default());
+        assert_eq!(read_projects(&config, "api-work").unwrap(), projects);
+        let text = std::fs::read_to_string(dir(&config, "api-work").join(FORMATION_FILE)).unwrap();
+        let saved: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(saved["createdAt"], 1_700_000_000_000_u64);
+        assert_eq!(
+            saved["projects"][0],
+            json!({"environment": "mac-studio", "repo": "api"})
+        );
+        // Written through a temporary file and a rename.
+        assert!(!dir(&config, "api-work").join("formation.json.tmp").exists());
+        // No project is allowed, and the first instruction is then none.
+        create_with(&config, "empty", &[], &two_environments(), 5).unwrap();
+        assert_eq!(
+            first_prompt(&read_projects(&config, "empty").unwrap()),
+            Ok(None)
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_projects_of_a_formation_that_has_no_file_are_none_and_a_broken_file_is_an_error() {
+        let config = temp_dir("projects-read");
+        assert_eq!(read_projects(&config, F).unwrap(), []);
+        assert_eq!(read_projects(&config, "new").unwrap(), []);
+        assert!(read_projects(&config, "../x").is_err());
+        std::fs::create_dir_all(dir(&config, "new")).unwrap();
+        std::fs::write(dir(&config, "new").join(FORMATION_FILE), "not json").unwrap();
+        assert!(read_projects(&config, "new")
+            .unwrap_err()
+            .contains("形式が正しくありません"));
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_is_a_formation_or_a_child_or_no_name_makes_nothing() {
+        let config = temp_dir("create-names");
+        create_with(&config, "one", &[], &two_environments(), 1).unwrap();
+        recorded_child(&config, "one", "worker");
+        let view = two_environments();
+        for (name, why) in [
+            ("one", "もうあります"),
+            // The first formation exists before any is created.
+            (F, "もうあります"),
+            ("worker", "フォーメーション「one」の子の名前"),
+            ("Bad Name", "名前は"),
+            ("../escape", "名前は"),
+            ("", "名前は"),
+        ] {
+            let err = create_with(&config, name, &[], &view, 2).unwrap_err();
+            assert!(err.contains(why), "{name:?}: {err}");
+        }
+        assert!(!config.join("escape").exists());
+        assert!(!dir(&config, "worker").exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    fn recorded_child(config: &Path, formation: &str, name: &str) {
+        write_children(config, formation, &[planned(name, "api")]).unwrap();
+    }
+
+    #[test]
+    fn a_project_that_the_environments_do_not_have_makes_nothing() {
+        let config = temp_dir("create-projects");
+        let mut view = two_environments();
+        let mut unread = read_environment("lab", Some("e2"), &[]);
+        unread.ok = false;
+        unread.repos = None;
+        unread.error = Some("orca が答えません".into());
+        view.environments.push(unread);
+        view.environments.push(read_environment(
+            "twin",
+            None,
+            &[("a", "/t/1"), ("a", "/t/2")],
+        ));
+        for (projects, why) in [
+            (
+                vec![project("nowhere", "api")],
+                "「nowhere」という環境はありません",
+            ),
+            (vec![project("", "api")], "環境はありません"),
+            (
+                vec![project(LOCAL, "docs")],
+                "リポジトリは環境「local」にありません",
+            ),
+            (
+                vec![project(LOCAL, "")],
+                "リポジトリは環境「local」にありません",
+            ),
+            (
+                vec![project("lab", "api")],
+                "確かめられません: orca が答えません",
+            ),
+            (vec![project("twin", "a")], "複数あります"),
+            (
+                vec![project(LOCAL, "api"), project(LOCAL, "/w/api")],
+                "が重なっています",
+            ),
+            (vec![project(LOCAL, "x\ny")], "リポジトリは環境"),
+        ] {
+            let err = create_with(&config, "f", &projects, &view, 1).unwrap_err();
+            assert!(err.contains(why), "{projects:?}: {err}");
+        }
+        // A list of environments that could not be read says so when an environment is missing from it.
+        view.environment_list_error = Some("pairing store".into());
+        let err =
+            create_with(&config, "f", &[project("mac-studio-2", "api")], &view, 1).unwrap_err();
+        assert!(err.contains("pairing store"), "{err}");
+        // More projects than the first instruction takes.
+        let many: Vec<_> = (0..=PROJECTS_LIMIT).map(|i| format!("r{i}")).collect();
+        let big = view_of(vec![read_environment(
+            LOCAL,
+            None,
+            &many.iter().map(|n| (n.as_str(), "/p")).collect::<Vec<_>>(),
+        )]);
+        // They share a path, so name them by their names.
+        let projects: Vec<_> = many.iter().map(|n| project(LOCAL, n)).collect();
+        assert!(create_with(&config, "f", &projects, &big, 1).is_err());
+        assert!(create_with(&config, "f", &projects[..PROJECTS_LIMIT], &big, 1).is_ok());
+        assert!(!dir(&config, "nowhere").exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn two_creations_of_one_name_make_one() {
+        let config = temp_dir("create-race");
+        let config = &config;
+        let results: Vec<Result<FormationEntry, String>> = std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| create_with(config, "same", &[], &two_environments(), 1)))
+                .collect();
+            runs.into_iter().map(|run| run.join().unwrap()).collect()
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_list_has_each_formation_with_its_projects_time_and_counts_and_reads_each_ps_once() {
+        let config = temp_dir("list");
+        create_with(
+            &config,
+            "alpha",
+            &[project(LOCAL, "api")],
+            &two_environments(),
+            10,
+        )
+        .unwrap();
+        create_with(&config, "beta", &[], &two_environments(), 20).unwrap();
+        write_children(
+            &config,
+            "alpha",
+            &[
+                launched("a", "web"),
+                in_environment(launched("b", "api"), "mac-studio"),
+                planned("p", "web"),
+            ],
+        )
+        .unwrap();
+        write_children(
+            &config,
+            "beta",
+            &[
+                launched("c", "web"),
+                in_environment(launched("d", "api"), "mac-studio"),
+            ],
+        )
+        .unwrap();
+        let fake = FakeOrca::new(vec![
+            (
+                "--environment=local",
+                Ok(ps_of(vec![
+                    agent("tab-a:leaf", "working", None),
+                    agent("tab-c:leaf", "done", None),
+                ])),
+            ),
+            (
+                "--environment=mac-studio",
+                Ok(ps_of(vec![
+                    agent("tab-b:leaf", "waiting", None),
+                    agent("tab-d:leaf", "working", None),
+                ])),
+            ),
+        ]);
+        let list = list_with(&config, &|args, limit| fake.read(args, limit)).unwrap();
+        assert_eq!(list.read_error, None);
+        let seen: Vec<_> = list
+            .formations
+            .iter()
+            .map(|f| (f.name.as_str(), f.created_at, f.counts))
+            .collect();
+        let counts = |planned, waiting, working, done| ChildCounts {
+            planned,
+            waiting,
+            working,
+            done,
+        };
+        assert_eq!(
+            seen,
+            [
+                ("alpha", Some(10), counts(1, 1, 1, 0)),
+                ("beta", Some(20), counts(0, 0, 1, 1)),
+                // The first formation exists before any is created, with no time and no child.
+                (F, None, counts(0, 0, 0, 0)),
+            ]
+        );
+        assert_eq!(list.formations[0].projects, [project(LOCAL, "api")]);
+        // One read of each environment's ps for the two formations together.
+        assert_eq!(
+            fake.reads_of_ps(),
+            ["--environment=local", "--environment=mac-studio"]
+        );
+        assert_eq!(fake.reads_of_the_list_of_environments(), 1);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_list_whose_orca_cannot_be_read_still_has_the_formations_with_their_children_working() {
+        let config = temp_dir("list-unread");
+        create_with(&config, "alpha", &[], &two_environments(), 10).unwrap();
+        write_children(
+            &config,
+            "alpha",
+            &[launched("a", "web"), planned("p", "web")],
+        )
+        .unwrap();
+        let list = list_with(&config, &|_, _| Err("orca が答えません".into())).unwrap();
+        assert_eq!(list.read_error.as_deref(), Some("orca が答えません"));
+        let alpha = &list.formations[0];
+        assert_eq!(alpha.name, "alpha");
+        assert_eq!(
+            alpha.counts,
+            ChildCounts {
+                planned: 1,
+                working: 1,
+                ..ChildCounts::default()
+            }
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_list_with_no_launched_child_reads_no_orca() {
+        let config = temp_dir("list-none");
+        std::fs::create_dir_all(&config).unwrap();
+        let list = list_with(&config, &|_, _| panic!("no child is launched")).unwrap();
+        assert_eq!(list.formations.len(), 1);
+        assert_eq!(list.formations[0].name, F);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_environments_view_keeps_the_words_of_the_tool_it_was_made_for() {
+        let report = environments_report(Ok(saved(&[("e1", "mac-studio")])), &|_| Ok(Vec::new()));
+        assert!(report["note"].is_string());
+        assert_eq!(report["environments"][1]["id"], "e1");
+        assert!(report["environments"][0].get("error").is_none());
+        // The screen's command has no note.
+        let view = environments_view(Ok(Vec::new()), &|_| Ok(Vec::new()));
+        assert!(serde_json::to_value(view).unwrap().get("note").is_none());
     }
 }
