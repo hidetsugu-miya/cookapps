@@ -24,8 +24,8 @@ const FOLDER: &str = "formation";
 const CHILDREN_FILE: &str = "children.json";
 /// The file that holds what a formation is made of: its projects and the time it was made (A-37).
 const FORMATION_FILE: &str = "formation.json";
-/// The name of the formation that exists before any other (the one the screen reads for now), and the name its orchestrator has (`claude -n formation`). It is the name of the one formation that had `formation/children.json` before the record was split by formation.
-pub const ORCHESTRATOR: &str = "formation";
+/// The name of the formation that took `formation/children.json`, the record from before it was split by formation (`migrate_legacy`). It is a formation like any other otherwise: it is in the list only while its folder is there, and it can be deleted.
+const LEGACY_FORMATION: &str = "formation";
 /// The files of the orchestrator that `formation/` held before each formation had its own folder. The app writes them at each start, and a `CLAUDE.md` left there would be read by the orchestrators of the folders under it.
 const LEGACY_FILES: [&str; 3] = ["CLAUDE.md", "mcp.json", "start.sh"];
 /// The environment of this Mac: the CLI's own `--environment=local`, which is this machine's Orca whatever `ORCA_ENVIRONMENT` holds. A saved environment is named by its name (or its id) in `orca environment list`.
@@ -68,8 +68,8 @@ pub fn dir(config: &Path, formation: &str) -> PathBuf {
     root(config).join(formation)
 }
 
-/// The names of the formations: the folders of `formation/` that are named as a formation is, and `extra` and the first formation, which may have no folder yet. In order of name.
-fn formation_names(config: &Path, extra: &str) -> Vec<String> {
+/// The names of the formations: the folders of `formation/` that are named as a formation is, and `extra`, which may have no folder yet. In order of name.
+fn formation_names(config: &Path, extra: Option<&str>) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(root(config))
         .into_iter()
         .flatten()
@@ -78,7 +78,7 @@ fn formation_names(config: &Path, extra: &str) -> Vec<String> {
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| check_name(name).is_ok())
         .collect();
-    for name in [ORCHESTRATOR, extra] {
+    if let Some(name) = extra {
         if !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
         }
@@ -87,14 +87,18 @@ fn formation_names(config: &Path, extra: &str) -> Vec<String> {
     names
 }
 
-/// Moves the record of before the split into the first formation's folder: `formation/children.json` becomes `formation/formation/children.json`, and the three files the orchestrator had in `formation/` are deleted (the app writes them again, in the folder of the formation, at each start). A record already there is not written over, and a legacy file that cannot be deleted is left.
+/// Moves the record of before the split into the folder of the formation `formation`: `formation/children.json` becomes `formation/formation/children.json`, and the three files the orchestrator had in `formation/` are deleted (the app writes them again, in the folder of the formation, at each start). A record already there is not written over, and a legacy file that cannot be deleted is left.
 /// An error is a record that could not be moved: the formation would read as having no children, so a change of it must not go on.
 pub fn migrate_legacy(config: &Path) -> Result<(), String> {
     let old = root(config).join(CHILDREN_FILE);
-    let new = dir(config, ORCHESTRATOR).join(CHILDREN_FILE);
+    let new = dir(config, LEGACY_FORMATION).join(CHILDREN_FILE);
     if old.is_file() && !new.exists() {
-        std::fs::create_dir_all(dir(config, ORCHESTRATOR))
-            .map_err(|e| format!("{} を作れません: {e}", dir(config, ORCHESTRATOR).display()))?;
+        std::fs::create_dir_all(dir(config, LEGACY_FORMATION)).map_err(|e| {
+            format!(
+                "{} を作れません: {e}",
+                dir(config, LEGACY_FORMATION).display()
+            )
+        })?;
         // The same move may be made by the app and by `tsunagiai-mcp` at once: the one that finds the file gone has nothing to do.
         match std::fs::rename(&old, &new) {
             Ok(()) => {}
@@ -350,7 +354,7 @@ fn base_of(output: &str) -> Option<String> {
 fn check_child_name(config: &Path, formation: &str, name: &str) -> Result<(), String> {
     check_name(name)?;
     migrate_legacy(config)?;
-    let formations = formation_names(config, formation);
+    let formations = formation_names(config, Some(formation));
     let mut others = Vec::new();
     for other in formations.iter().filter(|f| *f != formation) {
         others.push((other.clone(), read_record(config, other)?));
@@ -458,7 +462,7 @@ pub fn first_prompt(projects: &[FormationProject]) -> Result<Option<String>, Str
     )))
 }
 
-/// What `formation/{name}/formation.json` holds (`{"createdAt": ..., "projects": [...]}`, camelCase). The first formation, which exists before any is created, has no file: it has no project and no time.
+/// What `formation/{name}/formation.json` holds (`{"createdAt": ..., "projects": [...]}`, camelCase). A formation whose folder was made before this file existed has none: it has no project and no time.
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct Meta {
@@ -1815,7 +1819,7 @@ fn counts_of(rows: &[FormationChild]) -> ChildCounts {
 pub struct FormationEntry {
     pub name: String,
     pub projects: Vec<FormationProject>,
-    /// When it was created (epoch milliseconds); `None` for the first formation, which exists before any is created.
+    /// When it was created (epoch milliseconds); `None` for a formation that has no `formation.json`.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub created_at: Option<u64>,
     pub counts: ChildCounts,
@@ -1835,7 +1839,7 @@ pub struct FormationList {
 /// The formations, in order of name, with their projects, when they were created and how many children are in each state. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it.
 fn list_with(config: &Path, read: &Read<'_>) -> Result<FormationList, String> {
     migrate_legacy(config)?;
-    let names = formation_names(config, ORCHESTRATOR);
+    let names = formation_names(config, None);
     let records: Vec<Vec<Child>> = names.iter().map(|n| read_children(config, n)).collect();
     let all: Vec<Child> = records.iter().flatten().cloned().collect();
     let (rows, read_error) = match children_view_with(&all, read) {
@@ -1946,7 +1950,7 @@ fn check_projects(
     Ok(checked)
 }
 
-/// A formation's name must not be one of the existing formations (the first one included), and not the name of a child of any formation: a child's name is the address of its SendMessage, and a formation's name is the session name of its orchestrator.
+/// A formation's name must not be one of the existing formations, and not the name of a child of any formation: a child's name is the address of its SendMessage, and a formation's name is the session name of its orchestrator.
 fn check_formation_name(
     name: &str,
     formations: &[String],
@@ -1978,7 +1982,7 @@ fn create_with(
     let projects = check_projects(projects, view)?;
     migrate_legacy(config)?;
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    let formations = formation_names(config, ORCHESTRATOR);
+    let formations = formation_names(config, None);
     let mut children = Vec::new();
     for formation in &formations {
         children.push((formation.clone(), read_record(config, formation)?));
@@ -2032,7 +2036,6 @@ fn refusal_text(refusal: &Refusal) -> String {
 /// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
 /// Then every child is closed as `close` does, in the order of the record (a planned one is dropped from the record). A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
-/// The first formation exists before any is made (it is in the list at every start), so it is not deleted.
 fn delete_with(
     config: &Path,
     formation: &str,
@@ -2042,11 +2045,6 @@ fn delete_with(
     stop_orchestrator: &dyn Fn(),
 ) -> Result<(), String> {
     check_name(formation)?;
-    if formation == ORCHESTRATOR {
-        return Err(format!(
-            "最初のフォーメーション「{ORCHESTRATOR}」は、いつも一覧にあるので削除できません"
-        ));
-    }
     migrate_legacy(config)?;
     if !dir(config, formation).is_dir() {
         return Err(format!("フォーメーション「{formation}」はありません"));
@@ -2113,7 +2111,7 @@ pub async fn formation_create(
     .await?
 }
 
-/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. A child that is refused in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. The first formation is not deleted. A failure carries the message.
+/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. A child that is refused in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. A failure carries the message.
 #[tauri::command]
 pub async fn formation_delete(
     app: tauri::AppHandle,
@@ -2140,7 +2138,7 @@ mod tests {
     use super::*;
 
     /// The formation the tests of the record work in.
-    const F: &str = ORCHESTRATOR;
+    const F: &str = "formation";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -2255,7 +2253,7 @@ mod tests {
     fn the_folder_of_a_formation_is_under_formation_in_the_config_directory() {
         assert_eq!(dir(Path::new("/c"), "api"), Path::new("/c/formation/api"));
         assert_eq!(
-            dir(Path::new("/c"), ORCHESTRATOR),
+            dir(Path::new("/c"), LEGACY_FORMATION),
             Path::new("/c/formation/formation")
         );
     }
@@ -2286,7 +2284,7 @@ mod tests {
     }
 
     #[test]
-    fn the_record_of_before_the_split_becomes_that_of_the_first_formation() {
+    fn the_record_of_before_the_split_becomes_that_of_the_formation_named_formation() {
         let config = temp_dir("legacy");
         std::fs::create_dir_all(root(&config).join(".claude")).unwrap();
         let old = vec![launched("a", "agents"), planned("b", "web")];
@@ -2299,10 +2297,10 @@ mod tests {
             std::fs::write(root(&config).join(file), "old").unwrap();
         }
         std::fs::write(root(&config).join(".claude/settings.json"), "{}").unwrap();
-        assert_eq!(read_children(&config, ORCHESTRATOR), old);
+        assert_eq!(read_children(&config, LEGACY_FORMATION), old);
         // The record is the same file, moved, and no formation but the first has it.
         assert_eq!(
-            std::fs::read_to_string(dir(&config, ORCHESTRATOR).join(CHILDREN_FILE)).unwrap(),
+            std::fs::read_to_string(dir(&config, LEGACY_FORMATION).join(CHILDREN_FILE)).unwrap(),
             text
         );
         assert!(!root(&config).join(CHILDREN_FILE).exists());
@@ -2313,12 +2311,12 @@ mod tests {
         }
         assert!(root(&config).join(".claude/settings.json").exists());
         // A change goes on from the moved record, and a second read moves nothing.
-        update(&config, ORCHESTRATOR, |old| {
+        update(&config, LEGACY_FORMATION, |old| {
             with_planned(old, &[wanted("c", "x")])
         })
         .unwrap();
         assert_eq!(
-            names(&read_children(&config, ORCHESTRATOR)),
+            names(&read_children(&config, LEGACY_FORMATION)),
             ["a", "b", "c"]
         );
         std::fs::remove_dir_all(&config).unwrap();
@@ -2327,13 +2325,13 @@ mod tests {
     #[test]
     fn a_record_that_is_already_in_the_folder_is_not_written_over_by_the_old_one() {
         let config = temp_dir("legacy-both");
-        write_children(&config, ORCHESTRATOR, &[planned("new", "r")]).unwrap();
+        write_children(&config, LEGACY_FORMATION, &[planned("new", "r")]).unwrap();
         let old = serde_json::to_string(&Record {
             children: vec![planned("old", "r")],
         })
         .unwrap();
         std::fs::write(root(&config).join(CHILDREN_FILE), &old).unwrap();
-        assert_eq!(names(&read_children(&config, ORCHESTRATOR)), ["new"]);
+        assert_eq!(names(&read_children(&config, LEGACY_FORMATION)), ["new"]);
         assert_eq!(
             std::fs::read_to_string(root(&config).join(CHILDREN_FILE)).unwrap(),
             old
@@ -2346,10 +2344,10 @@ mod tests {
         let config = temp_dir("legacy-stuck");
         std::fs::create_dir_all(root(&config)).unwrap();
         std::fs::write(root(&config).join(CHILDREN_FILE), r#"{"children": []}"#).unwrap();
-        // A file where the folder of the first formation would be: it cannot be made.
-        std::fs::write(dir(&config, ORCHESTRATOR), "in the way").unwrap();
-        assert!(read_children(&config, ORCHESTRATOR).is_empty());
-        assert!(update(&config, ORCHESTRATOR, Ok).is_err());
+        // A file where the folder of the formation `formation` would be: it cannot be made.
+        std::fs::write(dir(&config, LEGACY_FORMATION), "in the way").unwrap();
+        assert!(read_children(&config, LEGACY_FORMATION).is_empty());
+        assert!(update(&config, LEGACY_FORMATION, Ok).is_err());
         assert!(root(&config).join(CHILDREN_FILE).exists());
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -2376,18 +2374,20 @@ mod tests {
     }
 
     #[test]
-    fn the_formations_are_the_folders_named_as_a_formation_is_and_the_first_one() {
+    fn the_formations_are_the_folders_named_as_a_formation_is_and_the_extra_one() {
         let config = temp_dir("names");
-        assert_eq!(formation_names(&config, "alpha"), ["alpha", "formation"]);
+        // No folder, no formation: `formation` is not in the list unless it has a folder.
+        assert!(formation_names(&config, None).is_empty());
+        assert_eq!(formation_names(&config, Some("alpha")), ["alpha"]);
         for folder in ["beta", "Bad", ".claude", "a b"] {
             std::fs::create_dir_all(root(&config).join(folder)).unwrap();
         }
         std::fs::write(root(&config).join("file"), "").unwrap();
-        assert_eq!(formation_names(&config, "beta"), ["beta", "formation"],);
-        assert_eq!(
-            formation_names(&config, "gamma"),
-            ["beta", "formation", "gamma"],
-        );
+        assert_eq!(formation_names(&config, None), ["beta"]);
+        assert_eq!(formation_names(&config, Some("beta")), ["beta"]);
+        assert_eq!(formation_names(&config, Some("gamma")), ["beta", "gamma"]);
+        std::fs::create_dir_all(root(&config).join("formation")).unwrap();
+        assert_eq!(formation_names(&config, None), ["beta", "formation"]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -2424,6 +2424,7 @@ mod tests {
         )
         .unwrap();
         write_children(&config, "alpha", &[planned("own", "r")]).unwrap();
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         for taken in ["shared", "b2", "alpha", "beta", "formation"] {
             let err = plan(&config, "alpha", &[wanted(taken, "r")]).unwrap_err();
             assert!(err.error.contains(taken), "{taken}: {}", err.error);
@@ -4579,12 +4580,13 @@ mod tests {
     #[test]
     fn a_name_that_is_a_formation_or_a_child_or_no_name_makes_nothing() {
         let config = temp_dir("create-names");
+        // `formation` is a name like any other: it can be made, and then it is taken.
+        create_with(&config, F, &[], &two_environments(), 1).unwrap();
         create_with(&config, "one", &[], &two_environments(), 1).unwrap();
         recorded_child(&config, "one", "worker");
         let view = two_environments();
         for (name, why) in [
             ("one", "もうあります"),
-            // The first formation exists before any is created.
             (F, "もうあります"),
             ("worker", "フォーメーション「one」の子の名前"),
             ("Bad Name", "名前は"),
@@ -4744,8 +4746,6 @@ mod tests {
             [
                 ("alpha", Some(10), counts(1, 1, 1, 0)),
                 ("beta", Some(20), counts(0, 0, 1, 1)),
-                // The first formation exists before any is created, with no time and no child.
-                (F, None, counts(0, 0, 0, 0)),
             ]
         );
         assert_eq!(list.formations[0].projects, [project(LOCAL, "api")]);
@@ -4788,8 +4788,8 @@ mod tests {
         let config = temp_dir("list-none");
         std::fs::create_dir_all(&config).unwrap();
         let list = list_with(&config, &|_, _| panic!("no child is launched")).unwrap();
-        assert_eq!(list.formations.len(), 1);
-        assert_eq!(list.formations[0].name, F);
+        // No folder, no formation.
+        assert!(list.formations.is_empty());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -4820,12 +4820,12 @@ mod tests {
     }
 
     #[test]
-    fn the_first_formation_is_not_deleted() {
+    fn the_formation_named_formation_is_deleted_as_any_other() {
         let config = temp_dir("delete-first");
         formation_of_children(&config, F, &[planned("p", "x")]);
         let stopped = std::cell::Cell::new(false);
         let orca = Calls::new();
-        let err = delete_with(
+        delete_with(
             &config,
             F,
             &|_| Ok(json!({})),
@@ -4833,11 +4833,10 @@ mod tests {
             &no_remote_git,
             &|| stopped.set(true),
         )
-        .unwrap_err();
-        assert!(err.contains("削除できません"));
-        assert!(!stopped.get());
-        assert!(orca.0.borrow().is_empty());
-        assert_eq!(names(&read_children(&config, F)), ["p"]);
+        .unwrap();
+        assert!(stopped.get());
+        assert!(!dir(&config, F).exists());
+        assert!(formation_names(&config, None).is_empty());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -4889,7 +4888,7 @@ mod tests {
         assert!(!dir(&config, "alpha").exists());
         // Another formation is not touched.
         assert_eq!(names(&read_children(&config, "beta")), ["keep"]);
-        assert!(!formation_names(&config, ORCHESTRATOR).contains(&"alpha".to_owned()));
+        assert!(!formation_names(&config, None).contains(&"alpha".to_owned()));
         std::fs::remove_dir_all(&config).unwrap();
     }
 

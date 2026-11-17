@@ -764,7 +764,7 @@ export const formationChild = (name: string, state: FormationState, extra: Parti
   return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", ...rest };
 };
 
-// A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca), the time it was made (`minutes` ago; none for the first formation) and the number of its children in each state.
+// A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state.
 export const formationEntry = (name: string, extra: Partial<FormationEntry> & { minutes?: number; repos?: string[] } = {}): FormationEntry => {
   const { minutes, repos = [], ...rest } = extra;
   return {

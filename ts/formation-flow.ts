@@ -54,7 +54,9 @@ async function read() {
       const answer = await invoke("formation_list");
       if (answer.readError === null) counted = answer.formations.reduce((sum, f) => sum + f.counts.waiting, 0);
     } else {
-      const got = await invoke("formation_children", { name: currentFormation() });
+      const name = currentFormation();
+      // No formation is selected: there is no child to read.
+      const got = name === null ? [] : await invoke("formation_children", { name });
       if (mine === epoch) {
         children = got;
         failure = null;
@@ -103,7 +105,7 @@ export function switchFormation() {
 
 // The orchestrator's card of the tree has the name of the formation that is shown.
 function drawRoot() {
-  $("formation-flow-root").querySelector(".formation-card-name")!.textContent = currentFormation();
+  $("formation-flow-root").querySelector(".formation-card-name")!.textContent = currentFormation() ?? "";
 }
 
 // The mode is shown.

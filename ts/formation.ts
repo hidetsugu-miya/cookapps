@@ -1,4 +1,4 @@
-// The orchestration mode of the development screen (A-37): three panes, the list of the formations at the left (formation-list.ts), the terminal of the orchestrator of the selected formation in the middle and its flow at the right, with the session of the selected child under it (formation-flow.ts).
+// The orchestration mode of the development screen (A-37): three panes, the list of the formations at the left (formation-list.ts), the terminal of the orchestrator of the selected formation in the middle and its flow at the right, with the session of the selected child under it (formation-flow.ts). While no formation is selected only the list is shown.
 // The mode is kept only while the app runs; the first one is Orca.
 import { claudeCodeStarted, closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
@@ -12,8 +12,11 @@ export type DevMode = "orca" | "formation";
 
 // The name of the pane's owner: what `hideClaudeCode` is told when the mode or the screen is left.
 const OWNER = "formation-screen";
-// The pane of the orchestrator of the formation the screen shows.
-const pane = () => formationPaneId(currentFormation());
+// The pane of the orchestrator of the formation the screen shows; null while none is selected.
+const pane = () => {
+  const name = currentFormation();
+  return name === null ? null : formationPaneId(name);
+};
 
 let mode: DevMode = "orca";
 export const devMode = () => mode;
@@ -23,11 +26,16 @@ export function setDevMode(next: DevMode) {
 
 // Shows the terminal of the orchestrator of the formation that is shown, and hides the one of another (its process goes on). The process starts with the first show of a formation, and a show of a running one starts nothing (A-36).
 // Nothing is shown while the mode or the screen is left: a selection or a deletion that ends then (it was on its way when the owner left) must not take the hidden pane.
+// While no formation is selected the middle pane is not shown, and no orchestrator is started.
 function showPane() {
   if (mode !== "formation" || $("formation").hidden) return;
+  const id = pane();
+  $("formation-orchestrator").hidden = id === null;
+  $("formation-split").hidden = id === null;
+  if (id === null) return hideClaudeCode(OWNER);
   $("formation-head-name").textContent = currentFormation();
   const host = $("formation-term");
-  if (!isClaudeCodeShowing(host, pane(), OWNER)) showClaudeCode(host, { id: pane(), kind: "formation" }, OWNER);
+  if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, kind: "formation" }, OWNER);
 }
 
 // Shows the mode and the orchestrator's terminal in it. The flow and the list are read while the mode is shown.
@@ -56,8 +64,9 @@ export function initFormation() {
   $("formation-restart").innerHTML = RELOAD_SVG;
   const button = $<HTMLButtonElement>("formation-restart");
   button.onclick = () => {
-    button.disabled = true;
     const id = pane();
+    if (id === null) return;
+    button.disabled = true;
     closeClaudeCode(id, OWNER);
     showClaudeCode($("formation-term"), { id, kind: "formation" }, OWNER);
     void claudeCodeStarted(id).then(() => {
