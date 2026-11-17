@@ -259,6 +259,33 @@ fn write_formation_files(
     Ok(dir.join(SCRIPT_FILE))
 }
 
+/// What `tsunagiai-mcp --formation-start {name}` runs in place of itself (A-37): the launch script of the orchestrator under `/bin/sh`, in the folder of its formation.
+#[derive(Debug, PartialEq)]
+pub struct FormationStart {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+}
+
+/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one): the files written as the app writes them for its own pane (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. The first instruction is not passed: whoever starts this types it.
+pub fn formation_start(config: &Path, name: &str, mcp: &Path) -> Result<FormationStart, String> {
+    formation_start_with(config, name, &claude_path()?, mcp)
+}
+
+fn formation_start_with(
+    config: &Path,
+    name: &str,
+    claude: &Path,
+    mcp: &Path,
+) -> Result<FormationStart, String> {
+    let script = write_formation_files(config, name, claude, mcp)?;
+    Ok(FormationStart {
+        program: "/bin/sh".to_owned(),
+        args: launch_args(&script, None, None),
+        cwd: crate::formation::dir(config, name),
+    })
+}
+
 /// Writes `{}` as `settings.json` in `claude_dir`. The orchestrator can write in its folder, so a link it placed there (the folder, the file or its temporary file) is removed first, and what it leads to is not written.
 fn write_empty_settings(claude_dir: &Path) -> Result<(), String> {
     let drop_link = |path: &Path| {
@@ -1187,6 +1214,51 @@ mod tests {
                 "{bad:?}"
             );
         }
+        assert!(!config.join("x").exists());
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_start_on_this_machine_writes_the_files_and_runs_the_script_in_the_folder() {
+        let config = temp_dir("formation-start");
+        let start = formation_start_with(
+            &config,
+            "api-work",
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+        )
+        .unwrap();
+        let dir = config.join("formation/api-work");
+        assert_eq!(
+            start,
+            FormationStart {
+                program: "/bin/sh".to_owned(),
+                args: vec![dir.join("start.sh").to_string_lossy().into_owned()],
+                cwd: dir.clone(),
+            }
+        );
+        // `mcp.json` points at the running `tsunagiai-mcp` with the name of the formation, and the script is the one the app's own pane runs.
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            mcp["mcpServers"]["tsunagiai"],
+            serde_json::json!({"command": "/app/tsunagiai-mcp", "args": ["--formation", "api-work"]})
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("start.sh")).unwrap(),
+            formation_script("/bin/claude".as_ref(), &dir.join("mcp.json"), "api-work")
+        );
+        for file in ["CLAUDE.md", ".claude/settings.json"] {
+            assert!(dir.join(file).is_file(), "{file}");
+        }
+        // A name that is not a formation's writes nothing.
+        assert!(formation_start_with(
+            &config,
+            "../x",
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp")
+        )
+        .is_err());
         assert!(!config.join("x").exists());
         std::fs::remove_dir_all(config).unwrap();
     }

@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tsunagiai_lib::{
     auth::Auth,
-    calendar,
+    calendar, claude_code,
     database::{self, script::Scripts, DatabaseProfile, Keychain},
     formation::{self, PlannedChild},
     gmail, identity,
@@ -234,19 +234,57 @@ fn router(formation: bool) -> ToolRouter<Tsunagiai> {
     router
 }
 
-/// The formation named by `--formation {name}`, or none when the argument is not there (a client other than the orchestrator). The argument alone, or a name that is not a formation's name (`formation::check_name`), is an error: the server would otherwise run with the tools and no record to keep them in.
-fn formation_arg(args: impl IntoIterator<Item = String>) -> Result<Option<String>, String> {
+/// The name that follows `flag` in `args`, or none when `flag` is not there. The flag alone, or a name that is not a formation's name (`formation::check_name`), is an error.
+fn formation_name_after(
+    args: impl IntoIterator<Item = String>,
+    flag: &str,
+) -> Result<Option<String>, String> {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        if arg == "--formation" {
+        if arg == flag {
             let name = args
                 .next()
-                .ok_or("--formation にはフォーメーションの名前が要ります")?;
+                .ok_or_else(|| format!("{flag} にはフォーメーションの名前が要ります"))?;
             formation::check_name(&name)?;
             return Ok(Some(name));
         }
     }
     Ok(None)
+}
+
+/// The formation named by `--formation {name}`, or none when the argument is not there (a client other than the orchestrator). The argument alone, or a name that is not a formation's name, is an error: the server would otherwise run with the tools and no record to keep them in.
+fn formation_arg(args: impl IntoIterator<Item = String>) -> Result<Option<String>, String> {
+    formation_name_after(args, "--formation")
+}
+
+/// The formation named by `--formation-start {name}`: this process does not serve, it writes the files of that formation's orchestrator on this machine and starts Claude Code in place of itself (A-37).
+fn formation_start_arg(args: impl IntoIterator<Item = String>) -> Result<Option<String>, String> {
+    formation_name_after(args, "--formation-start")
+}
+
+/// Writes the files of the orchestrator of `name` in the config folder of this machine and runs its script in place of this process, with this `tsunagiai-mcp` as the server of its `mcp.json`. It returns only when that failed, with the message.
+fn start_orchestrator(name: &str) -> String {
+    let start = std::env::current_exe()
+        .map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))
+        .and_then(|mcp| claude_code::formation_start(&identity::config_dir()?, name, &mcp));
+    let start = match start {
+        Ok(start) => start,
+        Err(e) => return e,
+    };
+    let mut command = std::process::Command::new(&start.program);
+    command.args(&start.args).current_dir(&start.cwd);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        format!("Claude Code を起動できません: {}", command.exec())
+    }
+    #[cfg(not(unix))]
+    {
+        match command.status() {
+            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+            Err(e) => format!("Claude Code を起動できません: {e}"),
+        }
+    }
 }
 
 #[tool_router]
@@ -533,6 +571,17 @@ impl Tsunagiai {
 impl rmcp::ServerHandler for Tsunagiai {}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    match formation_start_arg(std::env::args().skip(1)) {
+        Ok(Some(name)) => {
+            eprintln!("{}", start_orchestrator(&name));
+            std::process::exit(1);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
     let formation = formation_arg(std::env::args().skip(1))?;
     let server = Tsunagiai {
         auth: Auth::new(),
@@ -552,9 +601,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        db_test_answer, formation_arg, router, DbProfileSaveArgs, FormationFilesArgs,
-        FormationGitArgs, FormationLaunchArgs, FormationPlanArgs, FormationReadArgs,
-        FormationWorktreesArgs, Tsunagiai,
+        db_test_answer, formation_arg, formation_start_arg, router, DbProfileSaveArgs,
+        FormationFilesArgs, FormationGitArgs, FormationLaunchArgs, FormationPlanArgs,
+        FormationReadArgs, FormationWorktreesArgs, Tsunagiai,
     };
 
     #[test]
@@ -789,6 +838,32 @@ mod tests {
             &["--formation", "--other"],
         ] {
             assert!(formation_arg(args(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_start_flag_is_an_argument_of_its_own_and_the_serving_flag_does_not_read_it() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            formation_start_arg(args(&["--formation-start", "api-work"])),
+            Ok(Some("api-work".to_owned()))
+        );
+        assert_eq!(
+            formation_start_arg(args(&["--formation", "api-work"])),
+            Ok(None)
+        );
+        assert_eq!(formation_start_arg(args(&[])), Ok(None));
+        assert_eq!(
+            formation_arg(args(&["--formation-start", "api-work"])),
+            Ok(None)
+        );
+        for bad in [
+            &["--formation-start"][..],
+            &["--formation-start", ""],
+            &["--formation-start", "../x"],
+            &["--formation-start", "A"],
+        ] {
+            assert!(formation_start_arg(args(bad)).is_err(), "{bad:?}");
         }
     }
 
