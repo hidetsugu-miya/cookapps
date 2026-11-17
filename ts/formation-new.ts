@@ -39,6 +39,7 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
   // The projects in the order of the lists, each with its row (for the filter) and its box.
   const projects: { project: FormationProject; row: HTMLLabelElement; box: HTMLInputElement }[] = [];
   const sections: { head: HTMLElement; rows: HTMLElement[] }[] = [];
+  // A heading is shown only while a row under it is: an environment with no project, or none that the filter leaves, has none, and an environment that could not be read keeps its heading with its note.
   const narrow = () => {
     const re = partMatcher(filter.value);
     for (const p of projects) p.row.hidden = re !== null && !re.test(p.project.repo);
@@ -99,6 +100,7 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
         }
         sections.push({ head, rows });
       }
+      narrow();
       make.disabled = false;
     },
     (e) => {

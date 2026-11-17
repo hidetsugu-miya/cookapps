@@ -21,6 +21,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
+import { setOrcaWorking } from "./footer.js";
 import { devMode, setDevMode } from "./formation.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -75,6 +76,8 @@ type Scope = "full" | "screen" | "badge";
 let waitingCount = 0;
 // The rows that work now (group `working`, with a status that says so). A failed read cannot say that any does, so it clears them: the sidebar icon turns yellow and fades while there is one (see `track`).
 let workingCount = 0;
+// The projects that those rows are in: the number on the footer's Orca button (A-35).
+let workingProjects = 0;
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
 // The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
@@ -147,7 +150,9 @@ const viewedPane = () => {
 // or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
 function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
-  workingCount = rows.filter((r) => r.group === "working" && (r.status === "working" || r.status === "monitoring")).length;
+  const working = rows.filter((r) => r.group === "working" && (r.status === "working" || r.status === "monitoring"));
+  workingCount = working.length;
+  workingProjects = new Set(working.map((r) => r.projectKey)).size;
   const live = new Set<string>();
   for (const r of rows) {
     if (r.paneKey === null) continue;
@@ -168,6 +173,7 @@ function track(rows: OrcaRow[]) {
 function forgetNotices() {
   waitingCount = 0;
   workingCount = 0;
+  workingProjects = 0;
   notified.clear();
   wasStopped = new Set();
   baselined = false;
@@ -280,6 +286,7 @@ function drawBadge() {
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
   nav.setAttribute("aria-label", parts.length === 0 ? "開発" : `開発（${parts.join("、")}）`);
+  setOrcaWorking(workingProjects);
 }
 
 // What a read that did not work says (the Orca screen and the side pane show it alike), else null.
@@ -682,7 +689,10 @@ function adopt(read: OrcaOverview) {
   // The count and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked.
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
-  else workingCount = 0;
+  else {
+    workingCount = 0;
+    workingProjects = 0;
+  }
   adoptHere(next.local);
   settle();
 }
@@ -841,7 +851,10 @@ async function load(scope: Scope, force = false) {
   // A read for the count alone has no terminals: it only moves the count, and a failure of it is left to the next read.
   if (scope === "badge" && next.state !== "missing") {
     if (next.state === "ready") track(next.rows);
-    else workingCount = 0;
+    else {
+      workingCount = 0;
+      workingProjects = 0;
+    }
     drawBadge();
     return;
   }

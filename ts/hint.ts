@@ -1,4 +1,6 @@
 // The "?" of a card opens its hint, a popup framed like the account popup; the same button, a click elsewhere, or Escape closes it.
+import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
+import type { FormationKeptChild } from "./bindings/FormationKeptChild";
 import { composing, tag } from "./dom.js";
 import { LOCK_SVG } from "./icons.js";
 import { closePane } from "./pane.js";
@@ -55,7 +57,7 @@ export function hintPopup(title: string, steps: (string | Node)[][], foot: strin
 }
 
 // A confirmation framed like a hint, with a red button that does it and a Cancel; Cancel, the same button, a click elsewhere or Escape closes it. Cancel has the keys at first.
-function confirmPop(button: Element, label: string, title: string, body: string, yesText: string, onConfirm: () => void, extra = "") {
+function confirmPop(button: Element, label: string, title: string, body: string | HTMLElement[], yesText: string, onConfirm: () => void, extra = "") {
   const pop = tag("div", `pop${extra}`);
   pop.setAttribute("role", "alertdialog");
   pop.setAttribute("aria-label", label);
@@ -69,7 +71,7 @@ function confirmPop(button: Element, label: string, title: string, body: string,
   no.onclick = closeHint;
   const actions = tag("div", "popup-actions");
   actions.append(yes, no);
-  pop.append(tag("h3", "", title), tag("p", "", body), actions);
+  pop.append(tag("h3", "", title), ...(typeof body === "string" ? [tag("p", "", body)] : body), actions);
   toggleHint(button, pop);
   no.focus();
 }
@@ -88,6 +90,49 @@ export function confirmDelete(button: Element, name: string, onConfirm: () => vo
 // The confirmation before a formation is deleted (A-37): its children are closed first, and one that cannot be closed stops it.
 export function confirmFormationDelete(button: Element, name: string, onConfirm: () => void) {
   confirmPop(button, `${name} を削除`, `${name} を削除しますか？`, "子をすべて閉じてから削除します。閉じられない子があるときは、削除しません。", "削除", onConfirm, " pop-confirm");
+}
+
+// The confirmation before a child of a formation is closed from its card (A-37): its worktree and its branch go, and a child that has something to lose is not closed.
+export function confirmChildDelete(button: Element, name: string, onConfirm: () => void) {
+  confirmPop(button, `${name} を削除`, `${name} を削除しますか？`, "worktree とブランチを消します。変更や追跡していないファイル、どのリモートにもないコミットがあるときは、消しません。", "削除", onConfirm, " pop-confirm");
+}
+
+// What a refused close of a child (A-37) would lose if it were forced: git's lines under a head each (data from git, drawn as text), and the head of a group that has none is not drawn.
+function lostGroups(groups: [string, string[]][]): HTMLElement[] {
+  const nodes: HTMLElement[] = [];
+  for (const [head, lines] of groups) {
+    if (lines.length === 0) continue;
+    const list = tag("ul", "pop-lost");
+    for (const line of lines) list.append(tag("li", "", line));
+    nodes.push(tag("p", "pop-lost-head", head), list);
+  }
+  return nodes;
+}
+
+// The reason a worktree was kept, where it is (the path a forced close sends back, and its environment) and what a forced close loses (git's lines under a head each).
+function keptBody(answer: FormationCloseAnswer): HTMLElement[] {
+  return [
+    tag("p", "", answer.reason ?? ""),
+    tag("p", "pop-lost-place", `${answer.environment === "local" ? "この Mac" : answer.environment}: ${answer.path}`),
+    ...lostGroups([
+      ["変更のあるファイル", answer.changed],
+      ["追跡していないファイル", answer.untracked],
+      ["どのリモートにもないコミット", answer.unpushed],
+    ]),
+  ];
+}
+
+// The confirmation after the close of a child was refused for what git says of its worktree (A-37): the reason and what a forced close loses, with 「強制削除」 in the danger color.
+export function confirmChildForce(button: Element, name: string, answer: FormationCloseAnswer, onConfirm: () => void) {
+  const body = [...keptBody(answer), tag("p", "", "強制すると、worktree を消します。変更と追跡していないファイルは失われます。どのリモートにもないコミットは、ローカルのブランチに残ります。")];
+  confirmPop(button, `${name} を強制削除`, `${name} を削除できませんでした`, body, "強制削除", onConfirm, " pop-confirm");
+}
+
+// The confirmation after the deletion of a formation was refused for what git says of the worktrees of its children (A-37): each child that was kept with its reason and what a forced deletion loses, with 「強制削除」 in the danger color. Nothing was closed when this is drawn.
+export function confirmFormationForce(button: Element, name: string, kept: FormationKeptChild[], onConfirm: () => void) {
+  const body = kept.flatMap((child) => [tag("p", "pop-lost-child", `子「${child.name}」`), ...keptBody(child.answer)]);
+  body.push(tag("p", "", "強制すると、これらの子の worktree を消してから、フォーメーションを削除します。上の変更と追跡していないファイルは失われます。どのリモートにもないコミットは、ローカルのブランチに残ります。"));
+  confirmPop(button, `${name} を強制削除`, `${name} を削除できませんでした`, body, "強制削除", onConfirm, " pop-confirm pop-kept");
 }
 
 export function initHint() {

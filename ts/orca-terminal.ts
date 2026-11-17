@@ -4,7 +4,7 @@
 // A saved environment streams each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
 // the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
-// A terminal of a saved environment that the Orca screen does not stream (A-9 shows one) is a mirror too, read through Orca's CLI every 2 seconds.
+// A terminal of a saved environment that the Orca screen does not stream (A-9 and the session of a child of A-37 show one) is a mirror too, read through Orca's CLI every 2 seconds.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are sent on when the terminal stops showing (another tab, screen or a hidden window), to the terminal they were typed in, and dropped when it goes. Nothing a terminal prints or is typed is kept or logged here.
 // A file pasted or dropped on a terminal shown is put in its worktree and its path is typed in that terminal (A-10).

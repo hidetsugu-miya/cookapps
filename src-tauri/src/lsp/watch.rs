@@ -1,6 +1,6 @@
 //! A-34: telling ruby-lsp which Ruby files of the worktree changed on the disk, as pure functions.
 //!
-//! ruby-lsp indexes the worktree once, when it starts, and then follows only what the client tells it (`workspace/didChangeWatchedFiles`): it registers no watcher of its own. So before each question the app lists, by one command run in the worktree by the route of the server (`command`), the `*.rb` files that changed since the last look and all the `*.rb` files there are now, and tells the server the difference (`changes`, `message`). The command prints no more than the folders that hold the project's own code: `.git`, `node_modules`, `vendor/bundle`, `tmp` and `log` are not looked into. Nothing is written in the worktree, and `-mmin`, `-path` and `-prune` are what GNU, BSD and BusyBox `find` all have.
+//! ruby-lsp indexes the worktree once, when it starts, and then follows only what the client tells it (`workspace/didChangeWatchedFiles`): it registers no watcher of its own. So before each question the app lists, by one command run in the worktree by the route of the server (`command`), the `*.rb` files that changed since the last look and all the `*.rb` files there are now, and tells the server the difference (`changes`, `message`). The command prints no more than the folders that hold the project's own code: `.git`, `node_modules`, `vendor/bundle`, `tmp`, `log` and `.claude/worktrees` (the worktrees of the children of a formation are made there, A-37) are not looked into. Nothing is written in the worktree, and `-mmin`, `-path` and `-prune` are what GNU, BSD and BusyBox `find` all have.
 
 use std::{collections::HashSet, time::Duration};
 
@@ -18,7 +18,7 @@ const MAX_PATH: usize = 4096;
 const SPLIT: &str = "--";
 const END: &str = "--end";
 /// The folders that are not looked into.
-const SKIP: &str = r"\( -name .git -o -name node_modules -o -path ./vendor/bundle -o -path ./tmp -o -path ./log \) -prune -o -type f -name '*.rb'";
+const SKIP: &str = r"\( -name .git -o -name node_modules -o -path ./vendor/bundle -o -path ./tmp -o -path ./log -o -path ./.claude/worktrees \) -prune -o -type f -name '*.rb'";
 
 /// How a file changed, as the numbers of LSP's `FileChangeType`.
 const CREATED: u8 = 1;
@@ -188,6 +188,7 @@ mod tests {
             "-path ./vendor/bundle",
             "-path ./tmp",
             "-path ./log",
+            "-path ./.claude/worktrees",
         ] {
             assert_eq!(command.matches(skipped).count(), 2, "{skipped}");
         }

@@ -81,7 +81,7 @@ export function hideFormation() {
   hidePanes();
 }
 
-// Only the terminals are hidden: the count of the waiting children, when it is the read in hand, goes on.
+// Only the terminals are hidden: the numbers of the footer, from the read in hand, go on.
 export function hidePanes() {
   hideSession();
   hideClaudeCode(OWNER);

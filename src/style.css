@@ -51,6 +51,12 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .popup-actions { display: flex; gap: 8px; }
 .danger, .text-btn.danger { color: var(--danger); }
 .pop-confirm { max-width: 320px; overflow-wrap: anywhere; }
+.pop-kept { max-height: calc(100vh - 16px); overflow-y: auto; }
+.pop-lost-child { margin-bottom: 4px; font-weight: 700; color: var(--danger); }
+.pop-lost-head { margin-bottom: 2px; font-weight: 700; }
+.pop-lost { margin: 0 0 12px; padding-left: 18px; max-height: 6.4em; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); }
+.pop .pop-lost li { margin: 0; white-space: pre-wrap; }
+.pop-lost-place { margin: 0 0 6px; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); word-break: break-all; }
 .popup-unread, .popup-plan { color: #666; }
 .nav-item[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
 
@@ -70,6 +76,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .footer-mode svg { width: 17px; height: 17px; }
 /* The count of the children that wait, at the corner of the orchestration's icon while Orca is the mode. */
 .footer-mode-count { position: absolute; top: -6px; right: -5px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--surface); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+.footer-mode-count.working { background: var(--agent-working); color: var(--side); }
 .footer-mode[aria-pressed="true"] { padding: 0 10px 0 6px; background: var(--soft); color: var(--accent-text); font-weight: bold; }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
@@ -1054,6 +1061,7 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] { border-color: var(--agent-question); background: color-mix(in srgb, var(--agent-question) 10%, var(--surface)); }
 .formation-card[data-state="done"] { border-color: color-mix(in srgb, var(--agent-done) 45%, var(--line)); }
 .formation-card[data-state="planned"] { border: 1.5px dashed var(--chip-line); background: transparent; }
+.formation-card[aria-busy="true"] { opacity: .5; }
 .formation-card[aria-pressed="true"] { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
 .formation-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .formation-card-row + .formation-card-row { justify-content: flex-start; gap: 6px; }

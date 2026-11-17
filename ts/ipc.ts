@@ -21,9 +21,12 @@ import type { EnvironmentsView } from "./bindings/EnvironmentsView";
 import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
 import type { FormationChild } from "./bindings/FormationChild";
+import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
+import type { FormationDeleteAnswer } from "./bindings/FormationDeleteAnswer";
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationList } from "./bindings/FormationList";
 import type { FormationProject } from "./bindings/FormationProject";
+import type { FormationShown } from "./bindings/FormationShown";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
@@ -357,8 +360,10 @@ export interface Commands {
   formation_list: { args: undefined; result: FormationList };
   // A-37: makes the formation `name` (the shape of a child's name, not the name of a formation or of a child) of `projects` (each an environment and a repository of `formation_environments`, by name or id and by name or path). A failure carries the message.
   formation_create: { args: { name: string; projects: FormationProject[] }; result: FormationEntry };
-  // A-37: deletes the formation `name`: every child of it is checked as `formation_close` checks it (a worktree with a change, an untracked file or a commit no remote has is refused), and when none is refused its orchestrator's process ends, the children are closed and its folder is deleted. A refusal of the check ends and closes nothing; a child that is refused only when it is closed (its state changed) leaves the process ended. A refusal carries the message, and the formation stays.
-  formation_delete: { args: { name: string }; result: null };
+  // A-37: deletes the formation `name`: every child of it is checked as `formation_close` checks it, and when none is refused its orchestrator's process ends, the children are closed and its folder is deleted. Children kept for what git says of their worktrees (a change, an untracked file, a commit no remote has) are the answer (`deleted` false, `kept` with the lines of git for each) and nothing is ended or closed; with `force` the children named in `shown` (each child's `name` and the `path` of the answer's `kept`, as the owner was shown them) are closed all the same, with `--force`, and their changes and untracked files are lost (the commits no remote has stay on the local branch, which Orca keeps: `preserved` of the answer names it); a child that `shown` does not name, or names with another path, is checked again as without `force`. Any other refusal carries the message and the formation stays; a child that is refused only when it is closed (its state changed) leaves the process ended.
+  formation_delete: { args: { name: string; force: boolean; shown: FormationShown[] }; result: FormationDeleteAnswer };
+  // A-37: closes the child `name` of the formation `formation` from its card, as `formation_close` does (its terminal, its worktree with its branch, its entry of the record). A worktree with a change, an untracked file or a commit no remote has is kept: the answer has `closed` false with the reason and the lines of git. With `force` and the `path` the answer showed it is removed all the same, with `--force`, and its changes and untracked files are lost (the commits no remote has stay on the local branch, which Orca keeps: `preservedBranch` of the answer names it); with another `path`, or null, it is checked again as without `force`. Any other refusal carries the message.
+  formation_close_child: { args: { formation: string; name: string; force: boolean; path: string | null }; result: FormationCloseAnswer };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
