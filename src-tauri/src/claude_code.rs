@@ -95,7 +95,7 @@ fn mcp_config(mcp: &Path, args: &[&str]) -> String {
 }
 
 /// `text` as one word of a POSIX shell: in single quotes, a quote in it closed, escaped and opened again.
-fn sh_quote(text: &str) -> String {
+pub(crate) fn sh_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
@@ -267,21 +267,28 @@ pub struct FormationStart {
     pub cwd: PathBuf,
 }
 
-/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one): the files written as the app writes them for its own pane (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. The first instruction is not passed: whoever starts this types it.
-pub fn formation_start(config: &Path, name: &str, mcp: &Path) -> Result<FormationStart, String> {
-    formation_start_with(config, name, &claude_path()?, mcp)
+/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one): the files written as the app writes them for its own pane (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. `projects` are the repositories of its formation, all of this machine (`local`): they are its first instruction, passed as `claude [prompt]` as in the pane of the app, so nothing has to be typed into the terminal (a typed text would wait behind Claude Code's question whether to trust the folder, which the owner answers on the screen, and which nothing here answers). With no project there is no instruction. A name that `first_prompt` refuses is an error before any file is written.
+pub fn formation_start(
+    config: &Path,
+    name: &str,
+    projects: &[String],
+    mcp: &Path,
+) -> Result<FormationStart, String> {
+    formation_start_with(config, name, projects, &claude_path()?, mcp)
 }
 
 fn formation_start_with(
     config: &Path,
     name: &str,
+    projects: &[String],
     claude: &Path,
     mcp: &Path,
 ) -> Result<FormationStart, String> {
+    let prompt = crate::formation::local_first_prompt(projects)?;
     let script = write_formation_files(config, name, claude, mcp)?;
     Ok(FormationStart {
         program: "/bin/sh".to_owned(),
-        args: launch_args(&script, None, None),
+        args: launch_args(&script, None, prompt),
         cwd: crate::formation::dir(config, name),
     })
 }
@@ -1224,11 +1231,13 @@ mod tests {
         let start = formation_start_with(
             &config,
             "api-work",
+            &[],
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
         )
         .unwrap();
         let dir = config.join("formation/api-work");
+        // With no project there is no first instruction.
         assert_eq!(
             start,
             FormationStart {
@@ -1255,11 +1264,72 @@ mod tests {
         assert!(formation_start_with(
             &config,
             "../x",
+            &[],
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp")
         )
         .is_err());
         assert!(!config.join("x").exists());
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_start_on_this_machine_passes_the_projects_as_the_first_instruction_in_local() {
+        let config = temp_dir("formation-start-prompt");
+        let start = formation_start_with(
+            &config,
+            "api-work",
+            &["api".to_owned(), "x'; rm -rf $HOME".to_owned()],
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+        )
+        .unwrap();
+        let script = config.join("formation/api-work/start.sh");
+        // The script, then `--` and the prompt as one element: no shell reads it.
+        assert_eq!(start.args.len(), 3);
+        assert_eq!(start.args[0], script.to_string_lossy());
+        assert_eq!(start.args[1], "--");
+        let prompt = &start.args[2];
+        assert!(
+            prompt.contains("> 環境: local / リポジトリ: api\n"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("> 環境: local / リポジトリ: x'; rm -rf $HOME\n"),
+            "{prompt}"
+        );
+        assert_eq!(
+            Some(prompt.clone()),
+            crate::formation::first_prompt(&[
+                crate::formation::FormationProject {
+                    environment: "local".into(),
+                    repo: "api".into()
+                },
+                crate::formation::FormationProject {
+                    environment: "local".into(),
+                    repo: "x'; rm -rf $HOME".into()
+                },
+            ])
+            .unwrap()
+        );
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn a_project_name_that_the_instruction_refuses_stops_the_start_before_any_file_is_written() {
+        let config = temp_dir("formation-start-bad-project");
+        let many: Vec<String> = (0..51).map(|i| format!("r{i}")).collect();
+        for bad in [vec!["a\nb".to_owned()], vec![String::new()], many] {
+            assert!(formation_start_with(
+                &config,
+                "api-work",
+                &bad,
+                Path::new("/bin/claude"),
+                Path::new("/app/tsunagiai-mcp")
+            )
+            .is_err());
+            assert!(!config.join("formation/api-work").exists());
+        }
         std::fs::remove_dir_all(config).unwrap();
     }
 
