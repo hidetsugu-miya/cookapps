@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.82.2
+
+A-37: the orchestrator decides more by itself and finishes the work (#848 to #851). On an instruction it investigates first, sets the purpose, the goal and the plan, tells the owner in short and goes on; it asks the owner only for a decision the material does not settle, an operation that cannot be undone, or what investigation does not settle. It reads the repositories of every environment by itself: the worktrees, the entries of a folder, a file (in ranges of lines; `.git` and `.env` files are not read) and the git state and branches. A child's branch is optional and of any form git accepts. A child can run in an existing folder (the repository's own folder or a worktree) with nothing made, and closing such a child only closes its terminal. A new worktree is made through Orca's runtime: a branch that is in the repository is opened as it is, a branch that is only on `origin` is opened from `origin/{branch}` under the same name, on this Mac and on a saved environment alike, and Orca no longer makes a branch under another name such as `{branch}-2`; a branch that another place has open is refused with Orca's reason. Closing a child keeps a branch that was in the repository before it.
+
 ## v0.82.1
 
 A-37: a child can be closed from its card in the flow pane, and a formation can be deleted by force (#834, #835, #836). A right press on a card opens a menu with 「削除」, which closes the child after a confirmation, as the orchestrator's close does. When the child cannot be closed (a change, an untracked file or a commit that no remote has), a second confirmation shows the reason, those files and commits, and where the worktree is, and 「強制削除」 removes the worktree anyway. Deleting a formation whose children cannot be closed shows the same for each of them, and 「強制削除」 removes their worktrees and deletes the formation. A force removes only the worktrees that were shown: their changes and untracked files are lost, and the commits that no remote has stay on the local branch, which the screen names. The orchestrator never forces a close.
