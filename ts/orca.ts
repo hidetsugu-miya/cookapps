@@ -36,6 +36,7 @@ import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, showDefinition, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
+import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
@@ -339,6 +340,13 @@ function sessionNode(t: Tab, key: string) {
     row.append(badge);
   }
   row.onclick = () => selectSession(key, t.id);
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
+    if (key === projectKey || t.handle === null) return;
+    openPeek(key, t.id, `tab:${t.id}`);
+    syncPeek();
+  };
   return row;
 }
 
@@ -777,9 +785,21 @@ function serverGone(environment: string | null, path: string) {
   return !open && !hasFileIn(environment, path) && !hasDiffIn(environment, path);
 }
 
+// The modal of A-40 shows the session it was opened for as the list has it now, and closes when the list no longer has it, when its project was selected, or when the screen is not shown.
+function syncPeek() {
+  const at = peeking();
+  if (at === null) return;
+  const t = shown() && at.project !== projectKey ? tabsOf(at.project).find((x) => x.id === at.tab) : undefined;
+  if (t === undefined || t.handle === null) return closePeek();
+  const name = mix.projects.find((p) => p.key === at.project)?.name ?? "";
+  drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: { kind: t.environment !== null && streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment } });
+}
+
 function draw() {
   syncServers(serverGone);
   drawBadge();
+  // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
+  syncPeek();
   if (!shown()) return;
   drawNotice();
   drawSearch();
@@ -902,6 +922,7 @@ function rereadFiles() {
 function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
+  syncPeek();
   // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
   if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
   else if (Date.now() - filesAt >= shownMs()) {
@@ -1294,6 +1315,7 @@ function initSearch() {
 
 export function initOrca() {
   initOrcaTerminal(showError);
+  initPeek(statusIcon);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, ruby: (target, project, path) => void ensureServer({ target, project, path }) });

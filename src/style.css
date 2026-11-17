@@ -1436,6 +1436,16 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
+/* A-40: the modal of the terminal of one session, in the middle of the dimmed screen of .scrim with a margin on the four sides, in the frame of #account-popup. */
+#orca-peek { align-items: center; justify-content: center; box-sizing: border-box; padding: 32px; }
+#orca-peek-box { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+#orca-peek-head { flex: none; display: flex; align-items: center; gap: 10px; box-sizing: border-box; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); }
+#orca-peek-icon { flex: none; display: inline-flex; }
+#orca-peek-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+#orca-peek-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+#orca-peek-head .icon-btn { flex: none; width: 28px; height: 28px; }
+#orca-peek-head .icon-btn svg { width: 16px; height: 16px; }
+#orca-peek-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The host of a Claude Code pane (A-36), as `#orca-panes .orca-term` is the host of an Orca terminal: the box of the terminal fills it. */
 .claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }

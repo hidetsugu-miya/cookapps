@@ -799,6 +799,20 @@
       <button id="update-go" class="text-btn primary" type="button"></button>
     </div>
   </div>
+  <div id="orca-peek" class="scrim" hidden>
+    <div id="orca-peek-box" role="dialog" aria-modal="true" aria-label="セッション">
+      <div id="orca-peek-head">
+        <span id="orca-peek-icon"></span>
+        <b id="orca-peek-project"></b>
+        <span id="orca-peek-title"></span>
+        <span id="orca-peek-env" class="orca-env" hidden></span>
+        <button id="orca-peek-close" class="icon-btn" type="button" aria-label="閉じる">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div id="orca-peek-term"></div>
+    </div>
+  </div>
   <script src="vendor/marked.umd.js"></script>
   <script src="vendor/purify.min.js"></script>
   <script type="module" src="js/main.js"></script>
