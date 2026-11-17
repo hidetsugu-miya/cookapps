@@ -52,8 +52,16 @@ function showPane() {
   const said = remote ? (failures.get(name) ?? null) : null;
   $("formation-term-error").hidden = said === null;
   $("formation-term-error").textContent = said ?? "";
+  syncRestart();
   if (remote) return showRemote(name, host, said);
   if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, kind: "formation" }, OWNER);
+}
+
+// The restart button is off while the orchestrator of the shown formation of a saved environment is starting, because a restart pressed then would be dropped (one start at a time for a formation, and a first start can take long).
+function syncRestart() {
+  const name = currentFormation();
+  if (name === null || formationEnvironment(name) === LOCAL) return;
+  $<HTMLButtonElement>("formation-restart").disabled = starting.has(name);
 }
 
 // Shows the terminal of the orchestrator of a formation of a saved environment, and starts it when it has none and no failure is on the screen (a failure is tried again by the restart button, or by pressing the formation again).
@@ -75,6 +83,7 @@ async function startRemote(name: string, restart: boolean) {
   if (starting.has(name)) return;
   starting.add(name);
   failures.delete(name);
+  if (currentFormation() === name) syncRestart();
   try {
     terminals.set(name, await invoke("formation_orchestrator", { name, restart }));
   } catch (e) {
@@ -127,6 +136,7 @@ export function initFormation() {
       terminals.delete(name);
       void startRemote(name, true).then(() => {
         button.disabled = false;
+        syncRestart();
       });
       return;
     }

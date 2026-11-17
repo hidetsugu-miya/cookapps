@@ -1934,7 +1934,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await cardNames()).toEqual(["api-update", "docs-update"]);
     expect(await cardStates()).toEqual(["作業中", "予定"]);
     await expect($("#formation-flow")).toBeDisplayed();
-    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => JSON.stringify(c) === JSON.stringify({ handle: "term_api-update", environment: "mac-studio" })), { timeoutMsg: "the terminal of the child was not read in its environment" });
+    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_api-update" && (c as { environment?: string }).environment === "mac-studio"), { timeoutMsg: "the terminal of the child was not read in its environment" });
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
     expect(await starts()).toBe(0);
   });
@@ -1974,6 +1974,17 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
     expect(await starts()).toBe(0);
     expect(await callsOf("claude_code_close")).toEqual([]);
+  });
+
+  it("leaves the restart button off while the first start of the terminal is on its way, so a press is not dropped", async () => {
+    await openList({ formation_list: remote(), ...SHOWN }, null);
+    const start = await mock("formation_orchestrator", holds);
+    await row("studio-work").click();
+    await waitForCalls(start);
+    await expect($("#formation-restart")).toBeDisabled();
+    await release(start, terminal());
+    await expect($("#formation-restart")).toBeEnabled();
+    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
   });
 
   it("restarts the terminal through Rust, and shows the new one in place of the old", async () => {
