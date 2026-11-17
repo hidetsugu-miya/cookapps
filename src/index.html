@@ -193,6 +193,9 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
           </button>
           <h1 id="todo-title">今日</h1>
+          <button id="todo-orca-open" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+          </button>
           <button id="todo-more" class="text-btn" aria-label="編集" aria-haspopup="menu" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
             <span>編集</span>
@@ -216,19 +219,16 @@
           <div id="todo-pending"></div>
           <div id="todo-list"></div>
           <section id="todo-detail" hidden></section>
+          <aside id="todo-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
         </div>
       </div>
       <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="30" aria-valuemax="45" aria-valuenow="30" tabindex="0" hidden><span></span></div>
       <div id="todo-side" hidden>
         <div id="todo-tools" data-tauri-drag-region="deep">
-          <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="true">
+          <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
           </button>
-          <button id="todo-tool-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" disabled>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
-          </button>
         </div>
-        <aside id="todo-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
         <aside id="todo-claude" class="chat-pane" aria-label="Claude">
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude

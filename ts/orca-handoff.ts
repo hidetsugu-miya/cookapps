@@ -31,7 +31,7 @@ export interface HandoffHost {
   current: () => HandoffItem | null;
   // True when the pane is shown whenever the item is in view (the Slack tab): it has no title row before a send, and its close button only forgets the session.
   forced?: boolean;
-  // True when the pane has no way of its own to be closed (the Todo screen's right pane, which its icons choose): it has no close button before a send, and the close button of a session only forgets it.
+  // True when the pane has no way of its own to be closed (the Todo screen's pane under the detail, which goes with the task): it has no close button before a send, and the close button of a session only forgets it.
   stays?: boolean;
   // The pane opens or closes: the host shows or hides it and presses its button.
   onOpen: (open: boolean) => void;
@@ -235,19 +235,12 @@ export class HandoffPane {
     this.sync();
   }
 
-  // Opens the pane for the item in view, unless it is open (a host whose icon only chooses the pane).
+  // Opens the pane for the item in view, unless it is open (a host whose button only opens it).
   show() {
     this.sync();
     if (this.itemKey === null || this.open) return;
     this.open = true;
     this.lastRead = 0;
-    this.sync();
-  }
-
-  // Closes the pane because another pane of the host's screen takes its place.
-  close() {
-    if (!this.open) return;
-    this.open = false;
     this.sync();
   }
 

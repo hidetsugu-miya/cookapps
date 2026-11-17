@@ -26,9 +26,7 @@ const TODO_REFRESH_MS = 10 * 1000;
 // The pane that hands the open task to Orca (A-9).
 let handoff: HandoffPane;
 
-// The right pane is always there while the list or a task is shown, with an icon for each of the two things it holds: Claude's pane (T-7, the one at first) and the one that hands the open task to Orca (A-9).
-// They share the divider and its width. The Orca pane follows the open task (`orcaOpen` is what the pane told: open for the task in view), and when it is not open Claude's is.
-let orcaOpen = false;
+// The right pane is always there while the list or a task is shown, and holds Claude's pane (T-7). The pane that hands the open task to Orca (A-9) is not in it: it follows the detail, under the comments, in the same scroll.
 let sideUsable = false;
 
 // The list of projects (A-23): `listOpen` is what the owner chose, held in memory only, so the screen is open again when the app starts; `tokenForm` is whether the token form is up, which has no list.
@@ -53,19 +51,12 @@ function toggleList() {
 }
 
 function layoutPanes() {
-  const orca = sideUsable && orcaOpen;
-  const claude = sideUsable && !orcaOpen;
   $("todo-side").hidden = !sideUsable;
   $("todo-split").hidden = !sideUsable;
-  $("todo-claude").hidden = !claude;
-  $("todo-handoff").hidden = !orca;
-  $("todo-tool-claude").setAttribute("aria-pressed", String(claude));
-  $("todo-tool-orca").setAttribute("aria-pressed", String(orca));
-  $("todo-split").setAttribute("aria-label", orca ? "Orca の幅" : "Claude の幅");
-  if (claude) showTodoClaudeModels();
+  if (sideUsable) showTodoClaudeModels();
 }
 
-// Follows the open task: another task, or none, changes what the pane shows, and the card takes the task as it is now.
+// Follows the open task: another task, or none, changes what the pane under the detail shows, and the card takes the task as it is now.
 export function syncTodoHandoff() {
   handoff.sync();
   handoff.refreshCard();
@@ -84,10 +75,12 @@ export function todoMode(mode: "token" | "list" | "detail" | "draft") {
   $("todo-main").classList.toggle("drafting", mode === "draft");
   document.getElementById("todo-draft")?.toggleAttribute("hidden", mode !== "draft");
   $("todo-more").hidden = mode !== "detail";
-  // Only a task can be handed over, so the icon waits for one; leaving the task puts Claude's pane back (the Orca pane closes with it).
-  $<HTMLButtonElement>("todo-tool-orca").disabled = mode !== "detail";
+  // Only a task can be handed over, so the button is in the header of a task only.
+  $("todo-orca-open").hidden = mode !== "detail";
   sideUsable = mode === "list" || mode === "detail";
   layoutPanes();
+  // Leaving the task takes the pane under it away at once.
+  if (mode !== "detail") handoff.sync();
   // A redraw of the same task keeps its menu open; another task or another part closes it.
   if (moreMenu && (mode !== "detail" || todoState.open !== moreMenu.id)) closeMoreMenu();
 }
@@ -339,18 +332,17 @@ export function initTodo() {
     },
     stays: true,
     onOpen: (open) => {
-      orcaOpen = open;
-      layoutPanes();
+      $("todo-handoff").hidden = !open;
+      $("todo-orca-open").setAttribute("aria-pressed", String(open));
     },
   });
-  $("todo-tool-orca").onclick = () => handoff.show();
-  initTodoClaude();
-  $("todo-tool-claude").onclick = () => {
-    // The Orca pane closes first, and its close lays out the panes with the choice already made.
-    handoff.close();
-    layoutPanes();
-    focusTodoClaude();
+  $("todo-orca-open").onclick = () => {
+    handoff.show();
+    // The pane is under the comments, in the scroll of the detail: it is brought into view.
+    $("todo-handoff").scrollIntoView({ block: "start" });
   };
+  initTodoClaude();
+  $("todo-tool-claude").onclick = focusTodoClaude;
   // 30% of the screen at first, its least; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range).
   initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45 });
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
