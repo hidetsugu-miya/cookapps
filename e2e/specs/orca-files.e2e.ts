@@ -304,6 +304,64 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.querySelector(".orca-edit-rich")!.textContent)).not.toContain("title");
   });
 
+  // A-26: the band under the paragraph of the caret (`.orca-edit-rich-band`).
+  const richBand = () =>
+    browser.execute(() => {
+      const b = document.querySelector<HTMLElement>(".orca-edit-rich-band")!;
+      const r = b.getBoundingClientRect();
+      return { hidden: b.hidden, top: r.top, bottom: r.bottom, left: r.left, right: r.right, background: getComputedStyle(b).backgroundColor };
+    });
+  const boxOf = (selector: string) =>
+    browser.execute((s) => {
+      const r = document.querySelector(`.orca-edit-rich .ProseMirror ${s}`)!.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left };
+    }, selector);
+  // The caret at the start of the first element `selector` of the rich view, which has the focus (or, with `whole`, the whole content of the element selected).
+  const caretInRich = (selector: string, whole = false) =>
+    browser.execute(
+      (s, all) => {
+        const view = document.querySelector<HTMLElement>(".orca-edit-rich .ProseMirror")!;
+        view.focus();
+        const r = document.createRange();
+        r.selectNodeContents(view.querySelector(s)!);
+        if (!all) r.collapse(true);
+        const selection = getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(r);
+      },
+      selector,
+      whole,
+    );
+  const bandAt = (selector: string) =>
+    browser.waitUntil(
+      async () => {
+        const [b, box] = [await richBand(), await boxOf(selector)];
+        return !b.hidden && Math.abs(b.top - box.top) < 1 && Math.abs(b.bottom - box.bottom) < 1;
+      },
+      { timeoutMsg: `the band never came under ${selector}` },
+    );
+  const richBandHidden = () => browser.waitUntil(async () => (await richBand()).hidden, { timeoutMsg: "the band of the rich view never went" });
+
+  it("lays a faint band under the paragraph of the caret in the rich view, the heading and the item of a list included, and not over a selected range (A-26)", async () => {
+    await openFiles();
+    await openMarkdown(mdSample);
+    await caretInRich("h1");
+    await bandAt("h1");
+    expect((await richBand()).background).not.toBe("rgba(0, 0, 0, 0)");
+    await caretInRich("p");
+    await bandAt("p");
+    await caretInRich("li p");
+    await bandAt("li p");
+    // The band is as wide as the editor, so it reaches the marks of the list on the left of the item.
+    expect((await richBand()).left).toBeLessThan((await boxOf("li p")).left);
+    await caretInRich("p", true);
+    await richBandHidden();
+    await caretInRich("p");
+    await bandAt("p");
+    await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-rich .ProseMirror")!.blur());
+    await richBandHidden();
+  });
+
   it("switches a Markdown file to its source and back to the rich view with the buttons (A-26)", async () => {
     await openFiles();
     await openMarkdown("# 見出し\n");
@@ -448,6 +506,89 @@ describe("orca: files and editor (A-18)", () => {
     });
     const moved = await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-hl code")!.style.transform);
     expect(moved.replace(/\s/g, "")).toBe("translate(0px,-48px)");
+  });
+
+  // A-18: the band under the line of the caret (`.orca-edit-line`), and where it is on the page.
+  const band = () =>
+    browser.execute(() => {
+      const b = document.querySelector<HTMLElement>(".orca-edit-line")!;
+      const r = b.getBoundingClientRect();
+      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: b.nextElementSibling === document.querySelector(".orca-edit-hl") };
+    });
+  // The box of the letter at `index` of the text, drawn by the layer (a plain text file: the layer is one text node).
+  const glyph = (index: number) =>
+    browser.execute((i) => {
+      const node = document.querySelector(".orca-edit-hl code")!.firstChild as Text;
+      const range = document.createRange();
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      const r = range.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    }, index);
+  // Gives the text area the focus and puts the selection `start` to `end` in it (the window of the E2E build has no focus, so a click does not focus it); the keys that follow are real.
+  const caretAt = (start: number, end = start) =>
+    browser.execute(
+      (a, b) => {
+        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+        area.focus();
+        area.setSelectionRange(a, b);
+      },
+      start,
+      end,
+    );
+  const bandOn = (line: string) => browser.waitUntil(async () => (await band()).line === line && !(await band()).hidden, { timeoutMsg: `the band never came to line ${line}` });
+  const bandHidden = () => browser.waitUntil(async () => (await band()).hidden, { timeoutMsg: "the band never went" });
+
+  it("lays a faint band under the line of the caret, across the box of the text and under the letters, and moves it with the caret (A-18)", async () => {
+    await openFiles();
+    await openA("alpha\nbeta\ngamma\n");
+    await caretAt(0);
+    await browser.keys("ArrowDown");
+    await bandOn("1");
+    const b = await band();
+    const letter = await glyph(6);
+    const next = await glyph(11);
+    expect(b.top).toBeLessThanOrEqual(letter.top);
+    expect(b.bottom).toBeGreaterThanOrEqual(letter.bottom);
+    expect(b.bottom).toBeLessThanOrEqual(next.top);
+    expect(b.width).toBeCloseTo(b.textWidth, 0);
+    expect(b.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(b.beforeLayer).toBe(true);
+    await browser.keys("ArrowDown");
+    await bandOn("2");
+    expect((await band()).top).toBeGreaterThan(b.top);
+    await browser.keys("ArrowUp");
+    await bandOn("1");
+    expect((await band()).top).toBe(b.top);
+  });
+
+  it("does not draw the band over a selected range, and takes it off when the text area loses the focus (A-18)", async () => {
+    await openFiles();
+    await openA("alpha\nbeta\ngamma\n");
+    await caretAt(0);
+    await browser.keys("ArrowDown");
+    await bandOn("1");
+    await browser.keys(["Shift", "ArrowRight"]);
+    await bandHidden();
+    await browser.keys("ArrowLeft");
+    await bandOn("1");
+    await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-area")!.blur());
+    await bandHidden();
+  });
+
+  it("moves the band with the scroll of the textarea (A-18)", async () => {
+    await openFiles();
+    await openA("x\n".repeat(200));
+    await caretAt(0);
+    await browser.keys(["ArrowDown", "ArrowDown", "ArrowDown"]);
+    await bandOn("3");
+    const before = (await band()).top;
+    await browser.execute(() => {
+      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+      area.scrollTop = 48;
+      area.dispatchEvent(new Event("scroll"));
+    });
+    await browser.waitUntil(async () => Math.abs((await band()).top - (before - 48)) < 0.5, { timeoutMsg: "the band never followed the scroll" });
   });
 
   // A-18: the numbers of the lines, in a box at the left of the text (`.orca-edit-gutter`, one text node of the numbers in lines).
