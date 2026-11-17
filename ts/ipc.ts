@@ -60,6 +60,8 @@ import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
 import type { OrcaCommitList } from "./bindings/OrcaCommitList";
+import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
+import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
@@ -382,8 +384,8 @@ export interface Commands {
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
   // A-18: makes a file, or with `folder` a folder, named `name` in the folder `dir` of the worktree (the empty `dir` is its root), and answers its path from the worktree. A name that is not one name, and one that is taken, are errors; nothing is overwritten.
   orca_file_create: { args: { path: string; dir: string; name: string; folder: boolean; environment: string | null }; result: string };
-  // A-18: deletes the file `relative` of the worktree, or with `folder` the folder and everything in it, for good (no Trash). The root of the worktree and a path outside it are refused.
-  orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
+  // A-18: deletes the files and folders `entries` (a folder with everything in it) of the worktree, for good (no Trash). An entry under a folder of the list goes with the folder, the root of the worktree and a path outside it are refused, and the delete stops at the first that fails: the answer holds the entries that are gone and that failure's message.
+  orca_files_delete: { args: { path: string; entries: OrcaDeleteEntry[]; environment: string | null }; result: OrcaDeleted };
   // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
   // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language server: the saved ones, else the unset ones (`autoStart` true, nothing replaced).
