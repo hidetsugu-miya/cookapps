@@ -184,7 +184,7 @@ function openCardMenu(c: FormationChild, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   const formation = currentFormation();
   if (formation === null || closing.has(closingKey(formation, c.name))) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmChildDelete(anchor, c.name, () => void closeChild(formation, c.name, false, null)) }], { at: { x: e.clientX, y: e.clientY } });
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmChildDelete(anchor, c.name, c.created, () => void closeChild(formation, c.name, false, null)) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
 // Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it (`path`: where the worktree was shown to be) the worktree goes all the same, and only when Rust finds the child at that path. An error shows as a failed read does, and so does the branch that Orca kept (`notice`).

@@ -28,4 +28,8 @@ handle: string | null,
 /**
  * The Orca the child runs in: `local` (this Mac) or the name of a saved environment, as the record holds it (a launched child's is the name `orca environment list` gives, also when the record has its id). The screen reads and types into the terminal in that Orca.
  */
-environment: string, };
+environment: string, 
+/**
+ * Whether tsunagiai made the child's worktree. A child that works in a folder that was there (`formation_launch` with `folder`) has `false`: closing it removes nothing but its terminal and its entry. A planned child has `true`.
+ */
+created: boolean, };

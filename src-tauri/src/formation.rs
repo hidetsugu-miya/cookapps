@@ -60,9 +60,6 @@ const STEP_REMOVE: &str = "worktree の削除";
 const STEP_WORKTREE_BASE: &str = "worktree の場所の設定";
 const STEP_EXCLUDE: &str = "git の追跡外の設定";
 const STEP_LISTED: &str = "worktree の一覧の読み取り";
-/// The kinds a child's branch starts with: `{kind}/{ticket}`.
-const BRANCH_KINDS: [&str; 4] = ["feature", "fix", "chore", "refactor"];
-const BRANCH_LIMIT: usize = 100;
 
 /// `formation/` in the config directory: the folder of the formations, one folder under it for each.
 fn root(config: &Path) -> PathBuf {
@@ -159,6 +156,13 @@ pub struct Launch {
     pub pane_key: String,
     /// Epoch milliseconds.
     pub launched_at: u64,
+    /// Whether tsunagiai made the worktree (a launch with no `folder`). A child started in a folder that was there (a launch with `folder`) has `false`: its close ends the terminal and drops the entry, and removes no folder, worktree or branch. A record written before the field was kept has none, and its child is one tsunagiai made.
+    #[serde(default = "made_by_default")]
+    pub created: bool,
+}
+
+fn made_by_default() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -303,23 +307,33 @@ pub fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The branch of a child is `{kind}/{ticket}`: the kind is one of `BRANCH_KINDS`, the ticket is one path component of ASCII letters, digits, `-`, `_` and `.` that starts with a letter or a digit, and the whole is a name `git check-ref-format` accepts. No prefix of a user name, so that one ticket has one branch name in every repository.
-pub fn check_branch(branch: &str) -> Result<(), String> {
-    let shaped = branch.len() <= BRANCH_LIMIT
-        && branch.split_once('/').is_some_and(|(kind, ticket)| {
-            BRANCH_KINDS.contains(&kind)
-                && ticket.starts_with(|c: char| c.is_ascii_alphanumeric())
-                && ticket
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        });
-    if !shaped || orca::check_ref("branch", Some(branch)).is_err() {
-        return Err(format!(
-            "branch は {} のどれかで始まる「種類/チケット」の形にしてください（例 feature/WON-2482）。利用者名などの接頭辞は付けません",
-            BRANCH_KINDS.join("、")
-        ));
+/// Where a launched child works: a worktree that Orca makes (`branch` names its branch, or none and Orca names it), or `folder`, a folder that is there already. One of the two, not both.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Place<'a> {
+    pub branch: Option<&'a str>,
+    pub folder: Option<&'a str>,
+}
+
+/// What a launch makes of `Place`, checked: a new worktree on the branch (`None`: Orca names it), or the folder.
+#[derive(Debug, PartialEq)]
+enum Target<'a> {
+    NewWorktree(Option<&'a str>),
+    Folder(&'a str),
+}
+
+/// The branch is any name that `git check-ref-format` accepts and that is no option (`orca::check_ref`: a blank one is none), and the folder is an absolute path (`orca::check_path`; `folder_in` checks it against Orca's list). Both at once are refused, because a folder that is there has its branch already.
+fn target_of<'a>(place: Place<'a>) -> Result<Target<'a>, String> {
+    let branch = orca::check_ref("branch", place.branch)?;
+    match (branch, place.folder) {
+        (Some(_), Some(_)) => Err(
+            "branch と folder は一緒に渡せません。worktree を作るなら branch だけ、あるフォルダで動かすなら folder だけにしてください"
+                .into(),
+        ),
+        (_, Some(folder)) => orca::check_path(folder)
+            .map(|()| Target::Folder(folder))
+            .map_err(|_| "folder は絶対パスにしてください".to_owned()),
+        (branch, None) => Ok(Target::NewWorktree(branch)),
     }
-    Ok(())
 }
 
 /// The branch that Orca made must be the one asked for. Orca's CLI makes a branch of a taken name (one that exists locally with other commits than its base, or on a remote) under the name with a numeric suffix (`feature/a-2`), and says nothing.
@@ -352,7 +366,7 @@ fn on_origin(environment: &str, path: &str, branch: &str) -> bool {
     environment == LOCAL && !path.is_empty() && git(&git_origin_branch_args(path, branch)).is_ok()
 }
 
-/// The ref a child starts from: `origin/{branch}` when `branch` is on `origin`, so that Orca makes the branch of that name at the commit that was pushed, with `origin/{branch}` as its upstream, and otherwise `default` (`default_base`). `branch` has the form of `check_branch`.
+/// The ref a child starts from: `origin/{branch}` when `branch` is on `origin`, so that Orca makes the branch of that name at the commit that was pushed, with `origin/{branch}` as its upstream, and otherwise `default` (`default_base`).
 fn start_of(branch: &str, on_origin: bool, default: Option<String>) -> Option<String> {
     if on_origin {
         Some(format!("origin/{branch}"))
@@ -1332,19 +1346,21 @@ pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<V
     Ok(json!({ "children": children }))
 }
 
-/// Launches a child: a worktree on the branch `branch` in the repository of the environment, a terminal with `claude -n {name}` in it, the first instruction, and the record. Every command of Orca is run against that environment. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not `branch` is removed again at once.
+/// Launches a child: a terminal with `claude -n {name}` in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
+/// With no `place.folder` the worktree is made here in the repository of the environment, on `place.branch` (or on the branch Orca names, when there is none). A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
+/// With `place.folder` nothing is made: the folder must be the repository's own folder or a worktree of it that `orca worktree ps` lists (`folder_in`), and the child works there. The record says that tsunagiai did not make it (`Launch::created`), so that no close removes it.
 pub fn launch(
     config: &Path,
     formation: &str,
     environment: &str,
     repo: &str,
     name: &str,
-    branch: &str,
+    place: Place<'_>,
     prompt: &str,
 ) -> Result<Value, Refusal> {
     check_name(formation)?;
     check_child_name(config, formation, name)?;
-    check_branch(branch)?;
+    let target = target_of(place)?;
     let prompt = check_prompt(prompt)?;
     if is_launched(&read_record(config, formation)?, name) {
         return Err(already_launched(name).into());
@@ -1353,31 +1369,57 @@ pub fn launch(
     let environment = environment.as_str();
     let list = repos(environment)?;
     let repo = chosen_repo(&list, environment, repo)?;
-    prepare_repo(repo, environment, &|args| orca::write(args))?;
-    let base = start_of(
-        branch,
-        on_origin(environment, &repo.path, branch),
-        default_base(environment, &repo.path),
-    );
-    let made = orca::write(&orca::create_worktree_args(
-        &repo.id,
-        name,
-        Some(branch),
-        base.as_deref(),
-        Some(environment),
-    ))
-    .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
-    let path =
-        orca::created_worktree_path_of(&made).map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
-    if let Err(message) = check_created_branch(branch, &created_branch_of(&made))
-        .and_then(|()| check_worktree_place(&path, &repo.path))
-    {
-        return Err(unwanted_worktree(&path, environment, message));
-    }
-    let branch = branch.to_owned();
-    let kept = |step: &'static str, e: String| Refusal::failed(step, e).keeping(&path);
-    // Orca opens a plain shell in a new worktree: it is closed, so that the child is the only terminal.
-    let closed = close_shells(&path, environment);
+    let (path, branch, created, closed) = match target {
+        Target::Folder(folder) => {
+            let ps = orca_read(&orca::ps_args(Some(environment)))
+                .map_err(|e| Refusal::failed(STEP_LISTED, e))?;
+            let branch = folder_in(&ps, repo, folder).map_err(|message| {
+                Refusal::from(message)
+                    .with("environment", environment)
+                    .with("repo", repo.name.as_str())
+            })?;
+            (folder.to_owned(), branch, false, 0)
+        }
+        Target::NewWorktree(branch) => {
+            prepare_repo(repo, environment, &|args| orca::write(args))?;
+            let base = match branch {
+                Some(branch) => start_of(
+                    branch,
+                    on_origin(environment, &repo.path, branch),
+                    default_base(environment, &repo.path),
+                ),
+                None => default_base(environment, &repo.path),
+            };
+            let made = orca::write(&orca::create_worktree_args(
+                &repo.id,
+                name,
+                branch,
+                base.as_deref(),
+                Some(environment),
+            ))
+            .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
+            let path = orca::created_worktree_path_of(&made)
+                .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
+            let made_branch = created_branch_of(&made);
+            if let Err(message) = branch
+                .map_or(Ok(()), |asked| check_created_branch(asked, &made_branch))
+                .and_then(|()| check_worktree_place(&path, &repo.path))
+            {
+                return Err(unwanted_worktree(&path, environment, message));
+            }
+            // Orca opens a plain shell in a new worktree: it is closed, so that the child is the only terminal.
+            let closed = close_shells(&path, environment);
+            (path, made_branch, true, closed)
+        }
+    };
+    let kept = |step: &'static str, e: String| {
+        let refusal = Refusal::failed(step, e);
+        if created {
+            refusal.keeping(&path)
+        } else {
+            refusal.with("folder", path.as_str())
+        }
+    };
     let made = orca::write(&terminal_create_args(&path, name, environment))
         .map_err(|e| kept(STEP_TERMINAL, e))?;
     let (handle, pane_key) = created_terminal_of(&made).map_err(|e| kept(STEP_TERMINAL, e))?;
@@ -1391,6 +1433,7 @@ pub fn launch(
             handle: handle.clone(),
             pane_key: pane_key.clone(),
             launched_at: now_ms(),
+            created,
         }),
     };
     // Recorded before it is asked anything, so that a child that stays half-launched can be closed.
@@ -1421,8 +1464,41 @@ pub fn launch(
         "branch": branch,
         "handle": handle,
         "paneKey": pane_key,
+        "created": created,
         "closedShells": closed,
     }))
+}
+
+/// The git branch of the worktree at `folder` (empty when it is detached), when `ps` (`orca worktree ps`, its `result`) lists a worktree of that path that is the repository `repo`'s: its own folder or one of its worktrees (the repository is told by the `repoId` of the row, or by its `repo` name when the row has no id). A folder that the list lacks is refused, and so is one of another repository; a list that was cut (`truncated`) says that it cannot tell.
+fn folder_in(ps: &Value, repo: &Repo, folder: &str) -> Result<String, String> {
+    let row = ps["worktrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|w| orca::text_of(w, "path") == Some(folder));
+    let Some(row) = row else {
+        return Err(if ps["truncated"] == true {
+            "Orca の worktree の一覧が途中までなので、そのフォルダがあるか確かめられません"
+                .to_owned()
+        } else {
+            "そのフォルダは、Orca の worktree の一覧にありません。リポジトリ本体のフォルダか、Orca が一覧に出す worktree を渡してください".to_owned()
+        });
+    };
+    let mine = match orca::text_of(row, "repoId") {
+        Some(id) => id == repo.id,
+        None => orca::text_of(row, "repo") == Some(repo.name.as_str()),
+    };
+    if !mine {
+        return Err(format!(
+            "そのフォルダは、リポジトリ「{}」のものではありません",
+            repo.name
+        ));
+    }
+    Ok(orca::worktrees_of(ps)
+        .into_iter()
+        .find(|w| w.path == folder)
+        .map(|w| w.git_branch)
+        .unwrap_or_default())
 }
 
 /// A worktree that was just made on a branch other than the one asked for, or outside the repository's `.claude/worktrees/`: it holds nothing, so it is removed again with its branch, and the refusal says so; one that cannot be removed is left, and named.
@@ -1570,7 +1646,7 @@ fn remote_git_text(status: &Value, history: &Value) -> Result<(String, String), 
     Ok((changes, unpushed))
 }
 
-/// Closes a child: its terminal and its worktree with its branch, and its entry of the record. A worktree with a change, an untracked file or a commit no remote has is not removed, and so is nothing else. A child that is only planned is dropped from the record.
+/// Closes a child: its terminal and its worktree with its branch, and its entry of the record. A child that works in a folder that tsunagiai did not make (`Launch::created` is false) has only its terminal closed and its entry dropped: its folder, worktree and branch are never removed, and git is not asked (the answer has `folderKept: true`); its handle and environment are checked as any child's. A worktree with a change, an untracked file or a commit no remote has is not removed, and so is nothing else. A child that is only planned is dropped from the record.
 /// Every command of Orca goes to the child's environment. A child of a saved environment has its git read through that environment's Orca (`orca_git_of`, `remote_git_text`) and not through `git` on this Mac; what that cannot tell stops the close.
 /// A child whose saved environment is gone (`orca environment list` was read and has no environment of the recorded name or id) has only its entry dropped, with no command of Orca: there is nothing of it to ask. A list that cannot be read, or a value that fits two saved environments, refuses as below.
 /// A worktree that is gone (the owner removed it in Orca) has only its terminal closed, when `orca worktree ps` lists an agent of the recorded pane under the recorded path, and its entry dropped. This Mac's worktree is gone when the folder is not on the disk; a saved environment's, which this Mac cannot see, when its `orca worktree ps` was read whole and lists no worktree of that path.
@@ -1601,6 +1677,8 @@ enum Closing {
         environment: String,
         terminal: bool,
     },
+    /// A folder that tsunagiai did not make (`Launch::created` is false): its terminal is closed and its entry is dropped, and the folder, the worktree and the branch are left as they are, whatever git says of them.
+    Detach { handle: String, environment: String },
     /// Its worktree is whole and clean (no change, no untracked file, no commit no remote has), or the owner forced the close of exactly this child (`forced`: its name and path are the ones the owner was shown): its terminal and its worktree are removed, with `--force` when `forced`, and its entry is dropped.
     Remove {
         path: String,
@@ -1684,6 +1762,13 @@ fn inspect_child(
         });
     }
     let ps = ps.map_err(|e| Refusal::failed(STEP_LISTED, e))?;
+    if !launch.created {
+        // Nothing of it is removed, so the repository's own folder and a worktree that has changes are closed all the same; the handle and the environment were checked above as for any child.
+        return Ok(Closing::Detach {
+            handle: launch.handle,
+            environment,
+        });
+    }
     if !is_listed(&ps, path) {
         return Err(Refusal::from(
             "記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです。何も消していません。children.json の記録を確かめてください"
@@ -1783,6 +1868,19 @@ fn close_with(
                 "path": path,
                 "worktreeGone": true,
                 "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
+            }))
+        }
+        Closing::Detach {
+            handle,
+            environment,
+        } => {
+            // The owner may have closed the tab already: the entry is dropped all the same.
+            let terminal = write(&terminal_close_args(&handle, &environment));
+            dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
+            Ok(json!({
+                "name": name,
+                "folderKept": true,
+                "terminalClosed": terminal.is_ok(),
             }))
         }
         Closing::Remove {
@@ -1954,6 +2052,8 @@ pub struct FormationChild {
     pub handle: Option<String>,
     /// The Orca the child runs in: `local` (this Mac) or the name of a saved environment, as the record holds it (a launched child's is the name `orca environment list` gives, also when the record has its id). The screen reads and types into the terminal in that Orca.
     pub environment: String,
+    /// Whether tsunagiai made the child's worktree. A child that works in a folder that was there (`formation_launch` with `folder`) has `false`: closing it removes nothing but its terminal and its entry. A planned child has `true`.
+    pub created: bool,
 }
 
 /// The state of an agent that `orca worktree ps` lists.
@@ -1997,6 +2097,7 @@ fn child_row(child: &Child, environment: &str, ps: Option<&Value>) -> FormationC
         tool_name: None,
         handle: None,
         environment: environment.to_owned(),
+        created: child.launch.as_ref().is_none_or(|launch| launch.created),
     };
     let Some(launch) = &child.launch else {
         return row;
@@ -2649,6 +2750,20 @@ mod tests {
         }
     }
 
+    fn on_branch(branch: &str) -> Place<'_> {
+        Place {
+            branch: Some(branch),
+            folder: None,
+        }
+    }
+
+    fn in_folder(folder: &str) -> Place<'_> {
+        Place {
+            branch: None,
+            folder: Some(folder),
+        }
+    }
+
     fn in_environment(child: Child, environment: &str) -> Child {
         Child {
             environment: environment.into(),
@@ -2664,6 +2779,7 @@ mod tests {
                 handle: format!("term_{name}"),
                 pane_key: format!("tab-{name}:leaf"),
                 launched_at: 1_700_000_000_000,
+                created: true,
             }),
             ..planned(name, repo)
         }
@@ -2921,7 +3037,16 @@ mod tests {
         for taken in ["shared", "b2", "alpha", "beta", "formation"] {
             let err = plan(&config, "alpha", &[wanted(taken, "r")]).unwrap_err();
             assert!(err.error.contains(taken), "{taken}: {}", err.error);
-            let err = launch(&config, "alpha", "local", "r", taken, "feature/a", "go").unwrap_err();
+            let err = launch(
+                &config,
+                "alpha",
+                "local",
+                "r",
+                taken,
+                on_branch("feature/a"),
+                "go",
+            )
+            .unwrap_err();
             assert!(err.error.contains(taken), "{taken}: {}", err.error);
         }
         assert_eq!(names(&read_children(&config, "alpha")), ["own"]);
@@ -2931,7 +3056,16 @@ mod tests {
         // A formation named like no folder is refused before a path is made from it.
         for bad in ["../x", "A", ""] {
             assert!(plan(&config, bad, &[wanted("n", "r")]).is_err(), "{bad:?}");
-            assert!(launch(&config, bad, "local", "r", "n", "feature/a", "go").is_err());
+            assert!(launch(
+                &config,
+                bad,
+                "local",
+                "r",
+                "n",
+                on_branch("feature/a"),
+                "go"
+            )
+            .is_err());
             assert!(close(&config, bad, "n").is_err());
             assert!(children_view(&config, bad).is_err());
         }
@@ -3031,7 +3165,7 @@ mod tests {
             doc["children"][0],
             json!({
                 "name": "a", "repo": "agents", "environment": "local", "path": "/work/a", "branch": "user/a",
-                "handle": "term_a", "paneKey": "tab-a:leaf", "launchedAt": 1_700_000_000_000_u64
+                "handle": "term_a", "paneKey": "tab-a:leaf", "launchedAt": 1_700_000_000_000_u64, "created": true
             })
         );
         assert_eq!(
@@ -3112,42 +3246,100 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_is_a_kind_and_a_ticket_with_no_prefix_of_a_user() {
+    fn a_launch_takes_no_branch_any_branch_or_a_folder_and_not_a_branch_with_a_folder() {
+        assert_eq!(target_of(Place::default()), Ok(Target::NewWorktree(None)));
+        // A blank branch is none; any name that git takes is the branch, with no kind or ticket in it.
+        assert_eq!(target_of(on_branch("  ")), Ok(Target::NewWorktree(None)));
         for good in [
             "feature/WON-2482",
-            "fix/won-2485",
-            "chore/ci_1",
-            "refactor/v1.2",
-            "feature/824",
+            "main",
+            "me/hotfix/x",
+            "release-1.2",
+            "あ/い",
+            "feature/a_b.c",
         ] {
-            assert_eq!(check_branch(good), Ok(()), "{good}");
+            assert_eq!(
+                target_of(on_branch(good)),
+                Ok(Target::NewWorktree(Some(good))),
+                "{good}"
+            );
         }
-        let long = format!("fix/{}", "a".repeat(BRANCH_LIMIT));
+        assert_eq!(
+            target_of(on_branch(" fix/a ")),
+            Ok(Target::NewWorktree(Some("fix/a")))
+        );
+        // What git refuses, and what would be read as an option, stays refused.
         for bad in [
-            "",
-            "feature",
-            "feature/",
-            "/WON-1",
-            "me/feature/WON-1",
-            "feature/WON-1/a",
-            "hotfix/WON-1",
-            "Feature/WON-1",
-            "feature/-x",
-            "feature/.x",
-            "feature/_x",
+            "--feature/a",
+            "-x",
+            "a b",
             "feature/a..b",
-            "feature/a b",
+            "feature/x~1",
             "feature/a.lock",
             "feature/a.",
-            " feature/WON-1",
-            "feature/WON-1\n",
-            "feature/x~1",
-            "feature/あ",
-            "--feature/a",
-            long.as_str(),
+            "/x",
+            "a//b",
+            "@",
         ] {
-            assert!(check_branch(bad).is_err(), "{bad:?}");
+            assert!(target_of(on_branch(bad)).is_err(), "{bad:?}");
         }
+        assert_eq!(target_of(in_folder("/w/api")), Ok(Target::Folder("/w/api")));
+        for bad in ["", "api", "./api", " "] {
+            assert!(target_of(in_folder(bad)).is_err(), "{bad:?}");
+        }
+        let both = target_of(Place {
+            branch: Some("feature/a"),
+            folder: Some("/w/api"),
+        });
+        assert!(both.is_err(), "{both:?}");
+        // A blank branch beside a folder is no branch.
+        assert_eq!(
+            target_of(Place {
+                branch: Some(" "),
+                folder: Some("/w/api"),
+            }),
+            Ok(Target::Folder("/w/api"))
+        );
+    }
+
+    fn repo_of(id: &str, name: &str) -> Repo {
+        Repo {
+            id: id.into(),
+            name: name.into(),
+            path: format!("/w/{name}"),
+            worktree_base_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_folder_is_the_repositorys_own_or_a_worktree_that_orca_lists_for_it() {
+        let ps = json!({"worktrees": [
+            {"path": "/w/api", "repo": "api", "repoId": "r1", "isMainWorktree": true, "branch": "refs/heads/main"},
+            {"path": "/w/api/.claude/worktrees/api/a", "repo": "api", "repoId": "r1", "branch": "refs/heads/feature/a"},
+            {"path": "/w/api/detached", "repo": "api", "repoId": "r1", "branch": "HEAD"},
+            {"path": "/w/web", "repo": "web", "repoId": "r2", "isMainWorktree": true, "branch": "refs/heads/main"},
+            {"path": "/w/noid", "repo": "api", "branch": "refs/heads/x"},
+        ]});
+        let api = repo_of("r1", "api");
+        // The main folder and a worktree, each with its branch; a detached one has none.
+        assert_eq!(folder_in(&ps, &api, "/w/api"), Ok("main".to_owned()));
+        assert_eq!(
+            folder_in(&ps, &api, "/w/api/.claude/worktrees/api/a"),
+            Ok("feature/a".to_owned())
+        );
+        assert_eq!(folder_in(&ps, &api, "/w/api/detached"), Ok(String::new()));
+        // A row with no id is told by the name of its repository.
+        assert_eq!(folder_in(&ps, &api, "/w/noid"), Ok("x".to_owned()));
+        // Another repository's folder, and a path that the list lacks (also one that only looks like a listed one), are refused.
+        assert!(folder_in(&ps, &api, "/w/web").unwrap_err().contains("api"));
+        for bad in ["/w/other", "/w/api/", "/w/api/../api", "/w"] {
+            let err = folder_in(&ps, &api, bad).unwrap_err();
+            assert!(err.contains("一覧にありません"), "{bad}: {err}");
+        }
+        // A list that was cut cannot say that a folder is not there.
+        let cut = json!({"worktrees": [], "truncated": true});
+        let err = folder_in(&cut, &api, "/w/api").unwrap_err();
+        assert!(err.contains("途中まで"), "{err}");
     }
 
     #[test]
@@ -3591,17 +3783,39 @@ mod tests {
     #[test]
     fn a_launch_is_refused_before_orca_is_asked_when_it_is_not_valid() {
         let config = temp_dir("launch-refused");
-        assert!(launch(&config, F, "local", "r", "Bad Name", "feature/a", "go").is_err());
-        assert!(launch(&config, F, "local", "r", "ok", "feature/a", "").is_err());
-        // The branch is checked before Orca is asked, and nothing is recorded.
-        for branch in ["", "me/feature/a", "feature", "main"] {
-            let err = launch(&config, F, "local", "r", "ok", branch, "go").unwrap_err();
-            assert!(err.error.contains("branch"), "{branch:?}: {}", err.error);
-            assert!(err.step.is_none(), "{branch:?}");
+        assert!(launch(
+            &config,
+            F,
+            "local",
+            "r",
+            "Bad Name",
+            on_branch("feature/a"),
+            "go"
+        )
+        .is_err());
+        assert!(launch(&config, F, "local", "r", "ok", on_branch("feature/a"), "").is_err());
+        // The branch and the folder are checked before Orca is asked, and nothing is recorded.
+        for (place, word) in [
+            (on_branch("a b"), "branch"),
+            (on_branch("-x"), "branch"),
+            (on_branch("feature/a..b"), "branch"),
+            (in_folder("relative/dir"), "folder"),
+            (in_folder(""), "folder"),
+            (
+                Place {
+                    branch: Some("feature/a"),
+                    folder: Some("/w/api"),
+                },
+                "一緒に",
+            ),
+        ] {
+            let err = launch(&config, F, "local", "r", "ok", place, "go").unwrap_err();
+            assert!(err.error.contains(word), "{place:?}: {}", err.error);
+            assert!(err.step.is_none(), "{place:?}");
         }
         assert!(read_children(&config, F).is_empty());
         write_children(&config, F, &[launched("ok", "r")]).unwrap();
-        let err = launch(&config, F, "local", "r", "ok", "feature/a", "go").unwrap_err();
+        let err = launch(&config, F, "local", "r", "ok", on_branch("feature/a"), "go").unwrap_err();
         assert!(answer(Err(err)).contains("もう起動してあります"));
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -3758,6 +3972,161 @@ mod tests {
         launch.handle = handle.into();
         launch.branch = branch.into();
         write_children(config, F, &[planned("p", "x"), child]).unwrap();
+    }
+
+    /// The record of a child that works in a folder that was there (`formation_launch` with `folder`).
+    fn recorded_in_folder(config: &Path, path: &str, handle: &str) {
+        let mut child = launched("a", "x");
+        let launch = child.launch.as_mut().unwrap();
+        launch.path = path.into();
+        launch.handle = handle.into();
+        launch.created = false;
+        write_children(config, F, &[planned("p", "x"), child]).unwrap();
+    }
+
+    #[test]
+    fn a_child_in_a_folder_that_was_there_is_closed_by_its_terminal_alone_whatever_the_folder_is() {
+        let config = temp_dir("close-folder");
+        let there = temp_dir("close-folder-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        // The repository's own folder, a worktree that Orca lists, and a folder that Orca does not list (a worktree it forgot): none is removed, and git is not asked (the folder is no repository, so a look at git would fail).
+        let listed = |main: bool| json!({"worktrees": [{"path": path, "isMainWorktree": main, "branch": "refs/heads/main"}]});
+        for ps in [listed(true), listed(false), json!({"worktrees": []})] {
+            recorded_in_folder(&config, &path, "term_a");
+            let orca = Calls::new();
+            let done = close_with(
+                &config,
+                F,
+                "a",
+                None,
+                &|_| Ok(ps.clone()),
+                &|args| orca.run(args),
+                &no_remote_git,
+            )
+            .unwrap();
+            assert_eq!(done["folderKept"], true);
+            assert_eq!(done["terminalClosed"], true);
+            assert_eq!(done["name"], "a");
+            // Only the terminal is closed: no `worktree rm`, whatever `force` says.
+            assert_eq!(orca.names(), ["terminal close"]);
+            assert_eq!(orca.0.borrow()[0], terminal_close_args("term_a", "local"));
+            assert_eq!(names(&read_children(&config, F)), ["p"]);
+            assert!(there.is_dir());
+        }
+        // The owner's force changes nothing for it.
+        recorded_in_folder(&config, &path, "term_a");
+        let orca = Calls::new();
+        close_with(
+            &config,
+            F,
+            "a",
+            forcing(true, "a", &path).as_deref(),
+            &|_| Ok(listed(true)),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert_eq!(orca.names(), ["terminal close"]);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_child_in_a_folder_that_was_there_still_has_its_record_and_its_orca_checked() {
+        let config = temp_dir("close-folder-checked");
+        let there = temp_dir("close-folder-checked-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        let ps = json!({"worktrees": [{"path": path}]});
+        // A handle that is not one, a path that is not absolute, and an Orca that cannot be read: nothing is closed and the entry stays.
+        for (at, handle, listed) in [
+            (path.as_str(), "--force", Ok(ps.clone())),
+            (path.as_str(), "term_a x", Ok(ps.clone())),
+            ("relative/path", "term_a", Ok(ps.clone())),
+            (path.as_str(), "term_a", Err("orca が答えません".to_owned())),
+        ] {
+            recorded_in_folder(&config, at, handle);
+            let orca = Calls::new();
+            let err = close_with(
+                &config,
+                F,
+                "a",
+                None,
+                &|_| listed.clone(),
+                &|args| orca.run(args),
+                &no_remote_git,
+            );
+            assert!(err.is_err(), "{at} {handle}");
+            assert!(orca.0.borrow().is_empty(), "{at} {handle}");
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
+        }
+        // A folder that is gone from the disk is closed as any child's worktree that is gone.
+        recorded_in_folder(&config, "/nonexistent-tsunagiai/w/a", "term_a");
+        let done = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|_| Ok(json!({})),
+            &|args| Calls::new().run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert_eq!(done["worktreeGone"], true);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn the_deletion_of_a_formation_ends_a_folder_that_was_there_by_its_terminal_alone() {
+        let config = temp_dir("delete-folder");
+        let there = temp_dir("delete-folder-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        recorded_in_folder(&config, &path, "term_a");
+        let ps = json!({"worktrees": [{"path": path, "isMainWorktree": true}]});
+        let orca = Calls::new();
+        let done = delete_with(
+            &config,
+            F,
+            None,
+            &|_| Ok(ps.clone()),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        // The planned child is dropped with no command; the folder child's terminal is the only command.
+        assert!(done.deleted, "{:?}", done.kept);
+        assert_eq!(orca.names(), ["terminal close"]);
+        assert!(there.is_dir());
+        assert!(!dir(&config, F).exists());
+        std::fs::remove_dir_all(&config).ok();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_record_without_the_flag_is_a_child_that_tsunagiai_made() {
+        let text = r#"{"children": [
+            {"name": "a", "repo": "x", "path": "/w/a", "branch": "b", "handle": "term_a", "paneKey": "t:l", "launchedAt": 1},
+            {"name": "b", "repo": "x", "path": "/w/b", "branch": "b", "handle": "term_b", "paneKey": "t:m", "launchedAt": 1, "created": false}
+        ]}"#;
+        let record: Record = serde_json::from_str(text).unwrap();
+        let made: Vec<bool> = record
+            .children
+            .iter()
+            .map(|c| c.launch.as_ref().unwrap().created)
+            .collect();
+        assert_eq!(made, [true, false]);
+        let rows: Vec<bool> = record
+            .children
+            .iter()
+            .map(|c| child_row(c, LOCAL, None).created)
+            .collect();
+        assert_eq!(rows, [true, false]);
+        // A planned child is drawn as before.
+        assert!(child_row(&planned("p", "x"), LOCAL, None).created);
     }
 
     #[test]
@@ -3996,6 +4365,7 @@ mod tests {
                 tool_name: None,
                 handle: None,
                 environment: LOCAL.into(),
+                created: true,
             }]
         );
     }
@@ -4272,7 +4642,7 @@ mod tests {
         let mut child = wanted("a", "x");
         child.environment = String::new();
         assert!(plan(&config, F, &[child]).is_err());
-        assert!(launch(&config, F, "", "x", "a", "feature/a", "go").is_err());
+        assert!(launch(&config, F, "", "x", "a", on_branch("feature/a"), "go").is_err());
         assert!(read_children(&config, F).is_empty());
     }
 

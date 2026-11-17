@@ -965,6 +965,23 @@ describe("orchestration mode: close a child from its card", () => {
     expect(await readHandles()).toEqual(["term_batch-update"]);
   });
 
+  it("says that a child in a folder tsunagiai did not make loses only its terminal, and closes it the same way", async () => {
+    const folder = () => mixed().map((c) => (c.name === "web-update" ? { ...c, created: false } : c));
+    await openSession(folder());
+    const close = await mock("formation_close_child", gone);
+    await mock("formation_children", folder().filter((c) => c.name !== "web-update"));
+    await ask("web-update");
+    await expect(confirm()).toHaveText(expect.stringContaining("ターミナルを閉じて、一覧から外します。フォルダ、worktree、ブランチは消しません。"));
+    await expect(confirm()).not.toHaveText(expect.stringContaining("worktree とブランチを消します"));
+    await yes().click();
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false, path: null }]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await expect(confirm()).not.toExist();
+    // A child that tsunagiai made has the words about the worktree and the branch.
+    await ask("batch-update");
+    await expect(confirm()).toHaveText(expect.stringContaining("worktree とブランチを消します。"));
+  });
+
   it("closes a planned child the same way", async () => {
     await openSession(mixed());
     const close = await mock("formation_close_child", gone);
