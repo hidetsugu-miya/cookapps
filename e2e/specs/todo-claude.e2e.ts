@@ -6,6 +6,8 @@ const pane = "#todo-claude";
 const log = "#todo-claude-log";
 const input = () => $("#todo-claude-input");
 const send = () => $("#todo-claude-send");
+// A press with the pointer actions. The driver's element click calls `el.click()` and then `el.focus()` on the element itself, which would take the focus back from the field that the press gave it.
+const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
 
 // The pane is open from the start: the ✳ of the right side only puts the focus in its request field.
 const openPane = async () => {
@@ -69,7 +71,7 @@ describe("todo Claude pane", () => {
     });
     expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [44, 44, 28] });
     // A click on the ✳ keeps the pane and puts the focus in the request field.
-    await $("#todo-tool-claude").click();
+    await press($("#todo-tool-claude"));
     await expect($(pane)).toBeDisplayed();
     await expect(input()).toBeFocused();
   });
@@ -124,7 +126,7 @@ describe("todo Claude pane", () => {
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
     // The ✳ only puts the focus in the request field: the Orca pane stays open.
-    await $("#todo-tool-claude").click();
+    await press($("#todo-tool-claude"));
     await expect(input()).toBeFocused();
     await expect($("#todo-handoff")).toBeDisplayed();
     // Leaving the task takes the pane under it away, and Claude's stays.
