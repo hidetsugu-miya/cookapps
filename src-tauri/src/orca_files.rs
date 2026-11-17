@@ -515,21 +515,18 @@ fn reason(error: CallError) -> String {
     }
 }
 
-/// The entries of `dir`, from `files.readDir` alone. `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and every entry is marked so. Otherwise no entry is marked, and `orca_files_ignored` is asked after it.
+/// The entries of `dir`, from `files.readDir` alone, at most `limit` of them (the file pane asks for `LIST_LIMIT`). `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and every entry is marked so. Otherwise no entry is marked, and `orca_files_ignored` is asked after it.
 pub(crate) async fn list(
     rpc: &mut impl Rpc,
     path: &str,
     dir: &str,
     ignored: bool,
+    limit: usize,
 ) -> Result<OrcaDir, String> {
     let answer = rpc
         .call(
             "files.readDir",
-            worktree_params(
-                path,
-                None,
-                json!({"relativePath": dir, "limit": LIST_LIMIT}),
-            ),
+            worktree_params(path, None, json!({"relativePath": dir, "limit": limit})),
         )
         .await
         .map_err(reason)?;
@@ -1828,7 +1825,7 @@ pub async fn orca_files_list(
     cached_host_of(&path, environment.as_deref()).await?;
     let read = async {
         let mut connection = Connection::open(environment.clone()).await?;
-        list(&mut connection, &path, &dir, ignored).await
+        list(&mut connection, &path, &dir, ignored, LIST_LIMIT).await
     };
     forgetting(read.await, &path, environment.as_deref())
 }
@@ -2841,7 +2838,9 @@ mod tests {
             ),
             ("git.checkIgnored", Ok(json!(["lib/target/", "lib/b.log"]))),
         ]);
-        let dir = list(&mut orca, "/work/a", "lib", false).await.unwrap();
+        let dir = list(&mut orca, "/work/a", "lib", false, LIST_LIMIT)
+            .await
+            .unwrap();
         assert_eq!(names(&dir.entries), ["src", "target", "b.log"]);
         assert!(dir.entries.iter().all(|e| !e.ignored));
         assert_eq!(dir.total, 3);
@@ -2885,7 +2884,9 @@ mod tests {
                 {"name": "deps", "isDirectory": true},
             ], "total": 2})),
         )]);
-        let dir = list(&mut orca, "/work/a", "target", true).await.unwrap();
+        let dir = list(&mut orca, "/work/a", "target", true, LIST_LIMIT)
+            .await
+            .unwrap();
         assert_eq!(names(&dir.entries), ["deps", "a.o"]);
         assert!(dir.entries.iter().all(|e| e.ignored));
         assert_eq!(orca.calls.len(), 1);
@@ -3291,12 +3292,16 @@ mod tests {
             )),
         )]);
         assert_eq!(
-            list(&mut orca, "/work/a", "gone", false).await.unwrap_err(),
+            list(&mut orca, "/work/a", "gone", false, LIST_LIMIT)
+                .await
+                .unwrap_err(),
             "ファイルが見つかりません"
         );
         let mut orca = fake(vec![("files.readDir", Ok(json!({"entries": 1})))]);
         assert_eq!(
-            list(&mut orca, "/work/a", "", false).await.unwrap_err(),
+            list(&mut orca, "/work/a", "", false, LIST_LIMIT)
+                .await
+                .unwrap_err(),
             NOT_LISTED
         );
     }
