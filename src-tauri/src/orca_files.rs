@@ -1230,7 +1230,10 @@ fn parse_local_branches(result: &Value, path: &str) -> Result<Vec<OrcaLocalBranc
     Ok(branches.into_iter().map(|(branch, _)| branch).collect())
 }
 
-async fn local_branches(rpc: &mut impl Rpc, path: &str) -> Result<Vec<OrcaLocalBranch>, String> {
+pub(crate) async fn local_branches(
+    rpc: &mut impl Rpc,
+    path: &str,
+) -> Result<Vec<OrcaLocalBranch>, String> {
     let answer = rpc
         .call("git.localBranches", worktree_params(path, None, json!({})))
         .await
@@ -1281,7 +1284,7 @@ fn remote_params(repo: &str, query: &str) -> Value {
     json!({"repo": format!("id:{repo}"), "query": query, "limit": BRANCH_LIMIT, "namespace": "remote"})
 }
 
-async fn remote_branches(
+pub(crate) async fn remote_branches(
     rpc: &mut impl Rpc,
     repo: &str,
     query: &str,

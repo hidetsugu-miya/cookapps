@@ -155,6 +155,9 @@ fn broken(message: &str) -> LinkError {
     LinkError::Broken(message.to_owned())
 }
 
+/// How many characters of the message of an error Orca sent are held (`LinkError::Remote`, `CallError::detail`). A refusal of `worktree.create` names a branch and a path, so 200 cut it before its reason.
+const MESSAGE_LIMIT: usize = 1000;
+
 /// The `result` of `{id, ok, result, error: {code}}`. The code is shown, never the message: it is the text of another program.
 pub(crate) fn result_of(response: &Value) -> Result<Value, LinkError> {
     match response["ok"] {
@@ -171,7 +174,7 @@ pub(crate) fn result_of(response: &Value) -> Result<Value, LinkError> {
                 .as_str()
                 .unwrap_or_default()
                 .chars()
-                .take(200)
+                .take(MESSAGE_LIMIT)
                 .collect();
             Err(LinkError::Remote(
                 if code.is_empty() {
@@ -707,7 +710,7 @@ mod tests {
             "Orca がエラーを返しました（not_found）"
         );
         assert_eq!(remote(json!({"ok": false})), "Orca がエラーを返しました");
-        // The message is held for the caller to look at, cut at 200 characters.
+        // The message is held for the caller to look at, cut at `MESSAGE_LIMIT` characters.
         let held = |v: Value| match result_of(&v) {
             Err(LinkError::Remote(_, m)) => m,
             _ => panic!("{v}"),
@@ -718,8 +721,8 @@ mod tests {
         );
         assert_eq!(held(json!({"ok": false})), "");
         assert_eq!(
-            held(json!({"ok": false, "error": {"message": "x".repeat(500)}})).len(),
-            200
+            held(json!({"ok": false, "error": {"message": "x".repeat(MESSAGE_LIMIT + 500)}})).len(),
+            MESSAGE_LIMIT
         );
         // Odd characters of a code are dropped and the code is cut.
         let odd =

@@ -17,7 +17,12 @@ use serde_json::{json, Map, Value};
 use ts_rs::TS;
 
 use crate::{
-    accounts, auth::config_dir, orca, orca_attach::worktree_params, orca_link::Connection,
+    accounts,
+    auth::config_dir,
+    orca,
+    orca_attach::{worktree_params, Rpc},
+    orca_files::{local_branches, remote_branches, OrcaLocalBranch, OrcaRemoteBranch},
+    orca_link::{CallError, Connection},
 };
 
 const FOLDER: &str = "formation";
@@ -51,6 +56,7 @@ const DATA_NOTE: &str =
 const STEP_ENVIRONMENTS: &str = "環境の一覧の読み取り";
 const STEP_REPOS: &str = "repo の一覧の読み取り";
 const STEP_WORKTREE: &str = "worktree の作成";
+const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
 const STEP_IDLE: &str = "claude の立ち上がり待ち";
@@ -307,36 +313,49 @@ pub fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Where a launched child works: a worktree that Orca makes (`branch` names its branch, or none and Orca names it), or `folder`, a folder that is there already. One of the two, not both.
+/// Where a launched child works: a worktree that Orca makes (`branch` names its branch, or none and Orca names it; `base` is the ref a new branch starts from), or `folder`, a folder that is there already. A worktree or a folder, not both.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Place<'a> {
     pub branch: Option<&'a str>,
+    pub base: Option<&'a str>,
     pub folder: Option<&'a str>,
 }
 
-/// What a launch makes of `Place`, checked: a new worktree on the branch (`None`: Orca names it), or the folder.
+/// What a launch makes of `Place`, checked: a new worktree on the branch (`None`: Orca names it) that starts from `base` when the branch is a new one, or the folder.
 #[derive(Debug, PartialEq)]
 enum Target<'a> {
-    NewWorktree(Option<&'a str>),
+    NewWorktree {
+        branch: Option<&'a str>,
+        base: Option<&'a str>,
+    },
     Folder(&'a str),
 }
 
-/// The branch is any name that `git check-ref-format` accepts and that is no option (`orca::check_ref`: a blank one is none), and the folder is an absolute path (`orca::check_path`; `folder_in` checks it against Orca's list). Both at once are refused, because a folder that is there has its branch already.
+/// The branch and the base are any name that `git check-ref-format` accepts and that is no option (`orca::check_ref`: a blank one is none), and the folder is an absolute path (`orca::check_path`; `folder_in` checks it against Orca's list). A folder has its branch already, so it is refused with a branch or a base, and a base is the start of a branch that is made, so it is refused with no branch.
 fn target_of<'a>(place: Place<'a>) -> Result<Target<'a>, String> {
     let branch = orca::check_ref("branch", place.branch)?;
+    let base = orca::check_ref("base", place.base)?;
     match (branch, place.folder) {
         (Some(_), Some(_)) => Err(
             "branch と folder は一緒に渡せません。worktree を作るなら branch だけ、あるフォルダで動かすなら folder だけにしてください"
                 .into(),
         ),
+        (_, Some(_)) if base.is_some() => Err(
+            "base と folder は一緒に渡せません。base は新しい worktree の branch の起点です"
+                .into(),
+        ),
         (_, Some(folder)) => orca::check_path(folder)
             .map(|()| Target::Folder(folder))
             .map_err(|_| "folder は絶対パスにしてください".to_owned()),
-        (branch, None) => Ok(Target::NewWorktree(branch)),
+        (None, None) if base.is_some() => Err(
+            "base は branch と一緒に渡してください。branch を渡さないときは、Orca が起点を決めます"
+                .into(),
+        ),
+        (branch, None) => Ok(Target::NewWorktree { branch, base }),
     }
 }
 
-/// The branch that Orca made must be the one asked for. Orca's CLI makes a branch of a taken name (one that exists locally with other commits than its base, or on a remote) under the name with a numeric suffix (`feature/a-2`), and says nothing.
+/// The branch that Orca made must be the one asked for. `worktree.create` with a `branchIntent` makes the branch of the name asked for or refuses, but a worktree on another name is not one to keep, and an Orca that ignored the intent would make `feature/a-2` and say nothing.
 fn check_created_branch(requested: &str, created: &str) -> Result<(), String> {
     if created == requested {
         return Ok(());
@@ -347,41 +366,8 @@ fn check_created_branch(requested: &str, created: &str) -> Result<(), String> {
         ));
     }
     Err(format!(
-        "branch「{requested}」は引き継げず、Orca は別の名前「{created}」で作りました（同じ名前の branch が、ローカルに別のコミットであるか、起点にできない場所にあります）"
+        "branch「{requested}」では作れず、Orca は別の名前「{created}」で作りました"
     ))
-}
-
-/// The ref a child starts from, `origin/HEAD` of the repository on this Mac (`origin/main`); `None` leaves the start to Orca, whose default is `origin/HEAD` too (`origin/main`, `origin/master`, `main`, `master` when it is not set). A repository of a saved environment is on another machine, so it is left to its Orca.
-fn default_base(environment: &str, path: &str) -> Option<String> {
-    if environment != LOCAL || path.is_empty() {
-        return None;
-    }
-    git(&git_origin_head_args(path))
-        .ok()
-        .and_then(|output| base_of(&output))
-}
-
-/// Whether the repository on this Mac has `branch` as a branch of `origin` (`refs/remotes/origin/{branch}`), as a child that pushed and was closed leaves it. Nothing is fetched: it reads the refs of this Mac as `default_base` does, and a child's push of its worktree, which shares them, has set it. A repository of a saved environment is on another machine, so it is not asked and the branch is taken for not being there.
-fn on_origin(environment: &str, path: &str, branch: &str) -> bool {
-    environment == LOCAL && !path.is_empty() && git(&git_origin_branch_args(path, branch)).is_ok()
-}
-
-/// The ref a child starts from: `origin/{branch}` when `branch` is on `origin`, so that Orca makes the branch of that name at the commit that was pushed, with `origin/{branch}` as its upstream, and otherwise `default` (`default_base`).
-fn start_of(branch: &str, on_origin: bool, default: Option<String>) -> Option<String> {
-    if on_origin {
-        Some(format!("origin/{branch}"))
-    } else {
-        default
-    }
-}
-
-/// What `git symbolic-ref --short refs/remotes/origin/HEAD` printed, when it names a ref of `origin`.
-fn base_of(output: &str) -> Option<String> {
-    let line = output.trim();
-    let named = line
-        .strip_prefix("origin/")
-        .is_some_and(|rest| !rest.is_empty());
-    (named && orca::check_ref("起点", Some(line)).is_ok()).then(|| line.to_owned())
 }
 
 /// A child's name must reach one session with SendMessage: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
@@ -993,29 +979,6 @@ fn git_common_dir_args(path: &str) -> Vec<String> {
     .to_vec()
 }
 
-fn git_origin_head_args(path: &str) -> Vec<String> {
-    [
-        "-C",
-        path,
-        "symbolic-ref",
-        "--short",
-        "refs/remotes/origin/HEAD",
-    ]
-    .map(String::from)
-    .to_vec()
-}
-
-fn git_origin_branch_args(path: &str, branch: &str) -> Vec<String> {
-    vec![
-        "-C".into(),
-        path.into(),
-        "rev-parse".into(),
-        "--verify".into(),
-        "--quiet".into(),
-        format!("refs/remotes/origin/{branch}"),
-    ]
-}
-
 fn git_remote_args(path: &str) -> Vec<String> {
     vec!["-C".into(), path.into(), "remote".into()]
 }
@@ -1346,8 +1309,127 @@ pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<V
     Ok(json!({ "children": children }))
 }
 
+/// What Orca is asked of the branch of a new worktree (`branchIntent` of `worktree.create`, and the ref it starts from when it needs one).
+#[derive(Debug, PartialEq)]
+struct Intent {
+    kind: &'static str,
+    base: Option<String>,
+}
+
+/// The intent for `branch`, from the branches the repository has: a local branch is opened as it is (`open-existing-v2`, no start: it keeps its own commits), a branch that only `origin` has is opened from `origin/{branch}` (Orca makes the local branch at the commit that was pushed, with `origin/{branch}` as its upstream), and a name that is nowhere is made exactly (`create-exact`) from `base`, or from Orca's own default when there is none. A branch that is there already takes no `base`: it has its commits, so the one that was asked for is refused and not dropped.
+fn intent_of(
+    branch: &str,
+    base: Option<&str>,
+    local: &[OrcaLocalBranch],
+    remote: &[OrcaRemoteBranch],
+) -> Result<Intent, String> {
+    let origin = format!("origin/{branch}");
+    let existing = if local.iter().any(|l| l.name == branch) {
+        Some(None)
+    } else if remote.iter().any(|r| r.name == origin) {
+        Some(Some(origin))
+    } else {
+        None
+    };
+    match (existing, base) {
+        (Some(_), Some(base)) => Err(format!(
+            "branch「{branch}」はもうあるので、起点「{base}」は使えません。base を外してください"
+        )),
+        (Some(start), None) => Ok(Intent {
+            kind: "open-existing-v2",
+            base: start,
+        }),
+        (None, base) => Ok(Intent {
+            kind: "create-exact",
+            base: base.map(str::to_owned),
+        }),
+    }
+}
+
+/// The parameters of `worktree.create`: the repository by its id, the child's name, and with a `branch` the branch to take (`branchNameOverride`) with its intent and start. With no branch there is no intent, and Orca names the branch. The worktree has no parent (`noParent`), because Orca would record the caller's context as its parent otherwise.
+fn worktree_create_params(
+    repo_id: &str,
+    name: &str,
+    branch: Option<&str>,
+    intent: Option<&Intent>,
+) -> Value {
+    let mut params = json!({"repo": format!("id:{repo_id}"), "name": name, "noParent": true});
+    if let (Some(branch), Some(intent)) = (branch, intent) {
+        params["branchNameOverride"] = json!(branch);
+        params["branchIntent"] = json!(intent.kind);
+        if let Some(base) = &intent.base {
+            params["baseBranch"] = json!(base);
+        }
+    }
+    params
+}
+
+/// What a failed call of Orca says, as data for the answer: the code that Orca sent, and its own message in full (`CallError::detail`, which is empty when the connection failed).
+fn call_output(error: &CallError) -> String {
+    if error.detail.is_empty() {
+        error.shown.clone()
+    } else {
+        format!("{}: {}", error.shown, error.detail)
+    }
+}
+
+/// Makes the worktree through Orca's `worktree.create` and answers its `result` (`worktree.path` and `worktree.branch`). With a `branch` the repository's branches are read first, with `git.localBranches` of the repository's own folder and `repo.searchRefs` of `origin/{branch}`, so that the intent is the one the branch needs (`intent_of`) and Orca never makes a name of its own for it: a branch that another worktree has open, or a name that is taken, is refused by Orca with its reason, and nothing is made. The two reads and the call go over one connection, the same for this Mac and for a saved environment.
+async fn create_worktree(
+    rpc: &mut impl Rpc,
+    repo: &Repo,
+    name: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+) -> Result<Value, Refusal> {
+    let intent = match branch {
+        Some(branch) => {
+            if repo.path.is_empty() {
+                return Err(Refusal::failed(
+                    STEP_BRANCHES,
+                    "Orca がリポジトリの場所を答えませんでした".into(),
+                ));
+            }
+            let local = local_branches(rpc, &repo.path)
+                .await
+                .map_err(|e| Refusal::failed(STEP_BRANCHES, e))?;
+            let remote = remote_branches(rpc, &repo.id, &format!("origin/{branch}"))
+                .await
+                .map_err(|e| Refusal::failed(STEP_BRANCHES, e))?;
+            Some(intent_of(branch, base, &local, &remote)?)
+        }
+        None => None,
+    };
+    rpc.call(
+        "worktree.create",
+        worktree_create_params(&repo.id, name, branch, intent.as_ref()),
+    )
+    .await
+    .map_err(|e| Refusal::failed(STEP_WORKTREE, call_output(&e)))
+}
+
+/// What `Connection::open` takes for `environment`: this Mac is Orca's own runtime (`None`), and a saved environment is its pairing.
+fn orca_target(environment: &str) -> Option<String> {
+    (environment != LOCAL).then(|| environment.to_owned())
+}
+
+/// `create_worktree` over a connection to the Orca of `environment`. From a thread of `spawn_blocking`.
+fn make_worktree(
+    environment: &str,
+    repo: &Repo,
+    name: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+) -> Result<Value, Refusal> {
+    tokio::runtime::Handle::current().block_on(async {
+        let mut connection = Connection::open(orca_target(environment))
+            .await
+            .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
+        create_worktree(&mut connection, repo, name, branch, base).await
+    })
+}
+
 /// Launches a child: a terminal with `claude -n {name}` in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
-/// With no `place.folder` the worktree is made here in the repository of the environment, on `place.branch` (or on the branch Orca names, when there is none). A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
+/// With no `place.folder` the worktree is made here in the repository of the environment (`create_worktree`: Orca's RPC, not its CLI), on `place.branch` (or on the branch Orca names, when there is none): a branch that the repository has is opened as it is, one that only `origin` has is taken from there, and a new one starts from `place.base`. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
 /// With `place.folder` nothing is made: the folder must be the repository's own folder or a worktree of it that `orca worktree ps` lists (`folder_in`), and the child works there. The record says that tsunagiai did not make it (`Launch::created`), so that no close removes it.
 pub fn launch(
     config: &Path,
@@ -1380,24 +1462,9 @@ pub fn launch(
             })?;
             (folder.to_owned(), branch, false, 0)
         }
-        Target::NewWorktree(branch) => {
+        Target::NewWorktree { branch, base } => {
             prepare_repo(repo, environment, &|args| orca::write(args))?;
-            let base = match branch {
-                Some(branch) => start_of(
-                    branch,
-                    on_origin(environment, &repo.path, branch),
-                    default_base(environment, &repo.path),
-                ),
-                None => default_base(environment, &repo.path),
-            };
-            let made = orca::write(&orca::create_worktree_args(
-                &repo.id,
-                name,
-                branch,
-                base.as_deref(),
-                Some(environment),
-            ))
-            .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
+            let made = make_worktree(environment, repo, name, branch, base)?;
             let path = orca::created_worktree_path_of(&made)
                 .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
             let made_branch = created_branch_of(&made);
@@ -2753,14 +2820,14 @@ mod tests {
     fn on_branch(branch: &str) -> Place<'_> {
         Place {
             branch: Some(branch),
-            folder: None,
+            ..Place::default()
         }
     }
 
     fn in_folder(folder: &str) -> Place<'_> {
         Place {
-            branch: None,
             folder: Some(folder),
+            ..Place::default()
         }
     }
 
@@ -3247,9 +3314,10 @@ mod tests {
 
     #[test]
     fn a_launch_takes_no_branch_any_branch_or_a_folder_and_not_a_branch_with_a_folder() {
-        assert_eq!(target_of(Place::default()), Ok(Target::NewWorktree(None)));
+        let new_on = |branch| Target::NewWorktree { branch, base: None };
+        assert_eq!(target_of(Place::default()), Ok(new_on(None)));
         // A blank branch is none; any name that git takes is the branch, with no kind or ticket in it.
-        assert_eq!(target_of(on_branch("  ")), Ok(Target::NewWorktree(None)));
+        assert_eq!(target_of(on_branch("  ")), Ok(new_on(None)));
         for good in [
             "feature/WON-2482",
             "main",
@@ -3258,16 +3326,9 @@ mod tests {
             "あ/い",
             "feature/a_b.c",
         ] {
-            assert_eq!(
-                target_of(on_branch(good)),
-                Ok(Target::NewWorktree(Some(good))),
-                "{good}"
-            );
+            assert_eq!(target_of(on_branch(good)), Ok(new_on(Some(good))), "{good}");
         }
-        assert_eq!(
-            target_of(on_branch(" fix/a ")),
-            Ok(Target::NewWorktree(Some("fix/a")))
-        );
+        assert_eq!(target_of(on_branch(" fix/a ")), Ok(new_on(Some("fix/a"))));
         // What git refuses, and what would be read as an option, stays refused.
         for bad in [
             "--feature/a",
@@ -3290,6 +3351,7 @@ mod tests {
         let both = target_of(Place {
             branch: Some("feature/a"),
             folder: Some("/w/api"),
+            ..Place::default()
         });
         assert!(both.is_err(), "{both:?}");
         // A blank branch beside a folder is no branch.
@@ -3297,9 +3359,47 @@ mod tests {
             target_of(Place {
                 branch: Some(" "),
                 folder: Some("/w/api"),
+                ..Place::default()
             }),
             Ok(Target::Folder("/w/api"))
         );
+    }
+
+    #[test]
+    fn a_base_goes_with_a_branch_only_and_is_checked_as_a_ref() {
+        let with_base = |branch, base| Place {
+            branch,
+            base: Some(base),
+            ..Place::default()
+        };
+        assert_eq!(
+            target_of(with_base(Some("feature/a"), "origin/develop")),
+            Ok(Target::NewWorktree {
+                branch: Some("feature/a"),
+                base: Some("origin/develop")
+            })
+        );
+        // A blank base is none.
+        assert_eq!(
+            target_of(with_base(Some("feature/a"), " ")),
+            Ok(Target::NewWorktree {
+                branch: Some("feature/a"),
+                base: None
+            })
+        );
+        // A base is the start of a branch that is made: with no branch, or a folder, it is refused, and so is one that is no ref.
+        for bad in [
+            target_of(with_base(None, "origin/develop")),
+            target_of(Place {
+                folder: Some("/w/api"),
+                ..with_base(None, "origin/develop")
+            }),
+            target_of(with_base(Some("feature/a"), "--x")),
+            target_of(with_base(Some("feature/a"), "a b")),
+            target_of(with_base(Some("feature/a"), "a..b")),
+        ] {
+            assert!(bad.is_err(), "{bad:?}");
+        }
     }
 
     fn repo_of(id: &str, name: &str) -> Repo {
@@ -3353,113 +3453,6 @@ mod tests {
         assert!(check_created_branch("feature/a", "").is_err());
         // The branch of a user's prefix that Orca would have made is not the one asked for either.
         assert!(check_created_branch("feature/a", "me/a").is_err());
-    }
-
-    #[test]
-    fn the_start_is_the_origin_head_of_this_mac_and_nothing_else() {
-        assert_eq!(base_of("origin/main\n"), Some("origin/main".into()));
-        assert_eq!(
-            base_of("origin/release/1.0"),
-            Some("origin/release/1.0".into())
-        );
-        for bad in [
-            "",
-            "\n",
-            "main",
-            "origin/",
-            "upstream/main",
-            "origin/ma in",
-            "origin/main\norigin/x",
-            "origin/-x/..",
-        ] {
-            assert_eq!(base_of(bad), None, "{bad:?}");
-        }
-        // A saved environment's repository is on another machine, and a path that is not known is not asked.
-        assert_eq!(default_base("Studio", "/repo"), None);
-        assert_eq!(default_base(LOCAL, ""), None);
-        assert_eq!(
-            git_origin_head_args("/--repo"),
-            [
-                "-C",
-                "/--repo",
-                "symbolic-ref",
-                "--short",
-                "refs/remotes/origin/HEAD"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_branch_that_is_on_origin_is_the_start_of_the_child_that_takes_it_over() {
-        let default = || Some("origin/main".to_owned());
-        assert_eq!(
-            start_of("feature/WON-1", true, default()),
-            Some("origin/feature/WON-1".into())
-        );
-        // Not on origin (or not known to be, as in a saved environment's repository): the start stays the default one, or Orca's own.
-        assert_eq!(
-            start_of("feature/WON-1", false, default()),
-            Some("origin/main".into())
-        );
-        assert_eq!(start_of("feature/WON-1", false, None), None);
-        assert_eq!(
-            start_of("feature/WON-1", true, None),
-            Some("origin/feature/WON-1".into())
-        );
-        // What reaches Orca: `--base-branch=origin/{branch}` next to `--branch={branch}`, and the default one otherwise.
-        let args = |on| {
-            orca::create_worktree_args(
-                "repo1",
-                "web-2",
-                Some("feature/WON-1"),
-                start_of("feature/WON-1", on, default()).as_deref(),
-                Some("local"),
-            )
-        };
-        assert!(args(true).contains(&"--branch=feature/WON-1".to_owned()));
-        assert!(args(true).contains(&"--base-branch=origin/feature/WON-1".to_owned()));
-        assert!(args(false).contains(&"--base-branch=origin/main".to_owned()));
-    }
-
-    #[test]
-    fn only_the_repository_of_this_mac_is_asked_whether_a_branch_is_on_origin() {
-        assert!(!on_origin("Studio", "/repo", "feature/WON-1"));
-        assert!(!on_origin(LOCAL, "", "feature/WON-1"));
-        assert_eq!(
-            git_origin_branch_args("/--repo", "feature/WON-1"),
-            [
-                "-C",
-                "/--repo",
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "refs/remotes/origin/feature/WON-1"
-            ]
-        );
-    }
-
-    #[test]
-    fn the_worktree_takes_the_branch_and_the_start_it_is_given() {
-        assert_eq!(
-            orca::create_worktree_args(
-                "repo1",
-                "web-2",
-                Some("feature/WON-1"),
-                Some("origin/main"),
-                Some("local")
-            ),
-            [
-                "worktree",
-                "create",
-                "--repo=id:repo1",
-                "--name=web-2",
-                "--branch=feature/WON-1",
-                "--base-branch=origin/main",
-                "--no-parent",
-                "--json",
-                "--environment=local"
-            ]
-        );
     }
 
     #[test]
@@ -3678,7 +3671,6 @@ mod tests {
             terminal_send_args("term_1", "go", environment),
             terminal_close_args("term_1", environment),
             worktree_rm_args("/w/a", environment, false),
-            orca::create_worktree_args("repo1", "web-2", None, None, Some(environment)),
             orca::ps_args(Some(environment)),
         ];
         for args in all {
@@ -3721,19 +3713,300 @@ mod tests {
         );
     }
 
+    fn local_branch(name: &str) -> OrcaLocalBranch {
+        OrcaLocalBranch {
+            name: name.into(),
+            current: false,
+            in_use: false,
+        }
+    }
+
+    fn remote_branch(name: &str) -> OrcaRemoteBranch {
+        OrcaRemoteBranch {
+            name: name.into(),
+            local_name: name.split_once('/').map_or(name, |(_, rest)| rest).into(),
+        }
+    }
+
+    fn intent(kind: &'static str, base: Option<&str>) -> Intent {
+        Intent {
+            kind,
+            base: base.map(str::to_owned),
+        }
+    }
+
     #[test]
-    fn the_worktree_is_made_in_the_repository_with_no_parent() {
+    fn the_intent_of_a_branch_comes_from_where_the_repository_has_it() {
+        let local = [local_branch("main"), local_branch("feature/a")];
+        let remote = [
+            remote_branch("origin/feature/b"),
+            remote_branch("origin/main"),
+        ];
+        // A local branch is opened as it is, with no start, whether or not origin has it too.
         assert_eq!(
-            orca::create_worktree_args("repo1", "web-2", None, None, None),
-            [
-                "worktree",
-                "create",
-                "--repo=id:repo1",
-                "--name=web-2",
-                "--no-parent",
-                "--json"
-            ]
+            intent_of("feature/a", None, &local, &remote),
+            Ok(intent("open-existing-v2", None))
         );
+        assert_eq!(
+            intent_of("main", None, &local, &remote),
+            Ok(intent("open-existing-v2", None))
+        );
+        // A branch that only origin has is opened from origin.
+        assert_eq!(
+            intent_of("feature/b", None, &local, &remote),
+            Ok(intent("open-existing-v2", Some("origin/feature/b")))
+        );
+        // A branch that is nowhere is made exactly, from the base or from Orca's default.
+        assert_eq!(
+            intent_of("feature/c", None, &local, &remote),
+            Ok(intent("create-exact", None))
+        );
+        assert_eq!(
+            intent_of("feature/c", Some("origin/develop"), &local, &remote),
+            Ok(intent("create-exact", Some("origin/develop")))
+        );
+        // A name that only looks like a branch of the lists is not one: not another remote's, not a prefix, not a part.
+        let near = [
+            remote_branch("upstream/feature/c"),
+            remote_branch("origin/feature/c2"),
+        ];
+        assert_eq!(
+            intent_of("feature/c", None, &[local_branch("feature/c/x")], &near),
+            Ok(intent("create-exact", None))
+        );
+        // A base is the start of a new branch: with one that is there, it is refused and not dropped.
+        for (branch, base) in [("feature/a", "origin/main"), ("feature/b", "origin/main")] {
+            let err = intent_of(branch, Some(base), &local, &remote).unwrap_err();
+            assert!(err.contains(branch) && err.contains(base), "{err}");
+        }
+    }
+
+    #[test]
+    fn the_worktree_is_asked_of_orca_with_the_intent_and_no_parent() {
+        assert_eq!(
+            worktree_create_params("repo1", "web-2", None, None),
+            json!({"repo": "id:repo1", "name": "web-2", "noParent": true})
+        );
+        assert_eq!(
+            worktree_create_params(
+                "repo1",
+                "web-2",
+                Some("feature/a"),
+                Some(&intent("open-existing-v2", None))
+            ),
+            json!({
+                "repo": "id:repo1",
+                "name": "web-2",
+                "noParent": true,
+                "branchNameOverride": "feature/a",
+                "branchIntent": "open-existing-v2"
+            })
+        );
+        assert_eq!(
+            worktree_create_params(
+                "repo1",
+                "web-2",
+                Some("feature/a"),
+                Some(&intent("create-exact", Some("origin/develop")))
+            ),
+            json!({
+                "repo": "id:repo1",
+                "name": "web-2",
+                "noParent": true,
+                "branchNameOverride": "feature/a",
+                "branchIntent": "create-exact",
+                "baseBranch": "origin/develop"
+            })
+        );
+    }
+
+    #[test]
+    fn this_mac_is_the_runtime_and_a_saved_environment_is_a_pairing() {
+        assert_eq!(orca_target(LOCAL), None);
+        assert_eq!(orca_target("Studio"), Some("Studio".to_owned()));
+    }
+
+    fn orca_error(shown: &str, detail: &str) -> CallError {
+        CallError {
+            shown: shown.into(),
+            detail: detail.into(),
+        }
+    }
+
+    /// Orca's side of the calls of a launch: the branches the repository has, what `worktree.create` answers, and the calls it was given.
+    struct FakeRpc {
+        local: Vec<&'static str>,
+        remote: Vec<&'static str>,
+        created: Result<Value, (&'static str, &'static str)>,
+        calls: Vec<(String, Value)>,
+    }
+
+    impl FakeRpc {
+        fn with(local: &[&'static str], remote: &[&'static str]) -> Self {
+            Self {
+                local: local.to_vec(),
+                remote: remote.to_vec(),
+                created: Ok(
+                    json!({"worktree": {"path": "/w/api/.claude/worktrees/api/web-2", "branch": "refs/heads/feature/a"}}),
+                ),
+                calls: Vec::new(),
+            }
+        }
+
+        fn methods(&self) -> Vec<&str> {
+            self.calls.iter().map(|(m, _)| m.as_str()).collect()
+        }
+    }
+
+    impl Rpc for FakeRpc {
+        async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+            self.calls.push((method.to_owned(), params));
+            match method {
+                "git.localBranches" => Ok(
+                    json!({"current": "main", "branches": self.local, "committedAt": {}, "worktreePaths": {}}),
+                ),
+                "repo.searchRefs" => Ok(
+                    json!({"refDetails": self.remote.iter().map(|r| json!({"refName": r, "localBranchName": r})).collect::<Vec<_>>()}),
+                ),
+                "worktree.create" => self.created.clone().map_err(|(s, d)| orca_error(s, d)),
+                _ => Err(orca_error("unexpected", "")),
+            }
+        }
+    }
+
+    fn launch_on(
+        fake: &mut FakeRpc,
+        branch: Option<&str>,
+        base: Option<&str>,
+    ) -> Result<Value, Refusal> {
+        let repo = repo_of("repo1", "api");
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(create_worktree(fake, &repo, "web-2", branch, base))
+    }
+
+    fn created_params(fake: &FakeRpc) -> &Value {
+        let (method, params) = fake.calls.last().unwrap();
+        assert_eq!(method, "worktree.create");
+        params
+    }
+
+    #[test]
+    fn a_local_branch_is_opened_as_it_is() {
+        let mut orca = FakeRpc::with(&["main", "feature/a"], &[]);
+        let made = launch_on(&mut orca, Some("feature/a"), None).unwrap();
+        assert_eq!(created_branch_of(&made), "feature/a");
+        // The refs are asked of the repository's own folder and id, then the worktree is made.
+        assert_eq!(
+            orca.methods(),
+            ["git.localBranches", "repo.searchRefs", "worktree.create"]
+        );
+        assert_eq!(orca.calls[0].1["worktree"], "path:/w/api");
+        assert_eq!(orca.calls[1].1["repo"], "id:repo1");
+        assert_eq!(orca.calls[1].1["namespace"], "remote");
+        let params = created_params(&orca);
+        assert_eq!(params["branchIntent"], "open-existing-v2");
+        assert_eq!(params["branchNameOverride"], "feature/a");
+        assert!(params.get("baseBranch").is_none(), "{params}");
+    }
+
+    #[test]
+    fn a_branch_that_only_origin_has_is_opened_from_origin() {
+        let mut orca = FakeRpc::with(&["main"], &["origin/feature/a"]);
+        launch_on(&mut orca, Some("feature/a"), None).unwrap();
+        let params = created_params(&orca);
+        assert_eq!(params["branchIntent"], "open-existing-v2");
+        assert_eq!(params["baseBranch"], "origin/feature/a");
+    }
+
+    #[test]
+    fn a_new_branch_is_made_exactly_from_the_base_or_orcas_default() {
+        let mut orca = FakeRpc::with(&["main"], &["origin/main"]);
+        launch_on(&mut orca, Some("feature/a"), None).unwrap();
+        let params = created_params(&orca);
+        assert_eq!(params["branchIntent"], "create-exact");
+        assert!(params.get("baseBranch").is_none(), "{params}");
+        let mut orca = FakeRpc::with(&["main"], &[]);
+        launch_on(&mut orca, Some("feature/a"), Some("origin/develop")).unwrap();
+        assert_eq!(created_params(&orca)["baseBranch"], "origin/develop");
+    }
+
+    #[test]
+    fn no_branch_leaves_the_name_to_orca_and_reads_no_refs() {
+        let mut orca = FakeRpc::with(&["main"], &[]);
+        launch_on(&mut orca, None, None).unwrap();
+        assert_eq!(orca.methods(), ["worktree.create"]);
+        let params = created_params(&orca);
+        assert!(params.get("branchIntent").is_none() && params.get("branchNameOverride").is_none());
+    }
+
+    #[test]
+    fn a_base_with_a_branch_that_is_there_is_refused_before_anything_is_made() {
+        let mut orca = FakeRpc::with(&["feature/a"], &[]);
+        let err = launch_on(&mut orca, Some("feature/a"), Some("origin/develop")).unwrap_err();
+        assert!(err.error.contains("origin/develop"), "{}", err.error);
+        assert!(!orca.methods().contains(&"worktree.create"));
+    }
+
+    #[test]
+    fn what_orca_refuses_is_answered_in_its_own_words_and_nothing_else_is_asked() {
+        let taken = "Branch \"feature/a\" is already checked out at \"/w/api/.claude/worktrees/api/other\". Choose another worktree or remove the other one first. It is long enough that a cut at 200 characters would have lost the end of this sentence.";
+        let mut orca = FakeRpc::with(&["feature/a"], &[]);
+        orca.created = Err(("Orca がエラーを返しました（runtime_error）", taken));
+        let err = launch_on(&mut orca, Some("feature/a"), None).unwrap_err();
+        assert_eq!(err.step, Some(STEP_WORKTREE));
+        let output = err.data.as_ref().unwrap()["output"].as_str().unwrap();
+        assert!(
+            output.contains(taken) && output.contains("runtime_error"),
+            "{output}"
+        );
+        let mut orca = FakeRpc::with(&[], &[]);
+        orca.created = Err((
+            "Orca がエラーを返しました（worktree_create_exact_name_taken）",
+            "feature/a is already taken on this host. Nothing was created.",
+        ));
+        let err = launch_on(&mut orca, Some("feature/a"), None).unwrap_err();
+        let output = err.data.as_ref().unwrap()["output"].as_str().unwrap();
+        assert!(
+            output.contains("worktree_create_exact_name_taken")
+                && output.contains("Nothing was created"),
+            "{output}"
+        );
+        // Only the one call of worktree.create made a thing, and a refusal is not asked again.
+        assert_eq!(
+            orca.methods()
+                .iter()
+                .filter(|m| **m == "worktree.create")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_call_that_failed_with_no_message_is_told_by_its_code_alone() {
+        assert_eq!(call_output(&orca_error("切れました", "")), "切れました");
+        assert_eq!(call_output(&orca_error("a", "b")), "a: b");
+    }
+
+    #[test]
+    fn a_repository_whose_folder_is_unknown_is_not_asked_for_its_branches() {
+        let mut orca = FakeRpc::with(&[], &[]);
+        let mut repo = repo_of("repo1", "api");
+        repo.path = String::new();
+        let err = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(create_worktree(
+                &mut orca,
+                &repo,
+                "web-2",
+                Some("feature/a"),
+                None,
+            ))
+            .unwrap_err();
+        assert_eq!(err.step, Some(STEP_BRANCHES));
+        assert!(orca.calls.is_empty());
     }
 
     #[test]
@@ -3805,6 +4078,7 @@ mod tests {
                 Place {
                     branch: Some("feature/a"),
                     folder: Some("/w/api"),
+                    ..Place::default()
                 },
                 "一緒に",
             ),
