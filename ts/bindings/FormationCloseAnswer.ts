@@ -12,4 +12,12 @@ closed: boolean,
 /**
  * Why the worktree was kept, when it was.
  */
-reason: string | null, changed: Array<string>, untracked: Array<string>, unpushed: Array<string>, };
+reason: string | null, changed: Array<string>, untracked: Array<string>, unpushed: Array<string>, 
+/**
+ * Where the worktree is and in which environment (`local` for this Mac), shown with the lines when it was kept, so that the owner knows what a force removes; empty when `closed`. A force sends `path` back (`FormationShown`).
+ */
+path: string, environment: string, 
+/**
+ * When `closed`: the branch that Orca kept because commits that no remote has are on it `None` when it kept none.
+ */
+preservedBranch: string | null, };

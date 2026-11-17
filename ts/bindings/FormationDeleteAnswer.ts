@@ -12,4 +12,8 @@ deleted: boolean,
 /**
  * Every child that the check kept, in the order of the record (none when `deleted`).
  */
-kept: Array<FormationKeptChild>, };
+kept: Array<FormationKeptChild>, 
+/**
+ * When `deleted`: the children whose branch Orca kept because commits that no remote has are on it, each as `{name}: {branch}`.
+ */
+preserved: Array<string>, };

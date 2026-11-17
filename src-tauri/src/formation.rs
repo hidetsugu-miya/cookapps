@@ -725,29 +725,53 @@ fn prepare_repo(
 }
 
 /// Sets the worktree base of each repository of `projects` (`formation_create`): the repositories of each environment are read once. A project whose repository the environment does not list is skipped, because `check_projects` has checked it against the same list a moment before.
+/// A failure says which repositories had their setting changed before it, and that it is not taken back: `formation_create` takes the formation back, and Orca's own settings stay as they were set.
 fn settle_projects(
     projects: &[FormationProject],
     read: &dyn Fn(&str) -> Result<Vec<Repo>, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<(), String> {
     let mut lists: HashMap<&str, Vec<Repo>> = HashMap::new();
+    let mut changed: Vec<String> = Vec::new();
+    let failed = |message: String, changed: &[String]| {
+        if changed.is_empty() {
+            message
+        } else {
+            format!(
+                "{message}。先に設定を変えた repository は、そのままです（戻していません）: {}",
+                changed.join("、")
+            )
+        }
+    };
     for project in projects {
         let environment = project.environment.as_str();
         if !lists.contains_key(environment) {
             lists.insert(
                 environment,
-                read(environment).map_err(|e| format!("「{STEP_REPOS}」に失敗しました: {e}"))?,
+                read(environment).map_err(|e| {
+                    failed(format!("「{STEP_REPOS}」に失敗しました: {e}"), &changed)
+                })?,
             );
         }
         let Ok(repo) = resolve_repo(&lists[environment], &project.repo) else {
             continue;
         };
-        settle_worktree_base(repo, environment, write).map_err(|e| {
-            format!(
-                "「{STEP_WORKTREE_BASE}」に失敗しました（{}）: {e}",
-                repo.name
+        let did = settle_worktree_base(repo, environment, write).map_err(|e| {
+            failed(
+                format!(
+                    "「{STEP_WORKTREE_BASE}」に失敗しました（{}）: {e}",
+                    repo.name
+                ),
+                &changed,
             )
         })?;
+        if did {
+            changed.push(if environment == LOCAL {
+                repo.name.clone()
+            } else {
+                format!("{}（{environment}）", repo.name)
+            });
+        }
     }
     Ok(())
 }
@@ -922,7 +946,7 @@ fn terminal_close_args(handle: &str, environment: &str) -> Vec<String> {
     on(args, environment)
 }
 
-/// Without `force` there is no `--force`: Orca refuses a worktree with files that are not tracked, and that is a refusal worth keeping. With it (the owner's own press on the screen, `formation_close_child`) the worktree goes with its changes, and the branch with its commits that no remote has (`--delete-branch`, as without it).
+/// Without `force` there is no `--force`: Orca refuses a worktree with files that are not tracked, and that is a refusal worth keeping. With it (the owner's own press on the screen, `formation_close_child`) the worktree goes with its changes and its untracked files; `--delete-branch` is as without it, and Orca keeps a branch with commits that no remote has (`--force` does not force the deletion of a branch; the answer has `preservedBranch`), so those commits stay on the local branch.
 fn worktree_rm_args(path: &str, environment: &str, force: bool) -> Vec<String> {
     let mut args = orca::args_of(&["worktree", "rm", "--worktree"]);
     args.push(format!("path:{path}"));
@@ -1557,7 +1581,7 @@ pub fn close(config: &Path, formation: &str, name: &str) -> Result<Value, Refusa
         config,
         formation,
         name,
-        false,
+        None,
         &orca_read,
         &|args| orca::write(args),
         &orca_git_of,
@@ -1577,21 +1601,31 @@ enum Closing {
         environment: String,
         terminal: bool,
     },
-    /// Its worktree is whole and clean (no change, no untracked file, no commit no remote has), or the owner forced the close: its terminal and its worktree are removed, and its entry is dropped.
+    /// Its worktree is whole and clean (no change, no untracked file, no commit no remote has), or the owner forced the close of exactly this child (`forced`: its name and path are the ones the owner was shown): its terminal and its worktree are removed, with `--force` when `forced`, and its entry is dropped.
     Remove {
         path: String,
         handle: String,
         environment: String,
+        forced: bool,
     },
 }
 
+/// One child as the owner was shown it when a close was kept (`FormationCloseAnswer`, `FormationKeptChild`): its name and the path of its worktree. A forced close sends these back, and Rust forces only the child whose name and recorded path are equal to a shown one: the record is a file the orchestrator can write, so a child added or a path replaced after the owner was shown is not forced and is checked again as without `force`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct FormationShown {
+    pub name: String,
+    pub path: String,
+}
+
 /// Every check that `close_with` makes before it changes anything, and nothing else: it only reads the record, Orca and git. A child that it refuses is one that `close_with` refuses for the same reason, and `delete_with` asks it of every child before it ends the orchestrator.
-/// `force` leaves out the look at the git of the worktree (a change, an untracked file, a commit no remote has, and what cannot be told of them) and nothing else: the record, the environment and the list of `orca worktree ps` are checked as always, so that the owner's force reaches only a worktree that Orca lists and that is not the repository's own folder.
+/// `force` is the children the owner was shown (`None`: no force). It leaves out the look at the git of a child whose name and recorded path are both in it (a change, an untracked file, a commit no remote has, and what cannot be told of them) and nothing else: the record, the environment and the list of `orca worktree ps` are checked as always, so that the owner's force reaches only a worktree that Orca lists and that is not the repository's own folder. Any other child, one that was added or whose path was replaced after the owner was shown, is looked at as without `force`.
 fn inspect_child(
     config: &Path,
     formation: &str,
     name: &str,
-    force: bool,
+    force: Option<&[FormationShown]>,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
 ) -> Result<Closing, Refusal> {
@@ -1657,50 +1691,66 @@ fn inspect_child(
         )
         .with("path", path));
     }
-    if force {
+    if force.is_some_and(|shown| {
+        shown
+            .iter()
+            .any(|s| s.name == name && s.path == launch.path)
+    }) {
         return Ok(Closing::Remove {
             path: launch.path,
             handle: launch.handle,
             environment,
+            forced: true,
         });
     }
-    let (status, unpushed) = if environment == LOCAL {
-        let status = git(&git_status_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
-        let remotes = git(&git_remote_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
-        let unpushed = if has_remote(&remotes) {
-            git(&git_unpushed_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?
+    // What the owner is shown of a child that git keeps is where it is (`kept_answer`), so that a force can name it.
+    let looked = (|| {
+        let (status, unpushed) = if environment == LOCAL {
+            let status = git(&git_status_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
+            let remotes = git(&git_remote_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?;
+            let unpushed = if has_remote(&remotes) {
+                git(&git_unpushed_args(path)).map_err(|e| Refusal::failed(STEP_GIT, e))?
+            } else {
+                String::new()
+            };
+            (status, unpushed)
         } else {
-            String::new()
+            git_of(&environment, path)
+                .and_then(|(status, history)| remote_git_text(&status, &history))
+                .map_err(|e| {
+                    Refusal::failed(STEP_GIT, e)
+                        .saying("確かめられないので、何も消していません。消してよいか、オーナーに確かめてください")
+                })?
         };
-        (status, unpushed)
-    } else {
-        git_of(&environment, path)
-            .and_then(|(status, history)| remote_git_text(&status, &history))
-            .map_err(|e| {
-                Refusal::failed(STEP_GIT, e)
-                    .saying("確かめられないので、何も消していません。消してよいか、オーナーに確かめてください")
-            })?
-    };
-    if let Some((error, data)) = close_refusal(&status, &unpushed) {
-        return Err(Refusal {
-            error,
-            step: Some(STEP_GIT),
-            data: Some(data),
-        });
-    }
+        match close_refusal(&status, &unpushed) {
+            Some((error, data)) => Err(Refusal {
+                error,
+                step: Some(STEP_GIT),
+                data: Some(data),
+            }),
+            None => Ok(()),
+        }
+    })();
+    looked.map_err(|refusal| {
+        refusal
+            .with("path", path)
+            .with("environment", environment.as_str())
+    })?;
     Ok(Closing::Remove {
         path: launch.path,
         handle: launch.handle,
         environment,
+        forced: false,
     })
 }
 
-/// `force`: see `inspect_child`; the worktree is then removed with `--force` (`worktree_rm_args`).
+/// `force`: see `inspect_child`; the worktree of a child that it names is then removed with `--force` (`worktree_rm_args`), and any other without.
+/// The answer of a removal says `preservedBranch` when Orca kept the branch (`preserved_branch`): commits that no remote has stay on the local branch.
 fn close_with(
     config: &Path,
     formation: &str,
     name: &str,
-    force: bool,
+    force: Option<&[FormationShown]>,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
@@ -1739,21 +1789,33 @@ fn close_with(
             path,
             handle,
             environment,
+            forced,
         } => {
             // The owner may have closed the tab already: the worktree is removed all the same.
             let terminal = write(&terminal_close_args(&handle, &environment));
-            write(&worktree_rm_args(&path, &environment, force))
+            let removed = write(&worktree_rm_args(&path, &environment, forced))
                 .map_err(|e| Refusal::failed(STEP_REMOVE, e))?;
             dropped().map_err(|e| {
                 Refusal::from(e).saying("worktree は消しましたが、記録から外せませんでした")
             })?;
-            Ok(json!({
+            let mut done = json!({
                 "name": name,
                 "path": path,
                 "terminalClosed": terminal.is_ok(),
-            }))
+            });
+            if let Some(branch) = preserved_branch(&removed) {
+                done["preservedBranch"] = json!(branch);
+            }
+            Ok(done)
         }
     }
+}
+
+/// The branch that Orca kept when it removed a worktree: `orca worktree rm --delete-branch --json` keeps a branch that has commits no remote has and answers `{"removed": true, "preservedBranch": {"branchName": "feature/T-1", "head": "06184bb…"}}` (the `result` of the CLI's JSON, which `orca::write` gives; measured in #828). `None` when it kept none.
+fn preserved_branch(removed: &Value) -> Option<String> {
+    removed["preservedBranch"]["branchName"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// What the screen is told of the close of one child (`formation_close_child`): that it was closed, or that its worktree was kept for what git says of it, so that the owner can decide to force it. A refusal that no force passes (the record is wrong, the worktree is not in Orca's list, Orca failed) is not this answer but an error with its message.
@@ -1770,6 +1832,11 @@ pub struct FormationCloseAnswer {
     pub changed: Vec<String>,
     pub untracked: Vec<String>,
     pub unpushed: Vec<String>,
+    /// Where the worktree is and in which environment (`local` for this Mac), shown with the lines when it was kept, so that the owner knows what a force removes; empty when `closed`. A force sends `path` back (`FormationShown`).
+    pub path: String,
+    pub environment: String,
+    /// When `closed`: the branch that Orca kept because commits that no remote has are on it `None` when it kept none.
+    pub preserved_branch: Option<String>,
 }
 
 /// Whether a line of `git status --porcelain` (or of Orca's `git.status`, `remote_git_text`) is a file that git does not track.
@@ -1799,29 +1866,49 @@ fn kept_answer(refusal: &Refusal) -> Option<FormationCloseAnswer> {
     let (untracked, changed) = lines("status")
         .into_iter()
         .partition(|line| is_untracked(line));
+    let place = |key: &str| {
+        refusal
+            .data
+            .as_ref()
+            .and_then(|data| data.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
     Some(FormationCloseAnswer {
         closed: false,
         reason: Some(reason),
         changed,
         untracked,
         unpushed: lines("unpushedCommits"),
+        path: place("path"),
+        environment: place("environment"),
+        preserved_branch: None,
     })
 }
 
-/// Closes one child for the screen: as `close_with` does, and a refusal of the look at git is an answer (`kept_answer`) and any other is the message. With `force` the look at git is left out and the worktree goes with `--force`.
+/// The branch that a close kept, from its answer (`close_with`).
+fn preserved_of(done: &Value) -> Option<String> {
+    done.get("preservedBranch")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Closes one child for the screen: as `close_with` does, and a refusal of the look at git is an answer (`kept_answer`) and any other is the message. With `force` (the child as the owner was shown it) the look at git is left out and the worktree goes with `--force`; a child that `force` does not name is looked at, and is an answer when git keeps it.
 fn close_child_with(
     config: &Path,
     formation: &str,
     name: &str,
-    force: bool,
+    force: Option<&[FormationShown]>,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
 ) -> Result<FormationCloseAnswer, String> {
     check_name(formation)?;
     match close_with(config, formation, name, force, read, write, git_of) {
-        Ok(_) => Ok(FormationCloseAnswer {
+        Ok(done) => Ok(FormationCloseAnswer {
             closed: true,
+            preserved_branch: preserved_of(&done),
             ..FormationCloseAnswer::default()
         }),
         Err(refusal) => kept_answer(&refusal).ok_or_else(|| refusal_text(&refusal)),
@@ -2366,17 +2453,19 @@ pub struct FormationDeleteAnswer {
     pub deleted: bool,
     /// Every child that the check kept, in the order of the record (none when `deleted`).
     pub kept: Vec<FormationKeptChild>,
+    /// When `deleted`: the children whose branch Orca kept because commits that no remote has are on it, each as `{name}: {branch}`.
+    pub preserved: Vec<String>,
 }
 
 /// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and, without `force`, have no change, no untracked file and no commit no remote has). A child that is refused for what git says of it (`kept_answer`) is collected, and the answer lists them all with nothing ended, closed or deleted; the first child that is refused otherwise stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
-/// With `force` (the owner's own press on the screen, `formation_delete`) the look at git is left out as in `close_child_with`, every child is closed with `--force` and its branch, and the checks of the record, the environment and `orca worktree ps` are made as always.
+/// With `force` (the owner's own press on the screen, `formation_delete`: the children as the owner was shown them) the look at git is left out as in `close_child_with` for a child whose name and recorded path are in it, and that child is closed with `--force` and its branch; any other child, one added or whose path was replaced after the owner was shown, is looked at as without `force`, so that when git keeps it the answer is `kept` again and nothing is ended or closed. The checks of the record, the environment and `orca worktree ps` are made as always.
 /// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
 /// Then every child is closed as `close` does, in the order of the record (a planned one is dropped from the record). A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 fn delete_with(
     config: &Path,
     formation: &str,
-    force: bool,
+    force: Option<&[FormationShown]>,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
@@ -2411,19 +2500,23 @@ fn delete_with(
         return Ok(FormationDeleteAnswer {
             deleted: false,
             kept,
+            preserved: Vec::new(),
         });
     }
     stop_orchestrator();
+    let mut preserved = Vec::new();
     for child in children {
-        close_with(config, formation, &child.name, force, read, write, git_of).map_err(
-            |refusal| {
+        let done = close_with(config, formation, &child.name, force, read, write, git_of)
+            .map_err(|refusal| {
                 format!(
                     "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです。司令塔のプロセスは終えています）。{}",
                     child.name,
                     refusal_text(&refusal)
                 )
-            },
-        )?;
+            })?;
+        if let Some(branch) = preserved_of(&done) {
+            preserved.push(format!("{}: {branch}", child.name));
+        }
     }
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     if !read_record(config, formation)?.is_empty() {
@@ -2437,6 +2530,7 @@ fn delete_with(
     Ok(FormationDeleteAnswer {
         deleted: true,
         kept: Vec::new(),
+        preserved,
     })
 }
 
@@ -2478,13 +2572,14 @@ pub async fn formation_create(
     .await?
 }
 
-/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. Children that are kept for what git says of their worktrees are the answer (`deleted` false, nothing ended or closed), and with `force` they are closed all the same (`--force` and their branches; the commits no remote has are lost with them, and the checks of the record and of `orca worktree ps` are made also with `force`). A child that is refused otherwise in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. A failure carries the message. Not a tool of `tsunagiai-mcp`: the orchestrator runs in auto mode and could remove worktrees with no question.
+/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. Children that are kept for what git says of their worktrees are the answer (`deleted` false, nothing ended or closed), and with `force` (and `shown`, the children as the owner was shown them: only a child whose name and path are in it is forced, any other is looked at again and is `kept` when git keeps it) they are closed all the same (`--force`; the changes and the untracked files are lost, and the commits no remote has stay on the local branch, which Orca keeps and the answer names in `preserved`; the checks of the record and of `orca worktree ps` are made also with `force`). A child that is refused otherwise in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. A failure carries the message. Not a tool of `tsunagiai-mcp`: the orchestrator runs in auto mode and could remove worktrees with no question.
 #[tauri::command]
 pub async fn formation_delete(
     app: tauri::AppHandle,
     sessions: tauri::State<'_, crate::claude_code::ClaudeCode>,
     name: String,
     force: bool,
+    shown: Vec<FormationShown>,
 ) -> Result<FormationDeleteAnswer, String> {
     let dir = config_dir(&app)?;
     let sessions = sessions.inner().clone();
@@ -2492,7 +2587,7 @@ pub async fn formation_delete(
         delete_with(
             &dir,
             &name,
-            force,
+            force.then_some(shown.as_slice()),
             &orca_read,
             &|args| orca::write(args),
             &orca_git_of,
@@ -2502,21 +2597,27 @@ pub async fn formation_delete(
     .await?
 }
 
-/// Closes the child `name` of the formation `formation` from the screen (A-37): the check, the terminal, the worktree with its branch and the entry of the record, as `formation_close` does. A worktree with a change, an untracked file or a commit no remote has is kept and the answer says why (`closed` false, with the lines of git); with `force` it is removed all the same, with `--force` and its branch, and the commits no remote has are lost with it. The checks of the record and of `orca worktree ps` are made also with `force`. Not a tool of `tsunagiai-mcp`: the orchestrator runs in auto mode and could remove a worktree with no question.
+/// Closes the child `name` of the formation `formation` from the screen (A-37): the check, the terminal, the worktree with its branch and the entry of the record, as `formation_close` does. A worktree with a change, an untracked file or a commit no remote has is kept and the answer says why (`closed` false, with the lines of git); with `force` and the `path` the owner was shown it is removed all the same, with `--force` (the changes and the untracked files are lost; the commits no remote has stay on the local branch, which Orca keeps, and the answer says it in `preservedBranch`), and with another `path`, or none, it is looked at as without `force`. The checks of the record and of `orca worktree ps` are made also with `force`. Not a tool of `tsunagiai-mcp`: the orchestrator runs in auto mode and could remove a worktree with no question.
 #[tauri::command]
 pub async fn formation_close_child(
     app: tauri::AppHandle,
     formation: String,
     name: String,
     force: bool,
+    path: Option<String>,
 ) -> Result<FormationCloseAnswer, String> {
     let dir = config_dir(&app)?;
     orca::blocking(move || {
+        // The child as the owner was shown it; with no path nothing is forced.
+        let shown = vec![FormationShown {
+            name: name.clone(),
+            path: path.unwrap_or_default(),
+        }];
         close_child_with(
             &dir,
             &formation,
             &name,
-            force,
+            force.then_some(shown.as_slice()),
             &orca_read,
             &|args| orca::write(args),
             &orca_git_of,
@@ -3631,6 +3732,25 @@ mod tests {
         panic!("the git of a saved environment is read only for a child of a saved environment")
     }
 
+    /// What the owner was shown of the child `name` at `path`, when `on` is true: the force of a close.
+    fn forcing(on: bool, name: &str, path: &str) -> Option<Vec<FormationShown>> {
+        on.then(|| {
+            vec![FormationShown {
+                name: name.into(),
+                path: path.into(),
+            }]
+        })
+    }
+
+    /// What the owner was shown of `a` and `b` of `two_saved_children`.
+    fn both_shown() -> Option<Vec<FormationShown>> {
+        let shown = |name: &str, path: &str| FormationShown {
+            name: name.into(),
+            path: path.into(),
+        };
+        Some(vec![shown("a", REMOTE_PATH), shown("b", "/srv/work/b")])
+    }
+
     fn recorded(config: &Path, path: &str, handle: &str, branch: &str) {
         let mut child = launched("a", "x");
         let launch = child.launch.as_mut().unwrap();
@@ -3652,7 +3772,7 @@ mod tests {
             &config,
             F,
             "a",
-            false,
+            None,
             &|_| Ok(listed.clone()),
             &|args| orca.run(args),
             &no_remote_git,
@@ -3687,7 +3807,7 @@ mod tests {
                 &config,
                 F,
                 "a",
-                false,
+                None,
                 &|_| listed.clone(),
                 &|args| orca.run(args),
                 &no_remote_git,
@@ -3733,7 +3853,7 @@ mod tests {
                     &config,
                     F,
                     "a",
-                    force,
+                    forcing(force, "a", &path).as_deref(),
                     &|_| Ok(listed.clone()),
                     &|args| orca.run(args),
                     &no_remote_git,
@@ -3757,7 +3877,7 @@ mod tests {
                 &config,
                 F,
                 "a",
-                force,
+                forcing(force, "a", &path).as_deref(),
                 &|_| Err("orca が答えません".into()),
                 &|args| orca.run(args),
                 &no_remote_git,
@@ -4313,7 +4433,7 @@ mod tests {
             config,
             F,
             "a",
-            force,
+            forcing(force, "a", REMOTE_PATH).as_deref(),
             &|args| saved.read(args),
             &|args| orca.run(args),
             &|environment, path| {
@@ -4459,7 +4579,7 @@ mod tests {
             &config,
             F,
             "a",
-            true,
+            forcing(true, "a", &path).as_deref(),
             &|_| Ok(listed.clone()),
             &|args| orca.run(args),
             &no_remote_git,
@@ -4529,7 +4649,7 @@ mod tests {
                 &config,
                 F,
                 name,
-                force,
+                forcing(force, name, REMOTE_PATH).as_deref(),
                 &|args| saved.read(args),
                 &|args| orca.run(args),
                 &|_, _| git.clone(),
@@ -4564,12 +4684,84 @@ mod tests {
             &config,
             "Bad Name",
             "a",
-            true,
+            Some(&[]),
             &|_| Ok(json!({})),
             &|_| Ok(json!({})),
             &no_remote_git
         )
         .is_err());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_forced_close_of_another_path_than_the_one_shown_is_looked_at_again_and_kept() {
+        let config = temp_dir("close-child-shown");
+        let entries = json!([{"path": "new.txt", "status": "untracked", "area": "untracked"}]);
+        let saved = Saved::new(Ok(ps_with(remote_child())));
+        let orca = Calls::new();
+        recorded_saved(&config, "mac-studio");
+        for shown in [
+            forcing(true, "a", "/srv/work/replaced"),
+            forcing(true, "a", ""),
+            forcing(true, "b", REMOTE_PATH),
+            Some(Vec::new()),
+        ] {
+            let kept = close_child_with(
+                &config,
+                F,
+                "a",
+                shown.as_deref(),
+                &|args| saved.read(args),
+                &|args| orca.run(args),
+                &|_, _| Ok(git_answers(entries.clone(), 0)),
+            )
+            .unwrap();
+            assert!(!kept.closed, "{shown:?}");
+            // It says where the worktree is, so that the owner sees it before the next force.
+            assert_eq!(kept.path, REMOTE_PATH);
+            assert_eq!(kept.environment, "mac-studio");
+            assert_eq!(kept.untracked, ["untracked new.txt"]);
+            assert!(orca.0.borrow().is_empty(), "{shown:?}");
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_branch_that_orca_keeps_when_it_removes_a_worktree_is_in_the_answer() {
+        let kept =
+            json!({"removed": true, "preservedBranch": {"branchName": "me/a", "head": "06184bb"}});
+        let answers = [
+            (json!({"removed": true}), None),
+            (json!({"removed": true, "preservedBranch": null}), None),
+            (json!({"preservedBranch": {"head": "06184bb"}}), None),
+            (json!({"preservedBranch": "me/a"}), None),
+            (kept.clone(), Some("me/a")),
+        ];
+        for (answer, expected) in answers {
+            assert_eq!(preserved_branch(&answer).as_deref(), expected, "{answer}");
+        }
+        let config = temp_dir("close-child-preserved");
+        recorded_saved(&config, "mac-studio");
+        let saved = Saved::new(Ok(ps_with(remote_child())));
+        let done = close_child_with(
+            &config,
+            F,
+            "a",
+            forcing(true, "a", REMOTE_PATH).as_deref(),
+            &|args| saved.read(args),
+            &|args| {
+                if args.iter().any(|a| a == "--force") {
+                    Ok(kept.clone())
+                } else {
+                    Ok(json!({}))
+                }
+            },
+            &no_remote_git,
+        )
+        .unwrap();
+        assert!(done.closed);
+        assert_eq!(done.preserved_branch.as_deref(), Some("me/a"));
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -4729,7 +4921,7 @@ mod tests {
             &config,
             F,
             "a",
-            false,
+            None,
             &|_| Ok(json!({"environments": [{"id": "x", "name": "dup"}, {"id": "dup", "name": "other"}]})),
             &|args| orca.run(args),
             &no_remote_git,
@@ -4745,7 +4937,7 @@ mod tests {
             &config,
             F,
             "a",
-            false,
+            None,
             &|_| Err("orca が答えません".into()),
             &|args| orca.run(args),
             &no_remote_git,
@@ -4764,7 +4956,7 @@ mod tests {
                 &config,
                 F,
                 "a",
-                false,
+                None,
                 &|_| panic!("nothing is read for a record that is not well formed"),
                 &|args| orca.run(args),
                 &no_remote_git,
@@ -5480,7 +5672,7 @@ mod tests {
         let answer = delete_with(
             &config,
             F,
-            false,
+            None,
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
@@ -5503,7 +5695,7 @@ mod tests {
             let err = delete_with(
                 &config,
                 name,
-                false,
+                None,
                 &|_| Ok(json!({})),
                 &|_| Ok(json!({})),
                 &no_remote_git,
@@ -5529,7 +5721,7 @@ mod tests {
         delete_with(
             &config,
             "alpha",
-            false,
+            None,
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
@@ -5568,7 +5760,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
-            false,
+            None,
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
@@ -5608,7 +5800,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
-            false,
+            None,
             &|args| saved.read(args),
             &|args| orca.run(args),
             // The worktree is clean at the first check and has a change when the child is closed.
@@ -5670,7 +5862,7 @@ mod tests {
         let answer = delete_with(
             &config,
             "alpha",
-            false,
+            None,
             &|args| saved.read(args),
             &|args| orca.run(args),
             &kept_git,
@@ -5708,7 +5900,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
-            false,
+            None,
             &|args| saved.read(args),
             &|_| panic!("nothing is written"),
             &kept_git,
@@ -5731,7 +5923,7 @@ mod tests {
         let answer = delete_with(
             &config,
             "alpha",
-            true,
+            both_shown().as_deref(),
             &|args| saved.read(args),
             &|args| orca.run(args),
             &|_, _| panic!("a forced deletion asks no git"),
@@ -5755,6 +5947,103 @@ mod tests {
     }
 
     #[test]
+    fn a_forced_deletion_forces_only_the_children_the_owner_was_shown_and_asks_git_of_the_rest() {
+        let config = temp_dir("delete-force-shown");
+        let saved = two_saved_children(&config, false);
+        let orca = Calls::new();
+        let stopped = std::cell::Cell::new(false);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let git = |environment: &str, path: &str| {
+            asked.borrow_mut().push(path.to_owned());
+            kept_git(environment, path)
+        };
+        // `a` was shown; `b` was added after (or its path was replaced), so git is asked of it and keeps it.
+        let answer = delete_with(
+            &config,
+            "alpha",
+            forcing(true, "a", REMOTE_PATH).as_deref(),
+            &|args| saved.read(args),
+            &|args| orca.run(args),
+            &git,
+            &|| stopped.set(true),
+        )
+        .unwrap();
+        assert!(!answer.deleted);
+        let kept: Vec<&str> = answer.kept.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(kept, ["b"]);
+        // The new answer says where the worktree is, so that the owner is shown it before the next force.
+        assert_eq!(answer.kept[0].answer.path, "/srv/work/b");
+        assert_eq!(answer.kept[0].answer.environment, "mac-studio");
+        assert_eq!(answer.kept[0].answer.unpushed.len(), 1);
+        assert_eq!(*asked.borrow(), ["/srv/work/b"]);
+        // Nothing is ended, closed or deleted.
+        assert!(!stopped.get());
+        assert!(orca.0.borrow().is_empty());
+        assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
+        // A path that is not the recorded one (the record was written after the owner was shown) forces nothing.
+        let answer = delete_with(
+            &config,
+            "alpha",
+            forcing(true, "a", "/srv/work/replaced").as_deref(),
+            &|args| saved.read(args),
+            &|args| orca.run(args),
+            &git,
+            &|| stopped.set(true),
+        )
+        .unwrap();
+        let kept: Vec<&str> = answer.kept.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(kept, ["a", "b"]);
+        assert_eq!(answer.kept[0].answer.path, REMOTE_PATH);
+        assert!(!stopped.get());
+        assert!(orca.0.borrow().is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_that_was_not_shown_is_closed_without_force_when_git_keeps_nothing_and_the_kept_branch_is_told(
+    ) {
+        let config = temp_dir("delete-force-shown-clean");
+        let saved = two_saved_children(&config, false);
+        let orca = Calls::new();
+        // Orca keeps the branch of the forced one.
+        let write = |args: &[String]| {
+            orca.run(args)?;
+            if args.iter().any(|a| a == "--force") {
+                Ok(
+                    json!({"removed": true, "preservedBranch": {"branchName": "me/a", "head": "06184bb"}}),
+                )
+            } else {
+                Ok(json!({}))
+            }
+        };
+        let answer = delete_with(
+            &config,
+            "alpha",
+            forcing(true, "a", REMOTE_PATH).as_deref(),
+            &|args| saved.read(args),
+            &write,
+            &|_, path| {
+                assert_eq!(path, "/srv/work/b", "the shown child is not asked");
+                Ok(git_answers(json!([]), 0))
+            },
+            &|| (),
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        assert_eq!(answer.preserved, ["a: me/a"]);
+        assert_eq!(
+            *orca.0.borrow(),
+            [
+                terminal_close_args("term_a", "mac-studio"),
+                worktree_rm_args(REMOTE_PATH, "mac-studio", true),
+                terminal_close_args("term_b", "mac-studio"),
+                worktree_rm_args("/srv/work/b", "mac-studio", false),
+            ]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn a_forced_deletion_still_stops_for_the_repositorys_own_folder() {
         let config = temp_dir("delete-force-forged");
         let saved = two_saved_children(&config, true);
@@ -5762,7 +6051,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
-            true,
+            both_shown().as_deref(),
             &|args| saved.read(args),
             &|_| panic!("nothing is written"),
             &|_, _| panic!("a forced deletion asks no git"),
@@ -5785,7 +6074,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
-            false,
+            None,
             &|_| Ok(json!({})),
             &|_| Ok(json!({})),
             &no_remote_git,
@@ -5805,7 +6094,7 @@ mod tests {
         let err = delete_with(
             &config,
             "alpha",
-            false,
+            None,
             // A tool of the orchestrator that is still at work launches a child while the first one is closed (the second read: the first is the check before the orchestrator ends).
             &|_| {
                 reads.set(reads.get() + 1);
@@ -6098,6 +6387,36 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_that_fails_names_the_repositories_that_were_changed_before_it() {
+        let other = |id: &str, name: &str| Repo {
+            id: id.into(),
+            name: name.into(),
+            path: format!("/w/{name}"),
+            worktree_base_path: String::new(),
+        };
+        let read = |_: &str| Ok(vec![other("repo-1", "api"), other("repo-2", "web")]);
+        // `api` is set, then Orca refuses `web`.
+        let write = |args: &[String]| {
+            if *args == worktree_base_args("repo-2", "mac-studio") {
+                Err("拒みました".to_owned())
+            } else {
+                Ok(json!({}))
+            }
+        };
+        let err = settle_projects(
+            &[project("mac-studio", "api"), project("mac-studio", "web")],
+            &read,
+            &write,
+        )
+        .unwrap_err();
+        assert!(err.contains("web") && err.contains("拒みました"), "{err}");
+        assert!(err.contains("api（mac-studio）"), "{err}");
+        // The first one fails: nothing was changed, and nothing is said of it.
+        let err = settle_projects(&[project("mac-studio", "web")], &read, &write).unwrap_err();
+        assert!(!err.contains("戻していません"), "{err}");
+    }
+
+    #[test]
     fn a_formation_whose_projects_cannot_be_set_up_is_not_made() {
         let config = temp_dir("create-settle");
         let read = |_: &str| Ok(vec![repo_with_base("")]);
@@ -6182,7 +6501,7 @@ mod tests {
                 &config,
                 F,
                 "a",
-                force,
+                forcing(force, "a", recorded_path).as_deref(),
                 &|args| saved.read(args),
                 &|args| orca.run(args),
                 &|_, _| Ok(git_answers(json!([]), 0)),

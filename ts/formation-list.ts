@@ -2,6 +2,7 @@
 // The formation of the selected row is the one the middle pane (its orchestrator) and the right pane (its flow) show; with no row selected (at each start, and after the selected one is deleted) neither pane is shown. The list is read on the clock of the flow (formation-flow.ts), so it is read only while the mode is shown.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationKeptChild } from "./bindings/FormationKeptChild";
+import type { FormationShown } from "./bindings/FormationShown";
 import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
@@ -35,6 +36,8 @@ let onRemoved: (name: string) => void = () => {};
 // The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
 const deleting = new Set<string>();
 let deleteFailure: string | null = null;
+// What a deletion that worked told that is no failure: the branches that Orca kept for the commits no remote has.
+let deleteNotice: string | null = null;
 
 // The numbers on the footer's orchestration button (A-37), from the last read that Orca could be read in: the children that wait in all the formations, and the formations with a child that works.
 let waitingChildren = 0;
@@ -78,21 +81,24 @@ export async function readList() {
 function added(entry: FormationEntry) {
   made++;
   deleteFailure = null;
+  deleteNotice = null;
   formations = [...formations.filter((f) => f.name !== entry.name), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   choose(entry.name);
   void readList();
 }
 
-// Deletes the formation `name` (the children are closed first; Rust deletes it only when all of them are). Without `force`, children that git keeps are the answer: nothing was closed, and the owner is asked to force it. A refusal that no force passes keeps the formation and shows its reason.
-async function remove(name: string, force: boolean) {
+// Deletes the formation `name` (the children are closed first; Rust deletes it only when all of them are). Without `force`, children that git keeps are the answer: nothing was closed, and the owner is asked to force it; with it, `shown` are the children as the owner was shown them (their names and paths), and Rust forces only those. A refusal that no force passes keeps the formation and shows its reason.
+async function remove(name: string, force: boolean, shown: FormationShown[]) {
   if (deleting.has(name)) return;
   deleting.add(name);
   deleteFailure = null;
+  deleteNotice = null;
   draw();
   let kept: FormationKeptChild[] | null = null;
   try {
-    const answer = await invoke("formation_delete", { name, force });
+    const answer = await invoke("formation_delete", { name, force, shown });
     if (!answer.deleted) kept = answer.kept;
+    else if (answer.preserved.length > 0) deleteNotice = `どのリモートにもないコミットがあるブランチは、ローカルに残しました: ${answer.preserved.join("、")}`;
   } catch (e) {
     deleteFailure = String(e);
     deleting.delete(name);
@@ -105,7 +111,7 @@ async function remove(name: string, force: boolean) {
   if (kept !== null) {
     draw();
     const anchor = $("formation-list-feed").querySelector(`[data-formation="${CSS.escape(name)}"] .formation-row-name`) ?? $("formation-list-feed");
-    confirmFormationForce(anchor, name, kept, () => void remove(name, true));
+    confirmFormationForce(anchor, name, kept, () => void remove(name, true, kept.map((child) => ({ name: child.name, path: child.answer.path }))));
     return;
   }
   // A read that began before the deletion still lists it: its answer is dropped.
@@ -122,7 +128,7 @@ async function remove(name: string, force: boolean) {
 function openRowMenu(f: FormationEntry, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   if (deleting.has(f.name)) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name, false)) }], { at: { x: e.clientX, y: e.clientY } });
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name, false, [])) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
 // Selects the formation `name`: its orchestrator and its flow are shown. `null` selects none, and neither is shown.
@@ -140,6 +146,7 @@ function row(f: FormationEntry, now: number): HTMLButtonElement {
   node.setAttribute("aria-pressed", String(f.name === current));
   node.onclick = () => {
     deleteFailure = null;
+    deleteNotice = null;
     choose(f.name);
     draw();
   };
@@ -171,7 +178,7 @@ function row(f: FormationEntry, now: number): HTMLButtonElement {
 
 function draw() {
   const now = Date.now();
-  const error = deleteFailure ?? failure;
+  const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
   const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects, f.createdAt === null ? "" : elapsed(f.createdAt, now, false), f.counts])]);

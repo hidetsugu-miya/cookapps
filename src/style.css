@@ -55,7 +55,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .pop-lost-child { margin-bottom: 4px; font-weight: 700; color: var(--danger); }
 .pop-lost-head { margin-bottom: 2px; font-weight: 700; }
 .pop-lost { margin: 0 0 12px; padding-left: 18px; max-height: 6.4em; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); }
-.pop .pop-lost li { margin: 0; }
+.pop .pop-lost li { margin: 0; white-space: pre-wrap; }
+.pop-lost-place { margin: 0 0 6px; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); word-break: break-all; }
 .popup-unread, .popup-plan { color: #666; }
 .nav-item[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
 

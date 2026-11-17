@@ -1,5 +1,9 @@
 import { boot, callsOf, count, formationChild, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+
 import type { FormationList } from "../../ts/bindings/FormationList";
+
+// The text of each element as it is, with the spaces that `textsOf` trims (a line of git's status starts with one).
+const rawTextsOf = (selector: string) => browser.execute((s) => [...document.querySelectorAll(s)].map((e) => e.textContent ?? ""), selector);
 
 // A-37: the development screen's orchestration mode. The orchestrator's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
 const FOOTER_MODES = "#footer-modes";
@@ -915,8 +919,8 @@ describe("orchestration mode: close a child from its card", () => {
     await $('.menu button[role="menuitem"]').click();
     await expect(confirm()).toBeDisplayed();
   }
-  const gone = { closed: true, reason: null, changed: [], untracked: [], unpushed: [] };
-  const kept = { closed: false, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります。また、どのリモートにも届いていないコミットがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log", "?? tmp/y.log"], unpushed: ["abc1234 add a"] };
+  const gone = { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null };
+  const kept = { closed: false, path: "/w/web-update", environment: "local", preservedBranch: null, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります。また、どのリモートにも届いていないコミットがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log", "?? tmp/y.log"], unpushed: ["abc1234 add a"] };
 
   it("opens a menu with 削除 alone on a right press of a card, a planned one too", async () => {
     await openSession(mixed());
@@ -950,7 +954,7 @@ describe("orchestration mode: close a child from its card", () => {
     await mock("formation_children", without("web-update"));
     await ask("web-update");
     await yes().click();
-    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false }]);
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false, path: null }]);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
     await expect(confirm()).not.toExist();
     // The session goes to the next child, and the terminal of the closed one is read no more.
@@ -967,7 +971,7 @@ describe("orchestration mode: close a child from its card", () => {
     await mock("formation_children", without("summary"));
     await ask("summary");
     await yes().click();
-    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "summary", force: false }]);
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "summary", force: false, path: null }]);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update,web-update,batch-update,e2e-check");
   });
 
@@ -980,7 +984,11 @@ describe("orchestration mode: close a child from its card", () => {
     await expect($('.pop[role="alertdialog"] h3')).toHaveText("web-update を削除できませんでした");
     await expect(confirm()).toHaveText(expect.stringContaining(kept.reason));
     expect(await textsOf(".pop-lost-head")).toEqual(["変更のあるファイル", "追跡していないファイル", "どのリモートにもないコミット"]);
-    expect(await textsOf(".pop-lost li")).toEqual([...kept.changed, ...kept.untracked, ...kept.unpushed]);
+    // Git's lines as they are: the leading space of a status line stays in the text and on the screen.
+    expect(await rawTextsOf(".pop-lost li")).toEqual([...kept.changed, ...kept.untracked, ...kept.unpushed]);
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".pop-lost li")!).whiteSpace)).toBe("pre-wrap");
+    // Where the worktree is, which a force sends back.
+    expect(await textsOf(".pop-lost-place")).toEqual(["この Mac: /w/web-update"]);
     await expect(yes()).toHaveText("強制削除");
     expect(await cardNames()).toHaveLength(5);
     await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
@@ -998,6 +1006,22 @@ describe("orchestration mode: close a child from its card", () => {
     expect(await textsOf(".pop-lost-head")).toEqual(["追跡していないファイル"]);
   });
 
+  it("tells the branch that Orca kept when the worktree is closed, and drops the words at the next close", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", { ...gone, preservedBranch: "me/web-update" });
+    await mock("formation_children", without("web-update"));
+    await ask("web-update");
+    await yes().click();
+    await waitForCalls(close);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await expect($("#formation-flow-error")).toHaveText(expect.stringContaining("「web-update」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（me/web-update）"));
+    await mock("formation_close_child", gone);
+    await ask("summary");
+    await yes().click();
+    await waitForCalls(close, 2);
+    await expect($("#formation-flow-error")).not.toBeDisplayed();
+  });
+
   it("closes it with force on 強制削除, and takes the card away", async () => {
     await openSession(mixed());
     const close = await mock("formation_close_child", kept);
@@ -1008,7 +1032,7 @@ describe("orchestration mode: close a child from its card", () => {
     await mock("formation_close_child", gone);
     await mock("formation_children", without("web-update"));
     await yes().click();
-    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: true }]);
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: true, path: "/w/web-update" }]);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
     await expect(confirm()).not.toExist();
   });
@@ -1300,7 +1324,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
 
   it("shows no heading for an environment with no repository, and keeps the heading of one that could not be read", async () => {
     await ask({ formation_environments: formationEnvironments([], { "dev-server": ["wonder-api"], "empty-server": [] }, { "down-server": "届きません" }) });
-    expect(await textsOf(".formation-new-env")).toEqual(["dev-server", "down-server"]);
+    expect(await textsOf(".formation-new-env:not([hidden])")).toEqual(["dev-server", "down-server"]);
     expect(await textsOf(".formation-new-note")).toEqual(["届きません"]);
     expect(await repos()).toEqual(["wonder-api"]);
   });
@@ -1453,13 +1477,13 @@ describe("orchestration mode: delete a formation", () => {
       onceId(),
     );
   const without = (name: string) => formationList(listed().formations.filter((f) => f.name !== name));
-  const done = { deleted: true, kept: [] };
+  const done = { deleted: true, kept: [], preserved: [] };
   // Two children that git keeps: `api-update` has a change and an untracked file, `web-update` a commit that no remote has.
   const kept = {
     deleted: false,
     kept: [
-      { name: "api-update", answer: { closed: false, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log"], unpushed: [] } },
-      { name: "web-update", answer: { closed: false, reason: "どのリモートにも届いていないコミットがあります", changed: [], untracked: [], unpushed: ["abc1234 add a", "def5678 add b"] } },
+      { name: "api-update", answer: { closed: false, path: "/w/api-update", environment: "local", preservedBranch: null, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log"], unpushed: [] } },
+      { name: "web-update", answer: { closed: false, path: "/srv/web-update", environment: "dev-server", preservedBranch: null, reason: "どのリモートにも届いていないコミットがあります", changed: [], untracked: [], unpushed: ["abc1234 add a", "def5678 add b"] } },
     ],
   };
   async function ask(name: string) {
@@ -1490,7 +1514,7 @@ describe("orchestration mode: delete a formation", () => {
     await mock("formation_children", []);
     await ask("formation");
     await yes().click();
-    expect(await waitForCalls(del)).toEqual([{ name: "formation", force: false }]);
+    expect(await waitForCalls(del)).toEqual([{ name: "formation", force: false, shown: [] }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "won-2485,mail-summary");
     expect(await pressedRows()).toEqual([]);
     expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:formation" }]);
@@ -1517,7 +1541,7 @@ describe("orchestration mode: delete a formation", () => {
     await mock("formation_list", without("mail-summary"));
     await ask("mail-summary");
     await yes().click();
-    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: false }]);
+    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: false, shown: [] }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
     // The shown formation is another one: it stays shown, and its orchestrator is not started again.
     expect(await pressedRows()).toEqual(["formation"]);
@@ -1575,14 +1599,16 @@ describe("orchestration mode: delete a formation", () => {
     const del = await mock("formation_delete", kept);
     await ask("won-2485");
     await yes().click();
-    expect(await waitForCalls(del)).toEqual([{ name: "won-2485", force: false }]);
+    expect(await waitForCalls(del)).toEqual([{ name: "won-2485", force: false, shown: [] }]);
     await expect($('.pop[role="alertdialog"] h3')).toHaveText("won-2485 を削除できませんでした");
     expect(await textsOf(".pop-lost-child")).toEqual(["子「api-update」", "子「web-update」"]);
     await expect(confirm()).toHaveText(expect.stringContaining(kept.kept[0].answer.reason));
     await expect(confirm()).toHaveText(expect.stringContaining(kept.kept[1].answer.reason));
     // A kind that git did not list for a child has no head: the changed file and the untracked file of the first, the commits of the second.
     expect(await textsOf(".pop-lost-head")).toEqual(["変更のあるファイル", "追跡していないファイル", "どのリモートにもないコミット"]);
-    expect(await textsOf(".pop-lost li")).toEqual([" M src/a.rb", "?? tmp/x.log", "abc1234 add a", "def5678 add b"]);
+    expect(await rawTextsOf(".pop-lost li")).toEqual([" M src/a.rb", "?? tmp/x.log", "abc1234 add a", "def5678 add b"]);
+    // Where each worktree is, which a force sends back.
+    expect(await textsOf(".pop-lost-place")).toEqual(["この Mac: /w/api-update", "dev-server: /srv/web-update"]);
     await expect(yes()).toHaveText("強制削除");
     // Nothing was closed: the row stays, selected and shown, with no words of failure and no more calls.
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
@@ -1606,10 +1632,21 @@ describe("orchestration mode: delete a formation", () => {
     await mock("formation_delete", done);
     await mock("formation_list", without("mail-summary"));
     await yes().click();
-    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: true }]);
+    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: true, shown: [{ name: "api-update", path: "/w/api-update" }, { name: "web-update", path: "/srv/web-update" }] }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
     await expect(confirm()).not.toExist();
     await expect($("#formation-list-error")).not.toBeDisplayed();
+  });
+
+  it("tells the branches that Orca kept when the formation is deleted", async () => {
+    await openList();
+    const del = await mock("formation_delete", { deleted: true, kept: [], preserved: ["api-update: me/a", "web-update: me/web-update"] });
+    await mock("formation_list", without("mail-summary"));
+    await ask("mail-summary");
+    await yes().click();
+    await waitForCalls(del);
+    await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
+    await expect($("#formation-list-error")).toHaveText("どのリモートにもないコミットがあるブランチは、ローカルに残しました: api-update: me/a、web-update: me/web-update");
   });
 
   it("shows the words of a forced deletion that is refused, and keeps the formation", async () => {
@@ -1794,7 +1831,8 @@ describe("the count on the footer's Orca button", () => {
     await $("#footer-mode-formation").click();
     await expect(badge()).toHaveText("2");
     await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（作業中 2 件）");
-    // It follows the reads of the Orca list, in the orchestration mode too, and goes with the last working one.
+    // It follows the reads of the Orca list and goes with the last working one. The list is read every 60 seconds while the orchestration mode is shown (A-6), which a spec cannot wait for, so the later reads are waited for in the Orca mode.
+    await $("#footer-mode-orca").click();
     await mock("orca_overview", orca([orcaRow("example-app", "main", "first")]));
     await browser.waitUntil(async () => (await badge().getText()) === "1");
     await mock("orca_overview", orca([orcaRow("example-app", "main", "first", { group: "done" })]));

@@ -23,6 +23,8 @@ const LOCAL = "local";
 // The last read; a read that failed keeps it and says why in `failure`.
 let children: FormationChild[] = [];
 let failure: string | null = null;
+// What a close told that is no failure: the branch that Orca kept for the commits no remote has. It stays until the next close or another formation, which a read of the children does not clear.
+let notice: string | null = null;
 // The children that have a terminal (the last read), the selected child (its name) and whether 「自動で追う」 is on (on at first, in memory only).
 let terms: FormationChild[] = [];
 let selected: string | null = null;
@@ -95,6 +97,7 @@ export function switchFormation() {
   epoch++;
   children = [];
   failure = null;
+  notice = null;
   terms = [];
   selected = null;
   sessionKey = null;
@@ -181,11 +184,11 @@ function openCardMenu(c: FormationChild, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   const formation = currentFormation();
   if (formation === null || closing.has(closingKey(formation, c.name))) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmChildDelete(anchor, c.name, () => void closeChild(formation, c.name, false)) }], { at: { x: e.clientX, y: e.clientY } });
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmChildDelete(anchor, c.name, () => void closeChild(formation, c.name, false, null)) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
-// Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it the worktree goes all the same. An error shows as a failed read does.
-async function closeChild(formation: string, name: string, force: boolean) {
+// Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it (`path`: where the worktree was shown to be) the worktree goes all the same, and only when Rust finds the child at that path. An error shows as a failed read does, and so does the branch that Orca kept (`notice`).
+async function closeChild(formation: string, name: string, force: boolean, path: string | null) {
   const key = closingKey(formation, name);
   if (closing.has(key)) return;
   closing.add(key);
@@ -193,10 +196,12 @@ async function closeChild(formation: string, name: string, force: boolean) {
   let error: string | null = null;
   let kept: FormationCloseAnswer | null = null;
   let closed = false;
+  let preserved: string | null = null;
   try {
-    const answer = await invoke("formation_close_child", { formation, name, force });
+    const answer = await invoke("formation_close_child", { formation, name, force, path });
     closed = answer.closed;
     if (!closed) kept = answer;
+    preserved = answer.preservedBranch;
   } catch (e) {
     error = String(e);
   } finally {
@@ -205,6 +210,7 @@ async function closeChild(formation: string, name: string, force: boolean) {
   // Another formation is shown now: what this one answered is not drawn (its children are read when it is shown again).
   if (currentFormation() !== formation) return draw();
   if (error !== null) failure = error;
+  notice = closed && preserved !== null ? `「${name}」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（${preserved}）。` : null;
   if (closed) {
     // The child is gone from the pane and from the session at once (the session lets its terminal go), and a read that began before the close, which still lists it, is dropped.
     children = children.filter((c) => c.name !== name);
@@ -215,7 +221,7 @@ async function closeChild(formation: string, name: string, force: boolean) {
   if (closed && watching === "flow") void read();
   if (kept) {
     const anchor = $("formation-flow-list").querySelector(`[data-name="${CSS.escape(name)}"] .formation-card-name`) ?? $("formation-flow-list");
-    confirmChildForce(anchor, name, kept, () => void closeChild(formation, name, true));
+    confirmChildForce(anchor, name, kept, () => void closeChild(formation, name, true, kept.path));
   }
 }
 
@@ -277,8 +283,9 @@ function draw() {
   if (watching === "flow") syncSession();
   $("formation-follow").setAttribute("aria-pressed", String(follow));
   $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
-  $("formation-flow-error").hidden = failure === null;
-  $("formation-flow-error").textContent = failure ?? "";
+  const said = failure ?? notice;
+  $("formation-flow-error").hidden = said === null;
+  $("formation-flow-error").textContent = said ?? "";
   const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply])]);
   if (key === treeKey) return;
   treeKey = key;
