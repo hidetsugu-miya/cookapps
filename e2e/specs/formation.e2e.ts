@@ -1018,7 +1018,8 @@ describe("orchestration mode: close a child from its card", () => {
     await mock("formation_close_child", gone);
     await ask("summary");
     await yes().click();
-    await waitForCalls(close, 2);
+    // `mock` set the calls back to none, so the second close is the first call of the new mock.
+    await waitForCalls(close);
     await expect($("#formation-flow-error")).not.toBeDisplayed();
   });
 
