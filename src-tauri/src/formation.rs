@@ -76,6 +76,8 @@ const STEP_LISTED: &str = "worktree の一覧の読み取り";
 const STEP_FILES: &str = "フォルダの一覧の読み取り";
 const STEP_FILE: &str = "ファイルの読み取り";
 const STEP_GIT_STATE: &str = "git の状態の読み取り";
+/// Where `tsunagiai-mcp` is in the app of a PC, which the command of an orchestrator's terminal runs first (`orchestrator_command`).
+const APP_MCP: &str = "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp";
 
 /// `formation/` in the config directory: the folder of the formations, one folder under it for each.
 fn root(config: &Path) -> PathBuf {
@@ -504,6 +506,9 @@ struct Meta {
     /// Epoch milliseconds.
     #[serde(default)]
     created_at: Option<u64>,
+    /// The handle of the terminal of the orchestrator in the Orca of a saved environment (`start_orchestrator_with`): only a formation of a saved environment has one. A file written before it was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    orchestrator_terminal: Option<String>,
 }
 
 /// The file of `formation`: a missing one is none, but one that is there and cannot be read is an error, so that the orchestrator does not start as if the formation had no project.
@@ -516,6 +521,43 @@ fn read_meta(config: &Path, formation: &str) -> Result<Meta, String> {
         Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
     };
     serde_json::from_str(&text).map_err(|_| format!("{} の形式が正しくありません", path.display()))
+}
+
+/// Changes `formation.json` of `formation` while the lock of the record is held (the file is read, changed and written through a temporary file). A formation whose folder is gone is not brought back.
+fn update_meta(
+    config: &Path,
+    formation: &str,
+    change: impl FnOnce(&mut Meta),
+) -> Result<(), String> {
+    let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    if !dir(config, formation).is_dir() {
+        return Err(format!(
+            "フォーメーション「{formation}」はありません（削除されました）"
+        ));
+    }
+    let mut meta = read_meta(config, formation)?;
+    change(&mut meta);
+    let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
+    accounts::write_atomic(&dir(config, formation), FORMATION_FILE, &text)
+}
+
+/// The PC a formation belongs to: the environment of its projects (they all have the same one, `check_one_environment`), `local` (this Mac) when it has none. Its orchestrator runs there, with its children (A-37).
+pub fn formation_environment(projects: &[FormationProject]) -> String {
+    projects
+        .first()
+        .map_or_else(|| LOCAL.to_owned(), |p| p.environment.clone())
+}
+
+/// A formation belongs to one PC: a project of another environment is refused, because a Claude Code reaches another by `SendMessage` only on the same PC, so the orchestrator and its children must be there together.
+fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
+    let environment = formation_environment(projects);
+    match projects.iter().find(|p| p.environment != environment) {
+        Some(other) => Err(format!(
+            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（司令塔と子が別の PC にいると、SendMessage が届かないためです）",
+            other.environment
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The projects of `formation`, which the first instruction of its orchestrator names (`first_prompt`): the ones saved when it was created.
@@ -951,6 +993,32 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
         "--json".into(),
     ]);
     on(args, environment)
+}
+
+/// The shell sentence that starts an orchestrator on its PC: `tsunagiai-mcp` of the app there, else the one on the PATH, run with `--formation-start {name}` in place of the `sh` (it writes the orchestrator's files on that PC and starts Claude Code). It is typed into the login shell of the terminal, whichever shell that is, so it is one `sh -c` with no quote inside; a PC with neither prints why and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads.
+fn orchestrator_command(name: &str) -> Result<String, String> {
+    check_name(name)?;
+    Ok(format!(
+        "sh -c 'm={APP_MCP}; [ -x \"$m\" ] || m=$(command -v tsunagiai-mcp) || {{ echo tsunagiai-mcp was not found >&2; exit 1; }}; exec \"$m\" --formation-start {name}'"
+    ))
+}
+
+/// The orchestrator's terminal, in the folder of the first project's repository (`path`; Orca asks a `--worktree` of a terminal it creates on a saved environment), titled with the name of its formation, running `orchestrator_command`.
+fn orchestrator_create_args(
+    path: &str,
+    name: &str,
+    environment: &str,
+) -> Result<Vec<String>, String> {
+    let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
+    args.extend([
+        format!("path:{path}"),
+        "--title".into(),
+        name.into(),
+        "--command".into(),
+        orchestrator_command(name)?,
+        "--json".into(),
+    ]);
+    Ok(on(args, environment))
 }
 
 fn terminal_close_args(handle: &str, environment: &str) -> Vec<String> {
@@ -2770,6 +2838,8 @@ fn counts_of(rows: &[FormationChild]) -> ChildCounts {
 pub struct FormationEntry {
     pub name: String,
     pub projects: Vec<FormationProject>,
+    /// The PC it belongs to: `local` (this Mac), or the saved environment of its projects (`formation_environment`). Its orchestrator runs there.
+    pub environment: String,
     /// When it was created (epoch milliseconds); `None` for a formation that has no `formation.json`.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub created_at: Option<u64>,
@@ -2810,6 +2880,7 @@ fn list_with(config: &Path, read: &Read<'_>) -> Result<FormationList, String> {
         let meta = read_meta(config, &name).unwrap_or_default();
         formations.push(FormationEntry {
             name,
+            environment: formation_environment(&meta.projects),
             projects: meta.projects,
             created_at: meta.created_at,
             counts: counts_of(own),
@@ -2897,6 +2968,7 @@ fn check_projects(
         }
         checked.push(project);
     }
+    check_one_environment(&checked)?;
     first_prompt(&checked)?;
     Ok(checked)
 }
@@ -2953,6 +3025,7 @@ fn create_with(
     let meta = Meta {
         projects,
         created_at: Some(created_at),
+        orchestrator_terminal: None,
     };
     let written = serde_json::to_string_pretty(&meta)
         .map_err(|e| e.to_string())
@@ -2963,6 +3036,7 @@ fn create_with(
     }
     Ok(FormationEntry {
         name: name.to_owned(),
+        environment: formation_environment(&meta.projects),
         projects: meta.projects,
         created_at: meta.created_at,
         counts: ChildCounts::default(),
@@ -3029,7 +3103,7 @@ pub struct FormationDeleteAnswer {
 
 /// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and, without `force`, have no change, no untracked file and no commit no remote has). A child that is refused for what git says of it (`kept_answer`) is collected, and the answer lists them all with nothing ended, closed or deleted; the first child that is refused otherwise stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
 /// With `force` (the owner's own press on the screen, `formation_delete`: the children as the owner was shown them) the look at git is left out as in `close_child_with` for a child whose name and recorded path are in it, and that child is closed with `--force` and its branch; any other child, one added or whose path was replaced after the owner was shown, is looked at as without `force`, so that when git keeps it the answer is `kept` again and nothing is ended or closed. The checks of the record, the environment and `orca worktree ps` are made as always.
-/// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
+/// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted. The terminal of the orchestrator of a formation of a saved environment is closed in that Orca right after (`close_orchestrator_terminal`).
 /// Then every child is closed as `close` does, in the order of the record, except that the children that work in a folder tsunagiai did not make go first (a close refuses to remove a worktree while such a child works in it, `folder_holder`); a planned one is dropped from the record. A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 fn delete_with(
@@ -3074,6 +3148,7 @@ fn delete_with(
         });
     }
     stop_orchestrator();
+    close_orchestrator_terminal(config, formation, write);
     let mut preserved = Vec::new();
     let (folders, others): (Vec<Child>, Vec<Child>) = children
         .into_iter()
@@ -3107,10 +3182,166 @@ fn delete_with(
     })
 }
 
+/// The orchestrator of a formation that belongs to a saved environment: its terminal in the Orca of that PC, which the screen shows as it shows a child's (A-37).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct FormationOrchestrator {
+    /// The saved environment whose Orca holds the terminal.
+    pub environment: String,
+    /// The handle of the terminal in that Orca.
+    pub handle: String,
+}
+
+/// The orchestrator's first instruction as it reads on its own PC: there every project is of `local`, whatever the environment is called from here.
+fn remote_first_prompt(projects: &[FormationProject]) -> Result<Option<String>, String> {
+    let there: Vec<FormationProject> = projects
+        .iter()
+        .map(|p| FormationProject {
+            environment: LOCAL.to_owned(),
+            repo: p.repo.clone(),
+        })
+        .collect();
+    first_prompt(&there)
+}
+
+/// Whether `terminal list` (its `result`) has the terminal `handle`, not orphaned (one that lost its tab is not shown by Orca).
+fn is_listed_terminal(list: &Value, handle: &str) -> bool {
+    list["terminals"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|t| orca::text_of(t, "handle") == Some(handle) && t["orphaned"] != true)
+}
+
+/// The first line of what Orca printed, for a message that is one line.
+fn first_line(text: &str) -> &str {
+    text.lines().find(|l| !l.trim().is_empty()).unwrap_or("")
+}
+
+/// Only one start at a time: the screen asks again while a start is on its way, and two terminals of one orchestrator must not be made.
+static START: Mutex<()> = Mutex::new(());
+
+/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list`, else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again (the shell it was typed into stays alive when Claude Code ends).
+/// A new terminal is made in the folder of the first project's repository, titled with the formation's name, running `orchestrator_command`; it is waited for until Claude Code is idle (`wait`), and then given the projects as its first instruction, as the orchestrator of this Mac has it, with every project in `local` (`remote_first_prompt`). Only when all of that worked is its handle written in `formation.json`; a terminal that failed on the way is closed, so none is left running with no record.
+/// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
+fn start_orchestrator_with(
+    config: &Path,
+    formation: &str,
+    restart: bool,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    wait: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<FormationOrchestrator, String> {
+    check_name(formation)?;
+    if !dir(config, formation).is_dir() {
+        return Err(format!("フォーメーション「{formation}」はありません"));
+    }
+    let meta = read_meta(config, formation)?;
+    let environment = formation_environment(&meta.projects);
+    let environment = environment.as_str();
+    let Some(first) = meta.projects.first().filter(|_| environment != LOCAL) else {
+        return Err(format!(
+            "フォーメーション「{formation}」は、この Mac のものです。司令塔はつなぎAI の疑似端末で動きます"
+        ));
+    };
+    let _one = START.lock().unwrap_or_else(PoisonError::into_inner);
+    let failed = |e: String| {
+        format!(
+            "司令塔を起動できません（環境「{environment}」）: {}",
+            first_line(&e)
+        )
+    };
+    let repos = read(&repo_list_args(environment))
+        .map(|result| repos_of(&result))
+        .map_err(failed)?;
+    let path = resolve_repo(&repos, &first.repo)
+        .and_then(|repo| orca::check_path(&repo.path).map(|()| repo.path.clone()))
+        .map_err(failed)?;
+    if let Some(handle) = &meta.orchestrator_terminal {
+        let list = read(&terminal_list_args(&path, environment)).map_err(failed)?;
+        if restart {
+            // The owner may have closed the tab already.
+            let _ = write(&terminal_close_args(handle, environment));
+        } else if is_listed_terminal(&list, handle) {
+            return Ok(FormationOrchestrator {
+                environment: environment.to_owned(),
+                handle: handle.clone(),
+            });
+        }
+        update_meta(config, formation, |meta| meta.orchestrator_terminal = None)?;
+    }
+    let prompt = remote_first_prompt(&meta.projects)?;
+    let made = write(&orchestrator_create_args(&path, formation, environment)?).map_err(failed)?;
+    let handle = orca::created_of(&made)
+        .handle
+        .ok_or_else(|| failed("Orca がターミナルの handle を答えませんでした".into()))?;
+    let close = |message: String| {
+        let _ = write(&terminal_close_args(&handle, environment));
+        message
+    };
+    wait(&terminal_wait_args(&handle, environment))
+        .and_then(|result| {
+            wait_satisfied(&result).then_some(()).ok_or_else(|| {
+                "時間内に入力待ちになりませんでした。その PC に tsunagiai-mcp（つなぎAI のアプリの中か PATH）があるか確かめてください".to_owned()
+            })
+        })
+        .map_err(|e| close(failed(e)))?;
+    if let Some(prompt) = prompt {
+        write(&terminal_send_args(&handle, &prompt, environment))
+            .and_then(|result| check_submitted(&result))
+            .map_err(|e| close(failed(e)))?;
+    }
+    update_meta(config, formation, |meta| {
+        meta.orchestrator_terminal = Some(handle.clone());
+    })
+    .map_err(close)?;
+    Ok(FormationOrchestrator {
+        environment: environment.to_owned(),
+        handle,
+    })
+}
+
+/// Closes the terminal of the orchestrator that `formation.json` records, in the Orca of the formation's environment (the deletion of the formation, A-37). The owner may have closed the tab, or the environment may be gone: it is closed if it can be.
+fn close_orchestrator_terminal(
+    config: &Path,
+    formation: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) {
+    let Ok(meta) = read_meta(config, formation) else {
+        return;
+    };
+    if let Some(handle) = &meta.orchestrator_terminal {
+        let environment = formation_environment(&meta.projects);
+        let _ = write(&terminal_close_args(handle, &environment));
+    }
+}
+
 /// The environments (this Mac and the saved ones) with the repositories of each, for the dialog that makes a formation (A-37): the same read as the orchestrator's `formation_environments`.
 #[tauri::command]
 pub async fn formation_environments() -> Result<EnvironmentsView, String> {
     orca::blocking(|| environments_view(read_saved_environments(), &read_repos)).await
+}
+
+/// The terminal of the orchestrator of the formation `name`, which belongs to a saved environment (A-37): it is started in the Orca of that PC when it has none (`start_orchestrator_with`), and `restart` ends the one it has and starts a new one. A failure carries the message the screen shows.
+#[tauri::command]
+pub async fn formation_orchestrator(
+    app: tauri::AppHandle,
+    name: String,
+    restart: bool,
+) -> Result<FormationOrchestrator, String> {
+    let dir = config_dir(&app)?;
+    orca::blocking(move || {
+        start_orchestrator_with(
+            &dir,
+            &name,
+            restart,
+            &orca_read,
+            &|args| orca::write(args),
+            &|args| orca::call(args, IDLE_WAIT_RUN).map_err(orca::message_of),
+        )
+    })
+    .await?
 }
 
 /// The formations of the screen (A-37): each with its projects, when it was created and the number of its children in each state.
@@ -6644,15 +6875,16 @@ mod tests {
         let made = create_with(
             &config,
             "api-work",
-            &[project("e1", "/s/api"), project(LOCAL, "web")],
+            &[project("e1", "/s/api"), project("mac-studio", "docs")],
             &two_environments(),
             1_700_000_000_000,
         )
         .unwrap();
         // The environment is kept by its name and the repository by its name, whichever the call named them by.
-        let projects = [project("mac-studio", "api"), project(LOCAL, "web")];
+        let projects = [project("mac-studio", "api"), project("mac-studio", "docs")];
         assert_eq!(made.projects, projects);
         assert_eq!(made.created_at, Some(1_700_000_000_000));
+        assert_eq!(made.environment, "mac-studio");
         assert_eq!(made.counts, ChildCounts::default());
         assert_eq!(read_projects(&config, "api-work").unwrap(), projects);
         let text = std::fs::read_to_string(dir(&config, "api-work").join(FORMATION_FILE)).unwrap();
@@ -8263,5 +8495,605 @@ mod tests {
         ]);
         let err = run_blocking(git_report_of(&mut orca, &chosen(), None)).unwrap_err();
         assert_eq!(err.step, Some(STEP_GIT_STATE));
+    }
+
+    // ---- a formation belongs to one PC, and its orchestrator runs there (A-37) ----
+
+    #[test]
+    fn a_formation_belongs_to_the_environment_of_its_projects_and_to_this_mac_with_none() {
+        assert_eq!(formation_environment(&[]), LOCAL);
+        assert_eq!(formation_environment(&[project(LOCAL, "api")]), LOCAL);
+        assert_eq!(
+            formation_environment(&[project("mac-studio", "api"), project("mac-studio", "docs")]),
+            "mac-studio"
+        );
+    }
+
+    #[test]
+    fn projects_of_two_environments_make_no_formation_and_the_reason_names_both() {
+        let config = temp_dir("one-pc");
+        for projects in [
+            vec![project(LOCAL, "api"), project("mac-studio", "docs")],
+            vec![project("mac-studio", "api"), project(LOCAL, "web")],
+            vec![
+                project("mac-studio", "api"),
+                project("mac-studio", "docs"),
+                project(LOCAL, "web"),
+            ],
+        ] {
+            let err = create_with(&config, "f", &projects, &two_environments(), 1).unwrap_err();
+            assert!(err.contains("一つの PC に属します"), "{err}");
+            assert!(
+                err.contains("「local」") && err.contains("「mac-studio」"),
+                "{err}"
+            );
+            assert!(!dir(&config, "f").exists());
+        }
+        // Two repositories of one environment, and no project at all, are one PC.
+        let made = create_with(
+            &config,
+            "f",
+            &[project(LOCAL, "api"), project(LOCAL, "web")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(made.environment, LOCAL);
+        let empty = create_with(&config, "g", &[], &two_environments(), 1).unwrap();
+        assert_eq!(empty.environment, LOCAL);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_says_which_pc_each_formation_belongs_to() {
+        let config = temp_dir("list-environment");
+        create_with(
+            &config,
+            "a-here",
+            &[project(LOCAL, "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        create_with(
+            &config,
+            "b-there",
+            &[project("mac-studio", "api")],
+            &two_environments(),
+            2,
+        )
+        .unwrap();
+        // A formation with no `formation.json` is this Mac's.
+        std::fs::create_dir_all(dir(&config, "c-old")).unwrap();
+        let list = list_with(&config, &|_, _| panic!("no child is launched")).unwrap();
+        let rows: Vec<(&str, &str)> = list
+            .formations
+            .iter()
+            .map(|f| (f.name.as_str(), f.environment.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("a-here", LOCAL),
+                ("b-there", "mac-studio"),
+                ("c-old", LOCAL)
+            ]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_terminal_of_the_orchestrator_is_kept_in_the_file_that_older_files_lack() {
+        let config = temp_dir("meta-terminal");
+        let folder = dir(&config, "f");
+        std::fs::create_dir_all(&folder).unwrap();
+        // A file written before the field was kept reads with none, and the creation writes none.
+        std::fs::write(
+            folder.join(FORMATION_FILE),
+            r#"{"projects":[{"environment":"mac-studio","repo":"api"}],"createdAt":5}"#,
+        )
+        .unwrap();
+        let meta = read_meta(&config, "f").unwrap();
+        assert_eq!(meta.orchestrator_terminal, None);
+        assert_eq!(meta.created_at, Some(5));
+        create_with(&config, "g", &[], &two_environments(), 1).unwrap();
+        let text = std::fs::read_to_string(dir(&config, "g").join(FORMATION_FILE)).unwrap();
+        assert!(!text.contains("orchestratorTerminal"), "{text}");
+        // A change keeps the rest of the file.
+        update_meta(&config, "f", |meta| {
+            meta.orchestrator_terminal = Some("term_o".into());
+        })
+        .unwrap();
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(folder.join(FORMATION_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(saved["orchestratorTerminal"], "term_o");
+        assert_eq!(saved["createdAt"], 5);
+        assert_eq!(
+            saved["projects"],
+            json!([{"environment": "mac-studio", "repo": "api"}])
+        );
+        assert_eq!(
+            read_projects(&config, "f").unwrap(),
+            [project("mac-studio", "api")]
+        );
+        // A formation that is gone does not come back by a change.
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(update_meta(&config, "f", |_| {}).is_err());
+        assert!(!folder.exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_command_of_the_terminal_looks_for_the_mcp_in_the_app_then_on_the_path_and_starts_the_formation(
+    ) {
+        let command = orchestrator_command("api-work").unwrap();
+        assert_eq!(
+            command,
+            "sh -c 'm=/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp; [ -x \"$m\" ] || m=$(command -v tsunagiai-mcp) || { echo tsunagiai-mcp was not found >&2; exit 1; }; exec \"$m\" --formation-start api-work'"
+        );
+        // One line, and one quoted word for `sh -c`: nothing inside ends the quote.
+        assert!(!command.contains('\n'));
+        assert_eq!(command.matches('\'').count(), 2);
+        for bad in ["", "a b", "a'b", "a;b", "../x", "$(x)", "A"] {
+            assert!(orchestrator_command(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_terminal_is_made_in_the_repository_of_the_environment_with_the_name_of_the_formation() {
+        let args = orchestrator_create_args("/srv/api", "api-work", "mac-studio").unwrap();
+        assert_eq!(args[..3], ["terminal", "create", "--worktree"]);
+        assert_eq!(args[3], "path:/srv/api");
+        assert_eq!(args[4..6], ["--title", "api-work"]);
+        assert_eq!(args[6], "--command");
+        assert_eq!(args[7], orchestrator_command("api-work").unwrap());
+        assert_eq!(args[8..], ["--json", "--environment=mac-studio"]);
+        assert!(orchestrator_create_args("/srv/api", "a b", "mac-studio").is_err());
+    }
+
+    #[test]
+    fn the_first_instruction_of_a_saved_environment_names_every_project_in_local() {
+        let prompt =
+            remote_first_prompt(&[project("mac-studio", "api"), project("mac-studio", "docs")])
+                .unwrap()
+                .unwrap();
+        assert!(
+            prompt.contains("> 環境: local / リポジトリ: api\n"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("> 環境: local / リポジトリ: docs\n"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("mac-studio"), "{prompt}");
+        // The same text as the instruction of a formation of this Mac with those projects.
+        assert_eq!(
+            Some(prompt),
+            first_prompt(&[project(LOCAL, "api"), project(LOCAL, "docs")]).unwrap()
+        );
+        assert_eq!(remote_first_prompt(&[]), Ok(None));
+        assert!(remote_first_prompt(&[project("mac-studio", "a\nb")]).is_err());
+    }
+
+    #[test]
+    fn a_terminal_is_listed_when_its_handle_is_there_and_it_is_not_orphaned() {
+        let list = json!({"terminals": [
+            {"handle": "term_a"},
+            {"handle": "term_b", "orphaned": false},
+            {"handle": "term_c", "orphaned": true},
+            {"title": "no handle"},
+        ]});
+        assert!(is_listed_terminal(&list, "term_a"));
+        assert!(is_listed_terminal(&list, "term_b"));
+        assert!(!is_listed_terminal(&list, "term_c"));
+        assert!(!is_listed_terminal(&list, "term_x"));
+        assert!(!is_listed_terminal(&Value::Null, "term_a"));
+    }
+
+    /// A stand-in Orca for the start of an orchestrator: every call in order, with what `answer` says to it (`read`, `write` and `wait` share one list of calls).
+    struct Stand {
+        calls: std::cell::RefCell<Vec<Vec<String>>>,
+        /// The `terminal list` answer, the `terminal wait` answer and the one failing step (the first two words of a call).
+        listed: Value,
+        satisfied: bool,
+        fails: Option<&'static str>,
+    }
+
+    impl Stand {
+        fn new() -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+                listed: json!({"terminals": []}),
+                satisfied: true,
+                fails: None,
+            }
+        }
+        fn run(&self, args: &[String]) -> Result<Value, String> {
+            self.calls.borrow_mut().push(args.to_vec());
+            let step = args[..2].join(" ");
+            if self.fails == Some(step.as_str()) {
+                return Err(format!("{step} に失敗\n二行目"));
+            }
+            Ok(match step.as_str() {
+                "repo list" => json!({"repos": [
+                    {"id": "r1", "displayName": "api", "path": "/srv/api"},
+                    {"id": "r2", "displayName": "docs", "path": "/srv/docs"},
+                ]}),
+                "terminal list" => self.listed.clone(),
+                "terminal create" => json!({"terminal": {"handle": "term_new", "paneKey": "t:l"}}),
+                "terminal wait" => json!({"wait": {"satisfied": self.satisfied}}),
+                "terminal send" => json!({"send": {"accepted": true}}),
+                _ => json!({}),
+            })
+        }
+        fn start(
+            &self,
+            config: &Path,
+            name: &str,
+            restart: bool,
+        ) -> Result<FormationOrchestrator, String> {
+            start_orchestrator_with(
+                config,
+                name,
+                restart,
+                &|args| self.run(args),
+                &|args| self.run(args),
+                &|args| self.run(args),
+            )
+        }
+        fn steps(&self) -> Vec<String> {
+            self.calls
+                .borrow()
+                .iter()
+                .map(|a| a[..2].join(" "))
+                .collect()
+        }
+        fn call(&self, step: &str) -> Vec<String> {
+            self.calls
+                .borrow()
+                .iter()
+                .find(|a| a[..2].join(" ") == step)
+                .unwrap_or_else(|| panic!("no {step}"))
+                .clone()
+        }
+    }
+
+    /// A formation of the saved environment `mac-studio` with the projects `api` and `docs`.
+    fn remote_formation(config: &Path, name: &str) {
+        create_with(
+            config,
+            name,
+            &[project("mac-studio", "api"), project("mac-studio", "docs")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+    }
+
+    fn recorded_terminal(config: &Path, name: &str) -> Option<String> {
+        read_meta(config, name).unwrap().orchestrator_terminal
+    }
+
+    #[test]
+    fn the_orchestrator_of_a_saved_environment_is_a_terminal_in_its_first_repository_with_the_projects_as_its_first_instruction(
+    ) {
+        let config = temp_dir("orchestrator-start");
+        remote_formation(&config, "api-work");
+        let orca = Stand::new();
+        let got = orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(
+            got,
+            FormationOrchestrator {
+                environment: "mac-studio".into(),
+                handle: "term_new".into()
+            }
+        );
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal create",
+                "terminal wait",
+                "terminal send"
+            ]
+        );
+        // Every call is made in that environment, and the terminal is in the folder of the first project's repository.
+        for call in orca.calls.borrow().iter() {
+            assert_eq!(call.last().unwrap(), "--environment=mac-studio", "{call:?}");
+        }
+        let create = orca.call("terminal create");
+        assert_eq!(create[3], "path:/srv/api");
+        assert_eq!(create[5], "api-work");
+        assert_eq!(create[7], orchestrator_command("api-work").unwrap());
+        assert_eq!(orca.call("terminal wait")[3], "term_new");
+        // The instruction is the projects as that PC sees them: in `local`.
+        let send = orca.call("terminal send");
+        assert_eq!(send[3], "term_new");
+        assert!(send[4].starts_with("--text=このフォーメーションのプロジェクトです。"));
+        assert!(
+            send[4].contains("> 環境: local / リポジトリ: api\n"),
+            "{}",
+            send[4]
+        );
+        assert!(
+            send[4].contains("> 環境: local / リポジトリ: docs\n"),
+            "{}",
+            send[4]
+        );
+        assert!(!send[4].contains("mac-studio"));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_recorded_terminal_that_is_listed_is_shown_again_and_nothing_is_made() {
+        let config = temp_dir("orchestrator-again");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let got = orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(got.handle, "term_old");
+        assert_eq!(orca.steps(), ["repo list", "terminal list"]);
+        assert_eq!(
+            orca.call("terminal list")[2..4],
+            ["--worktree", "path:/srv/api"]
+        );
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_recorded_terminal_that_is_not_listed_any_more_is_replaced() {
+        let config = temp_dir("orchestrator-stale");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_other"}, {"handle": "term_old", "orphaned": true}]});
+        let got = orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(got.handle, "term_new");
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal list",
+                "terminal create",
+                "terminal wait",
+                "terminal send"
+            ]
+        );
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_restart_closes_the_recorded_terminal_and_starts_a_new_one() {
+        let config = temp_dir("orchestrator-restart");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let got = orca.start(&config, "api-work", true).unwrap();
+        assert_eq!(got.handle, "term_new");
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal list",
+                "terminal close",
+                "terminal create",
+                "terminal wait",
+                "terminal send"
+            ]
+        );
+        assert_eq!(
+            orca.call("terminal close"),
+            [
+                "terminal",
+                "close",
+                "--terminal",
+                "term_old",
+                "--json",
+                "--environment=mac-studio"
+            ]
+        );
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_that_never_waits_for_input_is_closed_and_not_recorded_and_the_words_say_where_to_look(
+    ) {
+        let config = temp_dir("orchestrator-never-idle");
+        remote_formation(&config, "api-work");
+        let mut orca = Stand::new();
+        orca.satisfied = false;
+        let err = orca.start(&config, "api-work", false).unwrap_err();
+        assert!(err.contains("環境「mac-studio」"), "{err}");
+        assert!(err.contains("入力待ちになりませんでした"), "{err}");
+        assert!(err.contains("tsunagiai-mcp"), "{err}");
+        assert!(!err.contains('\n'), "{err}");
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal create",
+                "terminal wait",
+                "terminal close"
+            ]
+        );
+        assert_eq!(orca.call("terminal close")[3], "term_new");
+        assert_eq!(recorded_terminal(&config, "api-work"), None);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_step_that_fails_says_it_in_one_line_and_leaves_no_terminal_with_no_record() {
+        let config = temp_dir("orchestrator-fails");
+        remote_formation(&config, "api-work");
+        // Orca does not answer the repositories, or will not make the terminal: nothing is left to close.
+        for (step, closed) in [("repo list", false), ("terminal create", false)] {
+            let mut orca = Stand::new();
+            orca.fails = Some(step);
+            let err = orca.start(&config, "api-work", false).unwrap_err();
+            assert!(err.contains("司令塔を起動できません"), "{err}");
+            assert!(err.contains(&format!("{step} に失敗")), "{err}");
+            assert!(!err.contains("二行目") && !err.contains('\n'), "{err}");
+            assert_eq!(orca.steps().contains(&"terminal close".to_owned()), closed);
+        }
+        // A wait or a send that fails closes the terminal that was made.
+        for step in ["terminal wait", "terminal send"] {
+            let mut orca = Stand::new();
+            orca.fails = Some(step);
+            let err = orca.start(&config, "api-work", false).unwrap_err();
+            assert!(err.contains(&format!("{step} に失敗")), "{err}");
+            assert_eq!(orca.steps().last().unwrap(), "terminal close");
+            assert_eq!(recorded_terminal(&config, "api-work"), None);
+        }
+        // The list of terminals that cannot be read makes nothing: a second terminal would be made beside a live one.
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.fails = Some("terminal list");
+        assert!(orca.start(&config, "api-work", false).is_err());
+        assert!(!orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_of_this_mac_a_missing_one_and_a_missing_repository_make_no_terminal() {
+        let config = temp_dir("orchestrator-refused");
+        create_with(
+            &config,
+            "here",
+            &[project(LOCAL, "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        create_with(&config, "empty", &[], &two_environments(), 1).unwrap();
+        create_with(
+            &config,
+            "lost",
+            &[project("mac-studio", "gone")],
+            &view_of(vec![read_environment(
+                "mac-studio",
+                Some("e1"),
+                &[("gone", "/srv/gone")],
+            )]),
+            1,
+        )
+        .unwrap();
+        for (name, why) in [
+            ("here", "この Mac のものです"),
+            ("empty", "この Mac のものです"),
+            ("nowhere", "はありません"),
+            ("../x", "名前は"),
+            ("lost", "orca repo list にありません"),
+        ] {
+            let orca = Stand::new();
+            let err = orca.start(&config, name, false).unwrap_err();
+            assert!(err.contains(why), "{name}: {err}");
+            assert!(
+                !orca.steps().contains(&"terminal create".to_owned()),
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_formation_of_a_saved_environment_closes_its_orchestrators_terminal_there() {
+        let config = temp_dir("delete-orchestrator");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_orch".into());
+        })
+        .unwrap();
+        let orca = Calls::new();
+        let stopped = std::cell::Cell::new(false);
+        let answer = delete_with(
+            &config,
+            "api-work",
+            None,
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| stopped.set(true),
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        assert!(stopped.get());
+        assert_eq!(
+            *orca.0.borrow(),
+            [[
+                "terminal",
+                "close",
+                "--terminal",
+                "term_orch",
+                "--json",
+                "--environment=mac-studio"
+            ]]
+        );
+        assert!(!dir(&config, "api-work").exists());
+        // A formation with no recorded terminal, and one of this Mac, close none; one whose close fails is deleted all the same.
+        create_with(&config, "plain", &[], &two_environments(), 1).unwrap();
+        let orca = Calls::new();
+        delete_with(
+            &config,
+            "plain",
+            None,
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        assert!(orca.0.borrow().is_empty());
+        remote_formation(&config, "gone-env");
+        update_meta(&config, "gone-env", |m| {
+            m.orchestrator_terminal = Some("term_orch".into());
+        })
+        .unwrap();
+        let answer = delete_with(
+            &config,
+            "gone-env",
+            None,
+            &|_| Ok(json!({})),
+            &|_| Err("no such environment".into()),
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        std::fs::remove_dir_all(&config).unwrap();
     }
 }

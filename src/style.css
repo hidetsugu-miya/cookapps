@@ -1035,6 +1035,7 @@ button.status:hover { filter: brightness(.95); }
 #formation-head h1 { flex: none; }
 #formation-head-name { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 #formation-restart { flex: none; margin-left: auto; }
+#formation-term-error { flex: none; margin: 8px; overflow-wrap: anywhere; }
 #formation-flow { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
 #formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
 #formation-flow-head h2 { flex: none; }

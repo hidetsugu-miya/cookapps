@@ -17,9 +17,14 @@ export const STATE_LABELS: Record<FormationState, string> = { working: "作業�
 // The order of the counts of a row.
 const COUNT_ORDER: FormationState[] = ["waiting", "working", "planned", "done"];
 
+// The environment of this Mac in `FormationEntry.environment`.
+const LOCAL = "local";
+
 // The name of the formation the screen shows: none at each start of the app, in memory only.
 let current: string | null = null;
 export const currentFormation = () => current;
+// The PC the formation `name` belongs to, from the last read: `local` (this Mac) or a saved environment. Its orchestrator runs there.
+export const formationEnvironment = (name: string) => formations.find((f) => f.name === name)?.environment ?? LOCAL;
 
 // The last read; a read that failed keeps it and says why in `failure`.
 let formations: FormationEntry[] = [];

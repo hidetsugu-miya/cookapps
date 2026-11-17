@@ -24,6 +24,7 @@ import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import type { FormationDeleteAnswer } from "./bindings/FormationDeleteAnswer";
 import type { FormationEntry } from "./bindings/FormationEntry";
+import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
 import type { FormationList } from "./bindings/FormationList";
 import type { FormationProject } from "./bindings/FormationProject";
 import type { FormationShown } from "./bindings/FormationShown";
@@ -356,7 +357,9 @@ export interface Commands {
   formation_children: { args: { name: string }; result: FormationChild[] };
   // A-37: the environments (this Mac first, then the saved ones) with the repositories of each, read from Orca; an environment that could not be read has `ok` false and its `error`, and the others are read.
   formation_environments: { args: undefined; result: EnvironmentsView };
-  // A-37: the formations in order of name, each with its projects, when it was created (null for the first, which exists before any is created) and the number of its children in each state (`orca worktree ps` is read once for each environment). `readError` says why no launched child could be read; the counts take them as working then.
+  // A-37: the terminal of the orchestrator of the formation `name`, which belongs to a saved environment (its `environment` in `formation_list` is not `local`): the one `formation.json` records while that Orca lists it, else a new one that Rust makes in the first project's repository there, waits for and gives the projects as its first instruction. `restart` closes the recorded one first. A failure carries the message the pane shows.
+  formation_orchestrator: { args: { name: string; restart: boolean }; result: FormationOrchestrator };
+  // A-37: the formations in order of name, each with its projects, the PC it belongs to (`environment`: `local` or a saved environment), when it was created (null for the first, which exists before any is created) and the number of its children in each state (`orca worktree ps` is read once for each environment). `readError` says why no launched child could be read; the counts take them as working then.
   formation_list: { args: undefined; result: FormationList };
   // A-37: makes the formation `name` (the shape of a child's name, not the name of a formation or of a child) of `projects` (each an environment and a repository of `formation_environments`, by name or id and by name or path). A failure carries the message.
   formation_create: { args: { name: string; projects: FormationProject[] }; result: FormationEntry };
