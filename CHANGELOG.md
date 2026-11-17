@@ -3,6 +3,20 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.82.1
+
+A-37: a child can be closed from its card in the flow pane, and a formation can be deleted by force (#834, #835, #836). A right press on a card opens a menu with 「削除」, which closes the child after a confirmation, as the orchestrator's close does. When the child cannot be closed (a change, an untracked file or a commit that no remote has), a second confirmation shows the reason, those files and commits, and where the worktree is, and 「強制削除」 removes the worktree anyway. Deleting a formation whose children cannot be closed shows the same for each of them, and 「強制削除」 removes their worktrees and deletes the formation. A force removes only the worktrees that were shown: their changes and untracked files are lost, and the commits that no remote has stay on the local branch, which the screen names. The orchestrator never forces a close.
+
+A-37: a child's worktree is made in its repository, under `.claude/worktrees/`, instead of Orca's workspace folder (#842). Making a formation, and launching a child, set the repository's worktree location in Orca to `.claude/worktrees`; no other setting of Orca changes. The setting belongs to the repository, so the worktrees that the hand-over to Orca and the plus of the work pane make in it go to the same folder from then on. For a repository of this Mac, the folder is added to git's `info/exclude` of the repository, so it does not show in `git status`.
+
+A-37: a child can take over the branch that an earlier child pushed and closed (#828). When the branch is on `origin` of a repository of this Mac, the child starts from `origin/{branch}` under the same name. Commits that were not pushed are not taken over, a local branch with other commits is still refused, and a repository of a saved environment does not take over a branch that is only on its remote.
+
+A-37: in the flow pane, a child of the saved environment that the Orca screen streams has its terminal streamed, as the Orca screen does, so it has its colors and takes the size of the pane (#839). Leaving the pane gives the terminal back its own size. The other children are shown as before.
+
+A-37: the dialog that makes a formation shows no heading for an environment that has no project (#837).
+
+A-35, A-37: the footer's mode buttons show counts in both modes (#840, #841). The Orca button shows, in yellow, the number of projects with a working Claude, counted as the side menu's Orca button counts them. The orchestration button shows the children that wait for approval in orange, as before, and, when none waits, the number of formations with a working child in yellow.
+
 ## v0.82.0
 
 A-38: a project is added to Orca from the Orca screen (#779 to #782). The heading of the list has a button, 「プロジェクトを追加」, that opens a small popup with a select of the place and the button 「フォルダを選ぶ…」. The select holds this Mac and, when the target is a saved environment, that environment; it starts on this Mac. For this Mac the folder dialog of the system opens, and a cancelled dialog adds nothing. For a saved environment a dialog opens that browses the folders of its server: the path as a trail, buttons for the folder above and the home folder, a field that narrows the names (a path that starts with 「/」 and Enter go to that path), and the marked folder or the folder shown as the path to add. A folder that is not a Git repository is added as a folder. The list is read again as soon as Orca has added the project.
