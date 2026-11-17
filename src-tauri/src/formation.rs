@@ -80,14 +80,10 @@ const STEP_LISTED: &str = "worktree の一覧の読み取り";
 const STEP_FILES: &str = "フォルダの一覧の読み取り";
 const STEP_FILE: &str = "ファイルの読み取り";
 const STEP_GIT_STATE: &str = "git の状態の読み取り";
-/// Where `tsunagiai-mcp` is in the app of a PC, which the command of an orchestrator's terminal looks at first (`orchestrator_command`).
-const APP_MCP: &str = "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp";
-/// Where `cargo install` puts `tsunagiai-mcp`, which the command looks at second: the shell of an Orca terminal has no `~/.cargo/bin` in its PATH (#877). `$HOME` is read by the `sh -c` of the command.
-const CARGO_MCP: &str = "$HOME/.cargo/bin/tsunagiai-mcp";
-/// What the command of an orchestrator's terminal prints when it finds `tsunagiai-mcp` in none of its three places.
-const MCP_NOT_FOUND: &str = "tsunagiai-mcp が見つかりません";
+/// What the command of an orchestrator's terminal prints when the PC has no `remote/tsunagiai-mcp`, which the app puts there (`formation_remote`).
+const MCP_NOT_PLACED: &str = "tsunagiai-mcp が置かれていません";
 /// Orca's floating terminal: it belongs to no repository and opens in the home folder of its PC. The orchestrator's terminal is made in it, and `files.*` of the records of that PC name it as their `worktree` (#879).
-const FLOATING_WORKTREE: &str = "global-floating-terminal";
+pub(crate) const FLOATING_WORKTREE: &str = "global-floating-terminal";
 
 /// `formations/` in the config directory: the folder of the formations, one folder under it for each.
 fn root(config: &Path) -> PathBuf {
@@ -1043,8 +1039,8 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
     on(args, environment)
 }
 
-/// The shell sentence that starts an orchestrator on its PC: the first of `APP_MCP`, `CARGO_MCP` and the `tsunagiai-mcp` of the PATH that can be executed, run with `--formation-start {name}` and one `--project {repo}` for each of `repos` in place of the `sh` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC with none of the three prints `MCP_NOT_FOUND` and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads, and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
-fn orchestrator_command(name: &str, repos: &[String]) -> Result<String, String> {
+/// The shell sentence that starts an orchestrator on its PC: the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
+fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<String, String> {
     check_name(name)?;
     local_first_prompt(repos)?;
     if let Some(repo) = repos.iter().find(|repo| repo.contains('\\')) {
@@ -1052,20 +1048,23 @@ fn orchestrator_command(name: &str, repos: &[String]) -> Result<String, String> 
             "リポジトリ「{repo}」の名前に \\ があります（シェルによって読み方が変わるため、使えません）"
         ));
     }
+    let host = crate::formation_remote::parse_host(host)?;
+    let program = crate::formation_remote::program_path();
     let projects: String = repos
         .iter()
         .map(|repo| format!(" --project {}", crate::claude_code::sh_quote(repo)))
         .collect();
     Ok(format!(
-        "sh -c 'for m in {APP_MCP} \"{CARGO_MCP}\" \"$(command -v tsunagiai-mcp)\"; do [ -x \"$m\" ] && exec \"$m\" --formation-start {name} \"$@\"; done; echo \"{MCP_NOT_FOUND}\" >&2; exit 1' sh{projects}"
+        "sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exit 1; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
     ))
 }
 
-/// The orchestrator's terminal, in the floating terminal of its PC's Orca (`FLOATING_WORKTREE`; Orca asks a `--worktree` of a terminal it creates on a saved environment), titled with the name of its formation, running `orchestrator_command` with the repositories of its projects.
+/// The orchestrator's terminal, in the floating terminal of its PC's Orca (`FLOATING_WORKTREE`; Orca asks a `--worktree` of a terminal it creates on a saved environment), titled with the name of its formation, running `orchestrator_command` with the repositories of its projects and the address of its PC.
 fn orchestrator_create_args(
     name: &str,
     environment: &str,
     repos: &[String],
+    host: &str,
 ) -> Result<Vec<String>, String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
     args.extend([
@@ -1073,13 +1072,13 @@ fn orchestrator_create_args(
         "--title".into(),
         name.into(),
         "--command".into(),
-        orchestrator_command(name, repos)?,
+        orchestrator_command(name, repos, host)?,
         "--json".into(),
     ]);
     Ok(on(args, environment))
 }
 
-fn terminal_close_args(handle: &str, environment: &str) -> Vec<String> {
+pub(crate) fn terminal_close_args(handle: &str, environment: &str) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "close", "--terminal"]);
     args.extend([handle.into(), "--json".into()]);
     on(args, environment)
@@ -3924,7 +3923,7 @@ fn terminal_is_gone(
 }
 
 /// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again (the shell it was typed into stays alive when Claude Code ends); one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
-/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command`, which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails.
+/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails.
 /// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
 fn start_orchestrator_with(
     config: &Path,
@@ -3932,6 +3931,7 @@ fn start_orchestrator_with(
     restart: bool,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
+    host_of: &dyn Fn(&str) -> Result<String, String>,
 ) -> Result<FormationOrchestrator, String> {
     check_name(formation)?;
     if !dir(config, formation).is_dir() {
@@ -3953,6 +3953,12 @@ fn start_orchestrator_with(
             first_line(&e)
         )
     };
+    // A restart closes the terminal that runs, so the address of the PC is settled before that.
+    let restart_host = if restart {
+        Some(host_of(environment).map_err(failed)?)
+    } else {
+        None
+    };
     if let Some(handle) = &meta.orchestrator_terminal {
         let list = read(&all_terminals_args(environment)).map_err(failed)?;
         if restart {
@@ -3973,7 +3979,17 @@ fn start_orchestrator_with(
         }
     }
     let repos: Vec<String> = meta.projects.iter().map(|p| p.repo.clone()).collect();
-    let made = write(&orchestrator_create_args(formation, environment, &repos)?).map_err(failed)?;
+    let host = match restart_host {
+        Some(host) => host,
+        None => host_of(environment).map_err(failed)?,
+    };
+    let made = write(&orchestrator_create_args(
+        formation,
+        environment,
+        &repos,
+        &host,
+    )?)
+    .map_err(failed)?;
     let handle = orca::created_of(&made)
         .handle
         .ok_or_else(|| failed("Orca がターミナルの handle を答えませんでした".into()))?;
@@ -4030,7 +4046,14 @@ pub async fn formation_orchestrator(
 ) -> Result<FormationOrchestrator, String> {
     let dir = config_dir(&app)?;
     orca::blocking(move || {
-        start_orchestrator_with(&dir, &name, restart, &orca_read, &|args| orca::write(args))
+        start_orchestrator_with(
+            &dir,
+            &name,
+            restart,
+            &orca_read,
+            &|args| orca::write(args),
+            &crate::formation_remote::bind_host,
+        )
     })
     .await?
 }
@@ -9424,54 +9447,75 @@ mod tests {
         std::fs::remove_dir_all(&config).unwrap();
     }
 
+    const HOST: &str = "10.0.0.2";
+
     #[test]
-    fn the_command_of_the_terminal_looks_for_the_mcp_in_the_app_then_cargo_bin_then_the_path_and_starts_the_formation(
+    fn the_command_of_the_terminal_serves_with_the_placed_program_then_starts_the_formation_with_it(
     ) {
-        let command = orchestrator_command("api-work", &[]).unwrap();
+        let command = orchestrator_command("api-work", &[], HOST).unwrap();
         assert_eq!(
             command,
-            "sh -c 'for m in /Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp \"$HOME/.cargo/bin/tsunagiai-mcp\" \"$(command -v tsunagiai-mcp)\"; do [ -x \"$m\" ] && exec \"$m\" --formation-start api-work \"$@\"; done; echo \"tsunagiai-mcp が見つかりません\" >&2; exit 1' sh"
+            "sh -c 'm=\"$HOME/Library/Application Support/jp.mysis.tsunagiai/remote/tsunagiai-mcp\"; [ -x \"$m\" ] || { echo \"tsunagiai-mcp が置かれていません\" >&2; exit 1; }; \"$m\" --serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\" --formation-start api-work \"$@\"' sh"
         );
-        // The three places are in this order, and the line when none has it is Japanese.
+        // The program of the app and the cargo and PATH places of #877 are not looked at any more.
+        for old in ["/Applications/", ".cargo/bin", "command -v"] {
+            assert!(!command.contains(old), "{old}");
+        }
+        // The server is started first, and a failure of it does not stop the orchestrator.
         let at = |needle: &str| command.find(needle).unwrap();
-        assert!(
-            at("/Applications/") < at("$HOME/.cargo/bin/")
-                && at("$HOME/.cargo/bin/") < at("command -v")
-        );
-        assert!(command.contains(MCP_NOT_FOUND));
+        assert!(at("--serve --bind") < at("exec "));
+        assert!(command.contains("--serve --bind 10.0.0.2 >/dev/null 2>&1; exec"));
+        assert!(command.contains(MCP_NOT_PLACED));
         // One line, and one quoted word for `sh -c`: nothing inside ends the quote.
         assert!(!command.contains('\n'));
         assert_eq!(command.matches('\'').count(), 2);
         for bad in ["", "a b", "a'b", "a;b", "../x", "$(x)", "A"] {
-            assert!(orchestrator_command(bad, &[]).is_err(), "{bad:?}");
+            assert!(orchestrator_command(bad, &[], HOST).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_command_of_the_terminal_takes_only_an_ip_address_as_the_address_of_its_pc() {
+        let command = orchestrator_command("api-work", &[], "fe80::1").unwrap();
+        assert!(command.contains("--serve --bind fe80::1 "));
+        for bad in [
+            "",
+            "mac-studio.local",
+            "10.0.0.2; rm -rf $HOME",
+            "10.0.0.2:6768",
+            "[::1]",
+        ] {
+            let error = orchestrator_command("api-work", &[], bad).unwrap_err();
+            assert!(error.contains("IP アドレス"), "{bad:?}: {error}");
         }
     }
 
     #[test]
     fn the_repositories_follow_the_script_as_its_arguments_each_in_single_quotes_of_its_own() {
         let repos = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
-        let command = orchestrator_command("api-work", &repos(&["api", "my docs"])).unwrap();
+        let command = orchestrator_command("api-work", &repos(&["api", "my docs"]), HOST).unwrap();
         // The script is the one with no project, then the arguments after `sh`, the `$0` of the script.
-        let bare = orchestrator_command("api-work", &[]).unwrap();
+        let bare = orchestrator_command("api-work", &[], HOST).unwrap();
         assert_eq!(
             command,
             format!("{bare} --project 'api' --project 'my docs'")
         );
         // A quote in a name is closed, escaped and opened again outside the script's quote, so it ends nothing.
-        let quoted = orchestrator_command("api-work", &repos(&["it's; rm -rf $HOME"])).unwrap();
+        let quoted =
+            orchestrator_command("api-work", &repos(&["it's; rm -rf $HOME"]), HOST).unwrap();
         assert_eq!(quoted, format!("{bare} --project 'it'\\''s; rm -rf $HOME'"));
-        let script_end = quoted.find("exit 1' sh").unwrap();
+        let script_end = quoted.find("\"$@\"' sh").unwrap();
         assert_eq!(quoted[..script_end].matches('\'').count(), 1);
         // A name the instruction refuses is refused here, before anything is typed into a shell.
         let many: Vec<String> = (0..51).map(|i| format!("r{i}")).collect();
-        assert!(orchestrator_command("api-work", &many).is_err());
+        assert!(orchestrator_command("api-work", &many, HOST).is_err());
         for bad in ["", "a\nb", "a\u{1b}b", &"x".repeat(201)] {
             assert!(
-                orchestrator_command("api-work", &repos(&[bad])).is_err(),
+                orchestrator_command("api-work", &repos(&[bad]), HOST).is_err(),
                 "{bad:?}"
             );
         }
-        assert!(orchestrator_command("api-work", &many[..50]).is_ok());
+        assert!(orchestrator_command("api-work", &many[..50], HOST).is_ok());
     }
 
     #[test]
@@ -9479,30 +9523,33 @@ mod tests {
     ) {
         let repos = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
         for bad in [&["a\\"][..], &["a\\", "b"], &["x\\\\y"], &["api", "x\\y"]] {
-            let error = orchestrator_command("api-work", &repos(bad)).unwrap_err();
+            let error = orchestrator_command("api-work", &repos(bad), HOST).unwrap_err();
             assert!(
                 error.contains('\\') && error.contains("使えません"),
                 "{bad:?}: {error}"
             );
         }
-        assert!(orchestrator_command("api-work", &repos(&["a/b", "it's"])).is_ok());
+        assert!(orchestrator_command("api-work", &repos(&["a/b", "it's"]), HOST).is_ok());
     }
 
     #[test]
     fn the_terminal_is_made_in_the_floating_terminal_of_the_environment_with_the_name_of_the_formation(
     ) {
-        let args = orchestrator_create_args("api-work", "mac-studio", &["api".to_owned()]).unwrap();
+        let args =
+            orchestrator_create_args("api-work", "mac-studio", &["api".to_owned()], HOST).unwrap();
         assert_eq!(args[..3], ["terminal", "create", "--worktree"]);
         assert_eq!(args[3], "global-floating-terminal");
         assert_eq!(args[4..6], ["--title", "api-work"]);
         assert_eq!(args[6], "--command");
         assert_eq!(
             args[7],
-            orchestrator_command("api-work", &["api".to_owned()]).unwrap()
+            orchestrator_command("api-work", &["api".to_owned()], HOST).unwrap()
         );
         assert_eq!(args[8..], ["--json", "--environment=mac-studio"]);
-        assert!(orchestrator_create_args("a b", "mac-studio", &[]).is_err());
-        assert!(orchestrator_create_args("api-work", "mac-studio", &["a\nb".to_owned()]).is_err());
+        assert!(orchestrator_create_args("a b", "mac-studio", &[], HOST).is_err());
+        assert!(
+            orchestrator_create_args("api-work", "mac-studio", &["a\nb".to_owned()], HOST).is_err()
+        );
     }
 
     #[test]
@@ -9585,9 +9632,14 @@ mod tests {
             name: &str,
             restart: bool,
         ) -> Result<FormationOrchestrator, String> {
-            start_orchestrator_with(config, name, restart, &|args| self.run(args), &|args| {
-                self.run(args)
-            })
+            start_orchestrator_with(
+                config,
+                name,
+                restart,
+                &|args| self.run(args),
+                &|args| self.run(args),
+                &|_| Ok(HOST.to_owned()),
+            )
         }
         fn steps(&self) -> Vec<String> {
             self.calls
@@ -9656,7 +9708,10 @@ mod tests {
         assert_eq!(create[5], "api-work");
         // The projects go as the arguments of the command, by their repository: in `local` for the PC, so the environment is not in it.
         let repos = ["api".to_owned(), "docs".to_owned()];
-        assert_eq!(create[7], orchestrator_command("api-work", &repos).unwrap());
+        assert_eq!(
+            create[7],
+            orchestrator_command("api-work", &repos, HOST).unwrap()
+        );
         assert!(
             create[7].ends_with(" --project 'api' --project 'docs'"),
             "{}",
@@ -9712,6 +9767,55 @@ mod tests {
             recorded_terminal(&config, "api-work"),
             Some("term_new".into())
         );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_address_of_the_pc_is_asked_for_its_environment_and_a_refusal_changes_nothing() {
+        let config = temp_dir("orchestrator-host");
+        unstarted_remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let asked = std::cell::RefCell::new(Vec::<String>::new());
+        let start = |restart: bool, host: &dyn Fn(&str) -> Result<String, String>| {
+            start_orchestrator_with(
+                &config,
+                "api-work",
+                restart,
+                &|args| orca.run(args),
+                &|args| orca.run(args),
+                &|environment| {
+                    asked.borrow_mut().push(environment.to_owned());
+                    host(environment)
+                },
+            )
+        };
+        let refuse = |_: &str| Err("接続先「mac.local」は IP アドレスではありません".to_owned());
+        // A restart is refused before the terminal that runs is closed: nothing was done to Orca but the list.
+        let error = start(true, &refuse).unwrap_err();
+        assert!(
+            error.contains("IP アドレス") && error.contains("mac-studio"),
+            "{error}"
+        );
+        assert_eq!(orca.steps(), Vec::<String>::new());
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        // A listed terminal is shown again with no need of the address.
+        assert_eq!(start(false, &refuse).unwrap().handle, "term_old");
+        assert_eq!(orca.steps(), ["terminal list"]);
+        // The address is that of the formation's environment.
+        assert_eq!(
+            start(true, &|_| Ok(HOST.to_owned())).unwrap().handle,
+            "term_new"
+        );
+        assert!(asked.borrow().iter().all(|e| e == "mac-studio"));
+        assert!(orca.call("terminal create")[7].contains("--serve --bind 10.0.0.2 "));
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -9786,7 +9890,12 @@ mod tests {
             Ok(json!({}))
         };
         let read = |_: &[String]| -> Result<Value, String> { Ok(json!({"terminals": []})) };
-        assert!(start_orchestrator_with(&config, "api-work", false, &read, &write).is_err());
+        assert!(
+            start_orchestrator_with(&config, "api-work", false, &read, &write, &|_| Ok(
+                HOST.to_owned()
+            ))
+            .is_err()
+        );
         let steps: Vec<String> = calls.borrow().iter().map(|a| a[..2].join(" ")).collect();
         assert_eq!(steps, ["terminal create", "terminal close"]);
         assert_eq!(calls.borrow()[1][3], "term_new");

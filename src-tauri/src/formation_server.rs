@@ -81,7 +81,7 @@ fn equal(left: &[u8], right: &[u8]) -> bool {
 }
 
 /// A 32-byte value in canonical padded base64 (`None` for anything else, so one value has one spelling).
-fn canonical_32(value: &str) -> Option<[u8; 32]> {
+pub(crate) fn canonical_32(value: &str) -> Option<[u8; 32]> {
     let bytes = STANDARD.decode(value).ok()?;
     if STANDARD.encode(&bytes) != value {
         return None;
@@ -89,13 +89,13 @@ fn canonical_32(value: &str) -> Option<[u8; 32]> {
     bytes.try_into().ok()
 }
 
-fn random_32() -> Result<[u8; 32], String> {
+pub(crate) fn random_32() -> Result<[u8; 32], String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|_| "乱数を作れません".to_owned())?;
     Ok(bytes)
 }
 
-fn public_of(secret: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn public_of(secret: &[u8; 32]) -> [u8; 32] {
     x25519(*secret, X25519_BASEPOINT_BYTES)
 }
 
@@ -770,7 +770,7 @@ fn read_version(dir: &Path) -> String {
         .unwrap_or_else(|| DEFAULT_VERSION.to_owned())
 }
 
-fn bind_address(bind: &str) -> Result<IpAddr, String> {
+pub(crate) fn bind_address(bind: &str) -> Result<IpAddr, String> {
     bind.parse()
         .map_err(|_| "--bind には IP アドレスを指定してください".to_owned())
 }
