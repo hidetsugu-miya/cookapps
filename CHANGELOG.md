@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.82.0
+
+A-38: a project is added to Orca from the Orca screen (#779 to #782). The heading of the list has a button, 「プロジェクトを追加」, that opens a small popup with a select of the place and the button 「フォルダを選ぶ…」. The select holds this Mac and, when the target is a saved environment, that environment; it starts on this Mac. For this Mac the folder dialog of the system opens, and a cancelled dialog adds nothing. For a saved environment a dialog opens that browses the folders of its server: the path as a trail, buttons for the folder above and the home folder, a field that narrows the names (a path that starts with 「/」 and Enter go to that path), and the marked folder or the folder shown as the path to add. A folder that is not a Git repository is added as a folder. The list is read again as soon as Orca has added the project.
+
+A-8: the row of a session in the Orca list shows the newer of your last message and Claude's last answer, in place of the session's name and the answer after it (#806). The tab keeps the name. The name is shown when the newer message has no text.
+
+A-9, T-7: on the Todo screen, 「Orca に渡す」 moves from the right side to the header of the open task, at the left of 「編集」 (#798). The form, and the terminal after a send, open under the comments of the task, in the same scroll as the task. The right side holds only Claude's pane, with no switch between the two.
+
 ## v0.81.4
 
 A-37: the first formation, `formation`, is no longer special (#830). It can be deleted from the list's right-press menu like any other, and the list shows only the formations that have a folder. No formation is selected when the app starts, and none after the shown one is deleted: until a row is pressed, only the list and its plus are shown, and no orchestrator starts.
