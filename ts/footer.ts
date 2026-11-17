@@ -26,6 +26,15 @@ export function setFormationWaiting(count: number) {
   button.setAttribute("aria-label", count === 0 ? "オーケストレーション" : `オーケストレーション（承認待ち ${count} 件）`);
 }
 
+// The number of the projects with a working Claude, at the corner of Orca's icon in both modes (A-35, A-37; 99+ from 100, none for 0). The label carries it too.
+export function setOrcaWorking(count: number) {
+  const button = $("footer-mode-orca");
+  const badge = button.querySelector<HTMLElement>(".footer-mode-count")!;
+  badge.hidden = count === 0;
+  badge.textContent = count > 99 ? "99+" : String(count);
+  button.setAttribute("aria-label", count === 0 ? "Orca" : `Orca（作業中 ${count} 件）`);
+}
+
 // The switch between Orca and the orchestration (A-37): shown only while the development screen is, with the name beside the icon of the mode that is on.
 export function drawDevSwitch(shown: boolean, mode: DevMode) {
   $("footer-modes").hidden = !shown;

@@ -1740,3 +1740,48 @@ describe("orchestration mode: the count on the footer's icon", () => {
     await expect(badge()).toHaveText("1");
   });
 });
+
+describe("the count on the footer's Orca button", () => {
+  const badge = () => $("#footer-mode-orca .footer-mode-count");
+  const orca = (rows: ReturnType<typeof orcaRow>[]) => orcaOverview(rows);
+  // Two sessions of example-app work, one of example-api, one waits, one is done and one failed: the count is the projects with a session that works.
+  const sample = () => [
+    orcaRow("example-app", "main", "first"),
+    orcaRow("example-app", "feature", "second", { handle: "term_example-app_2", paneKey: "tab_example-app:leaf_2" }),
+    orcaRow("example-api", "main", "third"),
+    orcaRow("example-lib", "main", "fourth", { group: "waiting" }),
+    orcaRow("example-web", "main", "fifth", { group: "done" }),
+    orcaRow("example-cli", "main", "sixth", { status: "failed" }),
+  ];
+
+  it("shows the number of the projects with a working Claude in the Orca mode and in the orchestration mode, and the label says it", async () => {
+    await boot({ inbox: inbox(), orca_overview: orca(sample()), ...timers({ orcaClock: READ }) });
+    await $("#nav-orca").click();
+    await expect(badge()).toHaveText("2");
+    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（作業中 2 件）");
+    await $("#footer-mode-formation").click();
+    await expect(badge()).toHaveText("2");
+    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（作業中 2 件）");
+    // It follows the reads of the Orca list, in the orchestration mode too, and goes with the last working one.
+    await mock("orca_overview", orca([orcaRow("example-app", "main", "first")]));
+    await browser.waitUntil(async () => (await badge().getText()) === "1");
+    await mock("orca_overview", orca([orcaRow("example-app", "main", "first", { group: "done" })]));
+    await expect(badge()).not.toBeDisplayed();
+    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca");
+  });
+
+  it("shows 99+ from 100 projects", async () => {
+    const many = Array.from({ length: 100 }, (_, i) => orcaRow(`example-${i}`, "main", `Task ${i}`));
+    await boot({ inbox: inbox(), orca_overview: orca(many) });
+    await $("#nav-orca").click();
+    await expect(badge()).toHaveText("99+");
+    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（作業中 100 件）");
+  });
+
+  it("shows no number when no project works", async () => {
+    await boot({ inbox: inbox(), orca_overview: orca([orcaRow("example-app", "main", "first", { group: "waiting" })]) });
+    await $("#nav-orca").click();
+    await expect(badge()).not.toBeDisplayed();
+    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca");
+  });
+});
