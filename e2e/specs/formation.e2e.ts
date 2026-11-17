@@ -571,6 +571,19 @@ describe("orchestration mode: the view of the flow", () => {
     expect(Math.abs(term.bottom - flow.bottom)).toBeLessThan(1);
     expect(term.right - term.left).toBeGreaterThan(200);
     expect(await styleOf("#formation-session-head .formation-dot", "backgroundColor")).toBe(await resolved("--agent-question"));
+    // The band is the form of the orchestrator's header band: the same height, padding, ground and weight of the title.
+    const form = (head: string, title: string) =>
+      browser.execute(
+        (h, t) => {
+          const band = document.querySelector(h)!;
+          const style = getComputedStyle(band);
+          const text = getComputedStyle(document.querySelector(t)!);
+          return { height: Math.round(band.getBoundingClientRect().height), padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`, background: style.backgroundColor, size: text.fontSize, weight: text.fontWeight };
+        },
+        head,
+        title,
+      );
+    expect(await form("#formation-session-head", "#formation-session-name")).toEqual(await form("#formation-head", "#formation-head h1"));
     // The band follows the state of the child.
     await mock("formation_children", [...mixed().slice(0, 1), formationChild("web-update", "working", { minutes: 1 }), ...mixed().slice(2)]);
     await browser.waitUntil(async () => (await $("#formation-session-head").getAttribute("data-state")) === "working");

@@ -1005,7 +1005,7 @@ button.status:hover { filter: brightness(.95); }
 /* The orchestration mode of the development screen (A-37): the orchestrator's terminal at the left, and the right pane (the flow, and under it the session of the selected child) of the same width. */
 #formation { flex: 1; min-height: 0; display: flex; }
 #formation-orchestrator { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
-#formation-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#formation-head, #formation-session-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #formation-restart { flex: none; margin-left: auto; }
 #formation-flow { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
 #formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
@@ -1023,10 +1023,9 @@ button.status:hover { filter: brightness(.95); }
 #formation-flow-list { list-style: none; margin: 14px 0 0; padding: 8px; position: relative; display: flex; flex-wrap: wrap; justify-content: center; box-sizing: border-box; border: 2px solid var(--chip-line); border-radius: 12px; }
 #formation-flow-list::before { content: ""; position: absolute; left: calc(50% - 1px); top: -16px; height: 16px; border-left: 2px solid var(--chip-line); }
 #formation-flow-list li { position: relative; flex: none; width: 188px; box-sizing: border-box; padding: 6px; }
-/* The session of the selected child: a thin band with the state and the name, and the terminal under it. */
+/* The session of the selected child: the band of the same form as #formation-head (the rule above) with the state and the name, and the terminal under it. */
 #formation-session { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
-#formation-session-head { flex: none; display: flex; align-items: center; gap: 8px; box-sizing: border-box; height: calc(32px * var(--fs)); padding: 0 14px; border-bottom: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); font-weight: 600; }
-#formation-session-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#formation-session-head { gap: 8px; }
 #formation-child-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .formation-card { display: grid; gap: 2px; width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 9px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; text-align: left; }
 button.formation-card { cursor: pointer; }
