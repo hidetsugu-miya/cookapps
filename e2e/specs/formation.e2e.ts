@@ -1925,6 +1925,20 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await starts()).toBe(0);
   });
 
+  // The children of such a formation are in its PC's `children.json`, which Rust reads through Orca (#860): the screen asks by the name of the formation, as for this Mac's, and draws the answer, whose children are in that environment.
+  it("reads the children of the formation of a saved environment by its name, draws them, and reads their terminals in that environment", async () => {
+    const children = [formationChild("api-update", "working", { environment: "mac-studio" }), formationChild("docs-update", "planned", { environment: "mac-studio" })];
+    await openList({ formation_list: remote(), formation_children: children, formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    expect((await waitForCalls("formation_children", 1))[0]).toEqual({ name: "studio-work" });
+    await browser.waitUntil(async () => (await cardNames()).length === 2, { timeoutMsg: "the children of the formation never showed" });
+    expect(await cardNames()).toEqual(["api-update", "docs-update"]);
+    expect(await cardStates()).toEqual(["作業中", "予定"]);
+    await expect($("#formation-flow")).toBeDisplayed();
+    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => JSON.stringify(c) === JSON.stringify({ handle: "term_api-update", environment: "mac-studio" })), { timeoutMsg: "the terminal of the child was not read in its environment" });
+    expect(await callsOf("formation_orchestrator")).toHaveLength(1);
+    expect(await starts()).toBe(0);
+  });
+
   it("asks only for the formations of a saved environment, and starts the pseudo terminal of this Mac's as before", async () => {
     await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "formation");
     await waitForStarts(1);

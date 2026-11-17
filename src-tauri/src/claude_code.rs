@@ -1282,6 +1282,10 @@ mod tests {
             "目的、ゴール",
             "`folder`",
             "取り消せない操作",
+            "あなたは、子と同じ PC で動いています",
+            "子を起動できるのは、その PC（環境 `local`）だけです",
+            "SendMessage は、同じ PC の中でしか届かない",
+            "ほかの環境のリポジトリは、読めます。子は置けません",
         ] {
             assert!(FORMATION_CLAUDE_MD.contains(needle), "{needle}");
         }
