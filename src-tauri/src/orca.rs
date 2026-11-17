@@ -90,8 +90,8 @@ pub struct OrcaRow {
     pub branch: String,
     /// The one line of the row: the first line of the conversation's name, else of the prompt, the task, or the title of the pane's terminal; only what the owner or Claude wrote, never a message of the harness, data or the output of a process.
     pub line: String,
-    /// The first line of the agent's last answer, which the list shows after the line; `None` when it has none, or when it is data, the output of a process or a message of the harness.
-    pub reply: Option<String>,
+    /// The first line of the newer of the agent's prompt and its last answer (`latest_of`), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
+    pub latest: Option<String>,
     /// How many of the agent's subagents are at work (A-8); 0 when it has none.
     pub subagents: u32,
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
@@ -558,6 +558,28 @@ fn line_of(agent: &Value, terminal_title: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+/// Whether the agent's last answer (`lastAssistantMessage`) came after its prompt (the last message sent to Claude). Orca gives no time of either, so this is read from the state of the turn (measured on `orca worktree ps --json`, 2026-11-17):
+/// a `done` agent ends its turn with its answer; a running agent whose `mainAgent` is `done` (its subagents still work) ended its turn at `mainAgent.stateStartedAt`, and when that is not before `stateStartedAt` (the start of the state, which a new turn moves) the answer is of this turn.
+/// Anything else is a turn in progress: the prompt is the latest message. A time that is missing counts for nothing.
+fn answer_is_newer(agent: &Value) -> bool {
+    if agent["state"] == "done" {
+        return true;
+    }
+    let main = &agent["mainAgent"];
+    let ended = ms_of(main, "stateStartedAt");
+    main["state"] == "done" && ended > 0 && ended >= ms_of(agent, "stateStartedAt")
+}
+
+/// The first line of the newer of the agent's prompt and last answer (`answer_is_newer`), read as `first_text_line` says. The older message is never taken in its place: it is not the latest.
+fn latest_of(agent: &Value) -> Option<String> {
+    let key = if answer_is_newer(agent) {
+        "lastAssistantMessage"
+    } else {
+        "prompt"
+    };
+    text_of(agent, key).and_then(first_text_line)
+}
+
 /// The status an Orca state word stands for; a word not known yet is `unknown`. `done` and `active` are both the green dot.
 fn status_of(state: &str, unknown: OrcaStatus) -> OrcaStatus {
     match state {
@@ -682,7 +704,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                         .unwrap_or_default()
                         .to_owned(),
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
-                    reply: text_of(agent, "lastAssistantMessage").and_then(first_text_line),
+                    latest: latest_of(agent),
                     subagents: working_subagents(agent),
                     at_ms: if group == OrcaGroup::Done {
                         updated
@@ -2314,7 +2336,7 @@ mod tests {
                 repo: "example".into(),
                 branch: "feat/a".into(),
                 line: "Write the docs".into(),
-                reply: None,
+                latest: Some("Write the docs".into()),
                 subagents: 0,
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
@@ -2391,7 +2413,7 @@ mod tests {
         assert_eq!(line_of(&a, Some("◑ Terminal title")), "Task");
         a["taskTitle"] = json!(" ");
         assert_eq!(line_of(&a, Some("◑ Terminal title")), "Terminal title");
-        // The last answer is the reply of the row, never its line.
+        // The last answer is the latest message of the row, never its line.
         assert_eq!(line_of(&a, None), "");
     }
 
@@ -2549,11 +2571,11 @@ mod tests {
     }
 
     #[test]
-    fn the_reply_is_the_answer_of_claude_and_never_data_or_a_message_of_the_harness() {
-        let reply = |message: Value| {
-            let mut a = agent("tabA:leaf1", "working");
+    fn the_latest_message_is_never_data_or_a_message_of_the_harness() {
+        let latest = |message: Value| {
+            let mut a = agent("tabA:leaf1", "done");
             a["lastAssistantMessage"] = message;
-            rows_of(&ps(&[a]), &terminals())[0].reply.clone()
+            rows_of(&ps(&[a]), &terminals())[0].latest.clone()
         };
         for data in [
             "{\"attributes\":{\"created_at\":\"2026-11-16T09:34:08Z\",\"phase\":\"started\"},\"id\":1}",
@@ -2564,14 +2586,14 @@ mod tests {
             "<event kind=\"repl-eval\"> <result>st:  M apps/",
             "<system-reminder>\nAs you answer\n</system-reminder>",
         ] {
-            assert_eq!(reply(json!(data)), None, "{data}");
+            assert_eq!(latest(json!(data)), None, "{data}");
         }
         assert_eq!(
-            reply(json!("確認しました。\n{\"a\":1}")).as_deref(),
+            latest(json!("確認しました。\n{\"a\":1}")).as_deref(),
             Some("確認しました。")
         );
         assert_eq!(
-            reply(json!("<system-reminder>x</system-reminder>\n直しました")).as_deref(),
+            latest(json!("<system-reminder>x</system-reminder>\n直しました")).as_deref(),
             Some("直しました")
         );
     }
@@ -2777,29 +2799,103 @@ mod tests {
     }
 
     #[test]
-    fn a_row_carries_the_first_line_of_the_last_answer() {
-        let reply = |message: Value| {
-            let mut a = agent("tabA:leaf1", "working");
+    fn the_latest_message_of_a_finished_turn_is_the_answer() {
+        let latest = |message: Value| {
+            let mut a = agent("tabA:leaf1", "done");
             a["lastAssistantMessage"] = message;
-            rows_of(&ps(&[a]), &terminals())[0].reply.clone()
+            rows_of(&ps(&[a]), &terminals())[0].latest.clone()
         };
         assert_eq!(
-            reply(json!("<c>\n  Answer\nmore")).as_deref(),
+            latest(json!("<c>\n  Answer\nmore")).as_deref(),
             Some("Answer")
         );
-        assert_eq!(reply(json!("\n\nOne line")).as_deref(), Some("One line"));
-        assert_eq!(reply(json!("<c/>\n \n")), None);
-        assert_eq!(reply(json!("  ")), None);
-        assert_eq!(reply(Value::Null), None);
+        assert_eq!(latest(json!("\n\nOne line")).as_deref(), Some("One line"));
+        // An answer with no text leaves the row to its line: the older prompt is not the latest message.
+        assert_eq!(latest(json!("<c/>\n \n")), None);
+        assert_eq!(latest(json!("  ")), None);
+        assert_eq!(latest(Value::Null), None);
         assert_eq!(
-            reply(json!("あ".repeat(LINE_LIMIT + 50)))
+            latest(json!("あ".repeat(LINE_LIMIT + 50)))
                 .unwrap()
                 .chars()
                 .count(),
             LINE_LIMIT
         );
-        let bare = agent("tabA:leaf1", "working");
-        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].reply, None);
+        // Of a done agent with no answer there is no latest message.
+        let bare = agent("tabA:leaf1", "done");
+        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].latest, None);
+    }
+
+    #[test]
+    fn the_latest_message_of_a_running_agent_is_its_prompt_until_its_main_agent_is_done() {
+        let latest = |state: &str, started: i64, main: Value| {
+            let mut a = agent("tabA:leaf1", state);
+            a["stateStartedAt"] = json!(started);
+            a["lastAssistantMessage"] = json!("Answer");
+            if !main.is_null() {
+                a["mainAgent"] = main;
+            }
+            rows_of(&ps(&[a]), &terminals())[0].latest.clone()
+        };
+        let main = |state: &str, at: i64| json!({"state": state, "stateStartedAt": at});
+        // A new turn began: the answer is of the turn before, and a main agent that ended before it is not the answer of this one.
+        assert_eq!(
+            latest("working", 2_000, Value::Null).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("working", 2_000, main("done", 1_500)).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("working", 2_000, main("working", 2_500)).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("waiting", 2_000, Value::Null).as_deref(),
+            Some("Write the docs")
+        );
+        // The main agent ended its turn after the prompt and subagents still work: the answer came after it (the row of #806).
+        assert_eq!(
+            latest("working", 2_000, main("done", 2_500)).as_deref(),
+            Some("Answer")
+        );
+        assert_eq!(
+            latest("working", 2_000, main("done", 2_000)).as_deref(),
+            Some("Answer")
+        );
+        // A time that is missing proves nothing.
+        assert_eq!(
+            latest("working", 0, main("done", 0)).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("working", 2_000, json!({"state": "done"})).as_deref(),
+            Some("Write the docs")
+        );
+        // A finished turn ends with its answer, whatever the main agent says.
+        assert_eq!(
+            latest("done", 2_000, Value::Null).as_deref(),
+            Some("Answer")
+        );
+    }
+
+    #[test]
+    fn the_latest_message_of_an_agent_that_has_no_prompt_is_its_answer_and_the_other_way_round() {
+        let mut a = agent("tabA:leaf1", "done");
+        a["lastAssistantMessage"] = json!("Answer");
+        a.as_object_mut().unwrap().remove("prompt");
+        assert_eq!(
+            rows_of(&ps(&[a]), &terminals())[0].latest.as_deref(),
+            Some("Answer")
+        );
+        // A running agent with a prompt that is a message of the harness: no latest message, the row keeps its line.
+        let mut b = agent("tabA:leaf1", "working");
+        b["prompt"] = json!("<event kind=\"repl-eval\">\nx\n</event>");
+        b["conversationName"] = json!("Name");
+        let row = &rows_of(&ps(&[b]), &terminals())[0];
+        assert_eq!(row.latest, None);
+        assert_eq!(row.line, "Name");
     }
 
     #[test]
@@ -2917,7 +3013,7 @@ mod tests {
                 repo: String::new(),
                 branch: String::new(),
                 line: String::new(),
-                reply: None,
+                latest: None,
                 subagents: 0,
                 at_ms: 0,
                 handle: None,

@@ -195,8 +195,8 @@ interface Tab {
   status: OrcaStatus;
   label: string;
   title: string;
-  // The first line of a Claude session's last answer, which its row in the list shows after the title (the tab shows the title alone); null for the rest.
-  reply: string | null;
+  // The first line of the newer of a Claude session's prompt and last answer, which its row in the list shows in place of the title (the tab shows the title); null for the rest, and for a session whose newer message has no text.
+  latest: string | null;
   // How many subagents of a Claude session are at work, which its row in the list shows at its right end (the tab shows none); 0 for the rest.
   subagents: number;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
@@ -237,21 +237,21 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", reply: r.reply, subagents: r.subagents, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", reply: null, subagents: 0, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), reply: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target);
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, reply: null, subagents: 0, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -317,9 +317,8 @@ function sessionNode(t: Tab, key: string) {
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(key === projectKey && t.id === selectedTab()));
-  const title = tag("span", "orca-session-title", t.title);
-  // "{title} - {reply}", as Orca's own list draws a row: the reply is the quieter part.
-  if (t.reply !== null) title.append(tag("span", "orca-session-reply", ` - ${t.reply}`));
+  // The newer of the user's and Claude's messages; the title when it has none.
+  const title = tag("span", "orca-session-title", t.latest ?? t.title);
   row.append(statusIcon(t.status, t.label), title);
   if (t.subagents > 0) {
     const badge = tag("span", "orca-session-subagents");
@@ -454,7 +453,7 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => !isDocument(t))]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.reply, t.subagents, t.environment])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.environment])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
@@ -547,7 +546,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine.map(({ reply, subagents, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
+    key: JSON.stringify([mine.map(({ latest, subagents, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
