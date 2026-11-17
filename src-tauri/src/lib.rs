@@ -9,6 +9,7 @@ pub mod database;
 mod disk_cache;
 pub mod fonts;
 pub mod formation;
+pub mod formation_server;
 pub mod ghostty;
 pub mod gmail;
 pub mod identity;

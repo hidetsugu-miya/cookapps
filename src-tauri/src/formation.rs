@@ -33,7 +33,7 @@ use crate::{
 const FOLDER: &str = "formations";
 /// The name `FOLDER` had before it was renamed (#889): `migrate_folder` moves a folder of this name to `FOLDER`.
 const OLD_FOLDER: &str = "formation";
-const CHILDREN_FILE: &str = "children.json";
+pub(crate) const CHILDREN_FILE: &str = "children.json";
 /// The file that holds what a formation is made of: its projects and the time it was made (A-37).
 const FORMATION_FILE: &str = "formation.json";
 /// The name of the formation that took `formations/children.json`, the record from before it was split by formation (`migrate_legacy`). It is a formation like any other otherwise: it is in the list only while its folder is there, and it can be deleted.
@@ -235,7 +235,7 @@ pub fn read_children(config: &Path, formation: &str) -> Vec<Child> {
 }
 
 /// The children of `children.json` for a change of it: a missing file is none, but a file that is there and cannot be read is an error, so that the change does not write over the record of the children already launched.
-fn read_record(config: &Path, formation: &str) -> Result<Vec<Child>, String> {
+pub(crate) fn read_record(config: &Path, formation: &str) -> Result<Vec<Child>, String> {
     migrate_legacy(config)?;
     let path = dir(config, formation).join(CHILDREN_FILE);
     let text = match std::fs::read_to_string(&path) {
@@ -265,7 +265,7 @@ fn write_children(config: &Path, formation: &str, children: &[Child]) -> Result<
 /// It is a lock of this process: the tools of `tsunagiai-mcp` run in another one and are not held by it, so what keeps them from the deletion of a formation is that the deletion ends the orchestrator, and with it the tools, before anything else (`delete_with`).
 static RECORD: Mutex<()> = Mutex::new(());
 
-fn update(
+pub(crate) fn update(
     config: &Path,
     formation: &str,
     change: impl FnOnce(Vec<Child>) -> Result<Vec<Child>, String>,
@@ -2747,7 +2747,7 @@ async fn pull_pc_children(
 }
 
 /// `children` without the entries of `removed` (by name).
-fn without_names(children: Vec<Child>, removed: &[String]) -> Vec<Child> {
+pub(crate) fn without_names(children: Vec<Child>, removed: &[String]) -> Vec<Child> {
     children
         .into_iter()
         .filter(|c| !removed.contains(&c.name))

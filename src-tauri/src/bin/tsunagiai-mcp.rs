@@ -15,7 +15,7 @@ use tsunagiai_lib::{
     calendar, claude_code,
     database::{self, script::Scripts, DatabaseProfile, Keychain},
     formation::{self, PlannedChild},
-    gmail, identity,
+    formation_server, gmail, identity,
 };
 
 fn relogin(account: &str) -> String {
@@ -588,6 +588,15 @@ impl Tsunagiai {
 impl rmcp::ServerHandler for Tsunagiai {}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The server mode of A-37 (#890): it serves the records of the formations to the app, and serves no MCP.
+    match formation_server::mode_of(std::env::args().skip(1)) {
+        Ok(Some(mode)) => std::process::exit(formation_server::run(mode)),
+        Ok(None) => {}
+        Err(e) => {
+            println!("{}", formation_server::error_line(&e));
+            std::process::exit(1);
+        }
+    }
     match formation_start_arg(std::env::args().skip(1)) {
         Ok(Some(name)) => {
             let message = project_args(std::env::args().skip(1))
