@@ -740,15 +740,34 @@ fn not_allowed(environment: &str) -> String {
     )
 }
 
-/// One try: connects with the pinned key and asks the version.
-async fn probe(host: &str, port: u16, secret: [u8; 32], key: &str) -> (Heard, Option<Client>) {
+/// How long the connection and the handshake of a read that does not wait (`wait` false: the screen's reads) may take. The screen's reads give up after `SAVED_PS_TIMEOUT` (5 seconds), so a PC that takes the connection and then says nothing (a firewall waiting for an answer) has to be heard as silent within that, to reach the start and the words of the firewall.
+pub(crate) const SCREEN_HANDSHAKE: Duration = Duration::from_secs(3);
+
+/// The limit of the connection and the handshake of one try.
+fn handshake_deadline(wait: bool) -> Duration {
+    if wait {
+        formation_server::HANDSHAKE_DEADLINE
+    } else {
+        SCREEN_HANDSHAKE
+    }
+}
+
+/// One try: connects with the pinned key and asks the version. A connection that is not made within `deadline` is silent.
+async fn probe(
+    host: &str,
+    port: u16,
+    secret: [u8; 32],
+    key: &str,
+    deadline: Duration,
+) -> (Heard, Option<Client>) {
     let Some(server_public) = canonical_32(key) else {
         return (
             Heard::Silent("固定したサーバーの鍵が壊れています".into()),
             None,
         );
     };
-    let mut client = match Client::connect(host, port, secret, server_public).await {
+    let mut client = match Client::connect_within(host, port, secret, server_public, deadline).await
+    {
         Ok(client) => client,
         Err(e) => return (Heard::Silent(e), None),
     };
@@ -889,7 +908,7 @@ async fn connect_with(
     let (mut started, mut placed) = (false, false);
     let mut pin = first;
     loop {
-        let (heard, client) = probe(host, port, secret, &pin.key).await;
+        let (heard, client) = probe(host, port, secret, &pin.key, handshake_deadline(wait)).await;
         match decide(&heard, app_version, started, placed) {
             Step::Use => return client.ok_or_else(|| "サーバーにつなげません".to_owned()),
             Step::Start => {
@@ -2385,6 +2404,51 @@ mod tests {
         free(&acting, "pc").await;
         assert_eq!(*calls.lock().unwrap(), [Do::Place]);
         task.abort();
+        std::fs::remove_dir_all(&pcs.config).unwrap();
+    }
+
+    #[test]
+    fn a_read_that_does_not_wait_gives_the_handshake_a_shorter_deadline() {
+        assert_eq!(
+            handshake_deadline(true),
+            formation_server::HANDSHAKE_DEADLINE
+        );
+        assert_eq!(handshake_deadline(false), SCREEN_HANDSHAKE);
+        assert!(SCREEN_HANDSHAKE < formation_server::HANDSHAKE_DEADLINE);
+    }
+
+    #[tokio::test]
+    async fn a_read_that_does_not_wait_takes_a_pc_that_connects_and_says_nothing_for_silent_and_starts_it(
+    ) {
+        // What a PC does while its firewall waits for an answer: the TCP connection is taken, and nothing comes back.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut pcs = Pcs::new("connect-no-wait-silent");
+        pcs.port = listener.local_addr().unwrap().port();
+        let silent = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                if let Ok((stream, _)) = listener.accept().await {
+                    held.push(stream);
+                }
+            }
+        });
+        pcs.pin(&pcs.server_secret, "1.2.3");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (act, release) = held(&calls);
+        let acting = Acting::default();
+        let began = Instant::now();
+        let reason = pcs.connect_in(&acting, false, &act).await.err().unwrap();
+        // The silence reached `decide`, which started the server in the background, within the shorter deadline.
+        assert!(reason.contains("起動しています"), "{reason}");
+        assert!(
+            began.elapsed() >= SCREEN_HANDSHAKE && began.elapsed() < SCREEN_HANDSHAKE * 2,
+            "{:?}",
+            began.elapsed()
+        );
+        release.send(()).unwrap();
+        free(&acting, "pc").await;
+        assert_eq!(*calls.lock().unwrap(), [Do::Start]);
+        silent.abort();
         std::fs::remove_dir_all(&pcs.config).unwrap();
     }
 

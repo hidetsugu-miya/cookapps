@@ -7504,6 +7504,7 @@ mod tests {
             ]
         );
         assert!(SAVED_PS_TIMEOUT < orca::READ_TIMEOUT);
+        assert!(formation_remote::SCREEN_HANDSHAKE < SAVED_PS_TIMEOUT);
     }
 
     #[test]

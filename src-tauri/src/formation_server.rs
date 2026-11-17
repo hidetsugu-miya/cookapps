@@ -51,7 +51,7 @@ const TAG_LENGTH: usize = 16;
 /// A sealed frame: the tag, then the payload.
 const MAX_FRAME: usize = MAX_PAYLOAD + TAG_LENGTH;
 /// From the open of the socket to the first sealed frame.
-const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 /// How long a connection may stay silent before the server closes it.
 const IDLE_LIMIT: Duration = Duration::from_secs(60);
 /// One call of the client.
@@ -585,8 +585,19 @@ impl Client {
         client_secret: [u8; 32],
         server_public: [u8; 32],
     ) -> Result<Self, String> {
+        Self::connect_within(host, port, client_secret, server_public, HANDSHAKE_DEADLINE).await
+    }
+
+    /// `connect` with its own limit for the connection and the handshake together, for a caller that has less time than `HANDSHAKE_DEADLINE`.
+    pub async fn connect_within(
+        host: &str,
+        port: u16,
+        client_secret: [u8; 32],
+        server_public: [u8; 32],
+        deadline: Duration,
+    ) -> Result<Self, String> {
         let handshake = ClientHandshake::new(client_secret, server_public)?;
-        timeout(HANDSHAKE_DEADLINE, async {
+        timeout(deadline, async {
             let stream = TcpStream::connect((host, port))
                 .await
                 .map_err(|e| format!("{host}:{port} につなげません: {e}"))?;
