@@ -1,5 +1,6 @@
-// The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
+// The right pane of the orchestration mode, "チームメイト" (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait and the formations that work, on the footer's icon (the reads of the orchestration mode move the same number).
+// The pane is opened and closed with the button of its heading (open at first, in memory only); closed, a strip of 40px stays at the right end with the button that opens it and a mark for the state of each child, and the terminal of the session is hidden (its reads stop).
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
@@ -29,6 +30,8 @@ let notice: string | null = null;
 let terms: FormationChild[] = [];
 let selected: string | null = null;
 let follow = true;
+// Whether the pane is open (in memory only).
+let open = true;
 // The handles whose terminals were shown, to forget the ones of children that are gone.
 const held = new Set<string>();
 // The children whose close is on its way, by the formation and the name (`closingKey`); a second close of one is not started meanwhile.
@@ -40,8 +43,9 @@ let watching: "flow" | "count" | null = null;
 let reading = false;
 // Counts the switches of the formation, so that a read that was on its way when the formation changed is dropped.
 let epoch = 0;
-// What the tree shows now, and what the session band shows now; each is drawn again only when its key changes.
+// What the tree shows now, and what the session band and the marks of the strip show now; each is drawn again only when its key changes.
 let treeKey = "";
+let marksKey = "";
 let sessionKey: string | null = "";
 // The child whose card was last brought into the view of the tree (the selection that moved is shown, the one that stays is not scrolled to again).
 let scrolledTo: string | null = null;
@@ -102,6 +106,7 @@ export function switchFormation() {
   selected = null;
   sessionKey = null;
   treeKey = "";
+  marksKey = "";
   scrolledTo = null;
   for (const handle of held) releaseTerminal(handle, OWNER);
   held.clear();
@@ -176,7 +181,8 @@ function syncSession() {
     $("formation-session-head").dataset.state = child?.state ?? "";
     $("formation-session-name").textContent = child?.name ?? "";
   }
-  showSelected(false);
+  // A closed pane has no room for the terminal: it is shown again when the pane is opened.
+  if (open) showSelected(false);
 }
 
 // The menu of a right press on a card: 「削除」 alone, as a row of the list has (formation-list.ts).
@@ -270,6 +276,37 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   return li;
 }
 
+// The strip of the closed pane: the label of the button that opens it says how many children work and wait for approval and how many are planned, and under it a mark for each child, in the order of the cards, with the dot of its state.
+function drawStrip(planned: number) {
+  const working = children.filter((c) => c.state === "working").length;
+  const waiting = children.filter((c) => c.state === "waiting").length;
+  $("formation-strip-open").setAttribute("aria-label", `チームメイトを開く（作業中 ${working}${waiting > 0 ? ` · 承認待ち ${waiting}` : ""} · 予定 ${planned}）`);
+  const key = JSON.stringify(children.map((c) => [c.name, c.state]));
+  if (key === marksKey) return;
+  marksKey = key;
+  $("formation-strip-marks").replaceChildren(
+    ...children.map((c) => {
+      const mark = tag("span", "formation-strip-mark");
+      mark.dataset.state = c.state;
+      mark.dataset.name = c.name;
+      mark.setAttribute("role", "img");
+      mark.setAttribute("aria-label", `${c.name}（${STATE_LABELS[c.state]}）`);
+      mark.append(tag("i", "formation-dot"));
+      return mark;
+    }),
+  );
+}
+
+// Closes or opens the pane. The focus moves to the button that takes the place of the one pressed, and an opened pane shows the terminal of its session again.
+function setOpen(next: boolean) {
+  open = next;
+  if (!open) hideTerminals(OWNER);
+  marksKey = "";
+  $("formation-flow-toggle").setAttribute("aria-expanded", String(open));
+  draw();
+  $(open ? "formation-flow-toggle" : "formation-strip-open").focus({ preventScroll: true });
+}
+
 function draw() {
   const now = Date.now();
   if (watching === null) setFormationCount(0, 0);
@@ -277,12 +314,16 @@ function draw() {
   if (watching === "count") return;
   const launched = children.filter((c) => c.state !== "planned");
   const planned = children.length - launched.length;
-  // The right pane is shown from the first child (a planned one too) on, and the orchestrator has the whole width before.
-  $("formation-flow").hidden = children.length === 0;
+  // The pane is shown from the first child (a planned one too) on, and the orchestrator has the whole width before. Closed, the strip is shown in its place and the divider is not.
+  const any = children.length > 0;
+  $("formation-flow").hidden = !any || !open;
+  $("formation-flow-split").hidden = !any || !open;
+  $("formation-strip").hidden = !any || open;
   // The session first: the follow may move the selection that the cards mark.
   if (watching === "flow") syncSession();
   $("formation-follow").setAttribute("aria-pressed", String(follow));
   $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
+  if (!open) drawStrip(planned);
   const said = failure ?? notice;
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
@@ -305,6 +346,8 @@ function draw() {
 }
 
 export function initFormationFlow() {
+  $("formation-flow-toggle").onclick = () => setOpen(false);
+  $("formation-strip-open").onclick = () => setOpen(true);
   $("formation-follow").onclick = () => {
     follow = !follow;
     draw();

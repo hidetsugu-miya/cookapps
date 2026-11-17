@@ -114,7 +114,9 @@ export function showFormation() {
 // The restart button of the header: ends the process of the orchestrator of the formation that is shown, if it is running (or has ended), and begins a new one with the keyboard, as a first show does (A-37). The other formations' orchestrators and the children are not touched.
 // The button is off until the new start has answered, because two starts of the pane's id at once could end each other's process.
 export function initFormation() {
-  initSplit($("formation"), $("formation-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
+  initSplit($("formation"), $("formation-split"), { side: "left", min: 0.15, max: 0.35, initial: 0.18, property: "--list-w" });
+  // The divider between the orchestrator and the right pane (shown with the pane, formation-flow.ts).
+  initSplit($("formation"), $("formation-flow-split"), { side: "right", min: 0.2, max: 0.5, initial: 0.35, property: "--flow-w" });
   // Another formation is selected in the list: its flow is read in place of the last one's, and its orchestrator is shown in the middle.
   initFormationList(
     (name) => {

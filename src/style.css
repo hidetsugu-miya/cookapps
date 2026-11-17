@@ -1012,8 +1012,8 @@ button.status:hover { filter: brightness(.95); }
 
 /* The orchestration mode of the development screen (A-37): the orchestrator's terminal at the left, and the right pane (the flow, and under it the session of the selected child) of the same width. */
 #formation { flex: 1; min-height: 0; display: flex; }
-/* The list of the formations at the left, as the Orca screen's list is (`--list-w` is where the divider put it, 20% to 50% of the screen). */
-#formation-list { flex: none; width: clamp(20%, var(--list-w, 25%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
+/* The list of the formations at the left, narrower than the Orca screen's list (`--list-w` is where the divider put it, 15% to 35% of the screen, 18% at first, and 160px at least). */
+#formation-list { flex: none; width: clamp(15%, var(--list-w, 18%), 35%); min-width: 160px; display: flex; flex-direction: column; background: var(--bar); }
 #formation-split { flex: none; }
 #formation-list-head { flex: none; display: flex; align-items: center; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px 0 18px; border-bottom: 1px solid var(--line); }
 #formation-new { flex: none; margin-left: auto; }
@@ -1026,9 +1026,10 @@ button.status:hover { filter: brightness(.95); }
 .formation-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .formation-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); font-weight: 700; }
 .formation-row-time { flex: none; color: var(--muted); font-size: calc(11px * var(--fs)); }
-.formation-row-projects, .formation-row-counts { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-.formation-row-projects { gap: 4px; }
-.formation-row-project { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border-radius: 4px; background: var(--soft); color: var(--ink-soft); font-size: calc(11px * var(--fs)); line-height: 18px; }
+.formation-row-counts { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+/* The projects of a formation at the top of the menu of its row: headings that are not pressed, in the monospace of the names. */
+.menu button:disabled:has(> .formation-menu-mark) { opacity: 1; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); cursor: default; }
+.formation-menu-mark { display: inline-flex; flex: none; }
 .formation-row-count { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-size: calc(11px * var(--fs)); white-space: nowrap; }
 .formation-row-count[data-state="waiting"] { color: var(--agent-question); font-weight: 700; }
 #formation-orchestrator { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
@@ -1037,13 +1038,21 @@ button.status:hover { filter: brightness(.95); }
 #formation-head-name { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 #formation-restart { flex: none; margin-left: auto; }
 #formation-term-error { flex: none; margin: 8px; overflow-wrap: anywhere; }
-#formation-flow { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
+/* The right pane, "チームメイト", is as wide as the divider before it puts it (`--flow-w`, 20% to 50% of the screen, 35% at first). The orchestrator takes the rest. */
+#formation-flow { flex: none; width: clamp(20%, var(--flow-w, 35%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; background: var(--bar); }
+#formation-flow-split { flex: none; }
+/* Closed: a strip of 40px stays at the right end, with the button that opens the pane and a mark for each child. */
+#formation-strip { flex: none; width: 40px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; border-left: 1px solid var(--line); background: var(--bar); }
+#formation-strip-head { flex: none; display: flex; align-items: center; justify-content: center; align-self: stretch; min-height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
+#formation-strip-marks { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 14px 0; align-self: stretch; scrollbar-width: none; }
+.formation-strip-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
 #formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
+#formation-flow-head .icon-btn, #formation-session-head .icon-btn, #formation-strip-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#formation-flow-head .icon-btn svg, #formation-session-head .icon-btn svg, #formation-strip-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #formation-flow-head h2 { flex: none; }
 #formation-flow-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
-.formation-follow { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
-.formation-follow svg { width: 15px; height: 15px; }
-.formation-follow[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+#formation-follow { flex: none; margin-left: auto; color: var(--muted); }
+#formation-follow[aria-pressed="true"], #formation-follow[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
 /* The view has a height of its own at most, and scrolls inside when the tree is taller; without a session under it, it takes the height of the pane. */
 #formation-flow-body { flex: 0 1 auto; min-height: 0; max-height: min(300px, 50%); overflow-y: auto; box-sizing: border-box; padding: 14px 10px; }
 #formation-flow:has(#formation-session[hidden]) #formation-flow-body { flex: 1 1 auto; max-height: none; }
@@ -1075,13 +1084,13 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }
 .formation-card[data-state="planned"] .formation-card-state { color: var(--muted); font-weight: 600; }
 .formation-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-idle); }
-.formation-card[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
-.formation-card[data-state="waiting"] .formation-dot, .formation-row-count[data-state="waiting"] .formation-dot, #formation-session-head[data-state="waiting"] .formation-dot { background: var(--agent-question); }
-.formation-card[data-state="done"] .formation-dot, .formation-row-count[data-state="done"] .formation-dot, #formation-session-head[data-state="done"] .formation-dot { background: var(--agent-done); }
-.formation-card[data-state="planned"] .formation-dot, .formation-row-count[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
+.formation-card[data-state="working"] .formation-dot, .formation-strip-mark[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
+.formation-card[data-state="waiting"] .formation-dot, .formation-strip-mark[data-state="waiting"] .formation-dot, .formation-row-count[data-state="waiting"] .formation-dot, #formation-session-head[data-state="waiting"] .formation-dot { background: var(--agent-question); }
+.formation-card[data-state="done"] .formation-dot, .formation-strip-mark[data-state="done"] .formation-dot, .formation-row-count[data-state="done"] .formation-dot, #formation-session-head[data-state="done"] .formation-dot { background: var(--agent-done); }
+.formation-card[data-state="planned"] .formation-dot, .formation-strip-mark[data-state="planned"] .formation-dot, .formation-row-count[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
 .formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
-@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-strip-mark[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }
