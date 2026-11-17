@@ -19,6 +19,7 @@ import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { EnvironmentsView } from "../ts/bindings/EnvironmentsView";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { FormationChild } from "../ts/bindings/FormationChild";
+import type { FormationConsent } from "../ts/bindings/FormationConsent";
 import type { FormationEntry } from "../ts/bindings/FormationEntry";
 import type { FormationList } from "../ts/bindings/FormationList";
 import type { FormationState } from "../ts/bindings/FormationState";
@@ -776,6 +777,9 @@ export const formationEntry = (name: string, extra: Partial<FormationEntry> & { 
     ...rest,
   };
 };
+
+// A PC that the owner agreed to put tsunagiai-mcp on, as `formation_consents`, `formation_consent` and `formation_consent_revoke` answer it (A-37, #893).
+export const formationConsent = (environment: string, version = "1.2.3"): FormationConsent => ({ environment, version });
 
 // What `formation_list` answers: the formations in the order given.
 export const formationList = (formations: FormationEntry[], readError: string | null = null): FormationList => ({ formations, readError });

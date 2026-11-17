@@ -4,6 +4,7 @@
 import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
 import { claudeCodeStarted, closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
+import { ensureConsent } from "./formation-consent.js";
 import { hideSession, startCount, startFlow, stopFlow, switchFormation } from "./formation-flow.js";
 import { currentFormation, formationEnvironment, initFormationList } from "./formation-list.js";
 import { RELOAD_SVG } from "./icons.js";
@@ -88,6 +89,12 @@ async function startRemote(name: string, restart: boolean) {
   failures.delete(name);
   if (currentFormation() === name) syncRestart();
   try {
+    // A formation made before the owner's consent for its PC (#893) asks for it first. When the owner declines nothing is started, and nothing is shown: pressing the formation again asks again.
+    if (!(await ensureConsent($("formation-head"), formationEnvironment(name)))) {
+      starting.delete(name);
+      if (currentFormation() === name) syncRestart();
+      return;
+    }
     terminals.set(name, await invoke("formation_orchestrator", { name, restart }));
   } catch (e) {
     failures.set(name, String(e));

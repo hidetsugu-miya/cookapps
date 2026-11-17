@@ -1258,7 +1258,7 @@ fn after_tab_close(out: &str) -> Result<AfterTabClose, String> {
 }
 
 /// The screen of the terminal as lines with no colors.
-fn screen_args(handle: &str, environment: Option<&str>) -> Vec<String> {
+pub(crate) fn screen_args(handle: &str, environment: Option<&str>) -> Vec<String> {
     with_environment(
         args_of(&[
             "terminal",

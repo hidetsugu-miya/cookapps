@@ -1,4 +1,4 @@
-import { boot, callsOf, count, formationChild, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
 
 import type { FormationList } from "../../ts/bindings/FormationList";
 
@@ -1293,7 +1293,7 @@ describe("orchestration mode: the list of the formations", () => {
 // A-37 (#823): the dialog that makes a formation.
 describe("orchestration mode: the dialog that makes a formation", () => {
   const ENVIRONMENTS = () => formationEnvironments(["wonder-knowledge", "wonder-api", "tsunagiai"], { "dev-server": ["wonder-api"] });
-  const dialog = () => $('.formation-new-pop[role="dialog"]');
+  const dialog = () => $('.formation-new-pop:not(.formation-consent-pop)[role="dialog"]');
   const nameField = () => $('.formation-new-pop input[aria-label="名前"]');
   const filterField = () => $('.formation-new-pop input[aria-label="プロジェクトを絞り込む"]');
   const makeButton = () => $(".formation-new-actions .text-btn.primary");
@@ -1302,7 +1302,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
   // The page's own press: the driver's click takes the focus to the button after the handler, which a real press does not.
   const pressNew = () => browser.execute(() => document.getElementById("formation-new")!.click());
   async function ask(extra: Record<string, unknown> = {}) {
-    await openList({ formation_environments: ENVIRONMENTS(), ...extra });
+    await openList({ formation_environments: ENVIRONMENTS(), formation_consents: [formationConsent("dev-server")], ...extra });
     await pressNew();
     await expect(dialog()).toBeDisplayed();
     await browser.waitUntil(async () => (await repos()).length > 0);
@@ -1364,6 +1364,23 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await browser.waitUntil(async () => (await callsOf("claude_code_start")).some((c) => (c as { id: string }).id === "formation:mail-api"));
     await browser.waitUntil(async () => (await callsOf("formation_children")).some((c) => (c as { name: string }).name === "mail-api"));
     await expect($("#error")).not.toBeDisplayed();
+    // The projects are of two environments: Rust refuses that mix with its own reason, so no consent is asked for it.
+    expect(await callsOf("formation_consents")).toEqual([]);
+    expect(await callsOf("formation_consent")).toEqual([]);
+  });
+
+  it("asks Rust for the consents when the projects are of one saved environment, and makes the formation with no dialog when that PC has the consent", async () => {
+    await ask();
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0, environment: "dev-server", projects: [{ environment: "dev-server", repo: "wonder-api" }] }));
+    const consent = await mock("formation_consent", formationConsent("dev-server"));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "dev-server", repo: "wonder-api" }] }]);
+    // Once for the dialog that makes the formation, and once when the new formation's orchestrator starts.
+    expect(await callsOf("formation_consents")).toHaveLength(2);
+    expect(await callsOf(consent)).toEqual([]);
+    await expect($(".formation-consent-pop")).not.toExist();
   });
 
   it("makes it on Enter in the name field, with no project when none is checked", async () => {
@@ -1373,6 +1390,8 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await browser.keys("solo");
     await browser.keys("Enter");
     expect(await waitForCalls(create)).toEqual([{ name: "solo", projects: [] }]);
+    // This Mac needs no consent: it is not asked.
+    expect(await callsOf("formation_consents")).toEqual([]);
     await expect(dialog()).not.toExist();
     await browser.waitUntil(async () => (await pressedRows()).join() === "solo");
   });
@@ -1418,6 +1437,185 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await expect($("#error")).toHaveText(reason);
     await expect(dialog()).toBeDisplayed();
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+  });
+
+  // A-37 (#893): the project of a saved environment whose PC has no consent asks for it before the formation is made.
+  const consentDialog = () => $('.formation-consent-pop[role="dialog"]');
+  const agreeButton = () => $(".formation-consent-pop .text-btn.primary");
+  const declineButton = () => $(".formation-consent-pop .text-btn:not(.primary)");
+
+  it("asks for the consent of the PC before it makes a formation of its project, saying what is put there, and makes nothing yet", async () => {
+    await ask({ formation_consents: [] });
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    const consent = await mock("formation_consent", formationConsent("dev-server"));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await expect(consentDialog()).toBeDisplayed();
+    // It takes the place of the dialog that makes a formation.
+    await expect(dialog()).not.toExist();
+    await expect($(".formation-consent-pop h3")).toHaveText("「dev-server」に tsunagiai-mcp を置きますか？");
+    expect(await textsOf(".formation-consent-pop li")).toEqual([
+      "「dev-server」のつなぎAIの設定フォルダに、GitHub Release から、このアプリと同じ版の tsunagiai-mcp を置きます",
+      "tsunagiai-mcp は、その PC でサーバーとして待ち受けます（ポート 47823）",
+      "最初に、その PC の画面でファイアウォールの「許可」を押してください",
+      "同意は、設定の Orca タブで PC ごとに取り消せます",
+    ]);
+    expect(await textsOf(".formation-consent-pop .text-btn")).toEqual(["やめる", "同意する"]);
+    expect(await callsOf("formation_consents")).toHaveLength(1);
+    expect(await callsOf(consent)).toEqual([]);
+    expect(await callsOf(create)).toEqual([]);
+  });
+
+  it("puts the program on the PC when 「同意する」 is pressed, and then makes the formation that was asked for", async () => {
+    await ask({ formation_consents: [] });
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0, environment: "dev-server", projects: [{ environment: "dev-server", repo: "wonder-api" }] }));
+    await mock("formation_list", formationList([...listed().formations, formationEntry("mail-api", { minutes: 0 })]));
+    const consent = await mock("formation_consent", formationConsent("dev-server"));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await expect(consentDialog()).toBeDisplayed();
+    // Once the program is on the PC, Rust lists the consent: the orchestrator of the new formation starts with no second dialog.
+    await mock("formation_consents", [formationConsent("dev-server")]);
+    await agreeButton().click();
+    expect(await waitForCalls(consent)).toEqual([{ environment: "dev-server" }]);
+    expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "dev-server", repo: "wonder-api" }] }]);
+    await expect(consentDialog()).not.toExist();
+    await browser.waitUntil(async () => (await pressedRows()).join() === "mail-api");
+  });
+
+  it("opens the dialog of the consent where the button that made it was, not at the corner of the window", async () => {
+    await ask({ formation_consents: [] });
+    await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    await browser.keys("mail-api");
+    await pick(3);
+    const button = await browser.execute(() => {
+      const r = document.querySelector(".formation-new-actions .text-btn.primary")!.getBoundingClientRect();
+      return { left: r.left, bottom: r.bottom };
+    });
+    await makeButton().click();
+    await expect(consentDialog()).toBeDisplayed();
+    const at = await browser.execute(() => {
+      const r = document.querySelector(".formation-consent-pop")!.getBoundingClientRect();
+      return { left: r.left, top: r.top, inside: r.right <= innerWidth && r.bottom <= innerHeight };
+    });
+    expect(at.top).toBeGreaterThanOrEqual(button.bottom);
+    expect(at.left).toBeGreaterThan(8);
+    expect(at.inside).toBe(true);
+  });
+
+  it("goes on with the formation when the dialog is pressed away or closed with Escape while the program is being put on the PC", async () => {
+    await ask({ formation_consents: [] });
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0, environment: "dev-server", projects: [{ environment: "dev-server", repo: "wonder-api" }] }));
+    const consent = await mock("formation_consent", holds);
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await expect(consentDialog()).toBeDisplayed();
+    await mock("formation_consents", [formationConsent("dev-server")]);
+    await agreeButton().click();
+    await waitForCalls(consent);
+    await browser.keys("Escape");
+    await expect(consentDialog()).not.toExist();
+    // The owner agreed, and the program is on its way: the answer of the placement decides, not the closing of the dialog.
+    await browser.pause(200);
+    expect(await callsOf(create)).toEqual([]);
+    await release(consent, formationConsent("dev-server"));
+    expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "dev-server", repo: "wonder-api" }] }]);
+  });
+
+  it("makes nothing and puts nothing on the PC when 「やめる」 is pressed", async () => {
+    await ask({ formation_consents: [] });
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    const consent = await mock("formation_consent", formationConsent("dev-server"));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await declineButton().click();
+    await expect(consentDialog()).not.toExist();
+    await expect(dialog()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+    expect(await callsOf(consent)).toEqual([]);
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+  });
+
+  it("counts Escape as a refusal too", async () => {
+    await ask({ formation_consents: [] });
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await expect(consentDialog()).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect(consentDialog()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+  });
+
+  it("keeps both buttons off while the program is being put on the PC", async () => {
+    await ask({ formation_consents: [] });
+    await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    const consent = await mock("formation_consent", holds);
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await agreeButton().click();
+    await waitForCalls(consent);
+    await expect(agreeButton()).toBeDisabled();
+    await expect(declineButton()).toBeDisabled();
+    await agreeButton().click();
+    await browser.pause(200);
+    expect(await callsOf(consent)).toHaveLength(1);
+    await release(consent, formationConsent("dev-server"));
+    await expect(consentDialog()).not.toExist();
+  });
+
+  it("shows the words of a failed placement, makes nothing, and keeps the dialog so that the owner can agree again", async () => {
+    await ask({ formation_consents: [] });
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    const reason = "サーバーを置けませんでした: この PC は macOS（Apple Silicon）ではありません";
+    const consent = await mock("formation_consent", rejects(reason));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await agreeButton().click();
+    await waitForCalls(consent);
+    await expect($("#error")).toHaveText(reason);
+    await expect(consentDialog()).toBeDisplayed();
+    await expect(agreeButton()).toBeEnabled();
+    await expect(declineButton()).toBeEnabled();
+    expect(await callsOf(create)).toEqual([]);
+    await mock("formation_consent", formationConsent("dev-server"));
+    await agreeButton().click();
+    expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "dev-server", repo: "wonder-api" }] }]);
+  });
+
+  it("does not ask for a consent when the projects are of two environments, and leaves the refusal to Rust", async () => {
+    await ask({ formation_consents: [] });
+    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（司令塔と子が別の PC にいると、SendMessage が届かないためです）";
+    const create = await mock("formation_create", rejects(reason));
+    await browser.keys("mail-api");
+    await pick(0);
+    await pick(3);
+    await makeButton().click();
+    await waitForCalls(create);
+    await expect($("#error")).toHaveText(reason);
+    await expect(consentDialog()).not.toExist();
+    expect(await callsOf("formation_consents")).toEqual([]);
+  });
+
+  it("shows the words of Rust when it refuses a project whose PC has no consent, and keeps the dialog as it was typed", async () => {
+    await ask();
+    const reason = "環境「dev-server」には、tsunagiai-mcp を置くことへの同意がありません。同意してから、フォーメーションを作ってください";
+    await mock("formation_create", rejects(reason));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await expect($("#error")).toHaveText(reason);
+    await expect(dialog()).toBeDisplayed();
+    await expect(nameField()).toHaveValue("mail-api");
   });
 
   it("makes no more than one formation while a creation is on its way", async () => {
@@ -1904,7 +2102,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   const remote = (environment = "mac-studio") => formationList([formationEntry("formation"), formationEntry("studio-work", { minutes: 5, environment, projects: [{ environment, repo: "api" }] })]);
   const terminal = (environment = "mac-studio") => ({ environment, handle: "term_orch" });
   const orchestratorText = () => $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText();
-  const SHOWN = { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 司令塔です"] };
+  const SHOWN = { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 司令塔です"], formation_consents: [formationConsent("mac-studio")] };
 
   it("asks for the terminal of the formation and mirrors it in that environment, with no pseudo terminal", async () => {
     await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
@@ -1927,7 +2125,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
 
   it("streams it when the Orca screen streams that environment, and reads nothing", async () => {
     const overview = orcaOverview([], [], { target: "Studio", environments: ["Studio"] });
-    await openList({ formation_list: remote("Studio"), formation_orchestrator: terminal("Studio"), orca_overview: overview }, null);
+    await openList({ formation_list: remote("Studio"), formation_orchestrator: terminal("Studio"), orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
     await waitForCalls("orca_stream_open");
     await sendStream(streamList([], []));
     await row("studio-work").click();
@@ -2010,6 +2208,53 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await pressRestart();
     await waitForStarts(2);
     await release(start, terminal());
+  });
+
+  // #893: a formation made before the owner's consent for its PC asks for it when it is opened.
+  const remoteDialog = () => $('.formation-consent-pop[role="dialog"]');
+
+  it("asks for the consent of the PC when a formation of it is opened with none, and starts nothing before the answer", async () => {
+    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN, formation_consents: [] }, "studio-work");
+    await expect(remoteDialog()).toBeDisplayed();
+    await expect($(".formation-consent-pop h3")).toHaveText("「mac-studio」に tsunagiai-mcp を置きますか？");
+    expect(await textsOf(".formation-consent-pop .text-btn")).toEqual(["やめる", "同意する"]);
+    await browser.pause(300);
+    expect(await callsOf("formation_orchestrator")).toEqual([]);
+    expect(await starts()).toBe(0);
+  });
+
+  it("goes on with the terminal of the orchestrator once the owner agrees", async () => {
+    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN, formation_consents: [] }, "studio-work");
+    const consent = await mock("formation_consent", formationConsent("mac-studio"));
+    await expect(remoteDialog()).toBeDisplayed();
+    await $(".formation-consent-pop .text-btn.primary").click();
+    expect(await waitForCalls(consent)).toEqual([{ environment: "mac-studio" }]);
+    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await expect(remoteDialog()).not.toExist();
+    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"), { timeoutMsg: "the terminal of the orchestrator never showed" });
+  });
+
+  it("closes the dialog and does nothing when the owner declines, with no failure in the pane", async () => {
+    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN, formation_consents: [] }, "studio-work");
+    const consent = await mock("formation_consent", formationConsent("mac-studio"));
+    await expect(remoteDialog()).toBeDisplayed();
+    await $(".formation-consent-pop .text-btn:not(.primary)").click();
+    await expect(remoteDialog()).not.toExist();
+    await browser.pause(400);
+    expect(await callsOf(consent)).toEqual([]);
+    expect(await callsOf("formation_orchestrator")).toEqual([]);
+    await expect($("#formation-term-error")).not.toBeDisplayed();
+    await expect($("#formation-restart")).toBeEnabled();
+  });
+
+  it("asks nothing of a PC that has the consent, and nothing of a formation of this Mac", async () => {
+    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await waitForCalls("formation_orchestrator", 1);
+    expect(await callsOf("formation_consents")).toHaveLength(1);
+    await expect(remoteDialog()).not.toExist();
+    await row("formation").click();
+    await waitForStarts(1);
+    expect(await callsOf("formation_consents")).toHaveLength(1);
   });
 
   it("restarts the terminal through Rust, and shows the new one in place of the old", async () => {

@@ -1459,6 +1459,10 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .formation-new-actions .text-btn:hover { background: var(--soft); }
 .formation-new-actions .text-btn.primary, .formation-new-actions .text-btn.primary:hover { border-color: var(--accent); background: var(--accent); }
 .formation-new-actions .text-btn:disabled { opacity: .4; cursor: default; }
+/* The dialog that asks for the consent to put tsunagiai-mcp on a PC (ts/formation-consent.ts), in the frame of the dialog that makes a formation. */
+.formation-consent-pop h3 { margin: 0; font-size: calc(13px * var(--fs)); }
+.formation-consent-pop ul { margin: 0; padding-left: 18px; font-size: calc(13px * var(--fs)); line-height: 1.6; }
+.formation-consent-pop li { margin-bottom: 6px; overflow-wrap: anywhere; }
 .orca-add-pop { width: 260px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 8px; gap: 8px; }
 .orca-add-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .orca-add-field > span { flex: none; font-size: calc(12px * var(--fs)); color: var(--muted); }

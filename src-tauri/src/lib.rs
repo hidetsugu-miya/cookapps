@@ -9,6 +9,8 @@ pub mod database;
 mod disk_cache;
 pub mod fonts;
 pub mod formation;
+pub mod formation_remote;
+pub mod formation_server;
 pub mod ghostty;
 pub mod gmail;
 pub mod identity;
@@ -225,6 +227,10 @@ pub fn run() {
                     if let Err(e) = identity::migrate_config_dir(&dir) {
                         gmail::log_failure("config_migrate", "-", e);
                     }
+                    // The folder of the formations was `formation/` (#889).
+                    if let Err(e) = formation::migrate_folder(&dir) {
+                        gmail::log_failure("formation_migrate", "-", e);
+                    }
                 }
                 Err(e) => {
                     gmail::log_failure("config_migrate", "-", e.to_string());
@@ -439,6 +445,9 @@ pub fn run() {
             formation::formation_create,
             formation::formation_delete,
             formation::formation_close_child,
+            formation_remote::formation_consents,
+            formation_remote::formation_consent,
+            formation_remote::formation_consent_revoke,
             set_badge
         ])
         .build(tauri::generate_context!())

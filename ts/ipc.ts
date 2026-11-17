@@ -22,6 +22,7 @@ import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
+import type { FormationConsent } from "./bindings/FormationConsent";
 import type { FormationDeleteAnswer } from "./bindings/FormationDeleteAnswer";
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
@@ -355,7 +356,7 @@ export interface Commands {
   claude_code_resize: { args: { id: string; viewport: OrcaViewport }; result: null };
   // A-36: ends the process of the pane `id` that the start `launch` (its answer) made, and what it started; a process of a later start stays.
   claude_code_close: { args: { id: string; launch: number }; result: null };
-  // A-37: the children of the formation `name`, in the order of `formation/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
+  // A-37: the children of the formation `name`, in the order of `formations/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
   // A-37: the environments (this Mac first, then the saved ones) with the repositories of each, read from Orca; an environment that could not be read has `ok` false and its `error`, and the others are read.
   formation_environments: { args: undefined; result: EnvironmentsView };
@@ -369,6 +370,12 @@ export interface Commands {
   formation_delete: { args: { name: string; force: boolean; shown: FormationShown[] }; result: FormationDeleteAnswer };
   // A-37: closes the child `name` of the formation `formation` from its card, as `formation_close` does (its terminal, its worktree with its branch, its entry of the record; a child in a folder that tsunagiai did not make has only its terminal closed and its entry dropped, and no git look is made). A worktree with a change, an untracked file or a commit no remote has is kept: the answer has `closed` false with the reason and the lines of git. With `force` and the `path` the answer showed it is removed all the same, with `--force`, and its changes and untracked files are lost (the commits no remote has stay on the local branch, which Orca keeps: `preservedBranch` of the answer names it); with another `path`, or null, it is checked again as without `force`. Any other refusal carries the message.
   formation_close_child: { args: { formation: string; name: string; force: boolean; path: string | null }; result: FormationCloseAnswer };
+  // A-37 (#893): the saved environments whose PC the owner agreed to put `tsunagiai-mcp` on, each with the version of its server, in order of the environment's name. The consent is the pinned key of that PC's server.
+  formation_consents: { args: undefined; result: FormationConsent[] };
+  // A-37 (#893): the owner agrees for the PC of the saved environment `environment`: Rust puts the program there, starts it and pins its key, which takes up to 2 minutes. A failure carries the words of its reason, and nothing is agreed.
+  formation_consent: { args: { environment: string }; result: FormationConsent };
+  // A-37 (#893): takes the consent of `environment` back: stops the server on its PC, deletes what was put there and forgets its key. The answer is the consents that are left. A PC that still has a formation is refused with the reason and nothing is changed; an environment gone from Orca loses only its consent.
+  formation_consent_revoke: { args: { environment: string }; result: FormationConsent[] };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.

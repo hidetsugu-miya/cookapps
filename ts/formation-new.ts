@@ -2,11 +2,12 @@
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationProject } from "./bindings/FormationProject";
 import { composing, partMatcher, tag } from "./dom.js";
+import { ensureConsent } from "./formation-consent.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { showError } from "./view.js";
 
-// Opens the dialog under `anchor`. `created` runs with the formation that Rust made. The environments are read when the dialog opens; the dialog is drawn at once and its list is filled when they answer.
+// Opens the dialog under `anchor`. `created` runs with the formation that Rust made (a project of a saved environment with no consent asks for it first, `ensureConsent`). The environments are read when the dialog opens; the dialog is drawn at once and its list is filled when they answer.
 export function openFormationDialog(anchor: Element, created: (entry: FormationEntry) => void) {
   const pop = tag("div", "menu formation-new-pop");
   pop.setAttribute("role", "dialog");
@@ -54,7 +55,15 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
     busy = true;
     make.disabled = true;
     try {
-      const entry = await invoke("formation_create", { name: wanted, projects: projects.filter((p) => p.box.checked).map((p) => p.project) });
+      const chosen = projects.filter((p) => p.box.checked).map((p) => p.project);
+      // The projects of one saved environment need the owner's consent for its PC. A mix of environments is refused by Rust with its own reason, so no consent is asked for it. The dialog of the consent replaces this one; when the owner declines, nothing is made.
+      const environments = [...new Set(chosen.map((p) => p.environment))];
+      if (environments.length === 1 && !(await ensureConsent(make, environments[0]))) {
+        busy = false;
+        make.disabled = false;
+        return;
+      }
+      const entry = await invoke("formation_create", { name: wanted, projects: chosen });
       if (pop.isConnected) closeMenu();
       created(entry);
     } catch (e) {

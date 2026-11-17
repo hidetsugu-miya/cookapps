@@ -34,7 +34,7 @@ const FOLDER: &str = "claude-code";
 const MCP_FILE: &str = "mcp.json";
 const SCRIPT_FILE: &str = "start.sh";
 const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
-/// A-37: the orchestrator of a formation is the pane whose id is this prefix and the formation's name (the screen names its pane so), and it runs in `formation/{name}/` of the config directory, not in `claude-code/`.
+/// A-37: the orchestrator of a formation is the pane whose id is this prefix and the formation's name (the screen names its pane so), and it runs in `formations/{name}/` of the config directory, not in `claude-code/`.
 const FORMATION_ID_PREFIX: &str = "formation:";
 const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The text of the orchestrator's `CLAUDE.md`: its role and its steps, with `{name}` where its own name goes. It holds nothing that comes from outside.
@@ -236,7 +236,7 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json`, the launch script and an empty `.claude/settings.json` in `formation/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script and an empty `.claude/settings.json` in `formations/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
 /// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
 fn write_formation_files(
     config: &Path,
@@ -925,7 +925,7 @@ mod tests {
     fn the_orchestrators_script_keeps_the_built_in_tools_and_reads_the_project_settings() {
         let script = formation_script(
             Path::new("/Users/x/.local/bin/claude"),
-            Path::new("/c/app/formation/mcp.json"),
+            Path::new("/c/app/formations/formation/mcp.json"),
             "formation",
         );
         assert_eq!(
@@ -933,7 +933,7 @@ mod tests {
             "#!/bin/sh\n\
              # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
              PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formation/mcp.json' \"$@\"\n"
+             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
         );
         assert!(!script.contains("--tools"));
     }
@@ -1091,7 +1091,7 @@ mod tests {
     fn the_orchestrators_settings_are_written_where_a_link_of_its_own_would_not_lead() {
         use std::os::unix::fs::symlink;
         let config = temp_dir("formation-links");
-        let dir = config.join("formation/formation");
+        let dir = config.join("formations/formation");
         let elsewhere = config.join("elsewhere");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(&elsewhere).unwrap();
@@ -1142,7 +1142,7 @@ mod tests {
     #[test]
     fn the_orchestrators_files_are_written_in_its_folder_and_the_other_files_stay() {
         let config = temp_dir("formation-files");
-        let dir = config.join("formation/formation");
+        let dir = config.join("formations/formation");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("children.json"), "[]").unwrap();
         // What the orchestrator added to its project settings in an earlier run does not stay.
@@ -1196,7 +1196,7 @@ mod tests {
         let claude = Path::new("/bin/claude");
         let mcp_binary = Path::new("/app/tsunagiai-mcp");
         let script = write_formation_files(&config, "api-work", claude, mcp_binary).unwrap();
-        let dir = config.join("formation/api-work");
+        let dir = config.join("formations/api-work");
         assert_eq!(script, dir.join("start.sh"));
         let mcp: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
@@ -1204,7 +1204,7 @@ mod tests {
             mcp["mcpServers"]["tsunagiai"]["args"],
             serde_json::json!(["--formation", "api-work"])
         );
-        assert!(!config.join("formation/formation").exists());
+        assert!(!config.join("formations/formation").exists());
         // The orchestrator is named for its formation in the script and in its `CLAUDE.md`, and the other name is nowhere in them.
         let script_text = std::fs::read_to_string(&script).unwrap();
         assert!(script_text.contains("-n 'api-work' --permission-mode auto"));
@@ -1214,7 +1214,7 @@ mod tests {
         assert!(claude_md.contains("SendMessage で `api-work` に知らせること"));
         assert!(!claude_md.contains("{name}"));
         assert!(!claude_md.contains("`formation` に"));
-        // A name that is not a folder name of its own writes nothing, least of all outside `formation/`.
+        // A name that is not a folder name of its own writes nothing, least of all outside `formations/`.
         for bad in ["", "..", "../x", "a/b", "A", ".claude"] {
             assert!(
                 write_formation_files(&config, bad, claude, mcp_binary).is_err(),
@@ -1236,7 +1236,7 @@ mod tests {
             Path::new("/app/tsunagiai-mcp"),
         )
         .unwrap();
-        let dir = config.join("formation/api-work");
+        let dir = config.join("formations/api-work");
         // With no project there is no first instruction.
         assert_eq!(
             start,
@@ -1284,7 +1284,7 @@ mod tests {
             Path::new("/app/tsunagiai-mcp"),
         )
         .unwrap();
-        let script = config.join("formation/api-work/start.sh");
+        let script = config.join("formations/api-work/start.sh");
         // The script, then `--` and the prompt as one element: no shell reads it.
         assert_eq!(start.args.len(), 3);
         assert_eq!(start.args[0], script.to_string_lossy());
@@ -1328,7 +1328,7 @@ mod tests {
                 Path::new("/app/tsunagiai-mcp")
             )
             .is_err());
-            assert!(!config.join("formation/api-work").exists());
+            assert!(!config.join("formations/api-work").exists());
         }
         std::fs::remove_dir_all(config).unwrap();
     }

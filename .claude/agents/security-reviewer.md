@@ -15,7 +15,7 @@ tools: Read, Grep, Glob, Bash
 
 - OAuth（PKCE、state、ループバックのリダイレクト）とトークンの扱い
 - シークレット（Google のクライアントシークレット・リフレッシュトークン・アクセストークン、Slack のユーザートークンと App-Level Token（`xapp-`）、Todoist のトークン、Anthropic の API キー、Notion の OAuth トークン、データベースの接続のパスワード、Orca の接続の鍵とトークン）が画面・ログ・エラー文・ファイル・コマンドの答え・`tsunagiai-mcp` の答えに出ないか
-- キーチェーンのすべてのサービスの読み書き（すべて `keychain.rs` を通る。Google は `jp.mysis.tsunagiai`、Slack は `jp.mysis.tsunagiai.slack`、Slack の App-Level Token は `jp.mysis.tsunagiai.slack-app`、Todoist は `jp.mysis.tsunagiai.todoist`、Anthropic の API キーは `jp.mysis.tsunagiai.claude`、Notion は `jp.mysis.tsunagiai.notion`（ユーザー名はワークスペース）、データベースは `jp.mysis.tsunagiai.database`（ユーザー名は接続の ID）。`jp.mysis.cookapps` 系の古い項目は読み取りのときだけ新しい名前へ写し、削除は両方を消す）、サービス名とユーザー名の決め方（外から来る値が別のシークレットを指せないか）、`accounts.json` の読み書き。新しいサービスを足す差分は、この一覧にも入っているかを見る
+- キーチェーンのすべてのサービスの読み書き（すべて `keychain.rs` を通る。Google は `jp.mysis.tsunagiai`、Slack は `jp.mysis.tsunagiai.slack`、Slack の App-Level Token は `jp.mysis.tsunagiai.slack-app`、Todoist は `jp.mysis.tsunagiai.todoist`、Anthropic の API キーは `jp.mysis.tsunagiai.claude`、Notion は `jp.mysis.tsunagiai.notion`（ユーザー名はワークスペース）、データベースは `jp.mysis.tsunagiai.database`（ユーザー名は接続の ID）、フォーメーションのサーバーに対するアプリの秘密鍵は `jp.mysis.tsunagiai.formation`（ユーザー名は `client-key`）。`jp.mysis.cookapps` 系の古い項目は読み取りのときだけ新しい名前へ写し、削除は両方を消す）、サービス名とユーザー名の決め方（外から来る値が別のシークレットを指せないか）、`accounts.json` の読み書き。新しいサービスを足す差分は、この一覧にも入っているかを見る
 - Orca の実行環境との通信（unix socket と、E2EE の WebSocket の接続・認証・鍵の扱い）
 - 端末と Orca の worktree に入る外の値（OSC 52 のクリップボード書き込み、A-9 で Orca に渡すメール・Slack・Todo の本文、A-10 のファイルの worktree への書き込み）
 - Orca の CLI に渡す引数（A-9 の新しい worktree の名前・ブランチ・基点、A-16 の端末を作る worktree のパス。引数のリストで渡すか、先頭が `-` の値や制御文字を弾くか、一覧に無い worktree やリポジトリ ID を指せないか）

@@ -142,6 +142,42 @@ fn load_pairing(environment: Option<&str>) -> Result<Pairing, String> {
     }
 }
 
+/// The host of the endpoint that `environment_pairing` chooses for a saved environment: what the PC of that environment is reached at, and what the server of A-37 listens on (`formation_remote`). The name of the host is as Orca stores it, so it may be a name and not an address.
+fn host_of_environment(doc: &Value, environment: &str) -> Result<String, String> {
+    match environment_pairing(doc, environment)? {
+        Pairing::WebSocket { url, .. } => host_of_url(&url),
+        Pairing::Unix { .. } => Err("接続先の登録に WebSocket のエンドポイントがありません".into()),
+    }
+}
+
+/// The host of a `ws://` URL, with no brackets round an IPv6 address, and no port, user or path.
+fn host_of_url(url: &str) -> Result<String, String> {
+    let bad = || format!("接続先の URL のホストを読めません: {url}");
+    let rest = url.get(5..).ok_or_else(bad)?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or_default();
+    let host = match host_port.strip_prefix('[') {
+        Some(inner) => inner.split_once(']').ok_or_else(bad)?.0,
+        None => host_port.split(':').next().unwrap_or_default(),
+    };
+    if host.is_empty() {
+        return Err(bad());
+    }
+    Ok(host.to_owned())
+}
+
+/// The host of the saved environment `environment`, read from Orca's file now.
+pub fn environment_host(environment: &str) -> Result<String, String> {
+    let dir = orca_dir().ok_or("設定フォルダが見つかりません")?;
+    host_of_environment(
+        &read_json(
+            &dir.join(ENVIRONMENTS_FILE),
+            "接続先の登録（orca-environments.json）が見つかりません",
+        )?,
+        environment,
+    )
+}
+
 // ---- the connection ----
 
 pub(crate) enum LinkError {
