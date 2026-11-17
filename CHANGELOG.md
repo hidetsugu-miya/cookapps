@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.82.4
+
+A-18: several files and folders of the Orca file pane can be chosen and deleted at once (#826). A press chooses a row, ⌘ adds or takes one off, and Shift chooses the rows between; a double press still opens a file. The chosen rows are painted in the accent colour with white text. 「n 件を削除」 of the right-press menu, or the Delete key, deletes them after one confirmation (「n 件を完全に削除します。元に戻せません。」); a row inside a chosen folder is deleted with the folder.
+
+A-37: the orchestrator of a formation of a saved environment starts (#877, #879). Its terminal is a floating terminal of that PC's Orca, which belongs to no repository, not a terminal of the first project's repository, and the children's record of that PC is read and written through it. `tsunagiai-mcp` is looked for in the app, in `~/.cargo/bin` and on the PATH, in that order: the shell of Orca's terminal may have no `~/.cargo/bin` on its PATH, and the start ended in `timeout`. A failed start is told in Japanese. The dialog that makes a formation shows no environment that could not be read (#878), in place of Orca's words.
+
 ## v0.82.3
 
 A-37: the orchestrator of a formation runs on the same PC as its children (#858, #859, #860). A Claude Code reaches another with SendMessage only on the same PC, so an orchestrator on this Mac and children on a saved environment could not talk. A formation now belongs to one PC: its projects are the repositories of one environment. The orchestrator of a formation on a saved environment runs in a terminal of that PC's Orca, made in the repository of its first project: `tsunagiai-mcp --formation-start {name}` of that PC writes the orchestrator's `CLAUDE.md`, `mcp.json` and settings in `formation/{name}/` of that PC's config folder and starts Claude Code there, and the screen shows that terminal as it shows the children's. The orchestrator starts children only on its own PC. The screen reads the children's record from that PC through Orca, and closing a child or deleting the formation closes them there. A formation made before keeps the children recorded on this Mac, and they are listed, closed and deleted as before. That PC needs `tsunagiai-mcp`, in the app or on the PATH.
