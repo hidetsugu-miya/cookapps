@@ -1349,14 +1349,35 @@ pub fn close(config: &Path, formation: &str, name: &str) -> Result<Value, Refusa
     )
 }
 
-fn close_with(
+/// What `inspect_child` found a child to need, with nothing done yet.
+enum Closing {
+    /// Only planned: its entry is dropped.
+    Planned,
+    /// Its saved environment is gone: its entry is dropped, with no command of Orca.
+    EnvironmentGone,
+    /// Its worktree is gone: its terminal is closed when `terminal` (Orca's list says the terminal is the child's), and its entry is dropped.
+    WorktreeGone {
+        path: String,
+        handle: String,
+        environment: String,
+        terminal: bool,
+    },
+    /// Its worktree is whole and clean (no change, no untracked file, no commit no remote has): its terminal and its worktree are removed, and its entry is dropped.
+    Remove {
+        path: String,
+        handle: String,
+        environment: String,
+    },
+}
+
+/// Every check that `close_with` makes before it changes anything, and nothing else: it only reads the record, Orca and git. A child that it refuses is one that `close_with` refuses for the same reason, and `delete_with` asks it of every child before it ends the orchestrator.
+fn inspect_child(
     config: &Path,
     formation: &str,
     name: &str,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
-    write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
-) -> Result<Value, Refusal> {
+) -> Result<Closing, Refusal> {
     let child = read_record(config, formation)?
         .into_iter()
         .find(|c| c.name == name)
@@ -1365,10 +1386,8 @@ fn close_with(
                 "「{name}」という子はフォーメーション「{formation}」の記録にありません"
             ))
         })?;
-    let dropped = || update(config, formation, |old| Ok(without(old, name))).map(|_| ());
     let Some(launch) = child.launch else {
-        dropped()?;
-        return Ok(json!({ "name": name, "planned": true, "dropped": true }));
+        return Ok(Closing::Planned);
     };
     let path = launch.path.as_str();
     orca::check_path(path)
@@ -1387,12 +1406,7 @@ fn close_with(
             .map_err(|e| Refusal::failed(STEP_ENVIRONMENTS, e).saying("何も消していません"))?;
         if environment_is_gone(&saved, &child.environment) {
             // The list was read and the environment is in none of it (the owner removed it in Orca): there is no Orca to ask, and no command is run. Only the entry goes.
-            dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
-            return Ok(json!({
-                "name": name,
-                "environmentGone": true,
-                "terminalClosed": false,
-            }));
+            return Ok(Closing::EnvironmentGone);
         }
         resolve_environment(&saved, &child.environment).map_err(|e| {
             Refusal::from(format!(
@@ -1400,8 +1414,7 @@ fn close_with(
             ))
         })?
     };
-    let environment = environment.as_str();
-    let ps = read(&orca::ps_args(Some(environment)));
+    let ps = read(&orca::ps_args(Some(&environment)));
     let gone = if environment == LOCAL {
         !Path::new(path).is_dir()
     } else {
@@ -1409,17 +1422,15 @@ fn close_with(
     };
     if gone {
         // The handle is closed only when Orca's list says the terminal is the child's; a list that cannot be read or does not say so leaves every terminal alone.
-        let confirmed = ps
+        let terminal = ps
             .as_ref()
             .is_ok_and(|ps| has_agent_at(ps, path, &launch.pane_key));
-        let terminal = confirmed.then(|| write(&terminal_close_args(&launch.handle, environment)));
-        dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
-        return Ok(json!({
-            "name": name,
-            "path": path,
-            "worktreeGone": true,
-            "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
-        }));
+        return Ok(Closing::WorktreeGone {
+            path: launch.path,
+            handle: launch.handle,
+            environment,
+            terminal,
+        });
     }
     let ps = ps.map_err(|e| Refusal::failed(STEP_LISTED, e))?;
     if !is_listed(&ps, path) {
@@ -1439,7 +1450,7 @@ fn close_with(
         };
         (status, unpushed)
     } else {
-        git_of(environment, path)
+        git_of(&environment, path)
             .and_then(|(status, history)| remote_git_text(&status, &history))
             .map_err(|e| {
                 Refusal::failed(STEP_GIT, e)
@@ -1453,17 +1464,70 @@ fn close_with(
             data: Some(data),
         });
     }
-    // The owner may have closed the tab already: the worktree is removed all the same.
-    let terminal = write(&terminal_close_args(&launch.handle, environment));
-    write(&worktree_rm_args(path, environment)).map_err(|e| Refusal::failed(STEP_REMOVE, e))?;
-    dropped().map_err(|e| {
-        Refusal::from(e).saying("worktree は消しましたが、記録から外せませんでした")
-    })?;
-    Ok(json!({
-        "name": name,
-        "path": path,
-        "terminalClosed": terminal.is_ok(),
-    }))
+    Ok(Closing::Remove {
+        path: launch.path,
+        handle: launch.handle,
+        environment,
+    })
+}
+
+fn close_with(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    git_of: &dyn Fn(&str, &str) -> GitAnswers,
+) -> Result<Value, Refusal> {
+    let closing = inspect_child(config, formation, name, read, git_of)?;
+    let dropped = || update(config, formation, |old| Ok(without(old, name))).map(|_| ());
+    match closing {
+        Closing::Planned => {
+            dropped()?;
+            Ok(json!({ "name": name, "planned": true, "dropped": true }))
+        }
+        Closing::EnvironmentGone => {
+            dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
+            Ok(json!({
+                "name": name,
+                "environmentGone": true,
+                "terminalClosed": false,
+            }))
+        }
+        Closing::WorktreeGone {
+            path,
+            handle,
+            environment,
+            terminal,
+        } => {
+            let terminal = terminal.then(|| write(&terminal_close_args(&handle, &environment)));
+            dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
+            Ok(json!({
+                "name": name,
+                "path": path,
+                "worktreeGone": true,
+                "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
+            }))
+        }
+        Closing::Remove {
+            path,
+            handle,
+            environment,
+        } => {
+            // The owner may have closed the tab already: the worktree is removed all the same.
+            let terminal = write(&terminal_close_args(&handle, &environment));
+            write(&worktree_rm_args(&path, &environment))
+                .map_err(|e| Refusal::failed(STEP_REMOVE, e))?;
+            dropped().map_err(|e| {
+                Refusal::from(e).saying("worktree は消しましたが、記録から外せませんでした")
+            })?;
+            Ok(json!({
+                "name": name,
+                "path": path,
+                "terminalClosed": terminal.is_ok(),
+            }))
+        }
+    }
 }
 
 // ---- the list the screen draws ----
@@ -1964,8 +2028,9 @@ fn refusal_text(refusal: &Refusal) -> String {
     }
 }
 
-/// Deletes the formation `formation` (A-37). First `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
-/// Then every child in its record is closed as `close` does, in the order of the record (a child with a change, an untracked file or a commit no remote has keeps its worktree, and a planned one is dropped from the record), and the first one that is refused stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
+/// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and have no change, no untracked file and no commit no remote has), and the first one that is refused stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
+/// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
+/// Then every child is closed as `close` does, in the order of the record (a planned one is dropped from the record). A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 /// The first formation exists before any is made (it is in the list at every start), so it is not deleted.
 fn delete_with(
@@ -1988,6 +2053,15 @@ fn delete_with(
     }
     // A record that cannot be read stops the deletion before the process is touched.
     let children = read_record(config, formation)?;
+    for child in &children {
+        inspect_child(config, formation, &child.name, read, git_of).map_err(|refusal| {
+            format!(
+                "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（何も閉じておらず、司令塔のプロセスも終えていません）。{}",
+                child.name,
+                refusal_text(&refusal)
+            )
+        })?;
+    }
     stop_orchestrator();
     for child in children {
         close_with(config, formation, &child.name, read, write, git_of).map_err(|refusal| {
@@ -2039,7 +2113,7 @@ pub async fn formation_create(
     .await?
 }
 
-/// Deletes the formation `name` (A-37): closes all its children as `formation_close` does and, when every one is closed, ends its orchestrator's process, deletes its folder and takes it off the list. A child that is refused stops it, and the formation stays. The first formation is not deleted. A failure carries the message.
+/// Deletes the formation `name` (A-37): checks all its children as `formation_close` does, and when none is refused ends its orchestrator's process, closes them, deletes its folder and takes it off the list. A child that is refused in the check stops it before anything is ended, and one refused only when it is closed (its state changed) stops it with the process already ended; the formation stays. The first formation is not deleted. A failure carries the message.
 #[tauri::command]
 pub async fn formation_delete(
     app: tauri::AppHandle,
@@ -4820,7 +4894,7 @@ mod tests {
     }
 
     #[test]
-    fn a_child_that_is_refused_stops_the_deletion_and_the_formation_stays() {
+    fn a_child_that_the_first_check_refuses_ends_nothing_and_closes_nothing() {
         let config = temp_dir("delete-refused");
         let there = temp_dir("delete-refused-worktree");
         std::fs::create_dir_all(&there).unwrap();
@@ -4846,15 +4920,58 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
         assert!(err.contains("何も消していません"), "{err}");
-        // The orchestrator was ended before the children were closed, and the refusal says so.
+        // The refusal comes before the orchestrator is ended, and says so.
+        assert!(!stopped.get());
+        assert!(err.contains("司令塔のプロセスも終えていません"), "{err}");
+        assert!(!err.contains("司令塔のプロセスは終えています"), "{err}");
+        // The child before the refused one is not closed either.
+        assert!(orca.0.borrow().is_empty());
+        assert!(dir(&config, "alpha").is_dir());
+        assert_eq!(names(&read_children(&config, "alpha")), ["a", "b", "c"]);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_child_that_is_refused_only_when_it_is_closed_leaves_the_orchestrator_ended() {
+        let config = temp_dir("delete-refused-late");
+        let mut child = launched("a", "x");
+        let launch = child.launch.as_mut().unwrap();
+        launch.path = REMOTE_PATH.into();
+        launch.pane_key = "tab-a:leaf".into();
+        formation_of_children(
+            &config,
+            "alpha",
+            &[planned("p", "x"), in_environment(child, "mac-studio")],
+        );
+        let saved = Saved::new(Ok(ps_with(remote_child())));
+        let orca = Calls::new();
+        let stopped = std::cell::Cell::new(false);
+        let asked = std::cell::Cell::new(0);
+        let err = delete_with(
+            &config,
+            "alpha",
+            &|args| saved.read(args),
+            &|args| orca.run(args),
+            // The worktree is clean at the first check and has a change when the child is closed.
+            &|_, _| {
+                asked.set(asked.get() + 1);
+                if asked.get() == 1 {
+                    Ok(git_answers(json!([]), 0))
+                } else {
+                    Ok(git_answers(json!([{"status": "M", "path": "a.rs"}]), 0))
+                }
+            },
+            &|| stopped.set(true),
+        )
+        .unwrap_err();
+        assert!(err.contains("子「a」を閉じられない"), "{err}");
         assert!(stopped.get());
         assert!(err.contains("司令塔のプロセスは終えています"), "{err}");
         assert!(orca.0.borrow().is_empty());
         assert!(dir(&config, "alpha").is_dir());
-        // The child closed before it stays closed, and the ones after it are not touched.
-        assert_eq!(names(&read_children(&config, "alpha")), ["b", "c"]);
+        assert_eq!(names(&read_children(&config, "alpha")), ["a"]);
         std::fs::remove_dir_all(&config).unwrap();
-        std::fs::remove_dir_all(&there).unwrap();
     }
 
     #[test]
@@ -4880,13 +4997,14 @@ mod tests {
     fn a_child_added_while_the_others_were_closed_keeps_the_folder() {
         let config = temp_dir("delete-added");
         formation_of_children(&config, "alpha", &[gone_child("a")]);
-        let added = std::cell::Cell::new(false);
+        let reads = std::cell::Cell::new(0);
         let err = delete_with(
             &config,
             "alpha",
-            // A tool of the orchestrator that is still at work launches a child while the first one is closed.
+            // A tool of the orchestrator that is still at work launches a child while the first one is closed (the second read: the first is the check before the orchestrator ends).
             &|_| {
-                if !added.replace(true) {
+                reads.set(reads.get() + 1);
+                if reads.get() == 2 {
                     write_children(&config, "alpha", &[gone_child("a"), planned("late", "x")])
                         .unwrap();
                 }
