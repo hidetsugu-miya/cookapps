@@ -444,13 +444,13 @@ describe("orca", () => {
     expect(box.header).toBe(44);
     expect(box.tabs).toBe(44);
     expect(box.tabsTop).toBe(box.headerTop);
-    expect(box.buttons).toEqual([28]);
-    // No label, no 「新規」 and no reload button: the button of the list (A-23) is the only one.
+    expect(box.buttons).toEqual([28, 28]);
+    // No label, no 「新規」 and no reload button: the button of the list (A-23) and the one that adds a project (A-38) are the only ones.
     expect(await count("#orca-heading")).toBe(0);
     expect(await count("#orca-new")).toBe(0);
     expect(await count("#orca-refresh")).toBe(0);
     const order = await browser.execute(() => [...document.querySelectorAll("#orca-header button")].map((b) => b.id));
-    expect(order).toEqual(["orca-list-toggle"]);
+    expect(order).toEqual(["orca-list-toggle", "orca-add"]);
     // The plus is in the tab bar, after the strip of tabs (the button that opens the list is before the strip, and hidden while the list is open); it is a menu button, and waits for a project.
     await expect($(".orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
     await expect($(".orca-plus")).toHaveAttribute("aria-haspopup", "menu");
@@ -1181,23 +1181,22 @@ describe("orca: projects", () => {
       expect(left.title).toBeGreaterThan(left.name);
     });
 
-    it("draws a session row as its title and the last answer after it, \"{title} - {reply}\", a row with no answer as its title alone, and the tab as the title alone", async () => {
-      const read = (reply: string | null) => orcaOverview([orcaRow("example-app", "feat/a", "Gmail返信エディター", { reply }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+    it("draws a session row as its latest message, the instruction or the answer, whichever is newer, a row with none as its title, and the tab as the title", async () => {
+      const read = (latest: string | null) => orcaOverview([orcaRow("example-app", "feat/a", "Gmail返信エディター", { latest }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
       await openOrca(read("返信欄を直しました"));
       await project("example-api").click();
-      expect(await sessionTitles()).toEqual(["Gmail返信エディター - 返信欄を直しました", "Fix the parser"]);
-      expect(await textsOf("#orca-feed .orca-session .orca-session-reply")).toEqual(["- 返信欄を直しました"]);
+      expect(await sessionTitles()).toEqual(["返信欄を直しました", "Fix the parser"]);
       await sessionOf(claudeTab("example-app")).click();
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
-      // A read with another answer draws the row again (as text, so a tag that stays is shown as the characters it is), and one with none leaves the title alone.
-      await mock("orca_overview", read("<b>次の返信</b>"));
+      // The owner sends the next instruction: a read with it draws the row again (as text, so a tag that stays is shown as the characters it is).
+      await mock("orca_overview", read("<b>次の指示</b>"));
       await showAgain();
-      await browser.waitUntil(async () => (await sessionTitles())[0] === "Gmail返信エディター - <b>次の返信</b>", { timeoutMsg: "the row did not draw the new answer" });
-      expect(await count("#orca-feed .orca-session-reply b")).toBe(0);
+      await browser.waitUntil(async () => (await sessionTitles())[0] === "<b>次の指示</b>", { timeoutMsg: "the row did not draw the new message" });
+      expect(await count("#orca-feed .orca-session-title b")).toBe(0);
+      // A read with no latest message leaves the title of the row.
       await mock("orca_overview", read(null));
       await showAgain();
-      await browser.waitUntil(async () => (await sessionTitles())[0] === "Gmail返信エディター", { timeoutMsg: "the row did not drop the answer" });
-      expect(await count("#orca-feed .orca-session-reply")).toBe(0);
+      await browser.waitUntil(async () => (await sessionTitles())[0] === "Gmail返信エディター", { timeoutMsg: "the row did not fall back to its title" });
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
     });
 
@@ -3583,5 +3582,381 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     await showAgain();
     await waitForCount("#orca-feed .orca-project", 2);
     expect(await count("#orca-feed .orca-env")).toBe(0);
+  });
+});
+
+// A-38: the button of the list's header that adds a project. Rust opens the folder dialog and adds the folder (`orca_project_add_here`, unit tests); here the screen is checked: the button, the popup and its select, what it asks of Rust, and the list read again, and for a saved environment the dialog that picks its folder (`orca_browse_dir`, `orca_project_add`).
+describe("orca: add a project (A-38)", () => {
+  const HERE = "orca_project_add_here";
+  const add = () => $("#orca-add");
+  const pop = () => $('.orca-add-pop[role="dialog"]');
+  const pick = () => $(".orca-add-pop .orca-add-pick");
+  // The page's own press of the button (the driver's click focuses the button after the page's handler ran, which no real press does).
+  async function press() {
+    await browser.execute(
+      (id) => {
+        if (window.__e2e_once__(id)) document.getElementById("orca-add")!.click();
+      },
+      onceId(),
+    );
+    await expect(pop()).toBeDisplayed();
+  }
+  // Chooses the place `label` in the select, as a user does.
+  const choosePlace = (label: string) =>
+    browser.execute(
+      (id, text) => {
+        if (!window.__e2e_once__(id)) return;
+        const select = document.querySelector<HTMLSelectElement>(".orca-add-pop select")!;
+        select.selectedIndex = [...select.options].findIndex((o) => o.textContent === text);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      onceId(),
+      label,
+    );
+  // The list the screen reads again after a folder was added: one more project than the sample.
+  const withNew = () => orcaOverview(sample(), [...worktrees(), orcaWorktree("example-new", "main")]);
+
+  it("has the button in the header after the button of the list, with a label, and opens the popup under it", async () => {
+    await openOrca();
+    await expect(add()).toHaveAttribute("aria-label", "プロジェクトを追加");
+    await expect(add()).toHaveAttribute("aria-haspopup", "dialog");
+    expect(await count("#orca-add svg")).toBe(1);
+    expect(await count("#orca-header #orca-add")).toBe(1);
+    await expect(pop()).not.toExist();
+    await press();
+    await expect(pop()).toHaveAttribute("aria-label", "プロジェクトを追加");
+    await expect(add()).toHaveAttribute("aria-expanded", "true");
+    const where = await browser.execute(() => {
+      const p = document.querySelector(".orca-add-pop")!.getBoundingClientRect();
+      const b = document.getElementById("orca-add")!.getBoundingClientRect();
+      return { belowButton: p.top >= b.bottom, inside: p.right <= innerWidth && p.left >= 0 };
+    });
+    expect(where).toEqual({ belowButton: true, inside: true });
+    // The select and the folder button are all it has, and nothing is asked of Rust yet.
+    expect(await count(".orca-add-pop select")).toBe(1);
+    expect(await textsOf(".orca-add-pop button")).toEqual(["フォルダを選ぶ…"]);
+    expect(await count(".orca-add-pop [placeholder]")).toBe(0);
+    expect(await callsOf(HERE)).toEqual([]);
+  });
+
+  it("lists this Mac first, then the target when it is a saved environment, and starts on this Mac", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await press();
+    // Lab is saved too, but the list reads only this Mac and the target, so a project added to Lab would not show.
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac", "Studio"]);
+    await expect($(".orca-add-pop select")).toHaveAttribute("aria-label", "場所");
+    expect(await browser.execute(() => document.querySelector<HTMLSelectElement>(".orca-add-pop select")!.selectedIndex)).toBe(0);
+  });
+
+  it("has only this Mac when no environment is saved", async () => {
+    await openOrca();
+    await press();
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac"]);
+  });
+
+  it("has only this Mac when this Mac is the target, although environments are saved", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab"] }));
+    await press();
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac"]);
+  });
+
+  it("asks Rust to pick and add a folder of this Mac, and reads the list again", async () => {
+    await openOrca();
+    await waitForCount("#orca-feed .orca-project", 4);
+    const here = await mock(HERE, true);
+    const read = await mock("orca_overview", withNew());
+    await press();
+    await pick().click();
+    // The page gives no path and no environment: Rust opens the dialog.
+    expect(await waitForCalls(here)).toEqual([null]);
+    expect(await callsOf(here)).toHaveLength(1);
+    await expect(pop()).not.toExist();
+    expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
+    await waitForCount("#orca-feed .orca-project", 5);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("reads nothing again when the folder dialog is cancelled", async () => {
+    await openOrca();
+    const here = await mock(HERE, false);
+    const read = await mock("orca_overview", withNew());
+    await press();
+    await pick().click();
+    await waitForCalls(here);
+    await expect(pop()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the failure of the add in the error line and does not read the list again", async () => {
+    await openOrca();
+    await waitForCount("#orca-feed .orca-project", 4);
+    const here = await mock(HERE, rejects("Orca が時間内に応答しませんでした"));
+    const read = await mock("orca_overview", withNew());
+    await press();
+    await pick().click();
+    await waitForCalls(here);
+    await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+  });
+
+  // The dialog of a saved environment's folder (`ts/orca-browse.ts`), over the folders that `e2e/fixtures.js` lists: / > home > dev (.config, Documents, workspace) > workspace (api, app, web), and /srv with none.
+  const BROWSE = "orca_browse_dir";
+  const ADD = "orca_project_add";
+  const dialog = () => $('.orca-browse[role="dialog"]');
+  const filter = () => $(".orca-browse-filter");
+  const rows = () => textsOf(".orca-browse-row .orca-browse-name");
+  const trail = () => textsOf(".orca-browse-trail .orca-browse-crumb, .orca-browse-trail .orca-browse-here");
+  const pathText = async () => (await textsOf(".orca-browse-path"))[0];
+  const rowOf = (name: string) => $(`//div[contains(@class,"orca-browse-list")]//button[.//span[@class="orca-browse-name"][. = "${name}"]]`);
+  const crumbOf = (name: string) => $(`//div[contains(@class,"orca-browse-trail")]//button[. = "${name}"]`);
+  const pickFolder = () => $(".orca-browse-buttons .text-btn.primary");
+  const waitForRows = (names: string[]) => browser.waitUntil(async () => JSON.stringify(await rows()) === JSON.stringify(names), { timeoutMsg: `the rows never were ${names.join(", ")}` });
+  const waitForPath = (path: string) => browser.waitUntil(async () => (await pathText()) === path, { timeoutMsg: `the path never was ${path}` });
+  const cursorOn = () => browser.execute(() => document.querySelector('.orca-browse-row[data-cursor="true"] .orca-browse-name')?.textContent ?? null);
+  // The page's own press of 「フォルダを選ぶ…」 for the saved environment Studio, and the dialog with the home folder read.
+  async function openDialog() {
+    await press();
+    await choosePlace("Studio");
+    await pick().click();
+    await expect(dialog()).toBeDisplayed();
+    await waitForRows([".config", "Documents", "workspace"]);
+  }
+  const openOnStudio = () => openOrca(orcaOverview(sample(), worktrees(), studio));
+
+  it("opens the dialog for a saved environment, with its home folder read, and calls neither command of this Mac", async () => {
+    await openOnStudio();
+    const here = await mock(HERE, true);
+    const added = await mock(ADD, null);
+    await openDialog();
+    await expect(pop()).not.toExist();
+    await expect(dialog()).toHaveAttribute("aria-label", "Studio のフォルダを選ぶ");
+    await expect(dialog()).toHaveAttribute("aria-modal", "true");
+    expect(await textsOf(".orca-browse-head h2")).toEqual(["Studio のフォルダを選ぶ"]);
+    // The home folder is asked for with an empty path, in the environment chosen.
+    expect(await callsOf(BROWSE)).toEqual([{ environment: "Studio", path: "" }]);
+    expect(await trail()).toEqual(["/", "home", "dev"]);
+    expect(await textsOf(".orca-browse-trail .orca-browse-here")).toEqual(["dev"]);
+    expect(await pathText()).toBe("/home/dev");
+    expect(await textsOf(".orca-browse-buttons button")).toEqual(["キャンセル", "フォルダを選ぶ"]);
+    await expect($('.orca-browse [aria-label="上のフォルダ"]')).toBeEnabled();
+    await expect($('.orca-browse [aria-label="ホーム"]')).toBeEnabled();
+    await expect(filter()).toHaveAttribute("aria-label", "フォルダを絞り込む");
+    await expect(filter()).toBeFocused();
+    // No help text: no placeholder, and no line but the folders.
+    expect(await count(".orca-browse [placeholder]")).toBe(0);
+    expect(await count(".orca-browse-note")).toBe(0);
+    await browser.pause(300);
+    expect(await callsOf(here)).toEqual([]);
+    expect(await callsOf(added)).toEqual([]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("goes into a folder on a press of its row, and back by up, the trail and home", async () => {
+    await openOnStudio();
+    await openDialog();
+    await rowOf("workspace").click();
+    await waitForRows(["api", "app", "web"]);
+    expect(await callsOf(BROWSE)).toEqual([
+      { environment: "Studio", path: "" },
+      { environment: "Studio", path: "/home/dev/workspace" },
+    ]);
+    expect(await trail()).toEqual(["/", "home", "dev", "workspace"]);
+    expect(await pathText()).toBe("/home/dev/workspace");
+    await $('.orca-browse [aria-label="上のフォルダ"]').click();
+    await waitForRows([".config", "Documents", "workspace"]);
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/home/dev" });
+    expect(await pathText()).toBe("/home/dev");
+    await crumbOf("home").click();
+    await waitForRows(["dev"]);
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/home" });
+    expect(await trail()).toEqual(["/", "home"]);
+    await crumbOf("/").click();
+    await waitForRows(["home", "srv"]);
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/" });
+    // The root has no folder above it.
+    await expect($('.orca-browse [aria-label="上のフォルダ"]')).toBeDisabled();
+    expect(await trail()).toEqual(["/"]);
+    expect(await pathText()).toBe("/");
+    await $('.orca-browse [aria-label="ホーム"]').click();
+    await waitForRows([".config", "Documents", "workspace"]);
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "" });
+    expect(await pathText()).toBe("/home/dev");
+  });
+
+  it("narrows the folders by the name typed, and goes to a path that starts with a slash", async () => {
+    await openOnStudio();
+    await openDialog();
+    await filter().setValue("DOC");
+    await waitForRows(["Documents"]);
+    await filter().setValue("xyz");
+    await waitForRows([]);
+    await expect($(".orca-browse-note")).toHaveText("フォルダがありません");
+    // A name that has a special character of a pattern matches itself.
+    await filter().setValue(".con");
+    await waitForRows([".config"]);
+    // A text that starts with a slash narrows nothing, and Enter goes there.
+    await filter().setValue("/srv");
+    await waitForRows([".config", "Documents", "workspace"]);
+    expect(await callsOf(BROWSE)).toHaveLength(1);
+    await browser.keys("Enter");
+    await waitForPath("/srv");
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/srv" });
+    expect(await trail()).toEqual(["/", "srv"]);
+    expect(await rows()).toEqual([]);
+    expect(await $(".orca-browse-filter").getValue()).toBe("");
+  });
+
+  it("keeps the folder shown and says so when the path typed cannot be read", async () => {
+    await openOnStudio();
+    await openDialog();
+    await filter().setValue("/nowhere");
+    await browser.keys("Enter");
+    await expect($(".orca-browse-note")).toHaveText("Orca のフォルダの一覧を読めません");
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/nowhere" });
+    // The folder shown stays in the trail, so the way back is there; nothing can be added until a folder is read.
+    expect(await trail()).toEqual(["/", "home", "dev"]);
+    expect(await rows()).toEqual([]);
+    expect(await pathText()).toBe("");
+    await expect(pickFolder()).toBeDisabled();
+    await expect($('.orca-browse [aria-label="上のフォルダ"]')).toBeEnabled();
+    await crumbOf("home").click();
+    await waitForRows(["dev"]);
+    expect(await count(".orca-browse-note")).toBe(0);
+    await expect(pickFolder()).toBeEnabled();
+    expect(await pathText()).toBe("/home");
+  });
+
+  it("shows the words of a failed first read, with nothing to add", async () => {
+    await openOnStudio();
+    await mock(BROWSE, rejects("Orca のフォルダの一覧を読めません"));
+    await press();
+    await choosePlace("Studio");
+    await pick().click();
+    await expect(dialog()).toBeDisplayed();
+    await expect($(".orca-browse-note")).toHaveText("Orca のフォルダの一覧を読めません");
+    expect(await count(".orca-browse-row")).toBe(0);
+    expect(await trail()).toEqual([]);
+    expect(await pathText()).toBe("");
+    await expect(pickFolder()).toBeDisabled();
+    await expect($('.orca-browse [aria-label="上のフォルダ"]')).toBeDisabled();
+    // Home is the way out: its answer fills the dialog.
+    await mock(BROWSE, { resolvedPath: "/home/dev", folders: ["workspace"] });
+    await $('.orca-browse [aria-label="ホーム"]').click();
+    await waitForRows(["workspace"]);
+    await expect(pickFolder()).toBeEnabled();
+    expect(await pathText()).toBe("/home/dev");
+  });
+
+  it("draws a folder name as text, and a name with a special character keeps its row", async () => {
+    await openOnStudio();
+    await mock(BROWSE, { resolvedPath: "/home/dev", folders: ["<b>bold</b>", "a b"] });
+    await press();
+    await choosePlace("Studio");
+    await pick().click();
+    await waitForRows(["<b>bold</b>", "a b"]);
+    expect(await count(".orca-browse-list b")).toBe(0);
+  });
+
+  it("marks a row with the arrow keys, which the path follows, and goes into it with Enter", async () => {
+    await openOnStudio();
+    await openDialog();
+    expect(await cursorOn()).toBeNull();
+    await browser.keys("ArrowDown");
+    expect(await cursorOn()).toBe(".config");
+    expect(await pathText()).toBe("/home/dev/.config");
+    await browser.keys(["ArrowDown", "ArrowDown", "ArrowDown"]);
+    expect(await cursorOn()).toBe("workspace");
+    await browser.keys("ArrowUp");
+    expect(await cursorOn()).toBe("Documents");
+    expect(await pathText()).toBe("/home/dev/Documents");
+    // Typing puts the keys on no row, so the path is the folder shown again.
+    await filter().setValue("w");
+    expect(await cursorOn()).toBeNull();
+    expect(await pathText()).toBe("/home/dev");
+    await browser.keys("ArrowUp");
+    expect(await cursorOn()).toBe("workspace");
+    await browser.keys("Enter");
+    await waitForRows(["api", "app", "web"]);
+    expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/home/dev/workspace" });
+    expect(await cursorOn()).toBeNull();
+    expect(await pathText()).toBe("/home/dev/workspace");
+  });
+
+  it("adds the folder shown as a project of the environment, and reads the list again", async () => {
+    await openOnStudio();
+    await openDialog();
+    await rowOf("workspace").click();
+    await waitForRows(["api", "app", "web"]);
+    const added = await mock(ADD, null);
+    const read = await mock("orca_overview", orcaOverview(sample(), [...worktrees(), orcaWorktree("example-new", "main")], studio));
+    await pickFolder().click();
+    expect(await waitForCalls(added)).toEqual([{ path: "/home/dev/workspace", environment: "Studio" }]);
+    await expect(dialog()).not.toExist();
+    expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("adds the folder the keys are on, in place of the one shown", async () => {
+    await openOnStudio();
+    await openDialog();
+    const added = await mock(ADD, null);
+    await browser.keys("ArrowDown");
+    await pickFolder().click();
+    expect(await waitForCalls(added)).toEqual([{ path: "/home/dev/.config", environment: "Studio" }]);
+    expect(await callsOf(added)).toHaveLength(1);
+    await expect(dialog()).not.toExist();
+  });
+
+  it("shows the failure of the add in the error line, and reads the list no more", async () => {
+    await openOnStudio();
+    await openDialog();
+    const added = await mock(ADD, rejects("そのフォルダは追加できません"));
+    const read = await mock("orca_overview", orcaOverview(sample(), [...worktrees(), orcaWorktree("example-new", "main")], studio));
+    await pickFolder().click();
+    await waitForCalls(added);
+    await expect($("#error")).toHaveText("そのフォルダは追加できません");
+    await expect(dialog()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+  });
+
+  it("closes the dialog with キャンセル, the cross, Escape and a press outside, adds nothing, and gives the focus back", async () => {
+    await openOnStudio();
+    const added = await mock(ADD, null);
+    // キャンセル, the cross, Escape and a press on the dimmed part.
+    const ways: (() => Promise<unknown>)[] = [
+      () => $(".orca-browse-buttons .text-btn:not(.primary)").click(),
+      () => $('.orca-browse-head [aria-label="閉じる"]').click(),
+      () => browser.keys("Escape"),
+      () =>
+        browser.execute(() => {
+          document.querySelector(".orca-browse-scrim")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        }),
+    ];
+    for (const close of ways) {
+      await openDialog();
+      // The screen behind takes no press while the dialog is open.
+      expect(await browser.execute(() => (document.getElementById("content") as HTMLElement).inert)).toBe(true);
+      await close();
+      await expect(dialog()).not.toExist();
+      expect(await browser.execute(() => (document.getElementById("content") as HTMLElement).inert)).toBe(false);
+      expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-add");
+    }
+    expect(await callsOf(added)).toEqual([]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("closes on Escape and adds nothing", async () => {
+    await openOrca();
+    const here = await mock(HERE, true);
+    await press();
+    await browser.keys("Escape");
+    await expect(pop()).not.toExist();
+    expect(await callsOf(here)).toEqual([]);
   });
 });

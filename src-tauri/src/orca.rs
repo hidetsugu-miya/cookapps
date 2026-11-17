@@ -13,6 +13,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::{AppHandle, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -34,6 +36,8 @@ const HOST_TTL: Duration = Duration::from_secs(60);
 const MADE_TTL: Duration = Duration::from_secs(60);
 /// Characters of a post (a send or the first prompt of a launch).
 pub(crate) const TEXT_LIMIT: usize = 100_000;
+/// Characters of the folder path of a project to add (macOS's `PATH_MAX` is 1024 bytes; a saved environment's server may allow more).
+const PROJECT_PATH_LIMIT: usize = 4096;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
 const LINE_LIMIT: usize = 200;
 /// How many characters of a line are read for its tags, so that a line of thousands of `<` costs no more than this; the line is cut to `LINE_LIMIT` afterwards.
@@ -88,8 +92,8 @@ pub struct OrcaRow {
     pub branch: String,
     /// The one line of the row: the first line of the conversation's name, else of the prompt, the task, or the title of the pane's terminal; only what the owner or Claude wrote, never a message of the harness, data or the output of a process.
     pub line: String,
-    /// The first line of the agent's last answer, which the list shows after the line; `None` when it has none, or when it is data, the output of a process or a message of the harness.
-    pub reply: Option<String>,
+    /// The first line of the newer of the agent's prompt and its last answer (`latest_of`), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
+    pub latest: Option<String>,
     /// How many of the agent's subagents are at work (A-8); 0 when it has none.
     pub subagents: u32,
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
@@ -556,6 +560,28 @@ fn line_of(agent: &Value, terminal_title: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+/// Whether the agent's last answer (`lastAssistantMessage`) came after its prompt (the last message sent to Claude). Orca gives no time of either, so this is read from the state of the turn (measured on `orca worktree ps --json`, 2026-11-17):
+/// a `done` agent ends its turn with its answer; a running agent whose `mainAgent` is `done` (its subagents still work) ended its turn at `mainAgent.stateStartedAt`, and when that is not before `stateStartedAt` (the start of the state, which a new turn moves) the answer is of this turn.
+/// Anything else is a turn in progress: the prompt is the latest message. A time that is missing counts for nothing.
+fn answer_is_newer(agent: &Value) -> bool {
+    if agent["state"] == "done" {
+        return true;
+    }
+    let main = &agent["mainAgent"];
+    let ended = ms_of(main, "stateStartedAt");
+    main["state"] == "done" && ended > 0 && ended >= ms_of(agent, "stateStartedAt")
+}
+
+/// The first line of the newer of the agent's prompt and last answer (`answer_is_newer`), read as `first_text_line` says. The older message is never taken in its place: it is not the latest.
+fn latest_of(agent: &Value) -> Option<String> {
+    let key = if answer_is_newer(agent) {
+        "lastAssistantMessage"
+    } else {
+        "prompt"
+    };
+    text_of(agent, key).and_then(first_text_line)
+}
+
 /// The status an Orca state word stands for; a word not known yet is `unknown`. `done` and `active` are both the green dot.
 fn status_of(state: &str, unknown: OrcaStatus) -> OrcaStatus {
     match state {
@@ -680,7 +706,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                         .unwrap_or_default()
                         .to_owned(),
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
-                    reply: text_of(agent, "lastAssistantMessage").and_then(first_text_line),
+                    latest: latest_of(agent),
                     subagents: working_subagents(agent),
                     at_ms: if group == OrcaGroup::Done {
                         updated
@@ -1033,6 +1059,25 @@ pub(crate) fn check_path(path: &str) -> Result<(), String> {
     }
 }
 
+/// The folder of a project to add: not empty, with no NUL (an argument cannot hold one), at most `PROJECT_PATH_LIMIT` characters, and absolute (on a saved environment it is the path on that server, which the CLI documents as absolute too).
+fn check_project_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("フォルダを選んでください".into());
+    }
+    if path.contains('\0') {
+        return Err("フォルダの場所に使えない文字が含まれています".into());
+    }
+    if path.chars().count() > PROJECT_PATH_LIMIT {
+        return Err(format!(
+            "フォルダの場所は {PROJECT_PATH_LIMIT} 文字までです"
+        ));
+    }
+    if !Path::new(path).is_absolute() {
+        return Err("フォルダの場所は絶対パスで指定してください".into());
+    }
+    Ok(())
+}
+
 /// The handle must belong to a row of the list read just now (a top-level agent of a live terminal), or the terminal is gone.
 fn check_session(rows: &[OrcaRow], handle: &str) -> Result<(), String> {
     if rows.iter().any(|r| r.handle.as_deref() == Some(handle)) {
@@ -1246,6 +1291,24 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
     let mut args = args_of(&["terminal", "create", "--worktree"]);
     args.extend([format!("path:{path}"), "--json".into()]);
     with_environment(args, environment)
+}
+
+/// A project added by the folder at `path`. Without `kind` Orca takes the folder as a Git repository, as its own menu does; `Some("folder")` adds an ordinary directory.
+fn repo_add_args(path: &str, kind: Option<&str>, environment: Option<&str>) -> Vec<String> {
+    let mut args = args_of(&["repo", "add"]);
+    args.push(format!("--path={path}"));
+    args.extend(kind.map(|kind| format!("--kind={kind}")));
+    args.push("--json".into());
+    with_environment(args, environment)
+}
+
+/// Whether the answer of `orca repo add` says the folder is not a Git repository (`error.message` starts with `Not a valid git repository`), which is the one failure that is tried again as a folder.
+fn is_not_git(out: &str) -> bool {
+    serde_json::from_str::<Value>(out.trim()).is_ok_and(|doc| {
+        doc["ok"] == false
+            && text_of(&doc["error"], "message")
+                .is_some_and(|message| message.starts_with("Not a valid git repository"))
+    })
 }
 
 /// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
@@ -1640,6 +1703,27 @@ fn launch(
         check_start(path, environment)?;
     }
     write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
+}
+
+/// Asks `ask` to add the folder as a Git repository, and, only when the answer says it is not one, asks once more with `--kind=folder`. Any other failure is Orca's own message and is not asked again.
+fn add_with(
+    path: &str,
+    environment: Option<&str>,
+    mut ask: impl FnMut(&[String]) -> Result<String, RunError>,
+) -> Result<(), String> {
+    let out = ask(&repo_add_args(path, None, environment)).map_err(message_of)?;
+    if !is_not_git(&out) {
+        return parse_output(&out).map(|_| ());
+    }
+    let out = ask(&repo_add_args(path, Some("folder"), environment)).map_err(message_of)?;
+    parse_output(&out).map(|_| ())
+}
+
+/// Adds the folder at `path` to Orca as a project: of this machine's Orca, or of the saved environment `environment` (then `path` is a path on that server). The path and the environment are checked first, and Orca's own message is the error of a refusal. A folder that is not a Git repository is added once more as a folder (`add_with`).
+fn add_project(path: &str, environment: Option<&str>) -> Result<(), String> {
+    check_project_path(path)?;
+    check_listed(environment)?;
+    add_with(path, environment, |args| run(args, WRITE_TIMEOUT))
 }
 
 /// Opens a plain terminal in the worktree at `path` (A-16), once, with the checks of a launch.
@@ -2098,6 +2182,39 @@ pub async fn orca_handoff(
     .await?
 }
 
+/// Adds the folder at `path` of the saved environment `environment` to Orca as a project (never run twice). This machine's folders are added only by `orca_project_add_here`, where the owner picks the folder in a dialog that Rust opens.
+#[tauri::command]
+pub async fn orca_project_add(path: String, environment: String) -> Result<(), String> {
+    blocking(move || add_project(&path, Some(&environment))).await?
+}
+
+/// Adds a folder of this machine to Orca as a project (A-38): the owner picks it in the folder dialog that Rust opens (the page gives no place), and it is added with the same checks and call as a saved environment's folder, with no environment. `false` when the dialog was cancelled, and nothing is added.
+#[tauri::command]
+pub async fn orca_project_add_here(app: AppHandle, window: WebviewWindow) -> Result<bool, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .pick_folder(move |picked| {
+            let _ = sender.send(picked);
+        });
+    let Some(picked) = receiver
+        .await
+        .map_err(|_| "フォルダを選べません".to_owned())?
+    else {
+        return Ok(false);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|_| "フォルダの場所が正しくありません".to_owned())?;
+    let path = path
+        .to_str()
+        .ok_or("フォルダの場所が正しくありません")?
+        .to_owned();
+    blocking(move || add_project(&path, None)).await??;
+    Ok(true)
+}
+
 /// Closes the tab of the Orca terminal `handle` (a Claude session or a plain terminal).
 #[tauri::command]
 pub async fn orca_close(handle: String, environment: Option<String>) -> Result<(), String> {
@@ -2248,7 +2365,7 @@ mod tests {
                 repo: "example".into(),
                 branch: "feat/a".into(),
                 line: "Write the docs".into(),
-                reply: None,
+                latest: Some("Write the docs".into()),
                 subagents: 0,
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
@@ -2325,7 +2442,7 @@ mod tests {
         assert_eq!(line_of(&a, Some("◑ Terminal title")), "Task");
         a["taskTitle"] = json!(" ");
         assert_eq!(line_of(&a, Some("◑ Terminal title")), "Terminal title");
-        // The last answer is the reply of the row, never its line.
+        // The last answer is the latest message of the row, never its line.
         assert_eq!(line_of(&a, None), "");
     }
 
@@ -2483,11 +2600,11 @@ mod tests {
     }
 
     #[test]
-    fn the_reply_is_the_answer_of_claude_and_never_data_or_a_message_of_the_harness() {
-        let reply = |message: Value| {
-            let mut a = agent("tabA:leaf1", "working");
+    fn the_latest_message_is_never_data_or_a_message_of_the_harness() {
+        let latest = |message: Value| {
+            let mut a = agent("tabA:leaf1", "done");
             a["lastAssistantMessage"] = message;
-            rows_of(&ps(&[a]), &terminals())[0].reply.clone()
+            rows_of(&ps(&[a]), &terminals())[0].latest.clone()
         };
         for data in [
             "{\"attributes\":{\"created_at\":\"2026-11-16T09:34:08Z\",\"phase\":\"started\"},\"id\":1}",
@@ -2498,14 +2615,14 @@ mod tests {
             "<event kind=\"repl-eval\"> <result>st:  M apps/",
             "<system-reminder>\nAs you answer\n</system-reminder>",
         ] {
-            assert_eq!(reply(json!(data)), None, "{data}");
+            assert_eq!(latest(json!(data)), None, "{data}");
         }
         assert_eq!(
-            reply(json!("確認しました。\n{\"a\":1}")).as_deref(),
+            latest(json!("確認しました。\n{\"a\":1}")).as_deref(),
             Some("確認しました。")
         );
         assert_eq!(
-            reply(json!("<system-reminder>x</system-reminder>\n直しました")).as_deref(),
+            latest(json!("<system-reminder>x</system-reminder>\n直しました")).as_deref(),
             Some("直しました")
         );
     }
@@ -2711,29 +2828,103 @@ mod tests {
     }
 
     #[test]
-    fn a_row_carries_the_first_line_of_the_last_answer() {
-        let reply = |message: Value| {
-            let mut a = agent("tabA:leaf1", "working");
+    fn the_latest_message_of_a_finished_turn_is_the_answer() {
+        let latest = |message: Value| {
+            let mut a = agent("tabA:leaf1", "done");
             a["lastAssistantMessage"] = message;
-            rows_of(&ps(&[a]), &terminals())[0].reply.clone()
+            rows_of(&ps(&[a]), &terminals())[0].latest.clone()
         };
         assert_eq!(
-            reply(json!("<c>\n  Answer\nmore")).as_deref(),
+            latest(json!("<c>\n  Answer\nmore")).as_deref(),
             Some("Answer")
         );
-        assert_eq!(reply(json!("\n\nOne line")).as_deref(), Some("One line"));
-        assert_eq!(reply(json!("<c/>\n \n")), None);
-        assert_eq!(reply(json!("  ")), None);
-        assert_eq!(reply(Value::Null), None);
+        assert_eq!(latest(json!("\n\nOne line")).as_deref(), Some("One line"));
+        // An answer with no text leaves the row to its line: the older prompt is not the latest message.
+        assert_eq!(latest(json!("<c/>\n \n")), None);
+        assert_eq!(latest(json!("  ")), None);
+        assert_eq!(latest(Value::Null), None);
         assert_eq!(
-            reply(json!("あ".repeat(LINE_LIMIT + 50)))
+            latest(json!("あ".repeat(LINE_LIMIT + 50)))
                 .unwrap()
                 .chars()
                 .count(),
             LINE_LIMIT
         );
-        let bare = agent("tabA:leaf1", "working");
-        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].reply, None);
+        // Of a done agent with no answer there is no latest message.
+        let bare = agent("tabA:leaf1", "done");
+        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].latest, None);
+    }
+
+    #[test]
+    fn the_latest_message_of_a_running_agent_is_its_prompt_until_its_main_agent_is_done() {
+        let latest = |state: &str, started: i64, main: Value| {
+            let mut a = agent("tabA:leaf1", state);
+            a["stateStartedAt"] = json!(started);
+            a["lastAssistantMessage"] = json!("Answer");
+            if !main.is_null() {
+                a["mainAgent"] = main;
+            }
+            rows_of(&ps(&[a]), &terminals())[0].latest.clone()
+        };
+        let main = |state: &str, at: i64| json!({"state": state, "stateStartedAt": at});
+        // A new turn began: the answer is of the turn before, and a main agent that ended before it is not the answer of this one.
+        assert_eq!(
+            latest("working", 2_000, Value::Null).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("working", 2_000, main("done", 1_500)).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("working", 2_000, main("working", 2_500)).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("waiting", 2_000, Value::Null).as_deref(),
+            Some("Write the docs")
+        );
+        // The main agent ended its turn after the prompt and subagents still work: the answer came after it (the row of #806).
+        assert_eq!(
+            latest("working", 2_000, main("done", 2_500)).as_deref(),
+            Some("Answer")
+        );
+        assert_eq!(
+            latest("working", 2_000, main("done", 2_000)).as_deref(),
+            Some("Answer")
+        );
+        // A time that is missing proves nothing.
+        assert_eq!(
+            latest("working", 0, main("done", 0)).as_deref(),
+            Some("Write the docs")
+        );
+        assert_eq!(
+            latest("working", 2_000, json!({"state": "done"})).as_deref(),
+            Some("Write the docs")
+        );
+        // A finished turn ends with its answer, whatever the main agent says.
+        assert_eq!(
+            latest("done", 2_000, Value::Null).as_deref(),
+            Some("Answer")
+        );
+    }
+
+    #[test]
+    fn the_latest_message_of_an_agent_that_has_no_prompt_is_its_answer_and_the_other_way_round() {
+        let mut a = agent("tabA:leaf1", "done");
+        a["lastAssistantMessage"] = json!("Answer");
+        a.as_object_mut().unwrap().remove("prompt");
+        assert_eq!(
+            rows_of(&ps(&[a]), &terminals())[0].latest.as_deref(),
+            Some("Answer")
+        );
+        // A running agent with a prompt that is a message of the harness: no latest message, the row keeps its line.
+        let mut b = agent("tabA:leaf1", "working");
+        b["prompt"] = json!("<event kind=\"repl-eval\">\nx\n</event>");
+        b["conversationName"] = json!("Name");
+        let row = &rows_of(&ps(&[b]), &terminals())[0];
+        assert_eq!(row.latest, None);
+        assert_eq!(row.line, "Name");
     }
 
     #[test]
@@ -2851,7 +3042,7 @@ mod tests {
                 repo: String::new(),
                 branch: String::new(),
                 line: String::new(),
-                reply: None,
+                latest: None,
                 subagents: 0,
                 at_ms: 0,
                 handle: None,
@@ -3244,6 +3435,191 @@ mod tests {
         assert!(hosts.get(None, "/work/a", t0).is_some());
         assert!(hosts.get(Some("Studio"), "/work/a", t0).is_some());
         assert_eq!(hosts.get(Some("Lab"), "/work/a", t0), None);
+    }
+
+    #[test]
+    fn the_folder_of_a_project_to_add_is_an_absolute_path_of_a_fit_size() {
+        assert!(check_project_path("/Users/example/work").is_ok());
+        assert!(check_project_path("/").is_ok());
+        let longest = format!("/{}", "a".repeat(PROJECT_PATH_LIMIT - 1));
+        assert!(check_project_path(&longest).is_ok());
+        let too_long = format!("/{}", "a".repeat(PROJECT_PATH_LIMIT));
+        assert!(check_project_path(&too_long)
+            .unwrap_err()
+            .contains("文字まで"));
+        // The limit counts characters, not bytes.
+        let wide = format!("/{}", "あ".repeat(PROJECT_PATH_LIMIT - 1));
+        assert!(check_project_path(&wide).is_ok());
+        for empty in ["", " ", "\n"] {
+            assert_eq!(
+                check_project_path(empty).unwrap_err(),
+                "フォルダを選んでください"
+            );
+        }
+        assert!(check_project_path("/work/a\0b")
+            .unwrap_err()
+            .contains("使えない文字"));
+        for relative in ["work", "./work", "../work", "~/work", "--json", "-x"] {
+            assert_eq!(
+                check_project_path(relative).unwrap_err(),
+                "フォルダの場所は絶対パスで指定してください",
+                "{relative}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_is_added_by_its_path_in_this_machine_or_in_a_saved_environment() {
+        assert_eq!(
+            repo_add_args("/Users/example/work", None, None),
+            ["repo", "add", "--path=/Users/example/work", "--json"]
+        );
+        assert_eq!(
+            repo_add_args("/srv/work", None, Some("Studio")),
+            [
+                "repo",
+                "add",
+                "--path=/srv/work",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        // A path with blanks and a leading dash after the slash stays one argument, joined to its flag.
+        assert_eq!(
+            repo_add_args("/work/a b/--json", None, None),
+            ["repo", "add", "--path=/work/a b/--json", "--json"]
+        );
+    }
+
+    #[test]
+    fn the_answer_of_a_project_add_is_its_success_or_orcas_own_words() {
+        let ok = r#"{"ok": true, "result": {"repo": {"id": "r1"}}}"#;
+        assert!(parse_output(ok).is_ok());
+        assert!(parse_output(r#"{"ok": true}"#).is_ok());
+        let refused = r#"{"ok": false, "error": {"code": "invalid_argument", "message": "Not a git repository: /work"}}"#;
+        assert_eq!(
+            parse_output(refused).unwrap_err(),
+            "Not a git repository: /work"
+        );
+        assert_eq!(
+            parse_output(r#"{"ok": false, "error": {"code": "repo_exists"}}"#).unwrap_err(),
+            "repo_exists"
+        );
+        assert_eq!(
+            parse_output("Unknown flag --host for command: repo add").unwrap_err(),
+            "Orca の出力を読めません"
+        );
+        assert!(parse_output("").unwrap_err().contains("応答がありません"));
+    }
+
+    #[test]
+    fn a_folder_that_is_no_git_repository_is_added_as_a_folder() {
+        assert_eq!(
+            repo_add_args("/srv/work", Some("folder"), None),
+            ["repo", "add", "--path=/srv/work", "--kind=folder", "--json"]
+        );
+        assert_eq!(
+            repo_add_args("/srv/work", Some("folder"), Some("Studio")),
+            [
+                "repo",
+                "add",
+                "--path=/srv/work",
+                "--kind=folder",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+    }
+
+    /// Runs `add_with` with the answers given in order, and gives its result and the arguments it asked with.
+    fn add_answered(answers: &[&str]) -> (Result<(), String>, Vec<Vec<String>>) {
+        let mut answers = answers.iter();
+        let mut asked = Vec::new();
+        let result = add_with("/work/a", Some("Studio"), |args| {
+            asked.push(args.to_vec());
+            Ok(answers
+                .next()
+                .expect("asked more than answered")
+                .to_string())
+        });
+        (result, asked)
+    }
+
+    const ADDED: &str = r#"{"ok": true, "result": {}}"#;
+    const NOT_GIT: &str = r#"{"ok": false, "error": {"code": "runtime_error", "message": "Not a valid git repository: /work/a", "data": {"nextSteps": ["rerun this command with --kind folder."]}}}"#;
+
+    #[test]
+    fn a_git_folder_is_added_with_one_call_and_no_kind() {
+        let (result, asked) = add_answered(&[ADDED]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked, [repo_add_args("/work/a", None, Some("Studio"))]);
+    }
+
+    #[test]
+    fn a_folder_that_is_not_git_is_asked_again_once_as_a_folder() {
+        let (result, asked) = add_answered(&[NOT_GIT, ADDED]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            asked,
+            [
+                repo_add_args("/work/a", None, Some("Studio")),
+                repo_add_args("/work/a", Some("folder"), Some("Studio")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folder_refused_as_a_folder_too_is_not_asked_a_third_time() {
+        let refused = r#"{"ok": false, "error": {"code": "runtime_error", "message": "Path is not a directory: /work/a"}}"#;
+        let (result, asked) = add_answered(&[NOT_GIT, refused]);
+        assert_eq!(result, Err("Path is not a directory: /work/a".to_owned()));
+        assert_eq!(asked.len(), 2);
+        // Even the same refusal twice is not asked again.
+        let (result, asked) = add_answered(&[NOT_GIT, NOT_GIT]);
+        assert_eq!(
+            result,
+            Err("Not a valid git repository: /work/a".to_owned())
+        );
+        assert_eq!(asked.len(), 2);
+    }
+
+    #[test]
+    fn any_other_failure_of_a_project_add_is_orcas_message_and_is_not_asked_again() {
+        for out in [
+            r#"{"ok": false, "error": {"code": "runtime_error", "message": "Repo already added"}}"#,
+            r#"{"ok": false, "error": {"code": "runtime_error"}}"#,
+            r#"{"ok": false, "error": {"message": "x Not a valid git repository"}}"#,
+            r#"{"ok": true, "error": {"message": "Not a valid git repository"}}"#,
+            "Not a valid git repository: /work/a",
+            "",
+        ] {
+            let (result, asked) = add_answered(&[out]);
+            assert_eq!(result, parse_output(out).map(|_| ()), "{out}");
+            assert_eq!(asked.len(), 1, "{out}");
+        }
+        assert!(is_not_git(NOT_GIT));
+        assert!(!is_not_git(ADDED));
+    }
+
+    #[test]
+    fn a_failed_run_of_the_cli_is_its_message_and_is_not_asked_again() {
+        let mut calls = 0;
+        let result = add_with("/work/a", None, |_| {
+            calls += 1;
+            Err(RunError::Failed("Orca が時間内に応答しませんでした".into()))
+        });
+        assert_eq!(result, Err("Orca が時間内に応答しませんでした".to_owned()));
+        assert_eq!(calls, 1);
+        let result = add_with("/work/a", None, |_| Err(RunError::Missing));
+        assert_eq!(result, Err(not_installed()));
+    }
+
+    #[test]
+    fn a_project_is_not_added_when_its_path_or_environment_is_refused() {
+        // Refused before Orca is asked for anything, so this runs no process.
+        assert!(add_project("work", None).is_err());
+        assert!(add_project("", Some("Studio")).is_err());
+        assert!(add_project("/work\0", None).is_err());
     }
 
     #[test]

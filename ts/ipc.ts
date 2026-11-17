@@ -2,6 +2,7 @@
 // A command with no arguments is called as `invoke("inbox")`. An answer of `null` is what a Rust `()` or `None` becomes.
 import type { AppInfo } from "./bindings/AppInfo";
 import type { AttachedFile } from "./bindings/AttachedFile";
+import type { BrowsedDir } from "./bindings/BrowsedDir";
 import type { Channel } from "./bindings/Channel";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { Checked } from "./bindings/Checked";
@@ -313,6 +314,12 @@ export interface Commands {
   orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
   // A-9: starts a session in a worktree with the instruction the owner wrote (`instruction`), the text of each file attached to it (`files`, A-10), the summary of the content (`summary`, empty without the content) and, when `context` is not null, the content quoted as data after them. Never run twice.
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; files: string[]; summary: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
+  // A-38: adds the folder `path` on the server of the saved environment `environment` to Orca as a project. Never run twice. A failure carries the message. A folder of this Mac is added only by `orca_project_add_here`.
+  orca_project_add: { args: { path: string; environment: string }; result: null };
+  // A-38: Rust opens the folder dialog of this Mac (the page gives no place and has no dialog permission), and adds the folder picked. `false` when the dialog was cancelled (nothing was added). Never run twice. A failure carries the message.
+  orca_project_add_here: { args: undefined; result: boolean };
+  // A-38: the folders in `path` of the saved environment `environment` (an empty path is its home folder), for the dialog that picks the folder of a project to add. `resolvedPath` is the folder Orca opened, `folders` the names in it. A failure carries the message.
+  orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. On `terminal_handle_stale` it closes once more without `--tab`, and a failure of that is an error.

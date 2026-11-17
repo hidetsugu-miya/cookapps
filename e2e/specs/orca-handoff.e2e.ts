@@ -59,7 +59,7 @@ const bootOrca = (fixtures: Record<string, unknown> = {}) =>
 // ---- the three screens ----
 
 const MAIL = { pane: "#mail-handoff", button: "#thread-orca" };
-const TODO = { pane: "#todo-handoff", button: "#todo-tool-orca" };
+const TODO = { pane: "#todo-handoff", button: "#todo-orca-open" };
 const SLACK = { pane: "#st-orca", button: "#reply-tab-orca" };
 type Screen = typeof MAIL;
 
@@ -1187,21 +1187,39 @@ describe("orca handoff", () => {
     await browser.waitUntil(async () => (await termText(MAIL)).includes("claude"), { timeoutMsg: "the screen of the session never showed in the pane" });
   });
 
-  it("opens from the header icon of a Todo, with its content as the card", async () => {
+  it("opens from the header icon of a Todo, under the detail in the same scroll, with its content as the card", async () => {
     await openTodo();
     await expect($(TODO.button)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect($(TODO.button)).toHaveAttribute("aria-pressed", "false");
+    await expect($(TODO.pane)).not.toBeDisplayed();
     const handoff = await mock("orca_handoff", started);
     await openPane(TODO);
     await expect($(TODO.button)).toHaveAttribute("aria-pressed", "true");
-    await expect($("#todo-split")).toHaveAttribute("role", "separator");
-    // The pane is chosen by the icons of the right side, so it has no close icon of its own before a send; its title is the second row.
+    // The button is in the header of the tasks at the left of 編集, the pane follows the detail inside #todo-main, in view, and the right side holds Claude's pane alone.
+    const place = await browser.execute(() => {
+      const rect = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const main = rect("#todo-main");
+      const pane = rect("#todo-handoff");
+      return {
+        inHeader: document.querySelector("#todo-body > header > #todo-orca-open") !== null,
+        leftOfEdit: rect("#todo-orca-open").right <= rect("#todo-more").left,
+        inMain: document.querySelector("#todo-main > #todo-handoff") !== null,
+        underDetail: pane.top >= rect("#todo-detail").bottom - 1,
+        inView: pane.top >= main.top - 1 && pane.top < main.bottom,
+        inSide: document.querySelectorAll("#todo-side #todo-handoff, #todo-side .ho-pane, #todo-tool-orca").length,
+      };
+    });
+    expect(place).toEqual({ inHeader: true, leftOfEdit: true, inMain: true, underDetail: true, inView: true, inSide: 0 });
+    await expect($("#todo-claude")).toBeDisplayed();
+    // The pane goes with the task, so it has no close icon before a send; its title is its first row.
     expect(await textsOf(`${TODO.pane} .ho-title`)).toEqual(["Orca に渡す"]);
     await expect($(`${TODO.pane} .ho-head [aria-label="閉じる"]`)).not.toBeDisplayed();
     expect(await textsOf(`${TODO.pane} .ho-card-title`)).toEqual(["Write report"]);
     expect(await textsOf(`${TODO.pane} .ho-card-meta`)).toEqual(["説明なし ・ 今日"]);
     await chooseProject(TODO, "example-app");
     await write(TODO, "実装して");
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    const read = await mock("orca_terminal_read", ["$ claude"]);
     await sendButton(TODO).click();
     const [call] = (await waitForCalls(handoff)) as Handed[];
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-app" });
@@ -1209,13 +1227,20 @@ describe("orca handoff", () => {
     expect(call.context!.title).toBe("Write report");
     expect(call.context!.body).toContain("タスク: Write report");
     expect(call.context!.body).toContain("プロジェクト: Work");
-    // Back to the list: the pane is gone (Claude's is back), and the icon waits for a task.
+    // After the send the terminal of the session is in the pane, at a fixed height.
+    await waitForCalls(read);
+    await expect($(`${TODO.pane} .ho-session-name`)).toBeDisplayed();
+    await browser.waitUntil(async () => (await termText(TODO)).includes("claude"), { timeoutMsg: "the screen of the session never showed in the pane" });
+    expect(await heightOf(`${TODO.pane} .ho-term`)).toBe(480);
+    // Back to the list: the pane and the button are gone, and the right side still holds Claude's pane.
     await $("#todo-back").click();
     await expect($(TODO.pane)).not.toBeDisplayed();
-    await expect($(TODO.button)).toBeDisabled();
-    // The same task again shows its session.
+    await expect($(TODO.button)).not.toBeDisplayed();
+    await expect($("#todo-claude")).toBeDisplayed();
+    // The same task again shows its session, with the button pressed.
     await $("#todo-list li.task").click();
     await expect($(`${TODO.pane} .ho-session-name`)).toBeDisplayed();
+    await expect($(TODO.button)).toHaveAttribute("aria-pressed", "true");
   });
 
   it("makes the right pane of the Slack thread tabs, Claude first and selected, and Orca hands the thread over", async () => {

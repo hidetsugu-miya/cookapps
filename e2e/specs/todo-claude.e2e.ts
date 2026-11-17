@@ -6,8 +6,10 @@ const pane = "#todo-claude";
 const log = "#todo-claude-log";
 const input = () => $("#todo-claude-input");
 const send = () => $("#todo-claude-send");
+// A press with the pointer actions. The driver's element click calls `el.click()` and then `el.focus()` on the element itself, which would take the focus back from the field that the press gave it.
+const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
 
-// The pane is open from the start: the icon of the right side only chooses it again.
+// The pane is open from the start: the ✳ of the right side only puts the focus in its request field.
 const openPane = async () => {
   await expect($(pane)).toBeDisplayed();
 };
@@ -41,38 +43,37 @@ async function ask(text: string, reply: unknown, replies = 1) {
 }
 
 describe("todo Claude pane", () => {
-  it("is open from the start in a right side with the two icons, and has no close button and no ✳ of the summary prompt", async () => {
+  it("is open from the start in a right side with the ✳ alone in its first row, and has no close button and no ✳ of the summary prompt", async () => {
     await openTodo();
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
     await expect($("#todo-tool-claude")).toHaveAttribute("aria-label", "Claude に相談");
-    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
-    await expect($("#todo-tool-orca")).toHaveAttribute("aria-label", "Orca に渡す");
-    await expect($("#todo-tool-orca")).toHaveAttribute("aria-pressed", "false");
+    // Nothing is chosen on the right side, so the ✳ has no pressed state, and the Orca icon is not in the row.
+    await expect($("#todo-tool-claude")).not.toHaveAttribute("aria-pressed");
+    expect(await count("#todo-tool-orca, #todo-tools #todo-orca-open")).toBe(0);
     await expect($(`${pane} .chat-head`)).toHaveText(expect.stringContaining("Claude"));
     // The buttons that were in the header of the tasks, and the close icon of the pane, are gone.
     expect(await count("#todo-prompt, #todo-claude-btn, #todo-orca, #todo-claude-close")).toBe(0);
-    // The first row: the two icons, at the right of the right side; the header of the tasks and this row are tinted the same and meet at the same line.
+    // The first row: the ✳ alone, at the right of the right side; the header of the tasks and this row are tinted the same and meet at the same line.
     const rows = await browser.execute(() => {
       const head = document.querySelector("#todo-body > header")!.getBoundingClientRect();
       const tools = document.querySelector("#todo-tools")!.getBoundingClientRect();
       const claude = document.querySelector("#todo-tool-claude")!.getBoundingClientRect();
-      const orca = document.querySelector("#todo-tool-orca")!.getBoundingClientRect();
       const color = (s: string) => getComputedStyle(document.querySelector(s)!);
       return {
         level: Math.abs(head.bottom - tools.bottom) < 1,
-        right: tools.right - orca.right < 40 && claude.right <= orca.left,
+        right: tools.right - claude.right < 40,
         same: color("#todo-body > header").backgroundColor === color("#todo-tools").backgroundColor && color("#todo-body > header").borderBottomColor === color("#todo-tools").borderBottomColor,
         line: color("#todo-tools").borderBottomWidth,
-        heights: [head.height, tools.height, claude.height, orca.height],
+        heights: [head.height, tools.height, claude.height],
       };
     });
-    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [44, 44, 28, 28] });
-    // A click on Claude's icon keeps Claude's pane.
-    await $("#todo-tool-claude").click();
+    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [44, 44, 28] });
+    // A click on the ✳ keeps the pane and puts the focus in the request field.
+    await press($("#todo-tool-claude"));
     await expect($(pane)).toBeDisplayed();
-    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect(input()).toBeFocused();
   });
 
   it("starts the right side at 30% of the screen, its least", async () => {
@@ -112,32 +113,27 @@ describe("todo Claude pane", () => {
     expect(await composerLayout("todo-claude")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
   });
 
-  it("is never shown with the Orca pane: the Orca icon waits for a task, and either icon chooses its pane", async () => {
+  it("is the only pane of the right side: the pane of Orca is under the detail, and opening it changes nothing on the right", async () => {
     await openTodo();
-    // The Orca icon is for a task's detail.
-    await expect($("#todo-tool-orca")).toBeDisabled();
+    // The button of Orca is for a task's detail, in the header of the tasks.
+    await expect($("#todo-orca-open")).not.toBeDisplayed();
     await $("#todo-list li.task").click();
-    await expect($("#todo-tool-orca")).toBeEnabled();
+    await expect($("#todo-orca-open")).toBeDisplayed();
     await expect($(pane)).toBeDisplayed();
-    await $("#todo-tool-orca").click();
+    await $("#todo-orca-open").click();
     await expect($("#todo-handoff")).toBeDisplayed();
-    await expect($(pane)).not.toBeDisplayed();
-    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "false");
-    await expect($("#todo-tool-orca")).toHaveAttribute("aria-pressed", "true");
-    await expect($("#todo-split")).toHaveAttribute("aria-label", "Orca の幅");
-    await $("#todo-tool-claude").click();
     await expect($(pane)).toBeDisplayed();
-    await expect($("#todo-handoff")).not.toBeDisplayed();
-    await expect($("#todo-tool-orca")).toHaveAttribute("aria-pressed", "false");
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
-    // Leaving the task puts Claude's pane back, and the Orca icon waits again.
-    await $("#todo-tool-orca").click();
+    // The ✳ only puts the focus in the request field: the Orca pane stays open.
+    await press($("#todo-tool-claude"));
+    await expect(input()).toBeFocused();
     await expect($("#todo-handoff")).toBeDisplayed();
+    // Leaving the task takes the pane under it away, and Claude's stays.
     await $("#todo-back").click();
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-handoff")).not.toBeDisplayed();
-    await expect($("#todo-tool-orca")).toBeDisabled();
+    await expect($("#todo-orca-open")).not.toBeDisplayed();
   });
 
   it("stays between the list and a task, hides under the page of a draft and the token form, and comes back", async () => {
@@ -157,7 +153,6 @@ describe("todo Claude pane", () => {
     await expect($("#todo-tools")).not.toBeDisplayed();
     await $("#todo-back").click();
     await expect($("#todo-tools")).toBeDisplayed();
-    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-split")).toBeDisplayed();
   });
@@ -450,7 +445,6 @@ describe("todo Claude pane", () => {
     }, onceId());
     await waitForCount("#todo-list li.task", 2);
     await expect($(pane)).toBeDisplayed();
-    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
     expect(await count(`${log} .chat-task`)).toBe(2);
     await expect($(`${log} .chat-user`)).toHaveText("出して");
   });

@@ -1,5 +1,5 @@
 // The Claude pane of the Todo screen (T-7): a conversation (claude-chat.ts) in which Claude answers a request about the owner's tasks and proposes tasks, drawn as cards under its reply, which the owner can change and add or reject.
-// The pane's elements are in `index.html` (`todo-claude-*`) except the request field, which composer.ts makes; todo.ts shows it in the right pane of the screen, in the place of the Orca pane's. The conversation is held in memory only, and Todoist gets a task only when its card's 追加 is pressed.
+// The pane's elements are in `index.html` (`todo-claude-*`) except the request field, which composer.ts makes; todo.ts shows it in the right pane of the screen. The conversation is held in memory only, and Todoist gets a task only when its card's 追加 is pressed.
 import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { createChat } from "./claude-chat.js";
 import { showModelSlot } from "./claude.js";
@@ -173,7 +173,7 @@ export const refreshTodoClaude = () => chat.refresh();
 // The pane is shown: its selects need the settings.
 export const showTodoClaudeModels = () => showModelSlot("todo-claude-model");
 
-// The icon of the pane was pressed: the request field gets the focus.
+// The ✳ of the right side was pressed: the request field gets the focus.
 export const focusTodoClaude = () => $("todo-claude-input").focus();
 
 export function initTodoClaude() {

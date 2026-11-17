@@ -1098,7 +1098,7 @@ mod tests {
             panic!()
         };
         assert_eq!(rows[0].line, "質問の題名");
-        assert_eq!(rows[0].reply, None);
+        assert_eq!(rows[0].latest, None);
     }
 
     #[test]

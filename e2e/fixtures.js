@@ -175,6 +175,15 @@ answers.claude_connection ??= { method: "subscription", subscription: answers.cl
 window.__e2e_mocks__ = {};
 window.__e2e_calls__ = {};
 
+// A-38: the folders of a saved environment's server (`orca_browse_dir`), as Rust answers them (the names of the folders, in the order of their names; the home folder for an empty path). A path that is none of these fails as an unreadable one does.
+const browseTree = {
+  "/": ["home", "srv"],
+  "/home": ["dev"],
+  "/home/dev": [".config", "Documents", "workspace"],
+  "/home/dev/workspace": ["api", "app", "web"],
+  "/srv": [],
+};
+
 // Commands whose base answer follows their arguments. `orca_panes` (A-17) answers as Rust does for a project that was never split: one pane with every tab, the tab last selected shown (kept between calls, as the saved layout is, else the first), and nothing else changed;
 // a spec that splits mocks it with the layout it wants.
 const selectedIn = {};
@@ -196,6 +205,11 @@ const computed = {
   // A-34: the settings of a repository that has none saved, and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
   lsp_settings: ({ environment, project }) => ({ environment, project, autoStart: true, command: null, mount: null, service: null, sshHost: null }),
   lsp_settings_set: ({ settings }) => settings,
+  orca_browse_dir: ({ path }) => {
+    const resolvedPath = path.trim() === "" || path.trim() === "~" ? "/home/dev" : path;
+    if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";
+    return { resolvedPath, folders: browseTree[resolvedPath] };
+  },
   orca_panes: ({ environment, project, tabs, op }) => {
     const key = JSON.stringify([environment, project]);
     if (op?.kind === "select" && tabs.includes(op.tab)) selectedIn[key] = op.tab;

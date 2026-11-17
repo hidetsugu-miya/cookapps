@@ -382,9 +382,10 @@ describe("orchestration mode: the flow pane", () => {
     // The read in hand is not answered, so no other starts while the periods pass.
     await browser.pause(READ * 3);
     expect((await callsOf("formation_children")).length).toBe(1);
-    await release("formation_children", [formationChild("api-update", "working")]);
+    // Answer the next reads before the held one is released, so that the read that follows it is not held again; `mock` forgets the calls, and the next one is the first of the new answer.
     await mock("formation_children", [formationChild("api-update", "working")]);
-    await waitForCalls("formation_children", 2);
+    await release("formation_children", [formationChild("api-update", "working")]);
+    await waitForCalls("formation_children", 1);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update");
   });
 
@@ -942,8 +943,8 @@ describe("orchestration mode: the list of the formations", () => {
     expect(await cardNames()).toEqual([]);
     await expect($("#formation-flow")).not.toBeDisplayed();
     // The read of the new formation is answered, and its children are drawn.
-    await release("formation_children", [formationChild("api-update", "working")]);
     await mock("formation_children", [formationChild("api-update", "working")]);
+    await release("formation_children", [formationChild("api-update", "working")]);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update");
   });
 
@@ -1361,9 +1362,10 @@ describe("orchestration mode: the count on the footer's icon", () => {
     await waitForCalls("formation_list", 1);
     await browser.pause(READ * 3);
     expect((await callsOf("formation_list")).length).toBe(1);
-    await release("formation_list", waitingList(1));
+    // Answer the next reads before the held one is released, so that the read that follows it is not held again; `mock` forgets the calls, and the next one is the first of the new answer.
     await mock("formation_list", waitingList(1));
-    await waitForCalls("formation_list", 2);
+    await release("formation_list", waitingList(1));
+    await waitForCalls("formation_list", 1);
     await expect(badge()).toHaveText("1");
     expect(await callsOf("formation_children")).toEqual([]);
   });
