@@ -262,11 +262,28 @@ fn formation_start_arg(args: impl IntoIterator<Item = String>) -> Result<Option<
     formation_name_after(args, "--formation-start")
 }
 
-/// Writes the files of the orchestrator of `name` in the config folder of this machine and runs its script in place of this process, with this `tsunagiai-mcp` as the server of its `mcp.json`. It returns only when that failed, with the message.
-fn start_orchestrator(name: &str) -> String {
+/// The repositories named by `--project {repo}`, as many as there are (none is fine): the projects of the formation that `--formation-start` starts, all of this machine. The flag with no value is an error. A value is taken as it is, even one that looks like a flag; `first_prompt` checks the names.
+fn project_args(args: impl IntoIterator<Item = String>) -> Result<Vec<String>, String> {
+    let mut args = args.into_iter();
+    let mut projects = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--project" {
+            projects.push(
+                args.next()
+                    .ok_or_else(|| "--project にはリポジトリの名前が要ります".to_owned())?,
+            );
+        }
+    }
+    Ok(projects)
+}
+
+/// Writes the files of the orchestrator of `name` in the config folder of this machine and runs its script in place of this process, with this `tsunagiai-mcp` as the server of its `mcp.json`, and `projects` as its first instruction. It returns only when that failed, with the message.
+fn start_orchestrator(name: &str, projects: &[String]) -> String {
     let start = std::env::current_exe()
         .map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))
-        .and_then(|mcp| claude_code::formation_start(&identity::config_dir()?, name, &mcp));
+        .and_then(|mcp| {
+            claude_code::formation_start(&identity::config_dir()?, name, projects, &mcp)
+        });
     let start = match start {
         Ok(start) => start,
         Err(e) => return e,
@@ -573,7 +590,9 @@ impl rmcp::ServerHandler for Tsunagiai {}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match formation_start_arg(std::env::args().skip(1)) {
         Ok(Some(name)) => {
-            eprintln!("{}", start_orchestrator(&name));
+            let message = project_args(std::env::args().skip(1))
+                .map_or_else(|e| e, |projects| start_orchestrator(&name, &projects));
+            eprintln!("{message}");
             std::process::exit(1);
         }
         Ok(None) => {}
@@ -601,9 +620,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        db_test_answer, formation_arg, formation_start_arg, router, DbProfileSaveArgs,
-        FormationFilesArgs, FormationGitArgs, FormationLaunchArgs, FormationPlanArgs,
-        FormationReadArgs, FormationWorktreesArgs, Tsunagiai,
+        db_test_answer, formation_arg, formation_start_arg, project_args, router,
+        DbProfileSaveArgs, FormationFilesArgs, FormationGitArgs, FormationLaunchArgs,
+        FormationPlanArgs, FormationReadArgs, FormationWorktreesArgs, Tsunagiai,
     };
 
     #[test]
@@ -865,6 +884,34 @@ mod tests {
         ] {
             assert!(formation_start_arg(args(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_projects_are_the_values_of_each_project_flag_in_order_and_none_is_fine() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(project_args(args(&[])), Ok(vec![]));
+        assert_eq!(
+            project_args(args(&["--formation-start", "api-work"])),
+            Ok(vec![])
+        );
+        assert_eq!(
+            project_args(args(&[
+                "--formation-start",
+                "api-work",
+                "--project",
+                "api",
+                "--project",
+                "it's a repo",
+            ])),
+            Ok(vec!["api".to_owned(), "it's a repo".to_owned()])
+        );
+        // A value is a value even when it reads as a flag.
+        assert_eq!(
+            project_args(args(&["--project", "--project", "--project", "x"])),
+            Ok(vec!["--project".to_owned(), "x".to_owned()])
+        );
+        // The flag with no value is an error and not "no project".
+        assert!(project_args(args(&["--formation-start", "a", "--project"])).is_err());
     }
 
     #[test]

@@ -1968,7 +1968,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   });
 
   it("says in the pane why the terminal could not be made, and asks again on the restart button", async () => {
-    const reason = "司令塔を起動できません（環境「mac-studio」）: 時間内に入力待ちになりませんでした。その PC に tsunagiai-mcp（つなぎAI のアプリの中か PATH）があるか確かめてください";
+    const reason = "司令塔を起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
     await openList({ formation_list: remote(), ...SHOWN }, null);
     await mock("formation_orchestrator", rejects(reason));
     await row("studio-work").click();
