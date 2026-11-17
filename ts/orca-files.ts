@@ -83,8 +83,8 @@ let branchSwitched: () => void = () => {};
 let branchMoved: () => void = () => {};
 // The branch the app itself just switched the worktree to: the tree and the history were read for it then, so the list that shows it starts no second read.
 let switchedTo: string | null = null;
-// Told that the file `relative` (with `folder`, the folder and everything under it) is gone, so the tabs of the editor that hold it close.
-let gone: (here: FilesContext, relative: string, folder: boolean) => void = () => {};
+// Told that the entries `deleted` (each a file, or with `folder` the folder and everything under it) are gone, so the tabs of the editor that hold them close, and the screen is drawn once.
+let gone: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void = () => {};
 // Told that `relative` is about to be moved: the editor holds the saves of the files it takes along, and the function it answers is called when the move is over, with the new place or with null when it failed.
 let hold: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> = async () => () => {};
 // The heading as it is drawn (the label and the branch), so that the branch button stays while the list under it is open.
@@ -549,7 +549,7 @@ async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
   }
   // The message comes first: closing a tab may show another worktree's tree, which is a new tree.
   if (mine === generation && answer.error !== null) showError(answer.error);
-  for (const { relative, folder } of answer.deleted) gone(here, relative, folder);
+  gone(here, answer.deleted);
   if (mine !== generation) return;
   for (const { relative, folder } of answer.deleted) {
     if (!folder) continue;
@@ -808,7 +808,7 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; definition: { inside: (relative: string, line: number, character: number) => void; outside: (path: string, line: number, character: number) => void }; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, relative: string, folder: boolean) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; definition: { inside: (relative: string, line: number, character: number) => void; outside: (path: string, line: number, character: number) => void }; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;

@@ -1305,7 +1305,12 @@ export function initOrca() {
       void refreshOrca(true);
     },
     moved: rereadTabs,
-    deleted: (here, relative, folder) => discardFiles(here.target, here.project, here.path, relative, folder) && draw(),
+    // One draw for the whole delete, not one for each entry whose tabs closed.
+    deleted: (here, deleted) => {
+      let closed = false;
+      for (const { relative, folder } of deleted) closed = discardFiles(here.target, here.project, here.path, relative, folder) || closed;
+      if (closed) draw();
+    },
     // A-18: the tabs of the files that a move takes along wait with their saves, and take the new path (and the new name of the tab) when it is done.
     moving: async (here, relative) => {
       const release = await holdFiles(here.target, here.project, here.path, relative);

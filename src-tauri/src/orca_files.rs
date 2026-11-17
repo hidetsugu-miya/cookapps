@@ -19,7 +19,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
@@ -850,21 +850,28 @@ fn delete_plan(entries: &[OrcaDeleteEntry]) -> Result<Vec<OrcaDeleteEntry>, Stri
     for entry in entries {
         check_written(&entry.relative, false)?;
     }
+    let folders: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.folder)
+        .map(|entry| entry.relative.as_str())
+        .collect();
     let mut plan: Vec<OrcaDeleteEntry> = Vec::new();
+    let mut at: HashMap<&str, usize> = HashMap::new();
     for entry in entries {
-        let inside = entries.iter().any(|other| {
-            other.folder
-                && entry
-                    .relative
-                    .strip_prefix(&other.relative)
-                    .is_some_and(|rest| rest.starts_with('/'))
-        });
+        // The folders above the path are its prefixes that end before a `/`.
+        let inside = entry
+            .relative
+            .match_indices('/')
+            .any(|(end, _)| folders.contains(&entry.relative[..end]));
         if inside {
             continue;
         }
-        match plan.iter_mut().find(|kept| kept.relative == entry.relative) {
-            Some(kept) => kept.folder |= entry.folder,
-            None => plan.push(entry.clone()),
+        match at.get(entry.relative.as_str()) {
+            Some(&index) => plan[index].folder |= entry.folder,
+            None => {
+                at.insert(entry.relative.as_str(), plan.len());
+                plan.push(entry.clone());
+            }
         }
     }
     Ok(plan)
@@ -4247,6 +4254,18 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(plan, vec![doomed("a.rs", false), doomed("src", true)]);
+    }
+
+    #[test]
+    fn a_folder_named_later_or_twice_still_takes_what_is_under_it_at_any_depth() {
+        let plan = delete_plan(&[
+            doomed("src/lib/deep/a.rs", false),
+            doomed("src", false),
+            doomed("x", false),
+            doomed("src", true),
+        ])
+        .unwrap();
+        assert_eq!(plan, vec![doomed("src", true), doomed("x", false)]);
     }
 
     #[test]
