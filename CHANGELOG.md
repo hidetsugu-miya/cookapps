@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.81.3
+
+A-37: the orchestration mode holds several formations, in three panes: the list of the formations at the left, the orchestrator of the selected one in the middle, and its flow with the session of the selected child at the right (#818 to #825). Pressing a row of the list switches the orchestrator and the flow to that formation; the restart button restarts only the shown orchestrator. The plus of the list's heading opens a dialog that takes a name and the projects (the repositories of this Mac and of the saved Orca environments); the new formation's orchestrator starts with the chosen projects as its first instruction, at each start and restart. Each formation keeps its children in a folder of its own, `formation/{name}/`, and the children recorded before are moved to the first formation, `formation`. While the Orca mode is shown, the count on the orchestration button adds up the children that wait for approval in every formation.
+
+A-37: a child's branch is `{kind}/{ticket}` (`feature`, `fix`, `chore` or `refactor`, for example `feature/WON-2482`), the same in every repository for one ticket, with no prefix of the user name (#824). On this Mac it starts from the repository's `origin/HEAD`. A launch on a branch that already exists is refused, and the orchestrator asks you.
+
+A-37: a right press on a row of the list deletes a formation after a confirmation (#825). Every child is checked first as closing it would check it; when one cannot be closed (a change, an untracked file or a commit that no remote has), nothing is closed and the orchestrator keeps running. Otherwise the orchestrator is ended, the children are closed and the formation's folder is deleted. The first formation cannot be deleted.
+
+A-37: the band over the selected child's session has the height and the form of the orchestrator's header (#818).
+
 ## v0.81.2
 
 A-37: the orchestrator can start children in a saved Orca environment as well as on this Mac (#809, #810, #811). Its new tool `formation_environments` lists this Mac and each saved environment with their repositories, and `formation_launch` and `formation_plan` take the environment with the repository, refusing a repository that the environment does not have and naming the ones it has. Before it starts or plans a child, the orchestrator checks there where the project you named is, and asks you when it is in no environment or in more than one. The state of each child and its terminal on the screen are read from the Orca of its environment; one environment that cannot be read leaves its children as working and the others as read. A child of a saved environment is closed only after that environment's Orca has confirmed that its worktree has no change, no untracked file and no commit missing from its upstream, and a child whose environment was removed from Orca is taken off the list without deleting anything.
