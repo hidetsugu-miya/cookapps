@@ -1021,10 +1021,15 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
     on(args, environment)
 }
 
-/// The shell sentence that starts an orchestrator on its PC: the first of `APP_MCP`, `CARGO_MCP` and the `tsunagiai-mcp` of the PATH that can be executed, run with `--formation-start {name}` and one `--project {repo}` for each of `repos` in place of the `sh` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again, which fish reads too). A PC with none of the three prints `MCP_NOT_FOUND` and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads, and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
+/// The shell sentence that starts an orchestrator on its PC: the first of `APP_MCP`, `CARGO_MCP` and the `tsunagiai-mcp` of the PATH that can be executed, run with `--formation-start {name}` and one `--project {repo}` for each of `repos` in place of the `sh` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC with none of the three prints `MCP_NOT_FOUND` and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads, and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
 fn orchestrator_command(name: &str, repos: &[String]) -> Result<String, String> {
     check_name(name)?;
     local_first_prompt(repos)?;
+    if let Some(repo) = repos.iter().find(|repo| repo.contains('\\')) {
+        return Err(format!(
+            "リポジトリ「{repo}」の名前に \\ があります（シェルによって読み方が変わるため、使えません）"
+        ));
+    }
     let projects: String = repos
         .iter()
         .map(|repo| format!(" --project {}", crate::claude_code::sh_quote(repo)))
@@ -9359,6 +9364,20 @@ mod tests {
             );
         }
         assert!(orchestrator_command("api-work", &many[..50]).is_ok());
+    }
+
+    #[test]
+    fn a_repository_with_a_backslash_is_refused_because_fish_reads_it_inside_single_quotes_as_an_escape(
+    ) {
+        let repos = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        for bad in [&["a\\"][..], &["a\\", "b"], &["x\\\\y"], &["api", "x\\y"]] {
+            let error = orchestrator_command("api-work", &repos(bad)).unwrap_err();
+            assert!(
+                error.contains('\\') && error.contains("使えません"),
+                "{bad:?}: {error}"
+            );
+        }
+        assert!(orchestrator_command("api-work", &repos(&["a/b", "it's"])).is_ok());
     }
 
     #[test]
