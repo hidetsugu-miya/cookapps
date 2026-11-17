@@ -327,7 +327,7 @@ fn check_created_branch(requested: &str, created: &str) -> Result<(), String> {
         ));
     }
     Err(format!(
-        "branch「{requested}」はもうあるので、Orca は別の名前「{created}」で作りました。あるブランチは引き継げません"
+        "branch「{requested}」は引き継げず、Orca は別の名前「{created}」で作りました（同じ名前の branch が、ローカルに別のコミットであるか、起点にできない場所にあります）"
     ))
 }
 
@@ -339,6 +339,20 @@ fn default_base(environment: &str, path: &str) -> Option<String> {
     git(&git_origin_head_args(path))
         .ok()
         .and_then(|output| base_of(&output))
+}
+
+/// Whether the repository on this Mac has `branch` as a branch of `origin` (`refs/remotes/origin/{branch}`), as a child that pushed and was closed leaves it. Nothing is fetched: it reads the refs of this Mac as `default_base` does, and a child's push of its worktree, which shares them, has set it. A repository of a saved environment is on another machine, so it is not asked and the branch is taken for not being there.
+fn on_origin(environment: &str, path: &str, branch: &str) -> bool {
+    environment == LOCAL && !path.is_empty() && git(&git_origin_branch_args(path, branch)).is_ok()
+}
+
+/// The ref a child starts from: `origin/{branch}` when `branch` is on `origin`, so that Orca makes the branch of that name at the commit that was pushed, with `origin/{branch}` as its upstream, and otherwise `default` (`default_base`). `branch` has the form of `check_branch`.
+fn start_of(branch: &str, on_origin: bool, default: Option<String>) -> Option<String> {
+    if on_origin {
+        Some(format!("origin/{branch}"))
+    } else {
+        default
+    }
 }
 
 /// What `git symbolic-ref --short refs/remotes/origin/HEAD` printed, when it names a ref of `origin`.
@@ -775,6 +789,17 @@ fn git_origin_head_args(path: &str) -> Vec<String> {
     .to_vec()
 }
 
+fn git_origin_branch_args(path: &str, branch: &str) -> Vec<String> {
+    vec![
+        "-C".into(),
+        path.into(),
+        "rev-parse".into(),
+        "--verify".into(),
+        "--quiet".into(),
+        format!("refs/remotes/origin/{branch}"),
+    ]
+}
+
 fn git_remote_args(path: &str) -> Vec<String> {
     vec!["-C".into(), path.into(), "remote".into()]
 }
@@ -1126,7 +1151,11 @@ pub fn launch(
     let environment = environment.as_str();
     let list = repos(environment)?;
     let repo = chosen_repo(&list, environment, repo)?;
-    let base = default_base(environment, &repo.path);
+    let base = start_of(
+        branch,
+        on_origin(environment, &repo.path, branch),
+        default_base(environment, &repo.path),
+    );
     let made = orca::write(&orca::create_worktree_args(
         &repo.id,
         name,
@@ -2854,6 +2883,55 @@ mod tests {
                 "symbolic-ref",
                 "--short",
                 "refs/remotes/origin/HEAD"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_branch_that_is_on_origin_is_the_start_of_the_child_that_takes_it_over() {
+        let default = || Some("origin/main".to_owned());
+        assert_eq!(
+            start_of("feature/WON-1", true, default()),
+            Some("origin/feature/WON-1".into())
+        );
+        // Not on origin (or not known to be, as in a saved environment's repository): the start stays the default one, or Orca's own.
+        assert_eq!(
+            start_of("feature/WON-1", false, default()),
+            Some("origin/main".into())
+        );
+        assert_eq!(start_of("feature/WON-1", false, None), None);
+        assert_eq!(
+            start_of("feature/WON-1", true, None),
+            Some("origin/feature/WON-1".into())
+        );
+        // What reaches Orca: `--base-branch=origin/{branch}` next to `--branch={branch}`, and the default one otherwise.
+        let args = |on| {
+            orca::create_worktree_args(
+                "repo1",
+                "web-2",
+                Some("feature/WON-1"),
+                start_of("feature/WON-1", on, default()).as_deref(),
+                Some("local"),
+            )
+        };
+        assert!(args(true).contains(&"--branch=feature/WON-1".to_owned()));
+        assert!(args(true).contains(&"--base-branch=origin/feature/WON-1".to_owned()));
+        assert!(args(false).contains(&"--base-branch=origin/main".to_owned()));
+    }
+
+    #[test]
+    fn only_the_repository_of_this_mac_is_asked_whether_a_branch_is_on_origin() {
+        assert!(!on_origin("Studio", "/repo", "feature/WON-1"));
+        assert!(!on_origin(LOCAL, "", "feature/WON-1"));
+        assert_eq!(
+            git_origin_branch_args("/--repo", "feature/WON-1"),
+            [
+                "-C",
+                "/--repo",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/remotes/origin/feature/WON-1"
             ]
         );
     }
