@@ -7,6 +7,10 @@ import type { FormationProject } from "./FormationProject";
  */
 export type FormationEntry = { name: string, projects: Array<FormationProject>, 
 /**
+ * The PC it belongs to: `local` (this Mac), or the saved environment of its projects (`formation_environment`). Its orchestrator runs there.
+ */
+environment: string, 
+/**
  * When it was created (epoch milliseconds); `None` for a formation that has no `formation.json`.
  */
 createdAt: number | null, counts: ChildCounts, };

@@ -434,6 +434,7 @@ pub fn run() {
             claude_code::claude_code_close,
             formation::formation_children,
             formation::formation_environments,
+            formation::formation_orchestrator,
             formation::formation_list,
             formation::formation_create,
             formation::formation_delete,

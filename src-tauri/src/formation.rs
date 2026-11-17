@@ -3,7 +3,8 @@
 //! Every command of Orca and of git is run with an argument list, never through a shell, and what they print is data: it is quoted in the answer and never read as an instruction.
 
 use std::{
-    collections::HashMap,
+    cell::OnceCell,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock, PoisonError},
@@ -19,6 +20,7 @@ use ts_rs::TS;
 use crate::{
     accounts,
     auth::config_dir,
+    identity::IDENTIFIER,
     orca,
     orca_attach::{worktree_params, Rpc},
     orca_files::{
@@ -76,6 +78,8 @@ const STEP_LISTED: &str = "worktree の一覧の読み取り";
 const STEP_FILES: &str = "フォルダの一覧の読み取り";
 const STEP_FILE: &str = "ファイルの読み取り";
 const STEP_GIT_STATE: &str = "git の状態の読み取り";
+/// Where `tsunagiai-mcp` is in the app of a PC, which the command of an orchestrator's terminal runs first (`orchestrator_command`).
+const APP_MCP: &str = "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp";
 
 /// `formation/` in the config directory: the folder of the formations, one folder under it for each.
 fn root(config: &Path) -> PathBuf {
@@ -255,7 +259,7 @@ fn update(
 pub struct PlannedChild {
     /// The name the child will be launched with.
     pub name: String,
-    /// The environment of the repository: `local` for this Mac, else the name (or the id) of a saved environment in `formation_environments`.
+    /// The environment of the repository: `local`, the PC this orchestrator runs on. Another environment is refused: SendMessage reaches only a child on the same PC.
     pub environment: String,
     /// The repository: its name in `orca repo list` of that environment.
     pub repo: String,
@@ -504,6 +508,12 @@ struct Meta {
     /// Epoch milliseconds.
     #[serde(default)]
     created_at: Option<u64>,
+    /// The handle of the terminal of the orchestrator in the Orca of a saved environment (`start_orchestrator_with`): only a formation of a saved environment has one. A file written before it was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    orchestrator_terminal: Option<String>,
+    /// The folder of the first project's repository in the Orca of the PC (`start_orchestrator_with` resolves it with `orca repo list`): the worktree that Orca is asked the PC's `children.json` from. The screen's polls read the record with it and run no `orca repo list`; a formation that has none never had its orchestrator started on its PC, so that PC has no record of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pc_repo_path: Option<String>,
 }
 
 /// The file of `formation`: a missing one is none, but one that is there and cannot be read is an error, so that the orchestrator does not start as if the formation had no project.
@@ -516,6 +526,43 @@ fn read_meta(config: &Path, formation: &str) -> Result<Meta, String> {
         Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
     };
     serde_json::from_str(&text).map_err(|_| format!("{} の形式が正しくありません", path.display()))
+}
+
+/// Changes `formation.json` of `formation` while the lock of the record is held (the file is read, changed and written through a temporary file). A formation whose folder is gone is not brought back.
+fn update_meta(
+    config: &Path,
+    formation: &str,
+    change: impl FnOnce(&mut Meta),
+) -> Result<(), String> {
+    let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    if !dir(config, formation).is_dir() {
+        return Err(format!(
+            "フォーメーション「{formation}」はありません（削除されました）"
+        ));
+    }
+    let mut meta = read_meta(config, formation)?;
+    change(&mut meta);
+    let text = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
+    accounts::write_atomic(&dir(config, formation), FORMATION_FILE, &text)
+}
+
+/// The PC a formation belongs to: the environment of its projects (they all have the same one, `check_one_environment`), `local` (this Mac) when it has none. Its orchestrator runs there, with its children (A-37).
+pub fn formation_environment(projects: &[FormationProject]) -> String {
+    projects
+        .first()
+        .map_or_else(|| LOCAL.to_owned(), |p| p.environment.clone())
+}
+
+/// A formation belongs to one PC: a project of another environment is refused, because a Claude Code reaches another by `SendMessage` only on the same PC, so the orchestrator and its children must be there together.
+fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
+    let environment = formation_environment(projects);
+    match projects.iter().find(|p| p.environment != environment) {
+        Some(other) => Err(format!(
+            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（司令塔と子が別の PC にいると、SendMessage が届かないためです）",
+            other.environment
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The projects of `formation`, which the first instruction of its orchestrator names (`first_prompt`): the ones saved when it was created.
@@ -953,6 +1000,32 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
     on(args, environment)
 }
 
+/// The shell sentence that starts an orchestrator on its PC: `tsunagiai-mcp` of the app there, else the one on the PATH, run with `--formation-start {name}` in place of the `sh` (it writes the orchestrator's files on that PC and starts Claude Code). It is typed into the login shell of the terminal, whichever shell that is, so it is one `sh -c` with no quote inside; a PC with neither prints why and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads.
+fn orchestrator_command(name: &str) -> Result<String, String> {
+    check_name(name)?;
+    Ok(format!(
+        "sh -c 'm={APP_MCP}; [ -x \"$m\" ] || m=$(command -v tsunagiai-mcp) || {{ echo tsunagiai-mcp was not found >&2; exit 1; }}; exec \"$m\" --formation-start {name}'"
+    ))
+}
+
+/// The orchestrator's terminal, in the folder of the first project's repository (`path`; Orca asks a `--worktree` of a terminal it creates on a saved environment), titled with the name of its formation, running `orchestrator_command`.
+fn orchestrator_create_args(
+    path: &str,
+    name: &str,
+    environment: &str,
+) -> Result<Vec<String>, String> {
+    let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
+    args.extend([
+        format!("path:{path}"),
+        "--title".into(),
+        name.into(),
+        "--command".into(),
+        orchestrator_command(name)?,
+        "--json".into(),
+    ]);
+    Ok(on(args, environment))
+}
+
 fn terminal_close_args(handle: &str, environment: &str) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "close", "--terminal"]);
     args.extend([handle.into(), "--json".into()]);
@@ -1281,11 +1354,24 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// A child is launched on the PC of its orchestrator and nowhere else: the orchestrator reaches a child by SendMessage, which reaches only a Claude Code on the same PC. For `tsunagiai-mcp` of a PC that is `local`; another environment is refused with nothing planned, launched or written. The tools that only read take any environment.
+fn check_children_here(environment: &str) -> Result<(), String> {
+    if environment == LOCAL {
+        return Ok(());
+    }
+    Err(format!(
+        "環境「{environment}」には子を置けません。SendMessage は同じ PC の中でしか届かないので、子は司令塔と同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
+    ))
+}
+
 /// Plans children: each is put in the record after the ones there, or in the place of a planned one of its name.
 pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
     check_name(formation)?;
     if wanted.is_empty() {
         return Err("予定の子を 1 つ以上渡してください".to_owned().into());
+    }
+    for child in wanted {
+        check_children_here(&child.environment)?;
     }
     for (i, child) in wanted.iter().enumerate() {
         check_child_name(config, formation, &child.name)?;
@@ -1471,6 +1557,7 @@ pub fn launch(
     prompt: &str,
 ) -> Result<Value, Refusal> {
     check_name(formation)?;
+    check_children_here(environment)?;
     check_child_name(config, formation, name)?;
     let target = target_of(place)?;
     let prompt = check_prompt(prompt)?;
@@ -2482,6 +2569,491 @@ fn close_child_with(
     }
 }
 
+// ---- the record of a formation of a saved environment ----
+
+/// How long a read of the record of a PC waits when the owner is closing or deleting (the screen's read waits `SAVED_PS_TIMEOUT`).
+const PC_RECORD_WAIT: Duration = Duration::from_secs(30);
+
+/// The folder of the repository `wanted` among those of `orca repo list` of `environment`, as a path that Orca takes (`orca::check_path`).
+fn repo_path_of(
+    environment: &str,
+    wanted: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<String, String> {
+    let repos = read(&repo_list_args(environment)).map(|result| repos_of(&result))?;
+    resolve_repo(&repos, wanted)
+        .and_then(|repo| orca::check_path(&repo.path).map(|()| repo.path.clone()))
+}
+
+/// Where `tsunagiai-mcp` of a saved environment's PC keeps the record of `formation`: `formation/{formation}/children.json` in that PC's config folder, which that PC's `dirs::config_dir()` names. This Mac cannot ask it, so these are the two folders it can be in, as Orca expands `~/` on its own PC (`files.resolveTerminalPath`; Orca 1.4.26x): macOS first, then Linux (without `XDG_CONFIG_HOME`). Windows is not checked (AGENTS.md).
+fn pc_record_paths(formation: &str) -> Result<[String; 2], String> {
+    check_name(formation)?;
+    let tail = format!("{IDENTIFIER}/{FOLDER}/{formation}/{CHILDREN_FILE}");
+    Ok([
+        format!("~/Library/Application Support/{tail}"),
+        format!("~/.config/{tail}"),
+    ])
+}
+
+/// What `files.resolveTerminalPath` says of the record's path.
+#[derive(Debug, PartialEq)]
+enum PcFile {
+    /// The file is not there: the PC has no child recorded.
+    Missing,
+    /// The file is there and Orca gave the right to read it, and to replace it while it is as it was (`grant`, for this connection only).
+    Granted { path: String, grant: String },
+}
+
+fn pc_file_of(answer: &Value) -> Result<PcFile, String> {
+    if answer["exists"] != true {
+        return Ok(PcFile::Missing);
+    }
+    let target = &answer["openTarget"];
+    match (
+        target["kind"].as_str(),
+        orca::text_of(target, "absolutePath"),
+        orca::text_of(target, "grantId"),
+    ) {
+        (Some("absolute-file"), Some(path), Some(grant)) if answer["isDirectory"] != true => {
+            Ok(PcFile::Granted {
+                path: path.to_owned(),
+                grant: grant.to_owned(),
+            })
+        }
+        _ => Err("Orca が children.json を読む許可を返しませんでした".to_owned()),
+    }
+}
+
+/// The children of the text of a `children.json`.
+fn parse_record(text: &str) -> Result<Vec<Child>, String> {
+    serde_json::from_str::<Record>(text)
+        .map(|record| record.children)
+        .map_err(|_| "その PC の children.json の形式が正しくありません".to_owned())
+}
+
+fn pc_failed(what: &str, error: &CallError) -> String {
+    format!("{what}: {}", call_output(error))
+}
+
+/// Which of the two places of `pc_record_paths` held the record last time (an index of it): the next read asks that one first, so that a PC that keeps it in the second place is not asked about the first on every poll. It is only the order of the questions; both are still asked when the first has no file.
+type Hint = std::sync::atomic::AtomicUsize;
+
+async fn locate_pc_record(
+    rpc: &mut impl Rpc,
+    repo_path: &str,
+    formation: &str,
+    hint: &Hint,
+) -> Result<PcFile, String> {
+    let paths = pc_record_paths(formation)?;
+    let first = hint.load(std::sync::atomic::Ordering::Relaxed).min(1);
+    for at in [first, 1 - first] {
+        let answer = rpc
+            .call(
+                "files.resolveTerminalPath",
+                worktree_params(repo_path, None, json!({ "pathText": paths[at] })),
+            )
+            .await
+            .map_err(|e| pc_failed("children.json の場所を Orca に問えません", &e))?;
+        match pc_file_of(&answer)? {
+            PcFile::Missing => {}
+            found => {
+                hint.store(at, std::sync::atomic::Ordering::Relaxed);
+                return Ok(found);
+            }
+        }
+    }
+    Ok(PcFile::Missing)
+}
+
+/// The params every call about the granted file takes.
+fn granted_params(repo_path: &str, path: &str, grant: &str, extra: Value) -> Value {
+    let mut params = worktree_params(repo_path, None, extra);
+    params["grantId"] = json!(grant);
+    params["absolutePath"] = json!(path);
+    params
+}
+
+async fn read_pc_record(
+    rpc: &mut impl Rpc,
+    repo_path: &str,
+    path: &str,
+    grant: &str,
+) -> Result<Vec<Child>, String> {
+    let answer = rpc
+        .call(
+            "files.readTerminalArtifact",
+            granted_params(repo_path, path, grant, json!({})),
+        )
+        .await
+        .map_err(|e| pc_failed("children.json を読めません", &e))?;
+    match (answer["content"].as_str(), answer["truncated"] == true) {
+        (Some(text), false) => parse_record(text),
+        _ => Err("children.json を読み切れません（大きすぎるか、文字ではありません）".to_owned()),
+    }
+}
+
+/// The children that the PC's `children.json` holds, as that PC wrote them; none when there is no file. From `repo_path`, the folder of a repository of the PC's Orca (the file is outside it, and Orca asks for the worktree it is read from).
+async fn pull_pc_children(
+    rpc: &mut impl Rpc,
+    repo_path: &str,
+    formation: &str,
+    hint: &Hint,
+) -> Result<Vec<Child>, String> {
+    match locate_pc_record(rpc, repo_path, formation, hint).await? {
+        PcFile::Missing => Ok(Vec::new()),
+        PcFile::Granted { path, grant } => read_pc_record(rpc, repo_path, &path, &grant).await,
+    }
+}
+
+/// `children` without the entries of `removed` (by name).
+fn without_names(children: Vec<Child>, removed: &[String]) -> Vec<Child> {
+    children
+        .into_iter()
+        .filter(|c| !removed.contains(&c.name))
+        .collect()
+}
+
+/// Takes the children of `removed` out of the PC's `children.json`: the file is read again and only those names go, so that a child the orchestrator added meanwhile stays. It is written with the right that Orca gave for the file as it was read, and Orca refuses when the orchestrator changed it since (`terminal_file_grant_stale`). A file that is not there, or that holds none of them, is left alone.
+async fn drop_from_pc_record(
+    rpc: &mut impl Rpc,
+    repo_path: &str,
+    formation: &str,
+    removed: &[String],
+    hint: &Hint,
+) -> Result<(), String> {
+    let PcFile::Granted { path, grant } = locate_pc_record(rpc, repo_path, formation, hint).await?
+    else {
+        return Ok(());
+    };
+    let current = read_pc_record(rpc, repo_path, &path, &grant).await?;
+    let kept = without_names(current.clone(), removed);
+    if kept.len() == current.len() {
+        return Ok(());
+    }
+    let content =
+        serde_json::to_string_pretty(&Record { children: kept }).map_err(|e| e.to_string())?;
+    rpc.call(
+        "files.writeTerminalArtifact",
+        granted_params(repo_path, &path, &grant, json!({ "content": content })),
+    )
+    .await
+    .map_err(|e| {
+        if e.detail.contains("terminal_file_grant_stale") {
+            "司令塔が children.json を書き換えたので、書き戻しませんでした。もう一度試してください"
+                .to_owned()
+        } else {
+            pc_failed("children.json に書けません", &e)
+        }
+    })?;
+    Ok(())
+}
+
+/// Runs `work` over a connection to the Orca of `environment`, and gives up after `limit`.
+fn on_pc<T>(
+    environment: &str,
+    limit: Duration,
+    work: impl AsyncFnOnce(&mut Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    tokio::runtime::Handle::current().block_on(async {
+        tokio::time::timeout(limit, async {
+            let mut connection = Connection::open(orca_target(environment)).await?;
+            work(&mut connection).await
+        })
+        .await
+        .unwrap_or_else(|_| Err("時間内に答えませんでした".to_owned()))
+    })
+}
+
+/// A read of the record of a PC: the environment, the folder of a repository of it, the formation, and the children as that PC wrote them.
+type PullRecord<'a> = dyn Fn(&str, &str, &str) -> Result<Vec<Child>, String> + 'a;
+/// The removal of children from the record of a PC: the environment, the folder of a repository of it, the formation, and the names.
+type DropRecord<'a> = dyn Fn(&str, &str, &str, &[String]) -> Result<(), String> + 'a;
+
+/// How the record of a PC is reached: Orca's CLI (`read`: the repositories and the environments), and the reads and the removals of its `children.json`.
+struct Access<'a> {
+    read: &'a dyn Fn(&[String]) -> Result<Value, String>,
+    pull: &'a PullRecord<'a>,
+    drop: &'a DropRecord<'a>,
+}
+
+/// Which place of the record each PC had it in last time (`Hint`), by environment.
+fn places() -> std::sync::MutexGuard<'static, HashMap<String, usize>> {
+    static PLACES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    PLACES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+fn place_hint(environment: &str) -> Hint {
+    Hint::new(places().get(environment).copied().unwrap_or(0))
+}
+
+/// Keeps the place that `hint` found, for the next read of `environment`.
+fn remember_place(environment: &str, hint: &Hint) {
+    places().insert(
+        environment.to_owned(),
+        hint.load(std::sync::atomic::Ordering::Relaxed),
+    );
+}
+
+/// `pull_pc_children` over a connection to the Orca of `environment`, for a close (`PC_RECORD_WAIT`).
+fn pull_from_pc(
+    environment: &str,
+    repo_path: &str,
+    formation: &str,
+    limit: Duration,
+) -> Result<Vec<Child>, String> {
+    let hint = place_hint(environment);
+    let pulled = on_pc(environment, limit, async |rpc| {
+        pull_pc_children(rpc, repo_path, formation, &hint).await
+    });
+    remember_place(environment, &hint);
+    pulled
+}
+
+/// The records of several formations of one saved environment over one connection (the screen's polls, `SAVED_PS_TIMEOUT`): for each of `items`, the folder of a repository of the PC and the formation, the children of its record, or why they could not be read. A connection that cannot be made, or that does not answer in time, is the reason of every one.
+fn pull_env_from_pc(
+    environment: &str,
+    items: &[(String, String)],
+    limit: Duration,
+) -> Vec<Result<Vec<Child>, String>> {
+    let hint = place_hint(environment);
+    let pulled = on_pc(environment, limit, async |rpc| {
+        let mut all = Vec::new();
+        for (repo_path, formation) in items {
+            all.push(pull_pc_children(rpc, repo_path, formation, &hint).await);
+        }
+        Ok(all)
+    });
+    remember_place(environment, &hint);
+    pulled.unwrap_or_else(|e| items.iter().map(|_| Err(e.clone())).collect())
+}
+
+fn drop_from_pc(
+    environment: &str,
+    repo_path: &str,
+    formation: &str,
+    removed: &[String],
+) -> Result<(), String> {
+    let hint = place_hint(environment);
+    let dropped = on_pc(environment, PC_RECORD_WAIT, async |rpc| {
+        drop_from_pc_record(rpc, repo_path, formation, removed, &hint).await
+    });
+    remember_place(environment, &hint);
+    dropped
+}
+
+/// How a close and a delete reach the record of a PC: the reads of Orca's CLI, and its RPC with `PC_RECORD_WAIT`.
+fn pc_access() -> Access<'static> {
+    Access {
+        read: &orca_read,
+        pull: &|environment, repo_path, formation| {
+            pull_from_pc(environment, repo_path, formation, PC_RECORD_WAIT)
+        },
+        drop: &drop_from_pc,
+    }
+}
+
+/// A child of a PC's record as this Mac names it. On its own PC a child is in `local`, and every child of the record is: from here that PC is `environment`, the saved environment of the formation, so its commands and its terminals go to that Orca.
+fn child_from_pc(child: Child, environment: &str) -> Child {
+    Child {
+        environment: environment.to_owned(),
+        ..child
+    }
+}
+
+/// The folder of the first project's repository of the formation, in the Orca of its PC, as `orca repo list` of the environment says: the worktree that Orca is asked the record's file from (`Meta::pc_repo_path`).
+fn pc_repo_path(
+    environment: &str,
+    projects: &[FormationProject],
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<String, String> {
+    let first = projects
+        .first()
+        .ok_or_else(|| "フォーメーションにプロジェクトがありません".to_owned())?;
+    repo_path_of(environment, &first.repo, read)
+}
+
+/// The children of a PC's record as this Mac names them (`child_from_pc`), from what its read gave (`pulled`). A PC that was taken off `orca environment list` (`gone`, asked only when the read failed) cannot be asked: its record reads as none, so that its formation can still be shown and deleted. Any other failure is the message.
+fn pc_children_settled(
+    environment: &str,
+    pulled: Result<Vec<Child>, String>,
+    gone: impl FnOnce() -> bool,
+) -> Result<Vec<Child>, String> {
+    match pulled {
+        Ok(children) => Ok(children
+            .into_iter()
+            .map(|c| child_from_pc(c, environment))
+            .collect()),
+        Err(_) if gone() => Ok(Vec::new()),
+        Err(e) => Err(format!(
+            "環境「{environment}」の子の記録を読めません: {}",
+            first_line(&e)
+        )),
+    }
+}
+
+/// Whether `environment` is gone from `orca environment list` (a list that cannot be read does not say it is).
+fn environment_gone(read: &dyn Fn(&[String]) -> Result<Value, String>, environment: &str) -> bool {
+    read(&environment_list_args())
+        .is_ok_and(|list| environment_is_gone(&environments_listed(&list), environment))
+}
+
+/// The children of a formation of the saved environment `environment`, from its PC's `children.json` (`pull`, from `repo_path`, the folder recorded in `formation.json`). A formation with no `repo_path` never had its orchestrator started on its PC, so the PC has no record of it and nothing is asked.
+fn pc_children_with(
+    environment: &str,
+    repo_path: Option<&str>,
+    formation: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    pull: &PullRecord<'_>,
+) -> Result<Vec<Child>, String> {
+    let Some(repo_path) = repo_path else {
+        return Ok(Vec::new());
+    };
+    pc_children_settled(environment, pull(environment, repo_path, formation), || {
+        environment_gone(read, environment)
+    })
+}
+
+/// The children of the PC's record, and after them the children of this Mac's own `children.json` of the formation that the PC lacks (by name). A formation made before its orchestrator ran on its PC has the children that orchestrator launched in this Mac's record: they are still the formation's, and each is closed from the record it is in.
+fn with_own(mut pc: Vec<Child>, own: Vec<Child>) -> Vec<Child> {
+    let rest: Vec<Child> = own
+        .into_iter()
+        .filter(|c| !pc.iter().any(|p| p.name == c.name))
+        .collect();
+    pc.extend(rest);
+    pc
+}
+
+/// The children of the record of `formation`, wherever it is: `children.json` of this Mac for a formation of this Mac, and for a formation of a saved environment the PC's with this Mac's own (`with_own`).
+fn record_children(
+    config: &Path,
+    formation: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    pull: &PullRecord<'_>,
+) -> Result<Vec<Child>, String> {
+    let meta = read_meta(config, formation).unwrap_or_default();
+    let own = read_children(config, formation);
+    match formation_environment(&meta.projects) {
+        environment if environment == LOCAL => Ok(own),
+        environment => pc_children_with(
+            &environment,
+            meta.pc_repo_path.as_deref(),
+            formation,
+            read,
+            pull,
+        )
+        .map(|pc| with_own(pc, own)),
+    }
+}
+
+/// A copy of the record of a formation of a saved environment, in a config folder of its own, so that `close_with` and `delete_with` work on it as on this Mac's record. It holds the formation's `formation.json` and the children (`with_own`: the PC's as `child_from_pc` names them, and this Mac's own), and it is deleted when this is dropped.
+struct Scratch {
+    config: PathBuf,
+}
+
+impl Scratch {
+    fn make(config: &Path, formation: &str, children: &[Child]) -> Result<Self, String> {
+        static MADE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let folder = std::env::temp_dir().join(format!(
+            "tsunagiai-formation-pc-{}-{}-{}",
+            std::process::id(),
+            now_ms(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let scratch = Self { config: folder };
+        let copy = dir(&scratch.config, formation);
+        std::fs::create_dir_all(&copy)
+            .map_err(|e| format!("{} を作れません: {e}", copy.display()))?;
+        let meta = dir(config, formation).join(FORMATION_FILE);
+        match std::fs::read_to_string(&meta) {
+            Ok(text) => accounts::write_atomic(&copy, FORMATION_FILE, &text)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{} を読めません: {e}", meta.display())),
+        }
+        write_children(&scratch.config, formation, children)?;
+        Ok(scratch)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.config);
+    }
+}
+
+/// Runs `work` on the record of `formation`, and takes the children it closed out of the record they were in. For a formation of this Mac that is `work(config)` with nothing else. For one of a saved environment the children of the PC's record and of this Mac's own (`with_own`) are copied to a scratch config folder (`Scratch`), `work` runs there, and the names that are gone from the copy afterwards are taken out of the PC's `children.json` (`drop_from_pc_record`) or of this Mac's, each from the record it came from, also when `work` failed half-way, because the children it closed are closed. The second value is whether the copy was used, so that the caller deletes what is this Mac's own (`formation.json`, and its record once it holds no child) after the records are written.
+/// A record that could not be written is an error also when `work` went through: the children are closed, and the message says so.
+fn through_record<T>(
+    config: &Path,
+    formation: &str,
+    access: &Access<'_>,
+    work: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<(T, bool), String> {
+    let meta = read_meta(config, formation).unwrap_or_default();
+    let environment = formation_environment(&meta.projects);
+    if environment == LOCAL {
+        return work(config).map(|done| (done, false));
+    }
+    let on_pc = pc_children_with(
+        &environment,
+        meta.pc_repo_path.as_deref(),
+        formation,
+        access.read,
+        access.pull,
+    )?;
+    let kept_here = read_record(config, formation)?;
+    let own: Vec<Child> = kept_here
+        .iter()
+        .filter(|c| !on_pc.iter().any(|p| p.name == c.name))
+        .cloned()
+        .collect();
+    let scratch = Scratch::make(config, formation, &with_own(on_pc.clone(), own))?;
+    let done = work(&scratch.config);
+    let after = read_record(&scratch.config, formation)?;
+    let closed = |of: &[Child]| -> Vec<String> {
+        of.iter()
+            .filter(|c| !after.iter().any(|a| a.name == c.name))
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    // A name in both records is closed from both, so that this Mac's old record does not keep it.
+    let (closed_on_pc, closed_own) = (closed(&on_pc), closed(&kept_here));
+    let dropped_from_pc = if closed_on_pc.is_empty() {
+        Ok(())
+    } else {
+        meta.pc_repo_path
+            .as_deref()
+            .ok_or_else(|| "その PC のフォルダが記録にありません".to_owned())
+            .and_then(|path| (access.drop)(&environment, path, formation, &closed_on_pc))
+            .map_err(|e| {
+                format!(
+                    "その PC の children.json から外せませんでした: {}",
+                    first_line(&e)
+                )
+            })
+    };
+    let dropped_from_own = if closed_own.is_empty() {
+        Ok(())
+    } else {
+        update(config, formation, |old| Ok(without_names(old, &closed_own)))
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "この Mac の children.json から外せませんでした: {}",
+                    first_line(&e)
+                )
+            })
+    };
+    match (done, dropped_from_pc.and(dropped_from_own)) {
+        (Ok(done), Ok(())) => Ok((done, true)),
+        (Ok(_), Err(e)) => Err(format!("子は閉じましたが、{e}")),
+        (Err(e), Ok(())) => Err(e),
+        (Err(e), Err(dropped)) => Err(format!("{e}。閉じた子も、{dropped}")),
+    }
+}
+
 // ---- the list the screen draws ----
 
 /// Where a child stands, in the words of the screen.
@@ -2721,9 +3293,66 @@ fn screen_read(args: &[String], timeout: Duration) -> Result<Value, String> {
         })
 }
 
+/// A read of the records of several formations of one saved environment over one connection, as the screen's polls make it: the environment, and for each formation the folder of a repository of the PC and its name. It answers in the order of the formations.
+type PullEnv<'a> = dyn Fn(&str, &[(String, String)]) -> PulledRecords + Sync + 'a;
+
+/// What such a read answers: for each formation, the children of its record, or why they could not be read.
+type PulledRecords = Vec<Result<Vec<Child>, String>>;
+
+/// The formations of saved environments that have a record on their PC, grouped by environment: for each, the folder recorded in `formation.json` and the name, in the order of the names. A formation of this Mac, and one whose orchestrator was never started on its PC (`Meta::pc_repo_path`), has none.
+fn pc_groups(metas: &[(String, Meta)]) -> BTreeMap<String, Vec<(String, String)>> {
+    let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for (name, meta) in metas {
+        let environment = formation_environment(&meta.projects);
+        if let (true, Some(path)) = (environment != LOCAL, &meta.pc_repo_path) {
+            groups
+                .entry(environment)
+                .or_default()
+                .push((path.clone(), name.clone()));
+        }
+    }
+    groups
+}
+
+fn read_metas(config: &Path, names: &[String]) -> Vec<(String, Meta)> {
+    names
+        .iter()
+        .map(|name| (name.clone(), read_meta(config, name).unwrap_or_default()))
+        .collect()
+}
+
+/// The reads of a PC's records by the screen's commands. `formation_children` and `formation_list` are called at the same moment, and both read the records of the formations of an environment over one connection: the calls made at the same time for the same environment and the same formations run once and take the same answer (`orca::Flights`), as `screen_read` does. It waits `SAVED_PS_TIMEOUT`, as a saved environment's `orca worktree ps` does.
+fn screen_pull_env(
+    environment: &str,
+    items: &[(String, String)],
+) -> Vec<Result<Vec<Child>, String>> {
+    type Pulling = orca::Flights<(String, Vec<(String, String)>), Vec<Result<Vec<Child>, String>>>;
+    static PULLING: OnceLock<Pulling> = OnceLock::new();
+    PULLING
+        .get_or_init(orca::Flights::default)
+        .run((environment.to_owned(), items.to_vec()), || {
+            pull_env_from_pc(environment, items, SAVED_PS_TIMEOUT)
+        })
+}
+
 fn children_view(config: &Path, formation: &str) -> Result<Vec<FormationChild>, String> {
     check_name(formation)?;
-    children_view_with(&read_children(config, formation), &screen_read)
+    // The record of the formation is read with those of the formations of its environment, the same call as `formation_list` makes.
+    let pull = |environment: &str, repo_path: &str, formation: &str| {
+        let metas = read_metas(config, &formation_names(config, None));
+        let items = pc_groups(&metas).remove(environment).unwrap_or_default();
+        match items.iter().position(|(_, name)| name == formation) {
+            Some(at) => screen_pull_env(environment, &items).swap_remove(at),
+            None => pull_from_pc(environment, repo_path, formation, SAVED_PS_TIMEOUT),
+        }
+    };
+    let children = record_children(
+        config,
+        formation,
+        &|args| screen_read(args, SAVED_PS_TIMEOUT),
+        &pull,
+    )?;
+    children_view_with(&children, &screen_read)
 }
 
 /// The children of the formation `name` for the screen (A-37), read from `formation/{name}/children.json` and `orca worktree ps` of the environment of each child.
@@ -2770,6 +3399,8 @@ fn counts_of(rows: &[FormationChild]) -> ChildCounts {
 pub struct FormationEntry {
     pub name: String,
     pub projects: Vec<FormationProject>,
+    /// The PC it belongs to: `local` (this Mac), or the saved environment of its projects (`formation_environment`). Its orchestrator runs there.
+    pub environment: String,
     /// When it was created (epoch milliseconds); `None` for a formation that has no `formation.json`.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub created_at: Option<u64>,
@@ -2787,14 +3418,85 @@ pub struct FormationList {
     pub read_error: Option<String>,
 }
 
-/// The formations, in order of name, with their projects, when they were created and how many children are in each state. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it.
-fn list_with(config: &Path, read: &Read<'_>) -> Result<FormationList, String> {
+/// The formations, in order of name, with their projects, when they were created and how many children are in each state. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it. The records of the formations of a saved environment are read over one connection for the environment (`pull`), the environments side by side, and `orca environment list` is read at most once, and only when a record could not be read.
+fn list_with(config: &Path, read: &Read<'_>, pull: &PullEnv<'_>) -> Result<FormationList, String> {
     migrate_legacy(config)?;
-    let names = formation_names(config, None);
-    let records: Vec<Vec<Child>> = names.iter().map(|n| read_children(config, n)).collect();
+    let metas = read_metas(config, &formation_names(config, None));
+    let groups = pc_groups(&metas);
+    // The reads of the PCs block on the runtime that `list_with` runs in (`on_pc`), and a thread of the scope has none of its own.
+    let runtime = tokio::runtime::Handle::try_current().ok();
+    let pulled: Vec<(&String, PulledRecords)> = std::thread::scope(|scope| {
+        let runs: Vec<_> = groups
+            .iter()
+            .map(|(environment, items)| {
+                let runtime = runtime.as_ref();
+                (
+                    environment,
+                    scope.spawn(move || {
+                        let _inside = runtime.map(tokio::runtime::Handle::enter);
+                        pull(environment, items)
+                    }),
+                )
+            })
+            .collect();
+        runs.into_iter()
+            .map(|(environment, run)| {
+                let items = groups[environment].len();
+                let answer = run.join().unwrap_or_else(|_| {
+                    vec![Err("Orca の読み取りが止まりました".into()); items]
+                });
+                (environment, answer)
+            })
+            .collect()
+    });
+    let listed: OnceCell<Option<Vec<Environment>>> = OnceCell::new();
+    let gone = |environment: &str| {
+        listed
+            .get_or_init(|| {
+                read(&environment_list_args(), SAVED_PS_TIMEOUT)
+                    .ok()
+                    .map(|list| environments_listed(&list))
+            })
+            .as_ref()
+            .is_some_and(|saved| environment_is_gone(saved, environment))
+    };
+    // A formation whose PC's record could not be read has no child counted, and the first reason is the list's `read_error`.
+    let mut record_error: Option<String> = None;
+    let records: Vec<Vec<Child>> = metas
+        .iter()
+        .map(|(name, meta)| {
+            let own = read_children(config, name);
+            let environment = formation_environment(&meta.projects);
+            if environment == LOCAL {
+                return own;
+            }
+            let answer = groups
+                .get(&environment)
+                .and_then(|items| items.iter().position(|(_, f)| f == name))
+                .and_then(|at| {
+                    pulled
+                        .iter()
+                        .find(|(e, _)| **e == environment)
+                        .map(|(_, a)| &a[at])
+                });
+            let children = match answer {
+                Some(answer) => {
+                    pc_children_settled(&environment, answer.clone(), || gone(&environment))
+                }
+                None => Ok(Vec::new()),
+            };
+            match children {
+                Ok(pc) => with_own(pc, own),
+                Err(e) => {
+                    record_error.get_or_insert(e);
+                    own
+                }
+            }
+        })
+        .collect();
     let all: Vec<Child> = records.iter().flatten().cloned().collect();
     let (rows, read_error) = match children_view_with(&all, read) {
-        Ok(rows) => (rows, None),
+        Ok(rows) => (rows, record_error),
         Err(e) => (
             all.iter()
                 .map(|child| child_row(child, &child.environment, None))
@@ -2804,12 +3506,12 @@ fn list_with(config: &Path, read: &Read<'_>) -> Result<FormationList, String> {
     };
     let mut rows = rows.as_slice();
     let mut formations = Vec::new();
-    for (name, children) in names.into_iter().zip(&records) {
+    for ((name, meta), children) in metas.into_iter().zip(&records) {
         let (own, rest) = rows.split_at(children.len());
         rows = rest;
-        let meta = read_meta(config, &name).unwrap_or_default();
         formations.push(FormationEntry {
             name,
+            environment: formation_environment(&meta.projects),
             projects: meta.projects,
             created_at: meta.created_at,
             counts: counts_of(own),
@@ -2897,6 +3599,7 @@ fn check_projects(
         }
         checked.push(project);
     }
+    check_one_environment(&checked)?;
     first_prompt(&checked)?;
     Ok(checked)
 }
@@ -2953,6 +3656,8 @@ fn create_with(
     let meta = Meta {
         projects,
         created_at: Some(created_at),
+        orchestrator_terminal: None,
+        pc_repo_path: None,
     };
     let written = serde_json::to_string_pretty(&meta)
         .map_err(|e| e.to_string())
@@ -2963,6 +3668,7 @@ fn create_with(
     }
     Ok(FormationEntry {
         name: name.to_owned(),
+        environment: formation_environment(&meta.projects),
         projects: meta.projects,
         created_at: meta.created_at,
         counts: ChildCounts::default(),
@@ -3029,7 +3735,7 @@ pub struct FormationDeleteAnswer {
 
 /// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and, without `force`, have no change, no untracked file and no commit no remote has). A child that is refused for what git says of it (`kept_answer`) is collected, and the answer lists them all with nothing ended, closed or deleted; the first child that is refused otherwise stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
 /// With `force` (the owner's own press on the screen, `formation_delete`: the children as the owner was shown them) the look at git is left out as in `close_child_with` for a child whose name and recorded path are in it, and that child is closed with `--force` and its branch; any other child, one added or whose path was replaced after the owner was shown, is looked at as without `force`, so that when git keeps it the answer is `kept` again and nothing is ended or closed. The checks of the record, the environment and `orca worktree ps` are made as always.
-/// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
+/// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted. The terminal of the orchestrator of a formation of a saved environment is closed in that Orca right after, before any child is closed, so that its Claude Code adds no child meanwhile (`close_orchestrator_terminal`); a terminal that cannot be closed and is still there stops the deletion with its reason.
 /// Then every child is closed as `close` does, in the order of the record, except that the children that work in a folder tsunagiai did not make go first (a close refuses to remove a worktree while such a child works in it, `folder_holder`); a planned one is dropped from the record. A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 fn delete_with(
@@ -3074,6 +3780,11 @@ fn delete_with(
         });
     }
     stop_orchestrator();
+    close_orchestrator_terminal(config, formation, read, write).map_err(|e| {
+        format!(
+            "司令塔のターミナルを閉じられないので、フォーメーション「{formation}」を削除していません（子は閉じていません。司令塔のプロセスは終えています）。{e}"
+        )
+    })?;
     let mut preserved = Vec::new();
     let (folders, others): (Vec<Child>, Vec<Child>) = children
         .into_iter()
@@ -3107,17 +3818,269 @@ fn delete_with(
     })
 }
 
+/// `delete_with` on the record of the formation wherever it is (`through_record`): for a formation of a saved environment its children are closed from the PC's `children.json` and from this Mac's own, each written, and then this Mac's folder of the formation (`formation.json`) is deleted with the copy. The records are read once more first: a child that either holds still (one the PC's orchestrator added while the children were closed) stops the deletion, and this Mac's folder stays.
+fn delete_formation(
+    config: &Path,
+    formation: &str,
+    force: Option<&[FormationShown]>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    git_of: &dyn Fn(&str, &str) -> GitAnswers,
+    stop_orchestrator: &dyn Fn(),
+    access: &Access<'_>,
+) -> Result<FormationDeleteAnswer, String> {
+    check_name(formation)?;
+    let (answer, copied) = through_record(config, formation, access, |scratch| {
+        delete_with(
+            scratch,
+            formation,
+            force,
+            access.read,
+            write,
+            git_of,
+            stop_orchestrator,
+        )
+    })?;
+    if copied && answer.deleted {
+        if !record_children(config, formation, access.read, access.pull)?.is_empty() {
+            return Err(format!(
+                "子を閉じている間に、司令塔が子を足しました。フォーメーション「{formation}」を削除していません。もう一度削除してください"
+            ));
+        }
+        let folder = dir(config, formation);
+        std::fs::remove_dir_all(&folder)
+            .map_err(|e| format!("{} を削除できません: {e}", folder.display()))?;
+    }
+    Ok(answer)
+}
+
+/// `close_child_with` on the record of the formation wherever it is (`through_record`).
+fn close_child_formation(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    force: Option<&[FormationShown]>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    git_of: &dyn Fn(&str, &str) -> GitAnswers,
+    access: &Access<'_>,
+) -> Result<FormationCloseAnswer, String> {
+    check_name(formation)?;
+    through_record(config, formation, access, |scratch| {
+        close_child_with(scratch, formation, name, force, access.read, write, git_of)
+    })
+    .map(|(answer, _)| answer)
+}
+
+/// The orchestrator of a formation that belongs to a saved environment: its terminal in the Orca of that PC, which the screen shows as it shows a child's (A-37).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct FormationOrchestrator {
+    /// The saved environment whose Orca holds the terminal.
+    pub environment: String,
+    /// The handle of the terminal in that Orca.
+    pub handle: String,
+}
+
+/// The orchestrator's first instruction as it reads on its own PC: there every project is of `local`, whatever the environment is called from here.
+fn remote_first_prompt(projects: &[FormationProject]) -> Result<Option<String>, String> {
+    let there: Vec<FormationProject> = projects
+        .iter()
+        .map(|p| FormationProject {
+            environment: LOCAL.to_owned(),
+            repo: p.repo.clone(),
+        })
+        .collect();
+    first_prompt(&there)
+}
+
+/// Whether `terminal list` (its `result`) has the terminal `handle`, not orphaned (one that lost its tab is not shown by Orca).
+fn is_listed_terminal(list: &Value, handle: &str) -> bool {
+    list["terminals"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|t| orca::text_of(t, "handle") == Some(handle) && t["orphaned"] != true)
+}
+
+/// The first line of what Orca printed, for a message that is one line.
+fn first_line(text: &str) -> &str {
+    text.lines().find(|l| !l.trim().is_empty()).unwrap_or("")
+}
+
+/// Only one start of a formation at a time: the screen asks again while a start is on its way, and two terminals of one orchestrator must not be made. Another formation starts meanwhile, because a start can wait for Claude Code for a long time.
+fn start_lock(formation: &str) -> std::sync::Arc<Mutex<()>> {
+    static STARTING: OnceLock<Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>> = OnceLock::new();
+    STARTING
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(formation.to_owned())
+        .or_default()
+        .clone()
+}
+
+/// Whether a terminal that a close could not end is gone all the same: Orca's `terminal list` of the worktree `path` does not have it (it answers `terminal_handle_stale` for a terminal that runs as well as for one that is gone, so the answer of the close says nothing), or the list cannot be read because the environment is gone from `orca environment list`.
+fn terminal_is_gone(
+    environment: &str,
+    path: &str,
+    handle: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> bool {
+    match read(&terminal_list_args(path, environment)) {
+        Ok(list) => !is_listed_terminal(&list, handle),
+        Err(_) => environment_gone(read, environment),
+    }
+}
+
+/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list`, else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again (the shell it was typed into stays alive when Claude Code ends); one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
+/// A new terminal is made in the folder of the first project's repository, titled with the formation's name, running `orchestrator_command`; it is waited for until Claude Code is idle (`wait`), and then given the projects as its first instruction, as the orchestrator of this Mac has it, with every project in `local` (`remote_first_prompt`). Only when all of that worked are its handle and that folder written in `formation.json` (the folder is what the screen's polls read the PC's record from, `Meta::pc_repo_path`); a terminal that failed on the way is closed, so none is left running with no record.
+/// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
+fn start_orchestrator_with(
+    config: &Path,
+    formation: &str,
+    restart: bool,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    wait: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<FormationOrchestrator, String> {
+    check_name(formation)?;
+    if !dir(config, formation).is_dir() {
+        return Err(format!("フォーメーション「{formation}」はありません"));
+    }
+    let held = start_lock(formation);
+    let _one = held.lock().unwrap_or_else(PoisonError::into_inner);
+    let meta = read_meta(config, formation)?;
+    let environment = formation_environment(&meta.projects);
+    let environment = environment.as_str();
+    let Some(first) = meta.projects.first().filter(|_| environment != LOCAL) else {
+        return Err(format!(
+            "フォーメーション「{formation}」は、この Mac のものです。司令塔はつなぎAI の疑似端末で動きます"
+        ));
+    };
+    let failed = |e: String| {
+        format!(
+            "司令塔を起動できません（環境「{environment}」）: {}",
+            first_line(&e)
+        )
+    };
+    let path = repo_path_of(environment, &first.repo, read).map_err(failed)?;
+    if let Some(handle) = &meta.orchestrator_terminal {
+        let list = read(&terminal_list_args(&path, environment)).map_err(failed)?;
+        if restart {
+            // The owner may have closed the tab already.
+            if let Err(e) = write(&terminal_close_args(handle, environment)) {
+                if is_listed_terminal(&list, handle) {
+                    return Err(failed(format!(
+                        "今の司令塔のターミナルを閉じられません: {}",
+                        first_line(&e)
+                    )));
+                }
+            }
+        } else if is_listed_terminal(&list, handle) {
+            if meta.pc_repo_path.as_deref() != Some(path.as_str()) {
+                update_meta(config, formation, |meta| {
+                    meta.pc_repo_path = Some(path.clone());
+                })?;
+            }
+            return Ok(FormationOrchestrator {
+                environment: environment.to_owned(),
+                handle: handle.clone(),
+            });
+        }
+        update_meta(config, formation, |meta| meta.orchestrator_terminal = None)?;
+    }
+    let prompt = remote_first_prompt(&meta.projects)?;
+    let made = write(&orchestrator_create_args(&path, formation, environment)?).map_err(failed)?;
+    let handle = orca::created_of(&made)
+        .handle
+        .ok_or_else(|| failed("Orca がターミナルの handle を答えませんでした".into()))?;
+    let close = |message: String| {
+        let _ = write(&terminal_close_args(&handle, environment));
+        message
+    };
+    wait(&terminal_wait_args(&handle, environment))
+        .and_then(|result| {
+            wait_satisfied(&result).then_some(()).ok_or_else(|| {
+                "時間内に入力待ちになりませんでした。その PC の tsunagiai-mcp が古くないか（アプリを更新するか、tsunagiai-mcp を入れ直してください）、あるか（つなぎAI のアプリの中か PATH）を確かめてください".to_owned()
+            })
+        })
+        .map_err(|e| close(failed(e)))?;
+    if let Some(prompt) = prompt {
+        write(&terminal_send_args(&handle, &prompt, environment))
+            .and_then(|result| check_submitted(&result))
+            .map_err(|e| close(failed(e)))?;
+    }
+    update_meta(config, formation, |meta| {
+        meta.orchestrator_terminal = Some(handle.clone());
+        meta.pc_repo_path = Some(path.clone());
+    })
+    .map_err(close)?;
+    Ok(FormationOrchestrator {
+        environment: environment.to_owned(),
+        handle,
+    })
+}
+
+/// Closes the terminal of the orchestrator that `formation.json` records, in the Orca of the formation's environment (the deletion of the formation, A-37). One that is already gone (`terminal_is_gone`: the owner closed the tab, or the environment is gone) counts as closed; any other failure is the message, so that the deletion does not go on with an orchestrator that still runs, in auto mode, with no record.
+fn close_orchestrator_terminal(
+    config: &Path,
+    formation: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<(), String> {
+    let Ok(meta) = read_meta(config, formation) else {
+        return Ok(());
+    };
+    let Some(handle) = &meta.orchestrator_terminal else {
+        return Ok(());
+    };
+    let environment = formation_environment(&meta.projects);
+    let Err(e) = write(&terminal_close_args(handle, &environment)) else {
+        return Ok(());
+    };
+    let path = match &meta.pc_repo_path {
+        Some(path) => Ok(path.clone()),
+        None => pc_repo_path(&environment, &meta.projects, read),
+    };
+    match path {
+        Ok(path) if terminal_is_gone(&environment, &path, handle, read) => Ok(()),
+        Err(_) if environment_gone(read, &environment) => Ok(()),
+        _ => Err(first_line(&e).to_owned()),
+    }
+}
+
 /// The environments (this Mac and the saved ones) with the repositories of each, for the dialog that makes a formation (A-37): the same read as the orchestrator's `formation_environments`.
 #[tauri::command]
 pub async fn formation_environments() -> Result<EnvironmentsView, String> {
     orca::blocking(|| environments_view(read_saved_environments(), &read_repos)).await
 }
 
+/// The terminal of the orchestrator of the formation `name`, which belongs to a saved environment (A-37): it is started in the Orca of that PC when it has none (`start_orchestrator_with`), and `restart` ends the one it has and starts a new one. A failure carries the message the screen shows.
+#[tauri::command]
+pub async fn formation_orchestrator(
+    app: tauri::AppHandle,
+    name: String,
+    restart: bool,
+) -> Result<FormationOrchestrator, String> {
+    let dir = config_dir(&app)?;
+    orca::blocking(move || {
+        start_orchestrator_with(
+            &dir,
+            &name,
+            restart,
+            &orca_read,
+            &|args| orca::write(args),
+            &|args| orca::call(args, IDLE_WAIT_RUN).map_err(orca::message_of),
+        )
+    })
+    .await?
+}
+
 /// The formations of the screen (A-37): each with its projects, when it was created and the number of its children in each state.
 #[tauri::command]
 pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, String> {
     let dir = config_dir(&app)?;
-    orca::blocking(move || list_with(&dir, &screen_read)).await?
+    orca::blocking(move || list_with(&dir, &screen_read, &screen_pull_env)).await?
 }
 
 /// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), sets the worktree base of each repository to `.claude/worktrees` (`settle_projects`), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
@@ -3157,14 +4120,14 @@ pub async fn formation_delete(
     let dir = config_dir(&app)?;
     let sessions = sessions.inner().clone();
     orca::blocking(move || {
-        delete_with(
+        delete_formation(
             &dir,
             &name,
             force.then_some(shown.as_slice()),
-            &orca_read,
             &|args| orca::write(args),
             &orca_git_of,
             &|| sessions.close_formation(&name),
+            &pc_access(),
         )
     })
     .await?
@@ -3186,14 +4149,14 @@ pub async fn formation_close_child(
             name: name.clone(),
             path: path.unwrap_or_default(),
         }];
-        close_child_with(
+        close_child_formation(
             &dir,
             &formation,
             &name,
             force.then_some(shown.as_slice()),
-            &orca_read,
             &|args| orca::write(args),
             &orca_git_of,
+            &pc_access(),
         )
     })
     .await?
@@ -3211,6 +4174,16 @@ mod tests {
             std::env::temp_dir().join(format!("tsunagiai-formation-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// The read of a PC's record of a test that has no formation of a saved environment.
+    fn no_pull(_: &str, _: &str, _: &str) -> Result<Vec<Child>, String> {
+        panic!("no PC is asked")
+    }
+
+    /// The same for the screen's list, which reads the records of an environment over one connection.
+    fn no_pull_env(_: &str, _: &[(String, String)]) -> Vec<Result<Vec<Child>, String>> {
+        panic!("no PC is asked")
     }
 
     fn planned(name: &str, repo: &str) -> Child {
@@ -6644,15 +7617,16 @@ mod tests {
         let made = create_with(
             &config,
             "api-work",
-            &[project("e1", "/s/api"), project(LOCAL, "web")],
+            &[project("e1", "/s/api"), project("mac-studio", "docs")],
             &two_environments(),
             1_700_000_000_000,
         )
         .unwrap();
         // The environment is kept by its name and the repository by its name, whichever the call named them by.
-        let projects = [project("mac-studio", "api"), project(LOCAL, "web")];
+        let projects = [project("mac-studio", "api"), project("mac-studio", "docs")];
         assert_eq!(made.projects, projects);
         assert_eq!(made.created_at, Some(1_700_000_000_000));
+        assert_eq!(made.environment, "mac-studio");
         assert_eq!(made.counts, ChildCounts::default());
         assert_eq!(read_projects(&config, "api-work").unwrap(), projects);
         let text = std::fs::read_to_string(dir(&config, "api-work").join(FORMATION_FILE)).unwrap();
@@ -6838,7 +7812,7 @@ mod tests {
                 ])),
             ),
         ]);
-        let list = list_with(&config, &|args, limit| fake.read(args, limit)).unwrap();
+        let list = list_with(&config, &|args, limit| fake.read(args, limit), &no_pull_env).unwrap();
         assert_eq!(list.read_error, None);
         let seen: Vec<_> = list
             .formations
@@ -6878,7 +7852,12 @@ mod tests {
             &[launched("a", "web"), planned("p", "web")],
         )
         .unwrap();
-        let list = list_with(&config, &|_, _| Err("orca が答えません".into())).unwrap();
+        let list = list_with(
+            &config,
+            &|_, _| Err("orca が答えません".into()),
+            &no_pull_env,
+        )
+        .unwrap();
         assert_eq!(list.read_error.as_deref(), Some("orca が答えません"));
         let alpha = &list.formations[0];
         assert_eq!(alpha.name, "alpha");
@@ -6897,7 +7876,12 @@ mod tests {
     fn a_list_with_no_launched_child_reads_no_orca() {
         let config = temp_dir("list-none");
         std::fs::create_dir_all(&config).unwrap();
-        let list = list_with(&config, &|_, _| panic!("no child is launched")).unwrap();
+        let list = list_with(
+            &config,
+            &|_, _| panic!("no child is launched"),
+            &no_pull_env,
+        )
+        .unwrap();
         // No folder, no formation.
         assert!(list.formations.is_empty());
         std::fs::remove_dir_all(&config).unwrap();
@@ -8263,5 +9247,2013 @@ mod tests {
         ]);
         let err = run_blocking(git_report_of(&mut orca, &chosen(), None)).unwrap_err();
         assert_eq!(err.step, Some(STEP_GIT_STATE));
+    }
+
+    // ---- a formation belongs to one PC, and its orchestrator runs there (A-37) ----
+
+    #[test]
+    fn a_formation_belongs_to_the_environment_of_its_projects_and_to_this_mac_with_none() {
+        assert_eq!(formation_environment(&[]), LOCAL);
+        assert_eq!(formation_environment(&[project(LOCAL, "api")]), LOCAL);
+        assert_eq!(
+            formation_environment(&[project("mac-studio", "api"), project("mac-studio", "docs")]),
+            "mac-studio"
+        );
+    }
+
+    #[test]
+    fn projects_of_two_environments_make_no_formation_and_the_reason_names_both() {
+        let config = temp_dir("one-pc");
+        for projects in [
+            vec![project(LOCAL, "api"), project("mac-studio", "docs")],
+            vec![project("mac-studio", "api"), project(LOCAL, "web")],
+            vec![
+                project("mac-studio", "api"),
+                project("mac-studio", "docs"),
+                project(LOCAL, "web"),
+            ],
+        ] {
+            let err = create_with(&config, "f", &projects, &two_environments(), 1).unwrap_err();
+            assert!(err.contains("一つの PC に属します"), "{err}");
+            assert!(
+                err.contains("「local」") && err.contains("「mac-studio」"),
+                "{err}"
+            );
+            assert!(!dir(&config, "f").exists());
+        }
+        // Two repositories of one environment, and no project at all, are one PC.
+        let made = create_with(
+            &config,
+            "f",
+            &[project(LOCAL, "api"), project(LOCAL, "web")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(made.environment, LOCAL);
+        let empty = create_with(&config, "g", &[], &two_environments(), 1).unwrap();
+        assert_eq!(empty.environment, LOCAL);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_says_which_pc_each_formation_belongs_to() {
+        let config = temp_dir("list-environment");
+        create_with(
+            &config,
+            "a-here",
+            &[project(LOCAL, "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        create_with(
+            &config,
+            "b-there",
+            &[project("mac-studio", "api")],
+            &two_environments(),
+            2,
+        )
+        .unwrap();
+        // A formation with no `formation.json` is this Mac's.
+        std::fs::create_dir_all(dir(&config, "c-old")).unwrap();
+        // `b-there` never had its orchestrator started on its PC, so its PC has no record to ask for.
+        let pc = Pc::with(Vec::new());
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        assert!(pc.envs.lock().unwrap().is_empty());
+        let rows: Vec<(&str, &str)> = list
+            .formations
+            .iter()
+            .map(|f| (f.name.as_str(), f.environment.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("a-here", LOCAL),
+                ("b-there", "mac-studio"),
+                ("c-old", LOCAL)
+            ]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_terminal_of_the_orchestrator_is_kept_in_the_file_that_older_files_lack() {
+        let config = temp_dir("meta-terminal");
+        let folder = dir(&config, "f");
+        std::fs::create_dir_all(&folder).unwrap();
+        // A file written before the field was kept reads with none, and the creation writes none.
+        std::fs::write(
+            folder.join(FORMATION_FILE),
+            r#"{"projects":[{"environment":"mac-studio","repo":"api"}],"createdAt":5}"#,
+        )
+        .unwrap();
+        let meta = read_meta(&config, "f").unwrap();
+        assert_eq!(meta.orchestrator_terminal, None);
+        assert_eq!(meta.created_at, Some(5));
+        create_with(&config, "g", &[], &two_environments(), 1).unwrap();
+        let text = std::fs::read_to_string(dir(&config, "g").join(FORMATION_FILE)).unwrap();
+        assert!(!text.contains("orchestratorTerminal"), "{text}");
+        // A change keeps the rest of the file.
+        update_meta(&config, "f", |meta| {
+            meta.orchestrator_terminal = Some("term_o".into());
+        })
+        .unwrap();
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(folder.join(FORMATION_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(saved["orchestratorTerminal"], "term_o");
+        assert_eq!(saved["createdAt"], 5);
+        assert_eq!(
+            saved["projects"],
+            json!([{"environment": "mac-studio", "repo": "api"}])
+        );
+        assert_eq!(
+            read_projects(&config, "f").unwrap(),
+            [project("mac-studio", "api")]
+        );
+        // A formation that is gone does not come back by a change.
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(update_meta(&config, "f", |_| {}).is_err());
+        assert!(!folder.exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_command_of_the_terminal_looks_for_the_mcp_in_the_app_then_on_the_path_and_starts_the_formation(
+    ) {
+        let command = orchestrator_command("api-work").unwrap();
+        assert_eq!(
+            command,
+            "sh -c 'm=/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp; [ -x \"$m\" ] || m=$(command -v tsunagiai-mcp) || { echo tsunagiai-mcp was not found >&2; exit 1; }; exec \"$m\" --formation-start api-work'"
+        );
+        // One line, and one quoted word for `sh -c`: nothing inside ends the quote.
+        assert!(!command.contains('\n'));
+        assert_eq!(command.matches('\'').count(), 2);
+        for bad in ["", "a b", "a'b", "a;b", "../x", "$(x)", "A"] {
+            assert!(orchestrator_command(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_terminal_is_made_in_the_repository_of_the_environment_with_the_name_of_the_formation() {
+        let args = orchestrator_create_args("/srv/api", "api-work", "mac-studio").unwrap();
+        assert_eq!(args[..3], ["terminal", "create", "--worktree"]);
+        assert_eq!(args[3], "path:/srv/api");
+        assert_eq!(args[4..6], ["--title", "api-work"]);
+        assert_eq!(args[6], "--command");
+        assert_eq!(args[7], orchestrator_command("api-work").unwrap());
+        assert_eq!(args[8..], ["--json", "--environment=mac-studio"]);
+        assert!(orchestrator_create_args("/srv/api", "a b", "mac-studio").is_err());
+    }
+
+    #[test]
+    fn the_first_instruction_of_a_saved_environment_names_every_project_in_local() {
+        let prompt =
+            remote_first_prompt(&[project("mac-studio", "api"), project("mac-studio", "docs")])
+                .unwrap()
+                .unwrap();
+        assert!(
+            prompt.contains("> 環境: local / リポジトリ: api\n"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("> 環境: local / リポジトリ: docs\n"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("mac-studio"), "{prompt}");
+        // The same text as the instruction of a formation of this Mac with those projects.
+        assert_eq!(
+            Some(prompt),
+            first_prompt(&[project(LOCAL, "api"), project(LOCAL, "docs")]).unwrap()
+        );
+        assert_eq!(remote_first_prompt(&[]), Ok(None));
+        assert!(remote_first_prompt(&[project("mac-studio", "a\nb")]).is_err());
+    }
+
+    #[test]
+    fn a_terminal_is_listed_when_its_handle_is_there_and_it_is_not_orphaned() {
+        let list = json!({"terminals": [
+            {"handle": "term_a"},
+            {"handle": "term_b", "orphaned": false},
+            {"handle": "term_c", "orphaned": true},
+            {"title": "no handle"},
+        ]});
+        assert!(is_listed_terminal(&list, "term_a"));
+        assert!(is_listed_terminal(&list, "term_b"));
+        assert!(!is_listed_terminal(&list, "term_c"));
+        assert!(!is_listed_terminal(&list, "term_x"));
+        assert!(!is_listed_terminal(&Value::Null, "term_a"));
+    }
+
+    /// A stand-in Orca for the start of an orchestrator: every call in order, with what `answer` says to it (`read`, `write` and `wait` share one list of calls).
+    struct Stand {
+        calls: std::cell::RefCell<Vec<Vec<String>>>,
+        /// The `terminal list` answer, the `terminal wait` answer and the one failing step (the first two words of a call).
+        listed: Value,
+        satisfied: bool,
+        fails: Option<&'static str>,
+    }
+
+    impl Stand {
+        fn new() -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+                listed: json!({"terminals": []}),
+                satisfied: true,
+                fails: None,
+            }
+        }
+        fn run(&self, args: &[String]) -> Result<Value, String> {
+            self.calls.borrow_mut().push(args.to_vec());
+            let step = args[..2].join(" ");
+            if self.fails == Some(step.as_str()) {
+                return Err(format!("{step} に失敗\n二行目"));
+            }
+            Ok(match step.as_str() {
+                "repo list" => json!({"repos": [
+                    {"id": "r1", "displayName": "api", "path": "/srv/api"},
+                    {"id": "r2", "displayName": "docs", "path": "/srv/docs"},
+                ]}),
+                "terminal list" => self.listed.clone(),
+                "terminal create" => json!({"terminal": {"handle": "term_new", "paneKey": "t:l"}}),
+                "terminal wait" => json!({"wait": {"satisfied": self.satisfied}}),
+                "terminal send" => json!({"send": {"accepted": true}}),
+                _ => json!({}),
+            })
+        }
+        fn start(
+            &self,
+            config: &Path,
+            name: &str,
+            restart: bool,
+        ) -> Result<FormationOrchestrator, String> {
+            start_orchestrator_with(
+                config,
+                name,
+                restart,
+                &|args| self.run(args),
+                &|args| self.run(args),
+                &|args| self.run(args),
+            )
+        }
+        fn steps(&self) -> Vec<String> {
+            self.calls
+                .borrow()
+                .iter()
+                .map(|a| a[..2].join(" "))
+                .collect()
+        }
+        fn call(&self, step: &str) -> Vec<String> {
+            self.calls
+                .borrow()
+                .iter()
+                .find(|a| a[..2].join(" ") == step)
+                .unwrap_or_else(|| panic!("no {step}"))
+                .clone()
+        }
+    }
+
+    /// A formation of the saved environment `mac-studio` with the projects `api` and `docs`.
+    fn remote_formation(config: &Path, name: &str) {
+        create_with(
+            config,
+            name,
+            &[project("mac-studio", "api"), project("mac-studio", "docs")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        // Its orchestrator was started on its PC, which recorded the folder of the first repository.
+        update_meta(config, name, |m| m.pc_repo_path = Some("/srv/api".into())).unwrap();
+    }
+
+    fn recorded_terminal(config: &Path, name: &str) -> Option<String> {
+        read_meta(config, name).unwrap().orchestrator_terminal
+    }
+
+    #[test]
+    fn the_orchestrator_of_a_saved_environment_is_a_terminal_in_its_first_repository_with_the_projects_as_its_first_instruction(
+    ) {
+        let config = temp_dir("orchestrator-start");
+        remote_formation(&config, "api-work");
+        let orca = Stand::new();
+        let got = orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(
+            got,
+            FormationOrchestrator {
+                environment: "mac-studio".into(),
+                handle: "term_new".into()
+            }
+        );
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal create",
+                "terminal wait",
+                "terminal send"
+            ]
+        );
+        // Every call is made in that environment, and the terminal is in the folder of the first project's repository.
+        for call in orca.calls.borrow().iter() {
+            assert_eq!(call.last().unwrap(), "--environment=mac-studio", "{call:?}");
+        }
+        let create = orca.call("terminal create");
+        assert_eq!(create[3], "path:/srv/api");
+        assert_eq!(create[5], "api-work");
+        assert_eq!(create[7], orchestrator_command("api-work").unwrap());
+        assert_eq!(orca.call("terminal wait")[3], "term_new");
+        // The instruction is the projects as that PC sees them: in `local`.
+        let send = orca.call("terminal send");
+        assert_eq!(send[3], "term_new");
+        assert!(send[4].starts_with("--text=このフォーメーションのプロジェクトです。"));
+        assert!(
+            send[4].contains("> 環境: local / リポジトリ: api\n"),
+            "{}",
+            send[4]
+        );
+        assert!(
+            send[4].contains("> 環境: local / リポジトリ: docs\n"),
+            "{}",
+            send[4]
+        );
+        assert!(!send[4].contains("mac-studio"));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_recorded_terminal_that_is_listed_is_shown_again_and_nothing_is_made() {
+        let config = temp_dir("orchestrator-again");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let got = orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(got.handle, "term_old");
+        assert_eq!(orca.steps(), ["repo list", "terminal list"]);
+        assert_eq!(
+            orca.call("terminal list")[2..4],
+            ["--worktree", "path:/srv/api"]
+        );
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_recorded_terminal_that_is_not_listed_any_more_is_replaced() {
+        let config = temp_dir("orchestrator-stale");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_other"}, {"handle": "term_old", "orphaned": true}]});
+        let got = orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(got.handle, "term_new");
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal list",
+                "terminal create",
+                "terminal wait",
+                "terminal send"
+            ]
+        );
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_restart_closes_the_recorded_terminal_and_starts_a_new_one() {
+        let config = temp_dir("orchestrator-restart");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let got = orca.start(&config, "api-work", true).unwrap();
+        assert_eq!(got.handle, "term_new");
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal list",
+                "terminal close",
+                "terminal create",
+                "terminal wait",
+                "terminal send"
+            ]
+        );
+        assert_eq!(
+            orca.call("terminal close"),
+            [
+                "terminal",
+                "close",
+                "--terminal",
+                "term_old",
+                "--json",
+                "--environment=mac-studio"
+            ]
+        );
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_that_never_waits_for_input_is_closed_and_not_recorded_and_the_words_say_where_to_look(
+    ) {
+        let config = temp_dir("orchestrator-never-idle");
+        remote_formation(&config, "api-work");
+        let mut orca = Stand::new();
+        orca.satisfied = false;
+        let err = orca.start(&config, "api-work", false).unwrap_err();
+        assert!(err.contains("環境「mac-studio」"), "{err}");
+        assert!(err.contains("入力待ちになりませんでした"), "{err}");
+        assert!(err.contains("tsunagiai-mcp"), "{err}");
+        assert!(!err.contains('\n'), "{err}");
+        assert_eq!(
+            orca.steps(),
+            [
+                "repo list",
+                "terminal create",
+                "terminal wait",
+                "terminal close"
+            ]
+        );
+        assert_eq!(orca.call("terminal close")[3], "term_new");
+        assert_eq!(recorded_terminal(&config, "api-work"), None);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_step_that_fails_says_it_in_one_line_and_leaves_no_terminal_with_no_record() {
+        let config = temp_dir("orchestrator-fails");
+        remote_formation(&config, "api-work");
+        // Orca does not answer the repositories, or will not make the terminal: nothing is left to close.
+        for (step, closed) in [("repo list", false), ("terminal create", false)] {
+            let mut orca = Stand::new();
+            orca.fails = Some(step);
+            let err = orca.start(&config, "api-work", false).unwrap_err();
+            assert!(err.contains("司令塔を起動できません"), "{err}");
+            assert!(err.contains(&format!("{step} に失敗")), "{err}");
+            assert!(!err.contains("二行目") && !err.contains('\n'), "{err}");
+            assert_eq!(orca.steps().contains(&"terminal close".to_owned()), closed);
+        }
+        // A wait or a send that fails closes the terminal that was made.
+        for step in ["terminal wait", "terminal send"] {
+            let mut orca = Stand::new();
+            orca.fails = Some(step);
+            let err = orca.start(&config, "api-work", false).unwrap_err();
+            assert!(err.contains(&format!("{step} に失敗")), "{err}");
+            assert_eq!(orca.steps().last().unwrap(), "terminal close");
+            assert_eq!(recorded_terminal(&config, "api-work"), None);
+        }
+        // The list of terminals that cannot be read makes nothing: a second terminal would be made beside a live one.
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.fails = Some("terminal list");
+        assert!(orca.start(&config, "api-work", false).is_err());
+        assert!(!orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_of_this_mac_a_missing_one_and_a_missing_repository_make_no_terminal() {
+        let config = temp_dir("orchestrator-refused");
+        create_with(
+            &config,
+            "here",
+            &[project(LOCAL, "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        create_with(&config, "empty", &[], &two_environments(), 1).unwrap();
+        create_with(
+            &config,
+            "lost",
+            &[project("mac-studio", "gone")],
+            &view_of(vec![read_environment(
+                "mac-studio",
+                Some("e1"),
+                &[("gone", "/srv/gone")],
+            )]),
+            1,
+        )
+        .unwrap();
+        for (name, why) in [
+            ("here", "この Mac のものです"),
+            ("empty", "この Mac のものです"),
+            ("nowhere", "はありません"),
+            ("../x", "名前は"),
+            ("lost", "orca repo list にありません"),
+        ] {
+            let orca = Stand::new();
+            let err = orca.start(&config, name, false).unwrap_err();
+            assert!(err.contains(why), "{name}: {err}");
+            assert!(
+                !orca.steps().contains(&"terminal create".to_owned()),
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_formation_of_a_saved_environment_closes_its_orchestrators_terminal_there() {
+        let config = temp_dir("delete-orchestrator");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_orch".into());
+        })
+        .unwrap();
+        let orca = Calls::new();
+        let stopped = std::cell::Cell::new(false);
+        let answer = delete_with(
+            &config,
+            "api-work",
+            None,
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| stopped.set(true),
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        assert!(stopped.get());
+        assert_eq!(
+            *orca.0.borrow(),
+            [[
+                "terminal",
+                "close",
+                "--terminal",
+                "term_orch",
+                "--json",
+                "--environment=mac-studio"
+            ]]
+        );
+        assert!(!dir(&config, "api-work").exists());
+        // A formation with no recorded terminal, and one of this Mac, close none; one whose close fails is deleted all the same.
+        create_with(&config, "plain", &[], &two_environments(), 1).unwrap();
+        let orca = Calls::new();
+        delete_with(
+            &config,
+            "plain",
+            None,
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        assert!(orca.0.borrow().is_empty());
+        remote_formation(&config, "gone-env");
+        update_meta(&config, "gone-env", |m| {
+            m.orchestrator_terminal = Some("term_orch".into());
+        })
+        .unwrap();
+        let answer = delete_with(
+            &config,
+            "gone-env",
+            None,
+            &|_| Ok(json!({})),
+            &|_| Err("no such environment".into()),
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    // ---- the record of a formation of a saved environment is on its PC (A-37) ----
+
+    /// The file the PC's `children.json` is, with the home of the PC that `~/` is expanded to.
+    const PC_HOME: &str = "/home/pc";
+
+    /// The PC's Orca for the record: the files of its disk by the `~/` path they are asked for with, the calls it was given, and the failures it is told to make.
+    struct PcRpc {
+        files: Vec<(String, String)>,
+        calls: Vec<(String, Value)>,
+        stale: bool,
+        resolve_fails: bool,
+        truncated: bool,
+    }
+
+    impl PcRpc {
+        fn with(files: &[(String, String)]) -> Self {
+            Self {
+                files: files.to_vec(),
+                calls: Vec::new(),
+                stale: false,
+                resolve_fails: false,
+                truncated: false,
+            }
+        }
+        fn absolute(path_text: &str) -> String {
+            path_text.replacen("~/", &format!("{PC_HOME}/"), 1)
+        }
+        fn methods(&self) -> Vec<&str> {
+            self.calls.iter().map(|(m, _)| m.as_str()).collect()
+        }
+        fn content_of(&self, path_text: &str) -> Option<&str> {
+            self.files
+                .iter()
+                .find(|(p, _)| p == path_text)
+                .map(|(_, c)| c.as_str())
+        }
+    }
+
+    impl Rpc for PcRpc {
+        async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+            self.calls.push((method.to_owned(), params.clone()));
+            let by_absolute = |files: &[(String, String)]| {
+                files.iter().position(|(p, _)| {
+                    Self::absolute(p) == params["absolutePath"].as_str().unwrap_or_default()
+                })
+            };
+            match method {
+                "files.resolveTerminalPath" if self.resolve_fails => Err(orca_error(
+                    "Orca がエラーを返しました（runtime_error）",
+                    "no such worktree",
+                )),
+                "files.resolveTerminalPath" => {
+                    let text = params["pathText"].as_str().unwrap();
+                    let absolute = Self::absolute(text);
+                    if self.content_of(text).is_some() {
+                        Ok(json!({
+                            "worktree": "id", "relativePath": null, "absolutePath": absolute,
+                            "exists": true, "isDirectory": false,
+                            "openTarget": {"kind": "absolute-file", "provider": "local", "absolutePath": absolute, "grantId": "grant-1", "byteLength": 10},
+                        }))
+                    } else {
+                        Ok(
+                            json!({"worktree": "id", "relativePath": null, "absolutePath": absolute, "exists": false, "isDirectory": false}),
+                        )
+                    }
+                }
+                "files.readTerminalArtifact" => {
+                    assert_eq!(params["grantId"], "grant-1");
+                    let at = by_absolute(&self.files).expect("a path that was resolved");
+                    Ok(
+                        json!({"content": self.files[at].1, "truncated": self.truncated, "byteLength": 1}),
+                    )
+                }
+                "files.writeTerminalArtifact" => {
+                    assert_eq!(params["grantId"], "grant-1");
+                    if self.stale {
+                        return Err(orca_error(
+                            "Orca がエラーを返しました（runtime_error）",
+                            "terminal_file_grant_stale",
+                        ));
+                    }
+                    let at = by_absolute(&self.files).expect("a path that was resolved");
+                    self.files[at].1 = params["content"].as_str().unwrap().to_owned();
+                    Ok(json!({"ok": true}))
+                }
+                other => panic!("{other}"),
+            }
+        }
+    }
+
+    const MAC_PATH: &str =
+        "~/Library/Application Support/jp.mysis.tsunagiai/formation/api-work/children.json";
+    const LINUX_PATH: &str = "~/.config/jp.mysis.tsunagiai/formation/api-work/children.json";
+
+    /// What a PC's `children.json` holds for these children: they are in `local` there.
+    fn pc_text(children: &[Child]) -> String {
+        serde_json::to_string_pretty(&Record {
+            children: children.to_vec(),
+        })
+        .unwrap()
+    }
+
+    /// A launched child as the PC writes it: in its own Orca, `local`.
+    fn on_pc(name: &str) -> Child {
+        Child {
+            repo: "api".into(),
+            launch: Some(Launch {
+                path: REMOTE_PATH.replace("/a", &format!("/{name}")),
+                branch: format!("me/{name}"),
+                handle: format!("term_{name}"),
+                pane_key: format!("tab-{name}:leaf"),
+                launched_at: 1,
+                created: true,
+                branch_made: true,
+            }),
+            ..planned(name, "api")
+        }
+    }
+
+    #[test]
+    fn the_record_of_a_pc_is_looked_for_in_the_config_folders_of_macos_and_linux() {
+        assert_eq!(pc_record_paths("api-work").unwrap(), [MAC_PATH, LINUX_PATH]);
+        // A name that is no formation's name could be a path outside `formation/`.
+        for bad in ["", "..", "../x", "A", "a/b"] {
+            assert!(pc_record_paths(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn what_orca_says_of_the_path_is_missing_or_a_right_to_read_it_and_nothing_else() {
+        assert_eq!(
+            pc_file_of(&json!({"exists": false, "absolutePath": "/x"})),
+            Ok(PcFile::Missing)
+        );
+        let granted = json!({"exists": true, "isDirectory": false, "openTarget": {"kind": "absolute-file", "absolutePath": "/h/c.json", "grantId": "g"}});
+        assert_eq!(
+            pc_file_of(&granted),
+            Ok(PcFile::Granted {
+                path: "/h/c.json".into(),
+                grant: "g".into()
+            })
+        );
+        for (what, answer) in [
+            ("no target", json!({"exists": true})),
+            (
+                "a file of the worktree",
+                json!({"exists": true, "openTarget": {"kind": "worktree-file", "absolutePath": "/h/c.json"}}),
+            ),
+            (
+                "no grant",
+                json!({"exists": true, "openTarget": {"kind": "absolute-file", "absolutePath": "/h/c.json"}}),
+            ),
+            (
+                "an empty grant",
+                json!({"exists": true, "openTarget": {"kind": "absolute-file", "absolutePath": "/h/c.json", "grantId": ""}}),
+            ),
+            (
+                "a folder",
+                json!({"exists": true, "isDirectory": true, "openTarget": {"kind": "absolute-file", "absolutePath": "/h", "grantId": "g"}}),
+            ),
+        ] {
+            assert!(pc_file_of(&answer).is_err(), "{what}");
+        }
+    }
+
+    #[test]
+    fn the_record_is_found_where_the_pc_has_it_and_asked_from_the_repository_folder() {
+        let text = pc_text(&[on_pc("a")]);
+        for (files, asked) in [
+            (vec![(MAC_PATH.to_owned(), text.clone())], vec![MAC_PATH]),
+            (
+                vec![(LINUX_PATH.to_owned(), text.clone())],
+                vec![MAC_PATH, LINUX_PATH],
+            ),
+        ] {
+            let mut rpc = PcRpc::with(&files);
+            let got = run_blocking(pull_pc_children(
+                &mut rpc,
+                "/srv/api",
+                "api-work",
+                &Hint::new(0),
+            ))
+            .unwrap();
+            assert_eq!(names(&got), ["a"]);
+            assert_eq!(got[0].environment, LOCAL, "as the PC wrote it");
+            let asked_for: Vec<&str> = rpc
+                .calls
+                .iter()
+                .filter(|(m, _)| m == "files.resolveTerminalPath")
+                .map(|(_, p)| p["pathText"].as_str().unwrap())
+                .collect();
+            assert_eq!(asked_for, asked);
+            // Every call names the worktree by the repository's folder; the read names the right and the path it was given.
+            assert!(rpc
+                .calls
+                .iter()
+                .all(|(_, p)| p["worktree"] == "path:/srv/api"));
+            let (method, read) = rpc.calls.last().unwrap();
+            assert_eq!(method, "files.readTerminalArtifact");
+            assert_eq!(read["grantId"], "grant-1");
+            assert_eq!(read["absolutePath"], PcRpc::absolute(asked.last().unwrap()));
+        }
+    }
+
+    #[test]
+    fn a_pc_with_no_record_has_no_child_and_one_that_cannot_be_read_is_an_error() {
+        let mut rpc = PcRpc::with(&[]);
+        assert_eq!(
+            run_blocking(pull_pc_children(
+                &mut rpc,
+                "/srv/api",
+                "api-work",
+                &Hint::new(0)
+            )),
+            Ok(Vec::new())
+        );
+        // Both places were asked, and nothing was read.
+        assert_eq!(
+            rpc.methods(),
+            ["files.resolveTerminalPath", "files.resolveTerminalPath"]
+        );
+        let mut rpc = PcRpc::with(&[(MAC_PATH.to_owned(), pc_text(&[on_pc("a")]))]);
+        rpc.truncated = true;
+        assert!(run_blocking(pull_pc_children(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &Hint::new(0)
+        ))
+        .is_err());
+        let mut rpc = PcRpc::with(&[(MAC_PATH.to_owned(), "not json".to_owned())]);
+        let err = run_blocking(pull_pc_children(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &Hint::new(0),
+        ))
+        .unwrap_err();
+        assert!(err.contains("形式が正しくありません"), "{err}");
+        let mut rpc = PcRpc::with(&[]);
+        rpc.resolve_fails = true;
+        let err = run_blocking(pull_pc_children(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &Hint::new(0),
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("runtime_error") && err.contains("no such worktree"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_closed_children_are_taken_out_of_the_record_that_is_read_again_and_a_new_one_stays() {
+        // The orchestrator launched `c` after this Mac read the record: it is in the file now.
+        let mut rpc = PcRpc::with(&[(
+            MAC_PATH.to_owned(),
+            pc_text(&[on_pc("a"), on_pc("b"), on_pc("c")]),
+        )]);
+        run_blocking(drop_from_pc_record(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &["a".into(), "b".into()],
+            &Hint::new(0),
+        ))
+        .unwrap();
+        assert_eq!(
+            rpc.methods(),
+            [
+                "files.resolveTerminalPath",
+                "files.readTerminalArtifact",
+                "files.writeTerminalArtifact"
+            ]
+        );
+        let written = parse_record(rpc.content_of(MAC_PATH).unwrap()).unwrap();
+        assert_eq!(written, [on_pc("c")], "the entry as the PC wrote it");
+        let (_, write) = rpc.calls.last().unwrap();
+        assert_eq!(write["grantId"], "grant-1");
+        assert_eq!(write["absolutePath"], PcRpc::absolute(MAC_PATH));
+        assert_eq!(write["worktree"], "path:/srv/api");
+        // All of them out leaves the file with no child, as a record that is read.
+        run_blocking(drop_from_pc_record(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &["c".into()],
+            &Hint::new(0),
+        ))
+        .unwrap();
+        assert_eq!(parse_record(rpc.content_of(MAC_PATH).unwrap()).unwrap(), []);
+    }
+
+    #[test]
+    fn nothing_is_written_when_there_is_no_file_or_none_of_the_names_is_in_it() {
+        let mut rpc = PcRpc::with(&[]);
+        run_blocking(drop_from_pc_record(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &["a".into()],
+            &Hint::new(0),
+        ))
+        .unwrap();
+        assert!(!rpc.methods().contains(&"files.writeTerminalArtifact"));
+        let mut rpc = PcRpc::with(&[(MAC_PATH.to_owned(), pc_text(&[on_pc("b")]))]);
+        run_blocking(drop_from_pc_record(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &["a".into()],
+            &Hint::new(0),
+        ))
+        .unwrap();
+        assert!(!rpc.methods().contains(&"files.writeTerminalArtifact"));
+    }
+
+    #[test]
+    fn a_record_that_the_orchestrator_changed_after_the_read_is_not_written_over() {
+        let mut rpc = PcRpc::with(&[(MAC_PATH.to_owned(), pc_text(&[on_pc("a")]))]);
+        rpc.stale = true;
+        let err = run_blocking(drop_from_pc_record(
+            &mut rpc,
+            "/srv/api",
+            "api-work",
+            &["a".into()],
+            &Hint::new(0),
+        ))
+        .unwrap_err();
+        assert!(err.contains("書き換えた"), "{err}");
+        assert_eq!(
+            parse_record(rpc.content_of(MAC_PATH).unwrap()).unwrap(),
+            [on_pc("a")]
+        );
+    }
+
+    /// A read of the screen's list as it was asked for: the environment, and the folder and the name of each formation.
+    type EnvBatch = (String, Vec<(String, String)>);
+
+    /// A removal from the record of a PC as it was asked for: the environment, the folder, the formation and the names.
+    type DroppedFrom = (String, String, String, Vec<String>);
+
+    /// The Orca of the PC for a formation: its repositories, the saved environments, and the record and the calls it was given.
+    struct Pc {
+        record: Mutex<Vec<Child>>,
+        environments: Value,
+        pull_fails: Option<&'static str>,
+        drop_fails: Option<&'static str>,
+        pulls: Mutex<Vec<(String, String, String)>>,
+        /// The reads of the screen's list: an environment and the folder and the name of each formation asked over its one connection.
+        envs: Mutex<Vec<EnvBatch>>,
+        drops: Mutex<Vec<DroppedFrom>>,
+        cli: Mutex<Vec<String>>,
+    }
+
+    impl Pc {
+        fn with(record: Vec<Child>) -> Self {
+            Self {
+                record: Mutex::new(record),
+                environments: json!({"environments": [{"id": "env-1", "name": "mac-studio"}]}),
+                pull_fails: None,
+                drop_fails: None,
+                pulls: Mutex::default(),
+                envs: Mutex::default(),
+                drops: Mutex::default(),
+                cli: Mutex::default(),
+            }
+        }
+        fn read(&self, args: &[String]) -> Result<Value, String> {
+            self.cli.lock().unwrap().push(args[..2].join(" "));
+            match (args[0].as_str(), args[1].as_str()) {
+                ("repo", "list") => {
+                    assert_eq!(args.last().unwrap(), "--environment=mac-studio", "{args:?}");
+                    Ok(json!({"repos": [
+                        {"id": "r1", "displayName": "api", "path": "/srv/api"},
+                        {"id": "r2", "displayName": "docs", "path": "/srv/docs"},
+                    ]}))
+                }
+                ("environment", "list") => Ok(self.environments.clone()),
+                _ => Err(format!("unexpected {args:?}")),
+            }
+        }
+        fn pull(
+            &self,
+            environment: &str,
+            path: &str,
+            formation: &str,
+        ) -> Result<Vec<Child>, String> {
+            self.pulls
+                .lock()
+                .unwrap()
+                .push((environment.into(), path.into(), formation.into()));
+            match self.pull_fails {
+                Some(e) => Err(e.into()),
+                None => Ok(self.record.lock().unwrap().clone()),
+            }
+        }
+        fn pull_env(
+            &self,
+            environment: &str,
+            items: &[(String, String)],
+        ) -> Vec<Result<Vec<Child>, String>> {
+            self.envs
+                .lock()
+                .unwrap()
+                .push((environment.into(), items.to_vec()));
+            items
+                .iter()
+                .map(|(path, formation)| self.pull(environment, path, formation))
+                .collect()
+        }
+        fn drop(
+            &self,
+            environment: &str,
+            path: &str,
+            formation: &str,
+            removed: &[String],
+        ) -> Result<(), String> {
+            self.drops.lock().unwrap().push((
+                environment.into(),
+                path.into(),
+                formation.into(),
+                removed.to_vec(),
+            ));
+            if let Some(e) = self.drop_fails {
+                return Err(e.into());
+            }
+            let kept = without_names(self.record.lock().unwrap().clone(), removed);
+            *self.record.lock().unwrap() = kept;
+            Ok(())
+        }
+    }
+
+    macro_rules! access {
+        ($pc:expr) => {
+            Access {
+                read: &|args| $pc.read(args),
+                pull: &|e, p, f| $pc.pull(e, p, f),
+                drop: &|e, p, f, r| $pc.drop(e, p, f, r),
+            }
+        };
+    }
+
+    fn remote_projects() -> Vec<FormationProject> {
+        vec![project("mac-studio", "api"), project("mac-studio", "docs")]
+    }
+
+    #[test]
+    fn the_children_of_a_pc_are_named_by_its_environment_from_here_and_are_read_from_its_first_repository(
+    ) {
+        let pc = Pc::with(vec![on_pc("a"), planned("b", "docs")]);
+        let access = access!(pc);
+        let got = pc_children_with(
+            "mac-studio",
+            Some("/srv/api"),
+            "api-work",
+            access.read,
+            access.pull,
+        )
+        .unwrap();
+        assert_eq!(names(&got), ["a", "b"]);
+        assert!(got.iter().all(|c| c.environment == "mac-studio"), "{got:?}");
+        // The rest of a child is as the PC wrote it.
+        assert_eq!(got[0].launch, on_pc("a").launch);
+        assert_eq!(
+            *pc.pulls.lock().unwrap(),
+            [(
+                "mac-studio".to_owned(),
+                "/srv/api".to_owned(),
+                "api-work".to_owned()
+            )]
+        );
+        // An environment the PC wrote that is not its own is read as the PC's too: no other Orca is reached by it.
+        let pc = Pc::with(vec![Child {
+            environment: "lab".into(),
+            ..on_pc("a")
+        }]);
+        let access = access!(pc);
+        let got = pc_children_with(
+            "mac-studio",
+            Some("/srv/api"),
+            "api-work",
+            access.read,
+            access.pull,
+        )
+        .unwrap();
+        assert_eq!(got[0].environment, "mac-studio");
+    }
+
+    #[test]
+    fn a_pc_that_is_gone_from_the_environments_has_no_record_and_any_other_failure_is_the_reason() {
+        let mut pc = Pc::with(vec![on_pc("a")]);
+        pc.pull_fails = Some("Orca に届きません\n二行目");
+        let access = access!(pc);
+        let err = pc_children_with(
+            "mac-studio",
+            Some("/srv/api"),
+            "api-work",
+            access.read,
+            access.pull,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("環境「mac-studio」") && err.contains("Orca に届きません"),
+            "{err}"
+        );
+        assert!(!err.contains("二行目"), "{err}");
+        let mut pc = Pc::with(vec![on_pc("a")]);
+        pc.pull_fails = Some("Orca に届きません");
+        pc.environments = json!({"environments": [{"id": "env-2", "name": "lab"}]});
+        let access = access!(pc);
+        assert_eq!(
+            pc_children_with(
+                "mac-studio",
+                Some("/srv/api"),
+                "api-work",
+                access.read,
+                access.pull
+            ),
+            Ok(Vec::new())
+        );
+        // A list of environments that cannot be read does not say it is gone.
+        let mut pc = Pc::with(vec![]);
+        pc.pull_fails = Some("x");
+        let read = |args: &[String]| {
+            if args == environment_list_args() {
+                Err("pairing".to_owned())
+            } else {
+                pc.read(args)
+            }
+        };
+        assert!(pc_children_with(
+            "mac-studio",
+            Some("/srv/api"),
+            "api-work",
+            &read,
+            &|e, p, f| pc.pull(e, p, f)
+        )
+        .is_err());
+        // A formation that has no folder recorded never had its orchestrator started on its PC: that PC has no record, and nothing is asked.
+        let pc = Pc::with(vec![on_pc("a")]);
+        let access = access!(pc);
+        assert_eq!(
+            pc_children_with("mac-studio", None, "api-work", access.read, access.pull),
+            Ok(Vec::new())
+        );
+        assert!(pc.pulls.lock().unwrap().is_empty() && pc.cli.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_formation_of_this_mac_reads_its_own_record_and_never_asks_a_pc_and_one_of_a_pc_adds_it_to_the_pcs(
+    ) {
+        let config = temp_dir("record-children-local");
+        create_with(
+            &config,
+            "f",
+            &[project(LOCAL, "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        write_children(&config, "f", &[planned("a", "api")]).unwrap();
+        let got = record_children(&config, "f", &|_| panic!("no Orca is asked"), &no_pull).unwrap();
+        assert_eq!(names(&got), ["a"]);
+        remote_formation(&config, "api-work");
+        write_children(&config, "api-work", &[planned("stale", "api")]).unwrap();
+        let pc = Pc::with(vec![on_pc("b")]);
+        let access = access!(pc);
+        let got = record_children(&config, "api-work", access.read, access.pull).unwrap();
+        assert_eq!(
+            names(&got),
+            ["b", "stale"],
+            "the PC's, and then the children of this Mac's record that the PC lacks"
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_closed_child_leaves_the_pcs_record_and_the_scratch_copy_is_deleted() {
+        let config = temp_dir("through-record");
+        remote_formation(&config, "api-work");
+        let pc = Pc::with(vec![on_pc("a"), on_pc("b")]);
+        let access = access!(pc);
+        let seen = std::cell::RefCell::new(None);
+        let (value, copied) = through_record(&config, "api-work", &access, |scratch| {
+            // The copy holds the PC's children as this Mac names them, and the formation's own file.
+            let inside = read_record(scratch, "api-work").unwrap();
+            assert!(inside.iter().all(|c| c.environment == "mac-studio"));
+            assert_eq!(
+                read_projects(scratch, "api-work").unwrap(),
+                remote_projects()
+            );
+            *seen.borrow_mut() = Some(scratch.to_path_buf());
+            update(scratch, "api-work", |old| Ok(without(old, "a")))?;
+            Ok("closed")
+        })
+        .unwrap();
+        assert_eq!((value, copied), ("closed", true));
+        assert_eq!(
+            *pc.drops.lock().unwrap(),
+            [(
+                "mac-studio".to_owned(),
+                "/srv/api".to_owned(),
+                "api-work".to_owned(),
+                vec!["a".to_owned()]
+            )]
+        );
+        assert_eq!(names(&pc.record.lock().unwrap()), ["b"]);
+        assert!(
+            !seen.borrow().as_ref().unwrap().exists(),
+            "the copy is deleted"
+        );
+        // This Mac's folder of the formation is as it was: it has no `children.json`.
+        assert!(!dir(&config, "api-work").join(CHILDREN_FILE).exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_closed_that_both_records_name_leaves_both_records() {
+        let config = temp_dir("through-record-both");
+        remote_formation(&config, "api-work");
+        write_children(
+            &config,
+            "api-work",
+            &[planned("a", "api"), planned("c", "api")],
+        )
+        .unwrap();
+        let pc = Pc::with(vec![on_pc("a"), on_pc("b")]);
+        let access = access!(pc);
+        through_record(&config, "api-work", &access, |scratch| {
+            update(scratch, "api-work", |old| Ok(without(old, "a")))
+        })
+        .unwrap();
+        assert_eq!(names(&pc.record.lock().unwrap()), ["b"]);
+        assert_eq!(names(&read_record(&config, "api-work").unwrap()), ["c"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_work_that_changes_nothing_writes_nothing_and_a_failed_one_still_takes_out_what_it_closed()
+    {
+        let config = temp_dir("through-record-fails");
+        remote_formation(&config, "api-work");
+        let pc = Pc::with(vec![on_pc("a"), on_pc("b")]);
+        let access = access!(pc);
+        through_record(&config, "api-work", &access, |_| Ok(())).unwrap();
+        assert!(pc.drops.lock().unwrap().is_empty());
+        // `a` was closed and `b` failed: the work's own error is what the owner reads, and `a` is out of the PC's record.
+        let err = through_record(
+            &config,
+            "api-work",
+            &access,
+            |scratch| -> Result<(), String> {
+                update(scratch, "api-work", |old| Ok(without(old, "a")))?;
+                Err("子「b」を閉じられません".into())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, "子「b」を閉じられません");
+        assert_eq!(names(&pc.record.lock().unwrap()), ["b"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_written_is_said_also_when_the_work_went_through() {
+        let config = temp_dir("through-record-drop-fails");
+        remote_formation(&config, "api-work");
+        let mut pc = Pc::with(vec![on_pc("a")]);
+        pc.drop_fails = Some("司令塔が children.json を書き換えたので、書き戻しませんでした");
+        let access = access!(pc);
+        let err = through_record(&config, "api-work", &access, |scratch| {
+            update(scratch, "api-work", |old| Ok(without(old, "a")))
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("子は閉じましたが") && err.contains("書き換えた"),
+            "{err}"
+        );
+        let err = through_record(
+            &config,
+            "api-work",
+            &access,
+            |scratch| -> Result<(), String> {
+                update(scratch, "api-work", |old| Ok(without(old, "a")))?;
+                Err("worktree を消せません".into())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("worktree を消せません") && err.contains("書き換えた"),
+            "{err}"
+        );
+        // A PC that cannot be read stops it before the work runs.
+        let mut pc = Pc::with(vec![]);
+        pc.pull_fails = Some("届きません");
+        let access = access!(pc);
+        let err = through_record(&config, "api-work", &access, |_| -> Result<(), String> {
+            panic!("no work")
+        })
+        .unwrap_err();
+        assert!(err.contains("届きません"), "{err}");
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_of_this_mac_is_worked_on_in_place() {
+        let config = temp_dir("through-record-local");
+        create_with(&config, "f", &[], &two_environments(), 1).unwrap();
+        let pc = Pc::with(vec![]);
+        let access = access!(pc);
+        let (_, copied) = through_record(&config, "f", &access, |at| {
+            assert_eq!(at, config);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!copied);
+        assert!(pc.pulls.lock().unwrap().is_empty() && pc.cli.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    /// The Orca of `mac-studio` for the children of the PC's record: the lists, the writes it was given and the git it answers.
+    struct PcFlow {
+        pc: Pc,
+        writes: Calls,
+        /// The launched children that are in this Mac's record, not the PC's: their worktrees are in the PC's Orca all the same.
+        also: Vec<Child>,
+    }
+
+    impl PcFlow {
+        fn new(record: Vec<Child>) -> Self {
+            Self {
+                pc: Pc::with(record),
+                writes: Calls::new(),
+                also: Vec::new(),
+            }
+        }
+        fn with_own(mut self, own: Vec<Child>) -> Self {
+            self.also = own;
+            self
+        }
+        fn read(&self, args: &[String]) -> Result<Value, String> {
+            if args[..2] == ["worktree", "ps"] {
+                // The worktrees of the children, each with the pane the record names.
+                let record = self.pc.record.lock().unwrap();
+                let rows: Vec<Value> = record
+                    .iter()
+                    .chain(&self.also)
+                    .filter_map(|c| c.launch.as_ref())
+                    .map(|l| json!({"path": l.path, "isMainWorktree": false, "agents": [{"paneKey": l.pane_key}]}))
+                    .collect();
+                return Ok(json!({"worktrees": rows, "truncated": false}));
+            }
+            self.pc.read(args)
+        }
+    }
+
+    #[test]
+    fn deleting_a_formation_of_a_saved_environment_closes_the_children_of_the_pc_and_empties_its_record(
+    ) {
+        let config = temp_dir("delete-pc");
+        remote_formation(&config, "api-work");
+        let flow = PcFlow::new(vec![on_pc("a"), on_pc("b")]);
+        let access = Access {
+            read: &|args| flow.read(args),
+            pull: &|e, p, f| flow.pc.pull(e, p, f),
+            drop: &|e, p, f, r| flow.pc.drop(e, p, f, r),
+        };
+        let stopped = std::cell::Cell::new(false);
+        let answer = delete_formation(
+            &config,
+            "api-work",
+            None,
+            &|args| flow.writes.run(args),
+            &|_, _| Ok(git_answers(json!([]), 0)),
+            &|| stopped.set(true),
+            &access,
+        )
+        .unwrap();
+        assert!(answer.deleted && stopped.get());
+        // Each child's terminal and worktree are closed in the PC's Orca, as for a child of any saved environment.
+        let writes = flow.writes.0.borrow().clone();
+        for name in ["a", "b"] {
+            let path = REMOTE_PATH.replace("/a", &format!("/{name}"));
+            assert!(
+                writes.contains(&terminal_close_args(&format!("term_{name}"), "mac-studio")),
+                "{name}"
+            );
+            assert!(
+                writes.contains(&worktree_rm_args(&path, "mac-studio", false, true)),
+                "{name}"
+            );
+        }
+        // The PC's record has none, and this Mac's folder of the formation is gone with its copy.
+        assert!(flow.pc.record.lock().unwrap().is_empty());
+        assert_eq!(flow.pc.drops.lock().unwrap().len(), 1);
+        assert!(!dir(&config, "api-work").exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_deletion_that_git_keeps_ends_and_closes_nothing_and_leaves_both_records() {
+        let config = temp_dir("delete-pc-kept");
+        remote_formation(&config, "api-work");
+        let flow = PcFlow::new(vec![on_pc("a")]);
+        let access = Access {
+            read: &|args| flow.read(args),
+            pull: &|e, p, f| flow.pc.pull(e, p, f),
+            drop: &|e, p, f, r| flow.pc.drop(e, p, f, r),
+        };
+        let stopped = std::cell::Cell::new(false);
+        let answer = delete_formation(
+            &config,
+            "api-work",
+            None,
+            &|args| flow.writes.run(args),
+            &|_, _| {
+                Ok(git_answers(
+                    json!([{"path": "a.rs", "status": "modified", "area": "unstaged"}]),
+                    0,
+                ))
+            },
+            &|| stopped.set(true),
+            &access,
+        )
+        .unwrap();
+        assert!(!answer.deleted);
+        assert_eq!(answer.kept.len(), 1);
+        assert_eq!(answer.kept[0].name, "a");
+        assert!(!stopped.get());
+        assert!(flow.writes.0.borrow().is_empty());
+        assert!(flow.pc.drops.lock().unwrap().is_empty());
+        assert_eq!(names(&flow.pc.record.lock().unwrap()), ["a"]);
+        assert!(dir(&config, "api-work").join(FORMATION_FILE).is_file());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_of_a_pc_that_is_gone_from_orca_is_deleted_with_nothing_asked_of_it() {
+        let config = temp_dir("delete-pc-gone");
+        remote_formation(&config, "api-work");
+        let mut pc = Pc::with(vec![]);
+        pc.pull_fails = Some("no such environment");
+        pc.environments = json!({"environments": []});
+        let access = access!(pc);
+        let writes = Calls::new();
+        let answer = delete_formation(
+            &config,
+            "api-work",
+            None,
+            &|args| writes.run(args),
+            &no_remote_git,
+            &|| {},
+            &access,
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        assert!(!dir(&config, "api-work").exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn closing_a_child_of_a_pc_from_the_screen_closes_it_there_and_takes_it_out_of_its_record() {
+        let config = temp_dir("close-pc");
+        remote_formation(&config, "api-work");
+        let flow = PcFlow::new(vec![on_pc("a"), on_pc("b")]);
+        let access = Access {
+            read: &|args| flow.read(args),
+            pull: &|e, p, f| flow.pc.pull(e, p, f),
+            drop: &|e, p, f, r| flow.pc.drop(e, p, f, r),
+        };
+        let answer = close_child_formation(
+            &config,
+            "api-work",
+            "a",
+            None,
+            &|args| flow.writes.run(args),
+            &|environment, path| {
+                assert_eq!((environment, path), ("mac-studio", REMOTE_PATH));
+                Ok(git_answers(json!([]), 0))
+            },
+            &access,
+        )
+        .unwrap();
+        assert!(answer.closed);
+        assert_eq!(names(&flow.pc.record.lock().unwrap()), ["b"]);
+        assert_eq!(flow.pc.drops.lock().unwrap()[0].3, ["a"]);
+        // `b` is still there, and so is a child that git keeps: the answer says why and the record is as it was.
+        let kept = close_child_formation(
+            &config,
+            "api-work",
+            "b",
+            None,
+            &|args| flow.writes.run(args),
+            &|_, _| {
+                Ok(git_answers(
+                    json!([{"path": "b.rs", "status": "modified", "area": "unstaged"}]),
+                    0,
+                ))
+            },
+            &access,
+        )
+        .unwrap();
+        assert!(!kept.closed);
+        assert_eq!(kept.changed.len(), 1);
+        assert_eq!(names(&flow.pc.record.lock().unwrap()), ["b"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_reads_the_records_of_the_pcs_with_the_runtime_of_the_blocking_thread_it_runs_on() {
+        let config = temp_dir("list-pc-runtime");
+        remote_formation(&config, "api-work");
+        let dir = config.clone();
+        let list = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                tokio::task::spawn_blocking(move || {
+                    list_with(&dir, &|_, _| Err("not read".into()), &|_, items| {
+                        // The real read of a PC (`on_pc`) blocks on the runtime it is called in.
+                        tokio::runtime::Handle::current().block_on(async {});
+                        items
+                            .iter()
+                            .map(|_| Ok(vec![planned("a", "api")]))
+                            .collect()
+                    })
+                })
+                .await
+                .unwrap()
+            })
+            .unwrap();
+        assert_eq!(list.read_error, None);
+        assert_eq!(list.formations[0].counts.planned, 1);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_counts_the_children_of_a_pcs_record_and_says_why_when_it_cannot_be_read() {
+        let config = temp_dir("list-pc");
+        remote_formation(&config, "api-work");
+        let pc = Pc::with(vec![planned("a", "api"), planned("b", "api")]);
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        assert_eq!(list.formations.len(), 1);
+        assert_eq!(list.formations[0].environment, "mac-studio");
+        assert_eq!(list.formations[0].counts.planned, 2);
+        assert_eq!(list.read_error, None);
+        let mut pc = Pc::with(vec![]);
+        pc.pull_fails = Some("届きません");
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        assert_eq!(list.formations[0].counts, ChildCounts::default());
+        assert!(list.read_error.unwrap().contains("届きません"));
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_flow_pane_shows_the_children_of_a_pcs_record_in_its_environment() {
+        let children = pc_children_with(
+            "mac-studio",
+            Some("/srv/api"),
+            "api-work",
+            &|args| Pc::with(vec![]).read(args),
+            &|_, _, _| Ok(vec![on_pc("a"), planned("b", "api")]),
+        )
+        .unwrap();
+        // Orca of that environment lists its worktrees, and the agent of the child `a` is in one of them.
+        let pc = Pc::with(Vec::new());
+        let rows = children_view_with(&children, &|args, _| {
+            if args[..2] == ["worktree", "ps"] {
+                assert_eq!(args.last().unwrap(), "--environment=mac-studio");
+                Ok(json!({"worktrees": [{"path": REMOTE_PATH, "agents": [{"paneKey": "tab-a:leaf", "parentPaneKey": null, "hasLivePty": true, "state": "working"}]}]}))
+            } else {
+                pc.read(args)
+            }
+        })
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[0].name.as_str(), rows[0].environment.as_str()),
+            ("a", "mac-studio")
+        );
+        assert_eq!(rows[0].state, FormationState::Working);
+        assert_eq!(rows[0].handle.as_deref(), Some("term_a"));
+        assert_eq!(rows[1].state, FormationState::Planned);
+    }
+
+    #[test]
+    fn a_child_is_planned_and_launched_only_on_the_pc_of_its_orchestrator() {
+        assert_eq!(check_children_here(LOCAL), Ok(()));
+        let err = check_children_here("mac-studio").unwrap_err();
+        assert!(
+            err.contains("環境「mac-studio」") && err.contains("SendMessage"),
+            "{err}"
+        );
+        // Nothing is read or written: the refusal is first, and the record stays as it was.
+        let config = temp_dir("here-only");
+        let err = plan(
+            &config,
+            "alpha",
+            &[
+                wanted("a", "x"),
+                PlannedChild {
+                    environment: "mac-studio".into(),
+                    ..wanted("b", "x")
+                },
+            ],
+        )
+        .unwrap_err();
+        assert!(err.error.contains("SendMessage"), "{}", err.error);
+        assert!(!dir(&config, "alpha").exists());
+        let err = launch(
+            &config,
+            "alpha",
+            "mac-studio",
+            "r",
+            "ok",
+            on_branch("feature/a"),
+            "go",
+        )
+        .unwrap_err();
+        assert!(err.error.contains("SendMessage"), "{}", err.error);
+        assert!(!dir(&config, "alpha").exists());
+    }
+
+    macro_rules! flow_access {
+        ($flow:expr) => {
+            Access {
+                read: &|args| $flow.read(args),
+                pull: &|e, p, f| $flow.pc.pull(e, p, f),
+                drop: &|e, p, f, r| $flow.pc.drop(e, p, f, r),
+            }
+        };
+    }
+
+    /// A child that the orchestrator of this Mac launched, before that orchestrator ran on its PC: in the saved environment, in this Mac's `children.json`.
+    fn own_launched(name: &str) -> Child {
+        Child {
+            environment: "mac-studio".into(),
+            ..on_pc(name)
+        }
+    }
+
+    #[test]
+    fn the_children_that_this_macs_record_holds_from_before_are_the_formations_too_and_are_listed()
+    {
+        let config = temp_dir("old-record-list");
+        remote_formation(&config, "api-work");
+        write_children(
+            &config,
+            "api-work",
+            &[planned("x", "api"), planned("a", "api")],
+        )
+        .unwrap();
+        let pc = Pc::with(vec![planned("a", "api"), planned("b", "api")]);
+        let access = access!(pc);
+        // The PC's children, and then those of this Mac's record that it lacks, by name.
+        let got = record_children(&config, "api-work", access.read, access.pull).unwrap();
+        assert_eq!(names(&got), ["a", "b", "x"]);
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        assert_eq!(list.formations[0].counts.planned, 3);
+        // A PC that cannot be read says why, and the children of this Mac's record are still counted.
+        let mut pc = Pc::with(vec![]);
+        pc.pull_fails = Some("届きません");
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        assert_eq!(list.formations[0].counts.planned, 2);
+        assert!(list.read_error.unwrap().contains("届きません"));
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_of_this_macs_old_record_is_closed_from_that_record_and_the_pcs_child_from_the_pcs() {
+        let config = temp_dir("old-record-close");
+        remote_formation(&config, "api-work");
+        write_children(&config, "api-work", &[own_launched("x")]).unwrap();
+        let flow = PcFlow::new(vec![on_pc("a")]).with_own(vec![own_launched("x")]);
+        let access = flow_access!(flow);
+        let close = |name: &str| {
+            close_child_formation(
+                &config,
+                "api-work",
+                name,
+                None,
+                &|args| flow.writes.run(args),
+                &|_, _| Ok(git_answers(json!([]), 0)),
+                &access,
+            )
+            .unwrap()
+        };
+        let answer = close("x");
+        assert!(answer.closed);
+        let writes = flow.writes.0.borrow().clone();
+        assert!(writes.contains(&terminal_close_args("term_x", "mac-studio")));
+        assert!(read_children(&config, "api-work").is_empty());
+        // The PC's record was not written, and its child is still there.
+        assert!(flow.pc.drops.lock().unwrap().is_empty());
+        assert_eq!(names(&flow.pc.record.lock().unwrap()), ["a"]);
+        // The other way round: closing the PC's child leaves this Mac's record as it is.
+        write_children(&config, "api-work", &[own_launched("x")]).unwrap();
+        assert!(close("a").closed);
+        assert_eq!(flow.pc.drops.lock().unwrap().len(), 1);
+        assert!(flow.pc.record.lock().unwrap().is_empty());
+        assert_eq!(names(&read_children(&config, "api-work")), ["x"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_formation_with_children_in_both_records_closes_all_of_them_and_empties_both() {
+        let config = temp_dir("old-record-delete");
+        remote_formation(&config, "api-work");
+        write_children(&config, "api-work", &[own_launched("x")]).unwrap();
+        let flow = PcFlow::new(vec![on_pc("a")]).with_own(vec![own_launched("x")]);
+        let access = flow_access!(flow);
+        let answer = delete_formation(
+            &config,
+            "api-work",
+            None,
+            &|args| flow.writes.run(args),
+            &|_, _| Ok(git_answers(json!([]), 0)),
+            &|| {},
+            &access,
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        let writes = flow.writes.0.borrow().clone();
+        for name in ["a", "x"] {
+            let path = REMOTE_PATH.replace("/a", &format!("/{name}"));
+            assert!(
+                writes.contains(&worktree_rm_args(&path, "mac-studio", false, true)),
+                "{name}"
+            );
+        }
+        assert!(flow.pc.record.lock().unwrap().is_empty());
+        assert!(!dir(&config, "api-work").exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_that_the_orchestrator_adds_while_the_children_are_closed_stops_the_deletion_and_keeps_this_macs_folder(
+    ) {
+        let config = temp_dir("delete-late-child");
+        remote_formation(&config, "api-work");
+        let flow = PcFlow::new(vec![on_pc("a")]);
+        let access = flow_access!(flow);
+        let err = delete_formation(
+            &config,
+            "api-work",
+            None,
+            &|args| flow.writes.run(args),
+            &|_, _| Ok(git_answers(json!([]), 0)),
+            &|| flow.pc.record.lock().unwrap().push(on_pc("late")),
+            &access,
+        )
+        .unwrap_err();
+        assert!(err.contains("子を足しました"), "{err}");
+        // The child that was closed is out of the PC's record, the late one stays, and the formation is still here to be deleted again.
+        assert_eq!(names(&flow.pc.record.lock().unwrap()), ["late"]);
+        assert!(dir(&config, "api-work").join(FORMATION_FILE).is_file());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_reads_the_records_of_an_environment_over_one_connection_and_asks_no_repository_list(
+    ) {
+        let config = temp_dir("list-batches");
+        remote_formation(&config, "api-work");
+        remote_formation(&config, "docs-work");
+        remote_formation(&config, "lab-work");
+        update_meta(&config, "lab-work", |m| {
+            m.projects = vec![project("lab", "api")];
+        })
+        .unwrap();
+        // Its orchestrator was never started on its PC: that PC is not asked.
+        create_with(
+            &config,
+            "never",
+            &[project("mac-studio", "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        let pc = Pc::with(vec![planned("a", "api")]);
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        let mut batches = pc.envs.lock().unwrap().clone();
+        batches.sort();
+        let at = |name: &str| ("/srv/api".to_owned(), name.to_owned());
+        assert_eq!(
+            batches,
+            [
+                ("lab".to_owned(), vec![at("lab-work")]),
+                (
+                    "mac-studio".to_owned(),
+                    vec![at("api-work"), at("docs-work")]
+                ),
+            ]
+        );
+        assert!(
+            !pc.cli.lock().unwrap().iter().any(|c| c == "repo list"),
+            "{:?}",
+            pc.cli.lock().unwrap()
+        );
+        let planned_of = |name: &str| {
+            list.formations
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap()
+                .counts
+                .planned
+        };
+        assert_eq!(
+            ["api-work", "docs-work", "lab-work", "never"].map(planned_of),
+            [1, 1, 1, 0]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_reads_orca_environment_list_once_however_many_records_failed() {
+        let config = temp_dir("list-gone-once");
+        remote_formation(&config, "api-work");
+        remote_formation(&config, "docs-work");
+        let mut pc = Pc::with(vec![]);
+        pc.pull_fails = Some("no such environment");
+        pc.environments = json!({"environments": []});
+        let list = list_with(&config, &|args, _| pc.read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        // The PC is gone from Orca: its formations are listed with no child, and that is no error.
+        assert_eq!(list.formations.len(), 2);
+        assert_eq!(list.read_error, None);
+        let asked = pc
+            .cli
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| *c == "environment list")
+            .count();
+        assert_eq!(asked, 1);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_place_that_had_the_record_is_asked_first_the_next_time() {
+        let text = pc_text(&[on_pc("a")]);
+        let hint = Hint::new(0);
+        let asked = |rpc: &PcRpc| -> Vec<String> {
+            rpc.calls
+                .iter()
+                .filter(|(m, _)| m == "files.resolveTerminalPath")
+                .map(|(_, p)| p["pathText"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut rpc = PcRpc::with(&[(LINUX_PATH.to_owned(), text.clone())]);
+        run_blocking(pull_pc_children(&mut rpc, "/srv/api", "api-work", &hint)).unwrap();
+        assert_eq!(asked(&rpc), [MAC_PATH, LINUX_PATH]);
+        // The next read asks the place that had it, and no more when it is there.
+        let mut rpc = PcRpc::with(&[(LINUX_PATH.to_owned(), text.clone())]);
+        run_blocking(pull_pc_children(&mut rpc, "/srv/api", "api-work", &hint)).unwrap();
+        assert_eq!(asked(&rpc), [LINUX_PATH]);
+        // A record that moved is still found, and the other place is asked after the first.
+        let mut rpc = PcRpc::with(&[(MAC_PATH.to_owned(), text)]);
+        let got = run_blocking(pull_pc_children(&mut rpc, "/srv/api", "api-work", &hint)).unwrap();
+        assert_eq!(names(&got), ["a"]);
+        assert_eq!(asked(&rpc), [LINUX_PATH, MAC_PATH]);
+        assert_eq!(hint.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_start_of_another_formation_does_not_wait_for_one_that_is_on_its_way() {
+        assert!(std::sync::Arc::ptr_eq(
+            &start_lock("lock-a"),
+            &start_lock("lock-a")
+        ));
+        assert!(!std::sync::Arc::ptr_eq(
+            &start_lock("lock-a"),
+            &start_lock("lock-b")
+        ));
+        let config = temp_dir("orchestrator-lock");
+        remote_formation(&config, "lock-a");
+        remote_formation(&config, "lock-b");
+        // `lock-a` is being started: this thread would wait for it for ever if the lock were one for every formation.
+        let held = start_lock("lock-a");
+        let _one = held.lock().unwrap();
+        let got = Stand::new().start(&config, "lock-b", false).unwrap();
+        assert_eq!(got.handle, "term_new");
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_folder_of_the_pc_is_recorded_when_the_orchestrator_starts_and_when_it_is_found_running()
+    {
+        let config = temp_dir("orchestrator-folder");
+        create_with(
+            &config,
+            "api-work",
+            &[project("mac-studio", "api")],
+            &two_environments(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(read_meta(&config, "api-work").unwrap().pc_repo_path, None);
+        Stand::new().start(&config, "api-work", false).unwrap();
+        assert_eq!(
+            read_meta(&config, "api-work").unwrap().pc_repo_path,
+            Some("/srv/api".into())
+        );
+        // A file that has the terminal and no folder gets the folder when the terminal is found running.
+        update_meta(&config, "api-work", |m| m.pc_repo_path = None).unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_new"}]});
+        orca.start(&config, "api-work", false).unwrap();
+        assert_eq!(
+            read_meta(&config, "api-work").unwrap().pc_repo_path,
+            Some("/srv/api".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_restart_that_cannot_close_the_terminal_that_is_still_listed_makes_no_second_one() {
+        let config = temp_dir("orchestrator-restart-stuck");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        orca.fails = Some("terminal close");
+        let err = orca.start(&config, "api-work", true).unwrap_err();
+        assert!(err.contains("閉じられません"), "{err}");
+        assert!(!orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        // A terminal that the failed close did not leave listed is gone: the new one is made.
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": []});
+        orca.fails = Some("terminal close");
+        let got = orca.start(&config, "api-work", true).unwrap();
+        assert_eq!(got.handle, "term_new");
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_that_cannot_be_closed_and_is_still_there_stops_the_deletion_before_any_child_is_closed(
+    ) {
+        let config = temp_dir("delete-orchestrator-stuck");
+        remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_orch".into());
+        })
+        .unwrap();
+        write_children(&config, "api-work", &[planned("a", "api")]).unwrap();
+        let stopped = std::cell::Cell::new(false);
+        let closing = |args: &[String]| -> Result<Value, String> {
+            if args[..2] == ["terminal", "close"] {
+                Err("terminal_handle_stale".into())
+            } else {
+                Ok(json!({}))
+            }
+        };
+        // The terminal is still listed in the Orca of its PC.
+        let listed = |args: &[String]| -> Result<Value, String> {
+            assert_eq!(args[..2], ["terminal", "list"]);
+            assert!(args.contains(&"path:/srv/api".to_owned()), "{args:?}");
+            Ok(json!({"terminals": [{"handle": "term_orch"}]}))
+        };
+        let err = delete_with(
+            &config,
+            "api-work",
+            None,
+            &listed,
+            &closing,
+            &no_remote_git,
+            &|| stopped.set(true),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("司令塔のターミナルを閉じられない")
+                && err.contains("terminal_handle_stale"),
+            "{err}"
+        );
+        assert!(stopped.get());
+        // No child was closed, and the formation is still here.
+        assert_eq!(names(&read_children(&config, "api-work")), ["a"]);
+        assert!(dir(&config, "api-work").join(FORMATION_FILE).is_file());
+        // The terminal is not listed any more: the failed close was of one that is gone, and the deletion goes on.
+        let gone = |_: &[String]| -> Result<Value, String> { Ok(json!({"terminals": []})) };
+        let answer = delete_with(
+            &config,
+            "api-work",
+            None,
+            &gone,
+            &closing,
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        assert!(answer.deleted);
+        std::fs::remove_dir_all(&config).unwrap();
     }
 }
