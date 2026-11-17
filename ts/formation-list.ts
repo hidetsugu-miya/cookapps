@@ -5,6 +5,7 @@ import type { FormationKeptChild } from "./bindings/FormationKeptChild";
 import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
+import { setFormationCount } from "./footer.js";
 import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
 import { DELETE_SVG, PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -35,6 +36,20 @@ let onRemoved: (name: string) => void = () => {};
 const deleting = new Set<string>();
 let deleteFailure: string | null = null;
 
+// The numbers on the footer's orchestration button (A-37), from the last read that Orca could be read in: the children that wait in all the formations, and the formations with a child that works.
+let waitingChildren = 0;
+let workingFormations = 0;
+
+// Draws the numbers of the last read on the footer.
+export const showCount = () => setFormationCount(waitingChildren, workingFormations);
+
+// Takes the numbers from a read of the list that Orca could be read in (an answer with a `readError` takes every launched child as working, so it counts nothing), and draws them.
+export function noteCounts(list: FormationEntry[]) {
+  waitingChildren = list.reduce((sum, f) => sum + f.counts.waiting, 0);
+  workingFormations = list.filter((f) => f.counts.working > 0).length;
+  showCount();
+}
+
 // Reads the formations now. One call at a time; a hidden window reads nothing.
 export async function readList() {
   if (reading || document.hidden) return;
@@ -47,6 +62,7 @@ export async function readList() {
       formations = answer.formations;
       failure = answer.readError;
       read = true;
+      if (answer.readError === null) noteCounts(answer.formations);
     }
   } catch (e) {
     failure = String(e);

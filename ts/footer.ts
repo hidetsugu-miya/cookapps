@@ -17,13 +17,18 @@ export function setFooterCount(count: number) {
   onCount?.(count);
 }
 
-// The count of the children that wait for approval, at the corner of the orchestration's icon while Orca is the mode (A-37).
-export function setFormationWaiting(count: number) {
+// The text of a count at the corner of a mode button (99+ from 100).
+const countText = (count: number) => (count > 99 ? "99+" : String(count));
+
+// The number at the corner of the orchestration's icon in both modes (A-37): the children that wait for approval in orange, and, when none waits, the formations with a child that works in yellow (`.working`, as Orca's). None for 0. The label carries it too.
+export function setFormationCount(waiting: number, working: number) {
   const button = $("footer-mode-formation");
   const badge = button.querySelector<HTMLElement>(".footer-mode-count")!;
+  const count = waiting > 0 ? waiting : working;
   badge.hidden = count === 0;
-  badge.textContent = String(count);
-  button.setAttribute("aria-label", count === 0 ? "オーケストレーション" : `オーケストレーション（承認待ち ${count} 件）`);
+  badge.classList.toggle("working", waiting === 0 && working > 0);
+  badge.textContent = countText(count);
+  button.setAttribute("aria-label", waiting > 0 ? `オーケストレーション（承認待ち ${waiting} 件）` : working > 0 ? `オーケストレーション（作業中 ${working} 件）` : "オーケストレーション");
 }
 
 // The number of the projects with a working Claude, at the corner of Orca's icon in both modes (A-35, A-37; 99+ from 100, none for 0). The label carries it too.
@@ -31,7 +36,7 @@ export function setOrcaWorking(count: number) {
   const button = $("footer-mode-orca");
   const badge = button.querySelector<HTMLElement>(".footer-mode-count")!;
   badge.hidden = count === 0;
-  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.textContent = countText(count);
   button.setAttribute("aria-label", count === 0 ? "Orca" : `Orca（作業中 ${count} 件）`);
 }
 

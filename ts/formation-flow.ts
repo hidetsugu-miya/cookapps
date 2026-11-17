@@ -1,12 +1,12 @@
 // The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
-// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait in all the formations, on the footer's icon.
+// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait and the formations that work, on the footer's icon (the reads of the orchestration mode move the same number).
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
-import { setFormationWaiting } from "./footer.js";
+import { currentFormation, noteCounts, readList, showCount, STATE_LABELS } from "./formation-list.js";
+import { setFormationCount } from "./footer.js";
 import { confirmChildDelete, confirmChildForce } from "./hint.js";
 import { DELETE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -23,8 +23,6 @@ const LOCAL = "local";
 // The last read; a read that failed keeps it and says why in `failure`.
 let children: FormationChild[] = [];
 let failure: string | null = null;
-// The children that wait in all the formations, by the last read of the list in the Orca mode.
-let counted = 0;
 // The children that have a terminal (the last read), the selected child (its name) and whether 「自動で追う」 is on (on at first, in memory only).
 let terms: FormationChild[] = [];
 let selected: string | null = null;
@@ -59,7 +57,7 @@ async function read() {
     if (counting) {
       // A read that fails keeps the last count, and so does an answer that says Orca could not be read (its counts take every launched child as working).
       const answer = await invoke("formation_list");
-      if (answer.readError === null) counted = answer.formations.reduce((sum, f) => sum + f.counts.waiting, 0);
+      if (answer.readError === null) noteCounts(answer.formations);
     } else {
       const name = currentFormation();
       // No formation is selected: there is no child to read.
@@ -118,7 +116,7 @@ function drawRoot() {
 // The mode is shown.
 export const startFlow = () => watch("flow", periodMs("formationFlow", READ_MS));
 
-// Orca is the mode of the development screen: the children that wait in all the formations are counted (from the list) at the period of the Orca list's read.
+// Orca is the mode of the development screen: the children that wait and the formations that work are counted (from the list) at the period of the Orca list's read.
 export const startCount = () => watch("count", shownMs());
 
 // The mode or the screen is left: nothing is read until it is shown again.
@@ -126,7 +124,7 @@ export function stopFlow() {
   if (timer !== null) window.clearInterval(timer);
   timer = null;
   watching = null;
-  setFormationWaiting(0);
+  setFormationCount(0, 0);
 }
 
 // The child that 「自動で追う」 selects: the one that has waited for approval the longest, else the selected one when it works, else the first one that works; null when none works.
@@ -268,7 +266,8 @@ function card(c: FormationChild, now: number): HTMLLIElement {
 
 function draw() {
   const now = Date.now();
-  setFormationWaiting(watching === "count" ? counted : 0);
+  if (watching === null) setFormationCount(0, 0);
+  else showCount();
   if (watching === "count") return;
   const launched = children.filter((c) => c.state !== "planned");
   const planned = children.length - launched.length;

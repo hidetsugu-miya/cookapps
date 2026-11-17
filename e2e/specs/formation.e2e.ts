@@ -1645,18 +1645,19 @@ describe("orchestration mode: delete a formation", () => {
 
 describe("orchestration mode: the count on the footer's icon", () => {
   const badge = () => $("#footer-mode-formation .footer-mode-count");
-  // The list of two formations that have `first` and `second` children waiting, and others that work, are planned or are done: the count is the sum of the waiting ones.
-  const waitingList = (first: number, second = 0) =>
+  // The list of two formations that have `first` and `second` children waiting, and others that are planned or are done, and, with `working` (on at first), children that work too: the count is the sum of the waiting ones, and when none waits, the number of the formations with a working child.
+  const waitingList = (first: number, second = 0, working = false) =>
     formationList([
-      formationEntry("formation", { counts: { planned: 1, waiting: first, working: 1, done: 1 } }),
-      formationEntry("other", { minutes: 5, counts: { planned: 0, waiting: second, working: 2, done: 0 } }),
+      formationEntry("formation", { counts: { planned: 1, waiting: first, working: working ? 1 : 0, done: 1 } }),
+      formationEntry("other", { minutes: 5, counts: { planned: 0, waiting: second, working: working ? 2 : 0, done: 0 } }),
     ]);
 
-  it("shows the number of the children that wait in all the formations on the icon while Orca is the mode, and the label says it", async () => {
+  it("shows the number of the children that wait in all the formations on the icon in the Orca mode, in orange, and the label says it", async () => {
     await boot({ inbox: inbox(), formation_list: waitingList(2, 1), ...timers({ orcaClock: READ }) });
     await expect(badge()).not.toBeDisplayed();
     await $("#nav-orca").click();
     await expect(badge()).toHaveText("3");
+    await expect(badge()).not.toHaveElementClass("working");
     await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション（承認待ち 3 件）");
     // It follows the reads, at the period of the Orca list's read, and is not drawn for none.
     await mock("formation_list", waitingList(3, 0));
@@ -1699,21 +1700,52 @@ describe("orchestration mode: the count on the footer's icon", () => {
     await expect(badge()).toHaveText("1");
   });
 
-  it("shows no number in the orchestration mode, and shares its read with the flow", async () => {
+  it("shows the number of the formations with a working child in yellow when no child waits, in both modes, and the label says it", async () => {
+    await boot({ inbox: inbox(), formation_list: waitingList(0, 0, true), ...timers({ orcaClock: READ, formationFlow: READ }) });
+    await $("#nav-orca").click();
+    await expect(badge()).toHaveText("2");
+    await expect(badge()).toHaveElementClass("working");
+    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション（作業中 2 件）");
+    await $("#footer-mode-formation").click();
+    await expect(badge()).toHaveText("2");
+    await expect(badge()).toHaveElementClass("working");
+    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション（作業中 2 件）");
+    // A child that waits takes the place of the working ones, in orange, and goes back to them when it is answered; the last working one takes the number away.
+    await mock("formation_children", []);
+    await mock("formation_list", waitingList(1, 1, true));
+    await browser.waitUntil(async () => (await badge().getText()) === "2" && !(await badge().getAttribute("class"))?.includes("working"));
+    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション（承認待ち 2 件）");
+    await mock("formation_list", formationList([formationEntry("formation", { counts: { planned: 0, waiting: 0, working: 3, done: 0 } }), formationEntry("other", { minutes: 5 })]));
+    await browser.waitUntil(async () => (await badge().getText()) === "1" && (await badge().getAttribute("class"))?.includes("working") === true);
+    await mock("formation_list", waitingList(0, 0));
+    await expect(badge()).not.toBeDisplayed();
+    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション");
+  });
+
+  it("shows 99+ from 100 formations with a working child", async () => {
+    const many = formationList(Array.from({ length: 100 }, (_, i) => formationEntry(`example-${i}`, { counts: { planned: 0, waiting: 0, working: 1, done: 0 } })));
+    await boot({ inbox: inbox(), formation_list: many, ...timers({ orcaClock: READ }) });
+    await $("#nav-orca").click();
+    await expect(badge()).toHaveText("99+");
+    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション（作業中 100 件）");
+  });
+
+  it("keeps the number of the orchestration mode, which shares its read with the flow", async () => {
     await boot({ inbox: inbox(), formation_list: waitingList(2), ...timers({ orcaClock: READ, formationFlow: READ }) });
     await $("#nav-orca").click();
     await expect(badge()).toHaveText("2");
     await $("#footer-mode-formation").click();
-    await expect(badge()).not.toBeDisplayed();
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション");
+    await expect(badge()).toHaveText("2");
+    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション（承認待ち 2 件）");
     // Only the clock of the flow reads now: the calls of one period are one for each command, not two.
     await mock("formation_children", []);
-    await mock("formation_list", waitingList(2));
+    await mock("formation_list", waitingList(3));
     await browser.pause(READ * 4 + 100);
     expect((await callsOf("formation_children")).length).toBeLessThanOrEqual(4);
     expect((await callsOf("formation_list")).length).toBeLessThanOrEqual(4);
+    await expect(badge()).toHaveText("3");
     await $("#footer-mode-orca").click();
-    await expect(badge()).toHaveText("2");
+    await expect(badge()).toHaveText("3");
   });
 
   it("does not read again when the 開発 button is pressed on the development screen", async () => {
