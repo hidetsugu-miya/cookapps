@@ -1934,6 +1934,62 @@ fn create_with(
     })
 }
 
+/// What the screen says of a refusal: its sentence and, when a step of Orca or git failed, the first line of what it printed (which is data, shown as text).
+fn refusal_text(refusal: &Refusal) -> String {
+    let output = refusal
+        .data
+        .as_ref()
+        .and_then(|data| data.get("output"))
+        .and_then(Value::as_str)
+        .and_then(|text| text.lines().find(|line| !line.trim().is_empty()));
+    match output {
+        Some(line) => format!("{}: {line}", refusal.error),
+        None => refusal.error.clone(),
+    }
+}
+
+/// Deletes the formation `formation` (A-37): every child in its record is closed as `close` does, in the order of the record (a child with a change, an untracked file or a commit no remote has keeps its worktree, and a planned one is dropped from the record), and the first one that is refused stops the deletion with its reason: the formation stays, and the children closed before it stay closed.
+/// When every child is closed, `stop_orchestrator` ends the process of its orchestrator, and its folder `formation/{formation}/` is deleted. A child that the orchestrator added while the others were being closed is found by a last read of the record, under its lock, and stops the deletion too: the folder is deleted only when the record is empty.
+/// The first formation exists before any is made (it is in the list at every start), so it is not deleted.
+fn delete_with(
+    config: &Path,
+    formation: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    git_of: &dyn Fn(&str, &str) -> GitAnswers,
+    stop_orchestrator: &dyn Fn(),
+) -> Result<(), String> {
+    check_name(formation)?;
+    if formation == ORCHESTRATOR {
+        return Err(format!(
+            "最初のフォーメーション「{ORCHESTRATOR}」は、いつも一覧にあるので削除できません"
+        ));
+    }
+    migrate_legacy(config)?;
+    if !dir(config, formation).is_dir() {
+        return Err(format!("フォーメーション「{formation}」はありません"));
+    }
+    for child in read_record(config, formation)? {
+        close_with(config, formation, &child.name, read, write, git_of).map_err(|refusal| {
+            format!(
+                "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです）。{}",
+                child.name,
+                refusal_text(&refusal)
+            )
+        })?;
+    }
+    stop_orchestrator();
+    let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    if !read_record(config, formation)?.is_empty() {
+        return Err(format!(
+            "子を閉じている間に、司令塔が子を足しました。フォーメーション「{formation}」を削除していません。もう一度削除してください"
+        ));
+    }
+    let folder = dir(config, formation);
+    std::fs::remove_dir_all(&folder)
+        .map_err(|e| format!("{} を削除できません: {e}", folder.display()))
+}
+
 /// The environments (this Mac and the saved ones) with the repositories of each, for the dialog that makes a formation (A-37): the same read as the orchestrator's `formation_environments`.
 #[tauri::command]
 pub async fn formation_environments() -> Result<EnvironmentsView, String> {
@@ -1965,6 +2021,28 @@ pub async fn formation_create(
         check_name(&name)?;
         let view = environments_view(read_saved_environments(), &read_repos);
         create_with(&dir, &name, &projects, &view, now_ms())
+    })
+    .await?
+}
+
+/// Deletes the formation `name` (A-37): closes all its children as `formation_close` does and, when every one is closed, ends its orchestrator's process, deletes its folder and takes it off the list. A child that is refused stops it, and the formation stays. The first formation is not deleted. A failure carries the message.
+#[tauri::command]
+pub async fn formation_delete(
+    app: tauri::AppHandle,
+    sessions: tauri::State<'_, crate::claude_code::ClaudeCode>,
+    name: String,
+) -> Result<(), String> {
+    let dir = config_dir(&app)?;
+    let sessions = sessions.inner().clone();
+    orca::blocking(move || {
+        delete_with(
+            &dir,
+            &name,
+            &orca_read,
+            &|args| orca::write(args),
+            &orca_git_of,
+            &|| sessions.close_formation(&name),
+        )
     })
     .await?
 }
@@ -4634,5 +4712,178 @@ mod tests {
         // The screen's command has no note.
         let view = environments_view(Ok(Vec::new()), &|_| Ok(Vec::new()));
         assert!(serde_json::to_value(view).unwrap().get("note").is_none());
+    }
+
+    /// The formation `name` with a folder and the children given in its record.
+    fn formation_of_children(config: &Path, name: &str, children: &[Child]) {
+        std::fs::create_dir_all(dir(config, name)).unwrap();
+        write_children(config, name, children).unwrap();
+    }
+
+    const GONE: &str = "/nonexistent-tsunagiai/w/a";
+
+    /// A child whose worktree is gone from the disk, and that Orca lists no more: closing it only drops its entry.
+    fn gone_child(name: &str) -> Child {
+        let mut child = launched(name, "x");
+        child.launch.as_mut().unwrap().path = format!("{GONE}-{name}");
+        child
+    }
+
+    #[test]
+    fn the_first_formation_is_not_deleted() {
+        let config = temp_dir("delete-first");
+        formation_of_children(&config, F, &[planned("p", "x")]);
+        let stopped = std::cell::Cell::new(false);
+        let orca = Calls::new();
+        let err = delete_with(
+            &config,
+            F,
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| stopped.set(true),
+        )
+        .unwrap_err();
+        assert!(err.contains("削除できません"));
+        assert!(!stopped.get());
+        assert!(orca.0.borrow().is_empty());
+        assert_eq!(names(&read_children(&config, F)), ["p"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_that_does_not_exist_and_a_name_that_is_wrong_delete_nothing() {
+        let config = temp_dir("delete-missing");
+        std::fs::create_dir_all(root(&config)).unwrap();
+        for name in ["alpha", "../x", "a/b", ""] {
+            let err = delete_with(
+                &config,
+                name,
+                &|_| Ok(json!({})),
+                &|_| Ok(json!({})),
+                &no_remote_git,
+                &|| panic!("no orchestrator is ended"),
+            );
+            assert!(err.is_err(), "{name}");
+        }
+        assert!(root(&config).is_dir());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn when_every_child_is_closed_the_orchestrator_ends_and_the_folder_goes() {
+        let config = temp_dir("delete-all");
+        formation_of_children(
+            &config,
+            "alpha",
+            &[planned("p", "x"), gone_child("a"), gone_child("b")],
+        );
+        formation_of_children(&config, "beta", &[planned("keep", "x")]);
+        let stopped = std::cell::Cell::new(0);
+        let orca = Calls::new();
+        delete_with(
+            &config,
+            "alpha",
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| {
+                // The orchestrator ends after the children are closed and before the folder goes.
+                assert!(dir(&config, "alpha").is_dir());
+                assert!(read_children(&config, "alpha").is_empty());
+                stopped.set(stopped.get() + 1);
+            },
+        )
+        .unwrap();
+        assert_eq!(stopped.get(), 1);
+        assert!(!dir(&config, "alpha").exists());
+        // Another formation is not touched.
+        assert_eq!(names(&read_children(&config, "beta")), ["keep"]);
+        assert!(!formation_names(&config, ORCHESTRATOR).contains(&"alpha".to_owned()));
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_that_is_refused_stops_the_deletion_and_the_formation_stays() {
+        let config = temp_dir("delete-refused");
+        let there = temp_dir("delete-refused-worktree");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        // The second child is on the disk, but Orca does not list its worktree: it is refused, and nothing is deleted for it.
+        let mut refused = launched("b", "x");
+        refused.launch.as_mut().unwrap().path = path;
+        formation_of_children(
+            &config,
+            "alpha",
+            &[gone_child("a"), refused, planned("c", "x")],
+        );
+        let stopped = std::cell::Cell::new(false);
+        let orca = Calls::new();
+        let err = delete_with(
+            &config,
+            "alpha",
+            &|_| Ok(json!({})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| stopped.set(true),
+        )
+        .unwrap_err();
+        assert!(err.contains("子「b」を閉じられない"), "{err}");
+        assert!(err.contains("何も消していません"), "{err}");
+        assert!(!stopped.get());
+        assert!(orca.0.borrow().is_empty());
+        assert!(dir(&config, "alpha").is_dir());
+        // The child closed before it stays closed, and the ones after it are not touched.
+        assert_eq!(names(&read_children(&config, "alpha")), ["b", "c"]);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_read_deletes_nothing() {
+        let config = temp_dir("delete-broken");
+        std::fs::create_dir_all(dir(&config, "alpha")).unwrap();
+        std::fs::write(dir(&config, "alpha").join(CHILDREN_FILE), "not json").unwrap();
+        let err = delete_with(
+            &config,
+            "alpha",
+            &|_| Ok(json!({})),
+            &|_| Ok(json!({})),
+            &no_remote_git,
+            &|| panic!("no orchestrator is ended"),
+        )
+        .unwrap_err();
+        assert!(err.contains("形式が正しくありません"), "{err}");
+        assert!(dir(&config, "alpha").is_dir());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_added_while_the_others_were_closed_keeps_the_folder() {
+        let config = temp_dir("delete-added");
+        formation_of_children(&config, "alpha", &[gone_child("a")]);
+        let err = delete_with(
+            &config,
+            "alpha",
+            &|_| Ok(json!({})),
+            &|_| Ok(json!({})),
+            &no_remote_git,
+            // The orchestrator launches a child before its process is gone.
+            &|| write_children(&config, "alpha", &[planned("late", "x")]).unwrap(),
+        )
+        .unwrap_err();
+        assert!(err.contains("司令塔が子を足しました"), "{err}");
+        assert_eq!(names(&read_children(&config, "alpha")), ["late"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_refusal_says_what_a_failed_step_printed_in_its_first_line() {
+        let step = Refusal::failed(STEP_GIT, "\nfatal: not a git repository\nmore".into());
+        assert_eq!(
+            refusal_text(&step),
+            "「git での確認」に失敗しました: fatal: not a git repository"
+        );
+        assert_eq!(refusal_text(&Refusal::from("だめ".to_owned())), "だめ");
     }
 }

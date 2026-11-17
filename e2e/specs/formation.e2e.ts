@@ -1148,6 +1148,123 @@ describe("orchestration mode: the dialog that makes a formation", () => {
   });
 });
 
+describe("orchestration mode: delete a formation", () => {
+  const confirm = () => $('.pop[role="alertdialog"]');
+  const yes = () => $('.pop[role="alertdialog"] .text-btn.danger');
+  // The page's own right button on the row of `name`.
+  const rightPress = (name: string) =>
+    browser.execute(
+      (n, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const r = document.querySelector(`#formation-list-feed [data-formation="${n}"]`)!.getBoundingClientRect();
+        document.querySelector(`#formation-list-feed [data-formation="${n}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.left + 40, clientY: r.top + r.height / 2 }));
+      },
+      name,
+      onceId(),
+    );
+  const without = (name: string) => formationList(listed().formations.filter((f) => f.name !== name));
+  async function ask(name: string) {
+    await rightPress(name);
+    await $('.menu button[role="menuitem"]').click();
+    await expect(confirm()).toBeDisplayed();
+  }
+
+  it("opens a menu with 削除 alone on a right press of a row, and has none on the first formation", async () => {
+    await openList();
+    await rightPress("won-2485");
+    await expect($(".menu")).toBeDisplayed();
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["削除"]);
+    await expect($('.menu button[role="menuitem"]')).toHaveElementClass("danger");
+    expect(await count('.menu button[role="menuitem"] svg')).toBe(1);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await rightPress("formation");
+    await browser.pause(200);
+    await expect($(".menu")).not.toExist();
+  });
+
+  it("asks first, with the name, and calls nothing on キャンセル", async () => {
+    await openList();
+    const del = await mock("formation_delete", null);
+    await ask("won-2485");
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("won-2485 を削除しますか？");
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect(confirm()).not.toExist();
+    expect(await callsOf(del)).toEqual([]);
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+  });
+
+  it("deletes the formation by its name on 削除, and takes its row off the list", async () => {
+    await openList();
+    const del = await mock("formation_delete", null);
+    await mock("formation_list", without("mail-summary"));
+    await ask("mail-summary");
+    await yes().click();
+    expect(await waitForCalls(del)).toEqual([{ name: "mail-summary" }]);
+    await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
+    // The shown formation is another one: it stays shown, and its orchestrator is not started again.
+    expect(await pressedRows()).toEqual(["formation"]);
+    expect(await headName()).toBe("formation");
+    expect(await starts()).toBe(1);
+  });
+
+  it("shows the first formation and stops reading the deleted one's children when the shown one is deleted", async () => {
+    await openList();
+    await row("won-2485").click();
+    await waitForStarts(2);
+    await waitForCalls("formation_children", 2);
+    const del = await mock("formation_delete", null);
+    await mock("formation_list", without("won-2485"));
+    await mock("formation_children", []);
+    await ask("won-2485");
+    await yes().click();
+    await waitForCalls(del);
+    await browser.waitUntil(async () => (await rowNames()).join() === "formation,mail-summary");
+    expect(await pressedRows()).toEqual(["formation"]);
+    expect(await headName()).toBe("formation");
+    // The terminal of the deleted formation's orchestrator is dropped, and the first formation's goes on without a new start.
+    expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:won-2485" }]);
+    expect(await starts()).toBe(2);
+    await waitForCalls("formation_children", 2);
+    await browser.pause(READ * 2);
+    expect([...new Set((await callsOf("formation_children")).map((c) => (c as { name: string }).name))]).toEqual(["formation"]);
+  });
+
+  it("says why a child was refused, and keeps the formation, its row and what is shown", async () => {
+    await openList();
+    await row("won-2485").click();
+    await waitForStarts(2);
+    const message = "子「api-update」を閉じられないので、フォーメーション「won-2485」を削除していません（閉じ終えた子は閉じたままです）。worktree にコミットしていない変更か、追跡していないファイルがあります。消さずに残しました。消してよいか、オーナーに確かめてください";
+    await mock("formation_delete", rejects(message));
+    await ask("won-2485");
+    await yes().click();
+    await expect($("#formation-list-error")).toHaveText(message);
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+    expect(await pressedRows()).toEqual(["won-2485"]);
+    expect(await headName()).toBe("won-2485");
+    expect(await callsOf("claude_code_close")).toEqual([]);
+    // The words go when another row is pressed.
+    await row("formation").click();
+    await expect($("#formation-list-error")).not.toBeDisplayed();
+  });
+
+  it("deletes one formation once while the deletion is on its way, and marks its row busy", async () => {
+    await openList();
+    const del = await mock("formation_delete", holds);
+    await ask("mail-summary");
+    await yes().click();
+    await waitForCalls(del);
+    await expect(row("mail-summary")).toHaveAttribute("aria-busy", "true");
+    await rightPress("mail-summary");
+    await browser.pause(200);
+    await expect($(".menu")).not.toExist();
+    expect(await callsOf(del)).toHaveLength(1);
+    await mock("formation_list", without("mail-summary"));
+    await release("formation_delete", null);
+    await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
+  });
+});
+
 describe("orchestration mode: the count on the footer's icon", () => {
   const badge = () => $("#footer-mode-formation .footer-mode-count");
   // The list of two formations that have `first` and `second` children waiting, and others that work, are planned or are done: the count is the sum of the waiting ones.

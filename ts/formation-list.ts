@@ -5,8 +5,10 @@ import type { FormationState } from "./bindings/FormationState";
 import { FORMATION_NAME } from "./claude-code.js";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
-import { PLUS_SVG } from "./icons.js";
+import { confirmFormationDelete } from "./hint.js";
+import { DELETE_SVG, PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { openMenu } from "./menu.js";
 import { elapsed } from "./orca.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
@@ -27,6 +29,11 @@ let made = 0;
 let listKey = "";
 // Told the name of the formation that was selected (a press, or the fallback when the shown one left the list).
 let onChange: (name: string) => void = () => {};
+// Told the name of a formation that was deleted, so that the terminal of its orchestrator is dropped.
+let onRemoved: (name: string) => void = () => {};
+// The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
+const deleting = new Set<string>();
+let deleteFailure: string | null = null;
 
 // Reads the formations now. One call at a time; a hidden window reads nothing.
 export async function readList() {
@@ -54,9 +61,44 @@ export async function readList() {
 // A formation was made in the dialog: it is in the list now, in the order of the names, and it is selected (its orchestrator starts).
 function added(entry: FormationEntry) {
   made++;
+  deleteFailure = null;
   formations = [...formations.filter((f) => f.name !== entry.name), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   choose(entry.name);
   void readList();
+}
+
+// Deletes the formation `name` (the children are closed first; Rust deletes it only when all of them are). A refusal keeps the formation and shows its reason.
+async function remove(name: string) {
+  if (deleting.has(name)) return;
+  deleting.add(name);
+  deleteFailure = null;
+  draw();
+  try {
+    await invoke("formation_delete", { name });
+  } catch (e) {
+    deleteFailure = String(e);
+    deleting.delete(name);
+    draw();
+    // Some children may be closed already, so the counts are read again.
+    void readList();
+    return;
+  }
+  deleting.delete(name);
+  // A read that began before the deletion still lists it: its answer is dropped.
+  made++;
+  formations = formations.filter((f) => f.name !== name);
+  // The shown formation is deleted: another one (the first, which is always there) is shown, and the read of the flow of the deleted one stops.
+  if (current === name && formations.length > 0) choose(formations[0].name);
+  onRemoved(name);
+  draw();
+  void readList();
+}
+
+// The menu of a right press on a row: the first formation is always in the list and has none.
+function openRowMenu(f: FormationEntry, anchor: Element, e: MouseEvent) {
+  e.preventDefault();
+  if (f.name === FORMATION_NAME || deleting.has(f.name)) return;
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name)) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
 // Selects the formation `name`: its orchestrator and its flow are shown.
@@ -72,9 +114,17 @@ function row(f: FormationEntry, now: number): HTMLButtonElement {
   node.type = "button";
   node.dataset.formation = f.name;
   node.setAttribute("aria-pressed", String(f.name === current));
-  node.onclick = () => choose(f.name);
+  node.onclick = () => {
+    deleteFailure = null;
+    choose(f.name);
+    draw();
+  };
+  if (deleting.has(f.name)) node.setAttribute("aria-busy", "true");
   const head = span("formation-row-head", "");
-  head.append(span("formation-row-name", f.name));
+  const name = span("formation-row-name", f.name);
+  // The menu and its confirmation are anchored on the name, which the button's own state does not touch.
+  node.oncontextmenu = (e) => openRowMenu(f, name, e);
+  head.append(name);
   const time = f.createdAt === null ? "" : elapsed(f.createdAt, now, false);
   if (time !== "") head.append(tag("time", "formation-row-time", time));
   node.append(head);
@@ -97,9 +147,10 @@ function row(f: FormationEntry, now: number): HTMLButtonElement {
 
 function draw() {
   const now = Date.now();
-  $("formation-list-error").hidden = failure === null;
-  $("formation-list-error").textContent = failure ?? "";
-  const key = JSON.stringify([current, formations.map((f) => [f.name, f.projects, f.createdAt === null ? "" : elapsed(f.createdAt, now, false), f.counts])]);
+  const error = deleteFailure ?? failure;
+  $("formation-list-error").hidden = error === null;
+  $("formation-list-error").textContent = error ?? "";
+  const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects, f.createdAt === null ? "" : elapsed(f.createdAt, now, false), f.counts])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.
@@ -111,8 +162,9 @@ function draw() {
   if (focused) feed.querySelector<HTMLElement>(`[data-formation="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
-export function initFormationList(changed: (name: string) => void) {
+export function initFormationList(changed: (name: string) => void, removed: (name: string) => void) {
   onChange = changed;
+  onRemoved = removed;
   const plus = $<HTMLButtonElement>("formation-new");
   plus.innerHTML = PLUS_SVG;
   plus.onclick = () => openFormationDialog(plus, added);

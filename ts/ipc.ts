@@ -350,6 +350,8 @@ export interface Commands {
   formation_list: { args: undefined; result: FormationList };
   // A-37: makes the formation `name` (the shape of a child's name, not the name of a formation or of a child) of `projects` (each an environment and a repository of `formation_environments`, by name or id and by name or path). A failure carries the message.
   formation_create: { args: { name: string; projects: FormationProject[] }; result: FormationEntry };
+  // A-37: deletes the formation `name`: every child of it is closed as `formation_close` does (a worktree with a change, an untracked file or a commit no remote has is not removed), and only when all are closed its orchestrator's process ends and its folder is deleted. A refusal (a child that is not closed, or the first formation) carries the message, and the formation stays.
+  formation_delete: { args: { name: string }; result: null };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.

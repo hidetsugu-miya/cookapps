@@ -625,6 +625,17 @@ impl ClaudeCode {
         }
     }
 
+    /// Ends the process of the orchestrator of the formation `name` (the pane `formation:{name}`), whichever start made it: the formation is deleted (A-37), so no pane is left to close it with its number.
+    pub fn close_formation(&self, name: &str) {
+        let session = self
+            .inner
+            .lock()
+            .remove(format!("{FORMATION_ID_PREFIX}{name}").as_str());
+        if let Some(session) = session {
+            stop_later(session.pgid, session.ended.clone());
+        }
+    }
+
     /// Ends every process group and waits for them (the app ends).
     pub fn close_all(&self) {
         let sessions: Vec<Session> = self.inner.lock().drain().map(|(_, s)| s).collect();

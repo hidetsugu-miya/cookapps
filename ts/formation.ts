@@ -40,10 +40,17 @@ export function showFormation() {
 export function initFormation() {
   initSplit($("formation"), $("formation-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   // Another formation is selected in the list: its flow is read in place of the last one's, and its orchestrator is shown in the middle.
-  initFormationList(() => {
-    switchFormation();
-    showPane();
-  });
+  initFormationList(
+    () => {
+      switchFormation();
+      showPane();
+    },
+    // A formation was deleted: Rust has ended its orchestrator's process, so its terminal is dropped. The release hides the shown terminal of this owner too, so the shown formation's is shown again.
+    (name) => {
+      closeClaudeCode(formationPaneId(name), OWNER);
+      showPane();
+    },
+  );
   $("formation-restart").innerHTML = RELOAD_SVG;
   const button = $<HTMLButtonElement>("formation-restart");
   button.onclick = () => {

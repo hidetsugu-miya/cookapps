@@ -432,6 +432,7 @@ pub fn run() {
             formation::formation_environments,
             formation::formation_list,
             formation::formation_create,
+            formation::formation_delete,
             set_badge
         ])
         .build(tauri::generate_context!())
