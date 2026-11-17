@@ -171,7 +171,7 @@ describe("orca", () => {
     expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", ...studio }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Orca is not running");
+    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Orca is not running");
     expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await showAgain();
@@ -826,13 +826,13 @@ describe("orca", () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio));
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is busy", known: false }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Orca is busy");
+    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Orca is busy");
     expect(await count("#orca-feed .orca-project")).toBe(4);
   });
 
   it("does not pick another target for a saved one that is gone", async () => {
     await openOrca(orcaOverview([], [], { state: "failed", message: "保存した接続先が見つかりません", target: "Gone", environments: ["Studio"] }));
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: 保存した接続先が見つかりません");
+    await expect($("#orca-notice")).toHaveText("Gone を読み込めませんでした: 保存した接続先が見つかりません");
     // A target that is not listed is not streamed.
     expect(await callsOf("orca_stream_open")).toEqual([]);
   });
@@ -1614,7 +1614,7 @@ describe("orca: a saved environment's stream", () => {
   it("says a lost connection, keeps the rows, and is live again with the next list", async () => {
     await openStudio();
     await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Studio is unreachable");
+    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
     expect(await count("#orca-feed .orca-project")).toBe(4);
     await sendStream(streamList(sample(), worktrees()));
     await browser.waitUntil(async () => (await textsOf("#orca-notice")).join() === "", { timeoutMsg: "the notice never went" });
@@ -3530,7 +3530,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       expect((await chips()).filter(([, chip]) => chip === null).map(([name]) => name).sort()).toEqual(["mac-1", "mac-2", "mac-3"]);
     });
 
-    it("keeps this machine's projects and says nothing more when its read fails, and the target's too", async () => {
+    it("keeps this machine's projects and says its failure in a line that names it, and the target's too", async () => {
       await openOrca(mixed(), timers({ orcaClock: 1000 }));
       await waitForCalls("orca_stream_open");
       await waitForCount("#orca-feed .orca-project", 4);
@@ -3538,7 +3538,8 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       await waitForCalls(destination);
       await browser.pause(300);
       expect((await chips()).map(([name]) => name)).toEqual(["studio-1", "mac-1", "studio-2", "mac-2"]);
-      expect(await textsOf("#orca-notice")).toEqual([""]);
+      expect(await textsOf("#orca-notice > div")).toEqual(["このマシン を読み込めませんでした: Orca is busy"]);
+      expect(await count("#orca-notice > .pending.fail")).toBe(1);
       // The target's list goes on: a list of the stream replaces Studio's rows and leaves this machine's.
       await sendStream(streamList([finished("studio-1")], [orcaWorktree("studio-1", "main")]));
       await waitForCount("#orca-feed .orca-project", 3);
@@ -3549,7 +3550,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       await openOrca(mixed());
       await waitForCalls("orca_stream_open");
       await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
-      await expect($("#orca-notice")).toHaveText("読み込めませんでした: Studio is unreachable");
+      await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
       expect(await count("#orca-feed .orca-project")).toBe(4);
       expect((await chips()).filter(([, chip]) => chip === "Studio")).toHaveLength(2);
     });
@@ -3562,7 +3563,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       ["mac-1", null],
       ["mac-2", null],
     ]);
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Studio is unreachable");
+    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
   });
 
   it("shows Studio's projects alone when the first read of this machine fails", async () => {
@@ -3572,7 +3573,34 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       ["studio-1", "Studio"],
       ["studio-2", "Studio"],
     ]);
-    expect(await textsOf("#orca-notice")).toEqual([""]);
+    expect(await textsOf("#orca-notice > div")).toEqual(["このマシン を読み込めませんでした: Orca is busy"]);
+  });
+
+  it("says both reads in two lines, this machine's first, and keeps the rows that were read", async () => {
+    await openOrca(mixed({ local: { ...beside([], []), state: "failed", message: "Orca is busy" } }));
+    await waitForCalls("orca_stream_open");
+    await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
+    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 2, { timeoutMsg: "the second line never came" });
+    expect(await textsOf("#orca-notice > div")).toEqual(["このマシン を読み込めませんでした: Orca is busy", "Studio を読み込めませんでした: Studio is unreachable"]);
+    expect(await count("#orca-notice > .pending.fail")).toBe(2);
+    expect(await count("#orca-feed .orca-project")).toBe(2);
+  });
+
+  it("drops the line of a place when it is read well again, and leaves the other's", async () => {
+    await openOrca(mixed({ local: { ...beside([], []), state: "failed", message: "Orca is busy" } }), timers({ orcaClock: 1000 }));
+    await waitForCalls("orca_stream_open");
+    // The clock reads this machine, and its read keeps failing until the mock below.
+    await mock("orca_destination", failedRead("Orca is busy"));
+    await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
+    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 2, { timeoutMsg: "the second line never came" });
+    // This machine is read by the clock: the line of Studio stays.
+    await mock("orca_destination", orcaOverview(macRows(), macTrees(), { known: false }));
+    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 1, { timeoutMsg: "the line of this machine never went" });
+    expect(await textsOf("#orca-notice > div")).toEqual(["Studio を読み込めませんでした: Studio is unreachable"]);
+    await waitForCount("#orca-feed .orca-project", 4);
+    // A list of the stream is Studio's read well: no line is left.
+    await sendStream(streamList(studioRows(), studioTrees()));
+    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 0, { timeoutMsg: "the line of Studio never went" });
   });
 
   it("drops this machine's projects when a read names it as the target", async () => {

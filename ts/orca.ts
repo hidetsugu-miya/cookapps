@@ -290,20 +290,40 @@ function drawBadge() {
   setOrcaCount(waiting, workingProjects);
 }
 
-// What a read that did not work says (the Orca screen and the side pane show it alike), else null.
+const MISSING_NOTICE = "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます";
+
+// What a read that did not work says (the side pane of A-9 shows it alike), else null.
 export function noticeOf(v: OrcaOverview | null) {
-  return v?.state === "missing" ? "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます" : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
+  return v?.state === "missing" ? MISSING_NOTICE : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
+}
+
+// The lines of the notice above the list (A-6, A-33). While this machine is the target, or the command is missing, it is the one line of `noticeOf`. While a saved environment is the target, this machine and the saved environment are read apart,
+// so each read that failed has a line of its own that names its place, this machine's first as in the list; the other place's rows stay drawn.
+function noticeLines() {
+  if (view === null) return [];
+  if (view.target === null || view.state === "missing") {
+    const text = noticeOf(view);
+    return text === null ? [] : [{ text, failed: view.state === "failed" }];
+  }
+  const failed = (place: string, message: string) => ({ text: `${place} を読み込めませんでした: ${message}`, failed: true });
+  const lines: { text: string; failed: boolean }[] = [];
+  if (here?.state === "failed") lines.push(failed(THIS_MACHINE, here.message));
+  if (view.state === "failed") lines.push(failed(view.target, view.message));
+  return lines;
 }
 
 function drawNotice() {
-  const text = noticeOf(view);
-  const key = JSON.stringify([view?.state, text]);
+  const lines = noticeLines();
+  const key = JSON.stringify(lines);
   if (key === noticeKey) return;
   noticeKey = key;
-  if (text === null) return $("orca-notice").replaceChildren();
-  const row = tag("div", view?.state === "failed" ? "pending fail" : "pending");
-  row.append(tag("span", "sp", text));
-  $("orca-notice").replaceChildren(row);
+  $("orca-notice").replaceChildren(
+    ...lines.map((line) => {
+      const row = tag("div", line.failed ? "pending fail" : "pending");
+      row.append(tag("span", "sp", line.text));
+      return row;
+    }),
+  );
 }
 
 // The clear button of the search field shows while something is typed.
