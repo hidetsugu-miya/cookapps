@@ -2,6 +2,7 @@
 // A command with no arguments is called as `invoke("inbox")`. An answer of `null` is what a Rust `()` or `None` becomes.
 import type { AppInfo } from "./bindings/AppInfo";
 import type { AttachedFile } from "./bindings/AttachedFile";
+import type { BrowsedDir } from "./bindings/BrowsedDir";
 import type { Channel } from "./bindings/Channel";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { Checked } from "./bindings/Checked";
@@ -317,6 +318,8 @@ export interface Commands {
   orca_project_add: { args: { path: string; environment: string | null }; result: null };
   // A-38: Rust opens the folder dialog of this Mac (the page gives no place and has no dialog permission), and adds the folder picked as `orca_project_add` adds one of this machine. `false` when the dialog was cancelled (nothing was added). Never run twice. A failure carries the message.
   orca_project_add_here: { args: undefined; result: boolean };
+  // A-38: the folders in `path` of the saved environment `environment` (an empty path is its home folder), for the dialog that picks the folder of a project to add. `resolvedPath` is the folder Orca opened, `folders` the names in it. A failure carries the message.
+  orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. On `terminal_handle_stale` it closes once more without `--tab`, and a failure of that is an error.

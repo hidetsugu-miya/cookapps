@@ -1455,6 +1455,38 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-add-pop select { flex: 1; min-width: 0; box-sizing: border-box; height: 28px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); font: inherit; color: inherit; }
 .orca-add-pop select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-add-pick svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* A-38: the dialog that picks a folder on the server of a saved environment, over the dimmed screen of .scrim. */
+.orca-browse-scrim { align-items: center; justify-content: center; }
+.orca-browse { display: flex; flex-direction: column; gap: 10px; width: 420px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); box-sizing: border-box; padding: 14px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); }
+.orca-browse-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -6px -6px 0 0; }
+.orca-browse-head h2 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(15px * var(--fs)); }
+.orca-browse-crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.orca-browse-crumbs .icon-btn { flex: none; width: 24px; height: 24px; }
+.orca-browse-crumbs .icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.orca-browse-trail { display: flex; flex: 1; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.orca-browse-trail::-webkit-scrollbar { display: none; }
+.orca-browse-crumb { flex: none; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.orca-browse-crumb:hover { background: var(--hover); }
+.orca-browse-here { flex: none; padding: 2px 4px; color: var(--ink-soft); font-weight: 700; }
+.orca-browse-arrow { display: inline-flex; flex: none; }
+.orca-browse-arrow svg, .orca-browse-next svg, .orca-browse-icon svg { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.orca-browse-filter { box-sizing: border-box; width: 100%; height: 30px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); font: inherit; color: inherit; }
+.orca-browse-filter:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.orca-browse-list { display: flex; flex-direction: column; height: 196px; padding: 4px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.orca-browse-row { display: flex; flex: none; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.orca-browse-row:hover, .orca-browse-row:focus-visible { background: var(--hover); outline: none; }
+.orca-browse-row[data-cursor="true"] { background: var(--soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.orca-browse-icon { display: inline-flex; flex: none; color: var(--ink-soft); }
+.orca-browse-icon svg { width: 15px; height: 15px; }
+.orca-browse-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-browse-next { display: inline-flex; flex: none; margin-left: auto; color: var(--muted); }
+.orca-browse-note { margin: 0; padding: 6px 8px; overflow-wrap: anywhere; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.orca-browse-note.err { color: var(--danger); }
+.orca-browse-foot { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.orca-browse-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.orca-browse-buttons { display: flex; flex: none; gap: 8px; }
+.orca-browse-buttons .text-btn { justify-content: center; height: 28px; padding: 0 16px; border-radius: 14px; }
+.orca-browse-buttons .text-btn:disabled { opacity: .4; cursor: default; }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail has it on the right of the screen (40% at first, a third to a half; the divider of ts/split.ts); the Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */
