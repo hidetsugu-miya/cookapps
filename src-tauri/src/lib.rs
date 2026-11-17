@@ -22,6 +22,7 @@ pub mod markdown_patch;
 pub mod notion;
 pub mod orca;
 pub mod orca_attach;
+pub mod orca_browse;
 pub mod orca_diff;
 pub mod orca_e2ee;
 pub mod orca_files;
@@ -351,6 +352,7 @@ pub fn run() {
             orca::orca_terminal_input,
             orca::orca_open_url,
             orca_attach::orca_attach_file,
+            orca_browse::orca_browse_dir,
             orca_stream::orca_stream_open,
             orca_stream::orca_stream_close,
             orca_stream::orca_stream_terminal,
