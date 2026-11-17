@@ -16,8 +16,11 @@ import type { DatabaseSqlResult } from "../ts/bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
+import type { EnvironmentsView } from "../ts/bindings/EnvironmentsView";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { FormationChild } from "../ts/bindings/FormationChild";
+import type { FormationEntry } from "../ts/bindings/FormationEntry";
+import type { FormationList } from "../ts/bindings/FormationList";
 import type { FormationState } from "../ts/bindings/FormationState";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
@@ -760,6 +763,31 @@ export const formationChild = (name: string, state: FormationState, extra: Parti
   const planned = state === "planned";
   return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", ...rest };
 };
+
+// A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca), the time it was made (`minutes` ago; none for the first formation) and the number of its children in each state.
+export const formationEntry = (name: string, extra: Partial<FormationEntry> & { minutes?: number; repos?: string[] } = {}): FormationEntry => {
+  const { minutes, repos = [], ...rest } = extra;
+  return {
+    name,
+    projects: repos.map((repo) => ({ environment: "local", repo })),
+    createdAt: minutes === undefined ? null : Date.now() - minutes * 60_000 - 5_000,
+    counts: { planned: 0, waiting: 0, working: 0, done: 0 },
+    ...rest,
+  };
+};
+
+// What `formation_list` answers: the formations in the order given.
+export const formationList = (formations: FormationEntry[], readError: string | null = null): FormationList => ({ formations, readError });
+
+// What `formation_environments` answers (A-37): this Mac with the repositories given by name, and a saved environment for each entry of `saved` (its repositories by name; a name of `unreadable` is an environment whose repositories could not be read, with that text as the reason).
+export const formationEnvironments = (local: string[], saved: Record<string, string[]> = {}, unreadable: Record<string, string> = {}, environmentListError: string | null = null): EnvironmentsView => ({
+  environmentListError,
+  environments: [
+    { environment: "local", label: "この Mac", ok: true, repos: local.map((name) => ({ name, path: `/Users/me/${name}` })) },
+    ...Object.entries(saved).map(([environment, repos]) => ({ environment, ok: true, repos: repos.map((name) => ({ name, path: `/srv/${name}` })) })),
+    ...Object.entries(unreadable).map(([environment, error]) => ({ environment, ok: false, error })),
+  ],
+});
 
 // What `orca_overview` answers: a read that worked, this machine's, unless `extra` says another.
 export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaOverview> = {}): OrcaOverview => ({

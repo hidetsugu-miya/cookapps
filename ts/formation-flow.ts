@@ -1,10 +1,10 @@
 // The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal mirrored from the Orca of the child's environment as the Orca screen's are (A-8).
-// The children are read every few seconds while the mode is shown. While Orca is the mode of the development screen, the read is made at the Orca list's period only to count the children that wait, on the footer's icon.
+// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait in all the formations, on the footer's icon.
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
-import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
+import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
 import { invoke } from "./ipc.js";
 import { setFormationWaiting } from "./footer.js";
 import { elapsed, shownMs } from "./orca.js";
@@ -15,11 +15,12 @@ const READ_MS = 3000;
 const OWNER = "formation-session";
 // The environment of this Mac in `FormationChild.environment`; the terminal source calls it null, as the Orca screen's.
 const LOCAL = "local";
-const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
 
 // The last read; a read that failed keeps it and says why in `failure`.
 let children: FormationChild[] = [];
 let failure: string | null = null;
+// The children that wait in all the formations, by the last read of the list in the Orca mode.
+let counted = 0;
 // The children that have a terminal (the last read), the selected child (its name) and whether 「自動で追う」 is on (on at first, in memory only).
 let terms: FormationChild[] = [];
 let selected: string | null = null;
@@ -30,23 +31,44 @@ const held = new Set<string>();
 let timer: number | null = null;
 let watching: "flow" | "count" | null = null;
 let reading = false;
+// Counts the switches of the formation, so that a read that was on its way when the formation changed is dropped.
+let epoch = 0;
 // What the tree shows now, and what the session band shows now; each is drawn again only when its key changes.
 let treeKey = "";
-let sessionKey = "";
+let sessionKey: string | null = "";
 // The child whose card was last brought into the view of the tree (the selection that moved is shown, the one that stays is not scrolled to again).
 let scrolledTo: string | null = null;
 
 async function read() {
   // A hidden window reads nothing, as the Orca list does; it reads once when it is shown again (initFormationFlow).
-  if (reading || document.hidden) return;
+  if (document.hidden) return;
+  // The list of the formations is read on this clock too, while the pane is shown (not for the count).
+  if (watching === "flow") void readList();
+  if (reading) return;
   reading = true;
+  const mine = epoch;
+  const counting = watching === "count";
   try {
-    children = await invoke("formation_children");
-    failure = null;
+    if (counting) {
+      // A read that fails keeps the last count, and so does an answer that says Orca could not be read (its counts take every launched child as working).
+      const answer = await invoke("formation_list");
+      if (answer.readError === null) counted = answer.formations.reduce((sum, f) => sum + f.counts.waiting, 0);
+    } else {
+      const got = await invoke("formation_children", { name: currentFormation() });
+      if (mine === epoch) {
+        children = got;
+        failure = null;
+      }
+    }
   } catch (e) {
-    failure = String(e);
+    if (mine === epoch && !counting) failure = String(e);
   } finally {
     reading = false;
+  }
+  // The formation changed while this read ran: its answer is dropped, and the new formation is read now (one read at a time, so a repeated switch never runs the reads side by side).
+  if (!counting && mine !== epoch) {
+    if (watching === "flow") void read();
+    return;
   }
   draw();
 }
@@ -61,10 +83,33 @@ function watch(next: "flow" | "count", ms: number) {
   timer = window.setInterval(() => void read(), ms);
 }
 
+// Another formation is selected: what the pane shows of the last one is dropped (the children, the selection, the terminals of their sessions), and the children of the new one are read at once.
+export function switchFormation() {
+  epoch++;
+  children = [];
+  failure = null;
+  terms = [];
+  selected = null;
+  sessionKey = null;
+  treeKey = "";
+  scrolledTo = null;
+  for (const handle of held) releaseTerminal(handle, OWNER);
+  held.clear();
+  hideTerminals(OWNER);
+  drawRoot();
+  draw();
+  if (watching === "flow") void read();
+}
+
+// The orchestrator's card of the tree has the name of the formation that is shown.
+function drawRoot() {
+  $("formation-flow-root").querySelector(".formation-card-name")!.textContent = currentFormation();
+}
+
 // The mode is shown.
 export const startFlow = () => watch("flow", periodMs("formationFlow", READ_MS));
 
-// Orca is the mode of the development screen: the children that wait are counted at the period of the Orca list's read.
+// Orca is the mode of the development screen: the children that wait in all the formations are counted (from the list) at the period of the Orca list's read.
 export const startCount = () => watch("count", shownMs());
 
 // The mode or the screen is left: nothing is read until it is shown again.
@@ -164,11 +209,10 @@ function card(c: FormationChild, now: number): HTMLLIElement {
 
 function draw() {
   const now = Date.now();
+  setFormationWaiting(watching === "count" ? counted : 0);
+  if (watching === "count") return;
   const launched = children.filter((c) => c.state !== "planned");
   const planned = children.length - launched.length;
-  const waiting = launched.filter((c) => c.state === "waiting").length;
-  setFormationWaiting(watching === "count" ? waiting : 0);
-  if (watching === "count") return;
   // The right pane is shown from the first child (a planned one too) on, and the orchestrator has the whole width before.
   $("formation-flow").hidden = children.length === 0;
   // The session first: the follow may move the selection that the cards mark.
@@ -200,6 +244,7 @@ export function initFormationFlow() {
     follow = !follow;
     draw();
   };
+  drawRoot();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && watching !== null) void read();
   });

@@ -85,6 +85,11 @@ export function confirmDelete(button: Element, name: string, onConfirm: () => vo
   confirmPop(button, `${name} を削除`, "削除しますか？", `${name} を完全に削除します。元に戻せません。`, "削除", onConfirm, " pop-confirm");
 }
 
+// The confirmation before a formation is deleted (A-37): its children are closed first, and one that cannot be closed stops it.
+export function confirmFormationDelete(button: Element, name: string, onConfirm: () => void) {
+  confirmPop(button, `${name} を削除`, `${name} を削除しますか？`, "子をすべて閉じてから削除します。閉じられない子があるときは、削除しません。", "削除", onConfirm, " pop-confirm");
+}
+
 export function initHint() {
   document.addEventListener("pointerdown", (e) => {
     if (hintOpen && !(e.target as Element).closest(".pop, [data-hint]")) closeHint();
