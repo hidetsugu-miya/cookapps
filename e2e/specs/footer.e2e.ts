@@ -51,6 +51,19 @@ describe("footer", () => {
     expect(await label()).toBe("通知");
   });
 
+  it("shows the tooltip of a footer control above it, because the footer is at the window's bottom edge", async () => {
+    await start();
+    await waitForText("#footer-bell .footer-count", "5");
+    await $("#nav-orca").click();
+    for (const id of ["footer-bell", "footer-mode-orca"]) {
+      await $(`#${id}`).moveTo();
+      await expect($(".tooltip")).toBeDisplayed();
+      const where = await browser.execute((i) => ({ tip: document.querySelector(".tooltip")!.getBoundingClientRect().bottom, target: document.getElementById(i)!.getBoundingClientRect().top }), id);
+      expect(where.tip).toBeLessThanOrEqual(where.target);
+      await $("#content h1, #content header").moveTo();
+    }
+  });
+
   it("draws the sum again when the Slack count changes", async () => {
     await start();
     await waitForText("#footer-bell .footer-count", "5");

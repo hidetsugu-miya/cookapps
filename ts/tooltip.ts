@@ -11,17 +11,18 @@ function hideTip() {
   tip.hidden = true;
 }
 
-// Right of a sidebar control, below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account, workspace and Claude avatars show none.
+// Right of a sidebar control, above a footer control (the footer is at the window's bottom edge), below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account, workspace and Claude avatars show none.
 function showTip(target: Element) {
   hideTip();
   const inSidebar = target.closest("#sidebar");
+  const inFooter = target.closest("#footer");
   if (popupOpen() && target.closest("#account-list, #slack-workspace-list, #claude-btn")) return;
   tipTimer = setTimeout(() => {
     tip.textContent = target.getAttribute("aria-label");
     tip.hidden = false;
     const r = target.getBoundingClientRect();
     const left = inSidebar ? r.right + 8 : r.left + (r.width - tip.offsetWidth) / 2;
-    const top = inSidebar ? r.top + (r.height - tip.offsetHeight) / 2 : r.bottom + 6;
+    const top = inSidebar ? r.top + (r.height - tip.offsetHeight) / 2 : inFooter ? r.top - tip.offsetHeight - 6 : r.bottom + 6;
     tip.style.left = `${Math.max(4, Math.min(left, innerWidth - tip.offsetWidth - 4))}px`;
     tip.style.top = `${Math.max(4, Math.min(top, innerHeight - tip.offsetHeight - 4))}px`;
   }, TIP_DELAY_MS);

@@ -21,7 +21,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { setOrcaWorking } from "./footer.js";
+import { setOrcaCount } from "./footer.js";
 import { devMode, setDevMode } from "./formation.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -286,7 +286,7 @@ function drawBadge() {
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
   nav.setAttribute("aria-label", parts.length === 0 ? "開発" : `開発（${parts.join("、")}）`);
-  setOrcaWorking(workingProjects);
+  setOrcaCount(waiting, workingProjects);
 }
 
 // What a read that did not work says (the Orca screen and the side pane show it alike), else null.
