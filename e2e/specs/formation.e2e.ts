@@ -804,6 +804,156 @@ const listed = () =>
     formationEntry("mail-summary", { minutes: 90, repos: ["tsunagiai"], counts: { planned: 0, waiting: 1, working: 0, done: 2 } }),
   ]);
 
+// A-37: the close of a child from its card.
+describe("orchestration mode: close a child from its card", () => {
+  const confirm = () => $('.pop[role="alertdialog"]');
+  const yes = () => $('.pop[role="alertdialog"] .text-btn.danger');
+  // The page's own right button on the card of `name`.
+  const rightPress = (name: string) =>
+    browser.execute(
+      (n, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const r = document.querySelector(`#formation-flow-list [data-name="${n}"]`)!.getBoundingClientRect();
+        document.querySelector(`#formation-flow-list [data-name="${n}"] .formation-card`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.left + 40, clientY: r.top + r.height / 2 }));
+      },
+      name,
+      onceId(),
+    );
+  const without = (name: string) => mixed().filter((c) => c.name !== name);
+  async function ask(name: string) {
+    await rightPress(name);
+    await $('.menu button[role="menuitem"]').click();
+    await expect(confirm()).toBeDisplayed();
+  }
+  const gone = { closed: true, reason: null, changed: [], untracked: [], unpushed: [] };
+  const kept = { closed: false, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります。また、どのリモートにも届いていないコミットがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log", "?? tmp/y.log"], unpushed: ["abc1234 add a"] };
+
+  it("opens a menu with 削除 alone on a right press of a card, a planned one too", async () => {
+    await openSession(mixed());
+    await rightPress("web-update");
+    await expect($(".menu")).toBeDisplayed();
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["削除"]);
+    await expect($('.menu button[role="menuitem"]')).toHaveElementClass("danger");
+    expect(await count('.menu button[role="menuitem"] svg')).toBe(1);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await rightPress("e2e-check");
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["削除"]);
+  });
+
+  it("asks first, with the name, and calls nothing on キャンセル", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child");
+    await ask("web-update");
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("web-update を削除しますか？");
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect(confirm()).not.toExist();
+    expect(await callsOf(close)).toEqual([]);
+    expect(await cardNames()).toHaveLength(5);
+  });
+
+  it("closes the child by its formation and name without force on 削除, and takes its card and its session away", async () => {
+    await openSession(mixed());
+    await waitForCalls("orca_terminal_read");
+    expect(await readHandles()).toEqual(["term_web-update"]);
+    const close = await mock("formation_close_child", gone);
+    await mock("formation_children", without("web-update"));
+    await ask("web-update");
+    await yes().click();
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false }]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await expect(confirm()).not.toExist();
+    // The session goes to the next child, and the terminal of the closed one is read no more.
+    await expect($("#formation-session-name")).toHaveText("batch-update");
+    await mock("orca_terminal_read", ["$ next"]);
+    await browser.waitUntil(async () => (await readHandles()).join() === "term_batch-update");
+    await browser.pause(MIRROR * 3);
+    expect(await readHandles()).toEqual(["term_batch-update"]);
+  });
+
+  it("closes a planned child the same way", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", gone);
+    await mock("formation_children", without("summary"));
+    await ask("summary");
+    await yes().click();
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "summary", force: false }]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,web-update,batch-update,e2e-check");
+  });
+
+  it("says why it was kept and what is lost, keeps the card, and calls nothing more on キャンセル", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", kept);
+    await ask("web-update");
+    await yes().click();
+    await waitForCalls(close);
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("web-update を削除できませんでした");
+    await expect(confirm()).toHaveText(expect.stringContaining(kept.reason));
+    expect(await textsOf(".pop-lost-head")).toEqual(["変更のあるファイル", "追跡していないファイル", "どのリモートにもないコミット"]);
+    expect(await textsOf(".pop-lost li")).toEqual([...kept.changed, ...kept.untracked, ...kept.unpushed]);
+    await expect(yes()).toHaveText("強制削除");
+    expect(await cardNames()).toHaveLength(5);
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect(confirm()).not.toExist();
+    expect(await callsOf(close)).toHaveLength(1);
+    expect(await cardNames()).toHaveLength(5);
+  });
+
+  it("draws no head for a kind of file that git did not list", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", { ...kept, changed: [], unpushed: [] });
+    await ask("web-update");
+    await yes().click();
+    await waitForCalls(close);
+    expect(await textsOf(".pop-lost-head")).toEqual(["追跡していないファイル"]);
+  });
+
+  it("closes it with force on 強制削除, and takes the card away", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", kept);
+    await ask("web-update");
+    await yes().click();
+    await waitForCalls(close);
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("web-update を削除できませんでした");
+    await mock("formation_close_child", gone);
+    await mock("formation_children", without("web-update"));
+    await yes().click();
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: true }]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await expect(confirm()).not.toExist();
+  });
+
+  it("shows the message of a failure where a failed read shows it, and keeps the cards", async () => {
+    await openSession(mixed());
+    const message = "子「web-update」の記録の worktree は、orca worktree ps に載っていません";
+    const close = await mock("formation_close_child", rejects(message));
+    await ask("web-update");
+    await yes().click();
+    await waitForCalls(close);
+    await expect($("#formation-flow-error")).toHaveText(message);
+    await expect(confirm()).not.toExist();
+    expect(await cardNames()).toHaveLength(5);
+    // The words go at the next read that works.
+    await expect($("#formation-flow-error")).not.toBeDisplayed();
+  });
+
+  it("closes one child once while it is on its way, and marks its card busy", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", holds);
+    await ask("web-update");
+    await yes().click();
+    await waitForCalls(close);
+    await expect(card("web-update")).toHaveAttribute("aria-busy", "true");
+    await rightPress("web-update");
+    await browser.pause(200);
+    await expect($(".menu")).not.toExist();
+    expect(await callsOf(close)).toHaveLength(1);
+    await mock("formation_children", without("web-update"));
+    await release("formation_close_child", gone);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+  });
+});
+
 // The list with a formation, `api-work`, whose name sorts before `formation`: no row is selected when the shown one goes, not the first row.
 const listedFirst = () => formationList([formationEntry("api-work", { minutes: 3 }), ...listed().formations]);
 

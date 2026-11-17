@@ -51,6 +51,9 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .popup-actions { display: flex; gap: 8px; }
 .danger, .text-btn.danger { color: var(--danger); }
 .pop-confirm { max-width: 320px; overflow-wrap: anywhere; }
+.pop-lost-head { margin-bottom: 2px; font-weight: 700; }
+.pop-lost { margin: 0 0 12px; padding-left: 18px; max-height: 6.4em; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); }
+.pop .pop-lost li { margin: 0; }
 .popup-unread, .popup-plan { color: #666; }
 .nav-item[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
 
@@ -1054,6 +1057,7 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] { border-color: var(--agent-question); background: color-mix(in srgb, var(--agent-question) 10%, var(--surface)); }
 .formation-card[data-state="done"] { border-color: color-mix(in srgb, var(--agent-done) 45%, var(--line)); }
 .formation-card[data-state="planned"] { border: 1.5px dashed var(--chip-line); background: transparent; }
+.formation-card[aria-busy="true"] { opacity: .5; }
 .formation-card[aria-pressed="true"] { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
 .formation-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .formation-card-row + .formation-card-row { justify-content: flex-start; gap: 6px; }

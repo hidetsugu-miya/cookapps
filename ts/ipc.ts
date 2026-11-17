@@ -21,6 +21,7 @@ import type { EnvironmentsView } from "./bindings/EnvironmentsView";
 import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
 import type { FormationChild } from "./bindings/FormationChild";
+import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationList } from "./bindings/FormationList";
 import type { FormationProject } from "./bindings/FormationProject";
@@ -359,6 +360,8 @@ export interface Commands {
   formation_create: { args: { name: string; projects: FormationProject[] }; result: FormationEntry };
   // A-37: deletes the formation `name`: every child of it is checked as `formation_close` checks it (a worktree with a change, an untracked file or a commit no remote has is refused), and when none is refused its orchestrator's process ends, the children are closed and its folder is deleted. A refusal of the check ends and closes nothing; a child that is refused only when it is closed (its state changed) leaves the process ended. A refusal carries the message, and the formation stays.
   formation_delete: { args: { name: string }; result: null };
+  // A-37: closes the child `name` of the formation `formation` from its card, as `formation_close` does (its terminal, its worktree with its branch, its entry of the record). A worktree with a change, an untracked file or a commit no remote has is kept: the answer has `closed` false with the reason and the lines of git. With `force` it is removed all the same, with its branch, and what it held is lost. Any other refusal carries the message.
+  formation_close_child: { args: { formation: string; name: string; force: boolean }; result: FormationCloseAnswer };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.

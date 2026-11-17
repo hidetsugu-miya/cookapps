@@ -2,11 +2,15 @@
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait in all the formations, on the footer's icon.
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
+import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
-import { invoke } from "./ipc.js";
 import { setFormationWaiting } from "./footer.js";
+import { confirmChildDelete, confirmChildForce } from "./hint.js";
+import { DELETE_SVG } from "./icons.js";
+import { invoke } from "./ipc.js";
+import { openMenu } from "./menu.js";
 import { elapsed, shownMs } from "./orca.js";
 import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
@@ -27,6 +31,9 @@ let selected: string | null = null;
 let follow = true;
 // The handles whose terminals were shown, to forget the ones of children that are gone.
 const held = new Set<string>();
+// The children whose close is on its way, by the formation and the name (`closingKey`); a second close of one is not started meanwhile.
+const closing = new Set<string>();
+const closingKey = (formation: string, name: string) => `${formation}\n${name}`;
 // The clock of the reads and what the reads are for (the pane, or the count only), and whether one is on its way (the next tick waits for it).
 let timer: number | null = null;
 let watching: "flow" | "count" | null = null;
@@ -169,6 +176,49 @@ function syncSession() {
   showSelected(false);
 }
 
+// The menu of a right press on a card: 「削除」 alone, as a row of the list has (formation-list.ts).
+function openCardMenu(c: FormationChild, anchor: Element, e: MouseEvent) {
+  e.preventDefault();
+  const formation = currentFormation();
+  if (formation === null || closing.has(closingKey(formation, c.name))) return;
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmChildDelete(anchor, c.name, () => void closeChild(formation, c.name, false)) }], { at: { x: e.clientX, y: e.clientY } });
+}
+
+// Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it the worktree goes all the same. An error shows as a failed read does.
+async function closeChild(formation: string, name: string, force: boolean) {
+  const key = closingKey(formation, name);
+  if (closing.has(key)) return;
+  closing.add(key);
+  draw();
+  let error: string | null = null;
+  let kept: FormationCloseAnswer | null = null;
+  let closed = false;
+  try {
+    const answer = await invoke("formation_close_child", { formation, name, force });
+    closed = answer.closed;
+    if (!closed) kept = answer;
+  } catch (e) {
+    error = String(e);
+  } finally {
+    closing.delete(key);
+  }
+  // Another formation is shown now: what this one answered is not drawn (its children are read when it is shown again).
+  if (currentFormation() !== formation) return draw();
+  if (error !== null) failure = error;
+  if (closed) {
+    // The child is gone from the pane and from the session at once (the session lets its terminal go), and a read that began before the close, which still lists it, is dropped.
+    children = children.filter((c) => c.name !== name);
+    failure = null;
+    epoch++;
+  }
+  draw();
+  if (closed && watching === "flow") void read();
+  if (kept) {
+    const anchor = $("formation-flow-list").querySelector(`[data-name="${CSS.escape(name)}"] .formation-card-name`) ?? $("formation-flow-list");
+    confirmChildForce(anchor, name, kept, () => void closeChild(formation, name, true));
+  }
+}
+
 // A press of the user on a card selects that child and turns 「自動で追う」 off. A child with no terminal is not selected.
 function selectChild(name: string) {
   if (!terms.some((c) => c.name === name)) return;
@@ -186,11 +236,13 @@ export function hideSession() {
 function card(c: FormationChild, now: number): HTMLLIElement {
   const li = tag("li");
   li.dataset.state = c.state;
+  li.dataset.name = c.name;
   const planned = c.state === "planned";
   const node = planned ? tag("div", "formation-card") : tag("button", "formation-card");
   node.dataset.state = c.state;
   const row = span("formation-card-row", "");
-  row.append(span("formation-card-name", c.name));
+  const name = span("formation-card-name", c.name);
+  row.append(name);
   const time = planned ? "" : elapsed(c.atMs, now, c.state === "done");
   if (time !== "") row.append(tag("time", "formation-card-time", time));
   const line = span("formation-card-row", "");
@@ -199,6 +251,9 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   line.append(state);
   if (!planned && c.reply) line.append(span("formation-card-msg", c.reply));
   node.append(row, line);
+  // The menu and its confirmation are anchored on the name, which a redraw of the card does not touch while they are open.
+  node.oncontextmenu = (e) => openCardMenu(c, name, e);
+  if (closing.has(closingKey(currentFormation() ?? "", c.name))) node.setAttribute("aria-busy", "true");
   if (node instanceof HTMLButtonElement) {
     node.type = "button";
     node.dataset.child = c.name;
@@ -223,7 +278,7 @@ function draw() {
   $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
   $("formation-flow-error").hidden = failure === null;
   $("formation-flow-error").textContent = failure ?? "";
-  const key = JSON.stringify([selected, children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply])]);
+  const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply])]);
   if (key === treeKey) return;
   treeKey = key;
   // The tree is drawn again in place: the scroll and the focus stay where they were.
