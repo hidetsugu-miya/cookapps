@@ -225,6 +225,10 @@ pub fn run() {
                     if let Err(e) = identity::migrate_config_dir(&dir) {
                         gmail::log_failure("config_migrate", "-", e);
                     }
+                    // The folder of the formations was `formation/` (#889).
+                    if let Err(e) = formation::migrate_folder(&dir) {
+                        gmail::log_failure("formation_migrate", "-", e);
+                    }
                 }
                 Err(e) => {
                     gmail::log_failure("config_migrate", "-", e.to_string());

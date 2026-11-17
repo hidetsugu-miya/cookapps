@@ -1,4 +1,4 @@
-//! The orchestration of A-37: the folder of each formation (`formation/{name}/` in the config directory: the orchestrator Claude Code's files and the record of its children), and the tools of `tsunagiai-mcp` that launch, plan and close them.
+//! The orchestration of A-37: the folder of each formation (`formations/{name}/` in the config directory: the orchestrator Claude Code's files and the record of its children), and the tools of `tsunagiai-mcp` that launch, plan and close them.
 //! A child is a Claude Code that runs in a terminal of Orca, in a worktree of its own. Its state is Orca's (`orca worktree ps`); only what Orca cannot tell is recorded here.
 //! Every command of Orca and of git is run with an argument list, never through a shell, and what they print is data: it is quoted in the answer and never read as an instruction.
 
@@ -30,13 +30,15 @@ use crate::{
     orca_link::{CallError, Connection},
 };
 
-const FOLDER: &str = "formation";
+const FOLDER: &str = "formations";
+/// The name `FOLDER` had before it was renamed (#889): `migrate_folder` moves a folder of this name to `FOLDER`.
+const OLD_FOLDER: &str = "formation";
 const CHILDREN_FILE: &str = "children.json";
 /// The file that holds what a formation is made of: its projects and the time it was made (A-37).
 const FORMATION_FILE: &str = "formation.json";
-/// The name of the formation that took `formation/children.json`, the record from before it was split by formation (`migrate_legacy`). It is a formation like any other otherwise: it is in the list only while its folder is there, and it can be deleted.
+/// The name of the formation that took `formations/children.json`, the record from before it was split by formation (`migrate_legacy`). It is a formation like any other otherwise: it is in the list only while its folder is there, and it can be deleted.
 const LEGACY_FORMATION: &str = "formation";
-/// The files of the orchestrator that `formation/` held before each formation had its own folder. The app writes them at each start, and a `CLAUDE.md` left there would be read by the orchestrators of the folders under it.
+/// The files of the orchestrator that `formations/` held before each formation had its own folder. The app writes them at each start, and a `CLAUDE.md` left there would be read by the orchestrators of the folders under it.
 const LEGACY_FILES: [&str; 3] = ["CLAUDE.md", "mcp.json", "start.sh"];
 /// The environment of this Mac: the CLI's own `--environment=local`, which is this machine's Orca whatever `ORCA_ENVIRONMENT` holds. A saved environment is named by its name (or its id) in `orca environment list`.
 pub const LOCAL: &str = "local";
@@ -87,17 +89,17 @@ const MCP_NOT_FOUND: &str = "tsunagiai-mcp が見つかりません";
 /// Orca's floating terminal: it belongs to no repository and opens in the home folder of its PC. The orchestrator's terminal is made in it, and `files.*` of the records of that PC name it as their `worktree` (#879).
 const FLOATING_WORKTREE: &str = "global-floating-terminal";
 
-/// `formation/` in the config directory: the folder of the formations, one folder under it for each.
+/// `formations/` in the config directory: the folder of the formations, one folder under it for each.
 fn root(config: &Path) -> PathBuf {
     config.join(FOLDER)
 }
 
-/// `formation/{formation}/` in the config directory: the folder the orchestrator of that formation runs in, with its `CLAUDE.md`, `mcp.json`, launch script and `children.json`. `formation` must have passed `check_name`, or it could name a path outside `formation/`.
+/// `formations/{formation}/` in the config directory: the folder the orchestrator of that formation runs in, with its `CLAUDE.md`, `mcp.json`, launch script and `children.json`. `formation` must have passed `check_name`, or it could name a path outside `formations/`.
 pub fn dir(config: &Path, formation: &str) -> PathBuf {
     root(config).join(formation)
 }
 
-/// The names of the formations: the folders of `formation/` that are named as a formation is, and `extra`, which may have no folder yet. In order of name.
+/// The names of the formations: the folders of `formations/` that are named as a formation is, and `extra`, which may have no folder yet. In order of name.
 fn formation_names(config: &Path, extra: Option<&str>) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(root(config))
         .into_iter()
@@ -116,7 +118,27 @@ fn formation_names(config: &Path, extra: Option<&str>) -> Vec<String> {
     names
 }
 
-/// Moves the record of before the split into the folder of the formation `formation`: `formation/children.json` becomes `formation/formation/children.json`, and the three files the orchestrator had in `formation/` are deleted (the app writes them again, in the folder of the formation, at each start). A record already there is not written over, and a legacy file that cannot be deleted is left.
+/// Moves the folder `formation/` of before the rename (#889) to `formations/` in the config directory. Nothing is done when there is no such folder, or when `formations/` already exists (a move that was made, or a folder made by a newer app, is never written over).
+/// The move is one `rename`, which `tsunagiai-mcp` and the app may both try at once: the one that finds the old folder gone, or the new one there, has nothing to do.
+/// An error is a folder that could not be moved: the formations would read as none until the next start.
+pub fn migrate_folder(config: &Path) -> Result<(), String> {
+    let old = config.join(OLD_FOLDER);
+    let new = root(config);
+    if !old.is_dir() || new.symlink_metadata().is_ok() {
+        return Ok(());
+    }
+    match std::fs::rename(&old, &new) {
+        Ok(()) => Ok(()),
+        Err(_) if !old.exists() || new.is_dir() => Ok(()),
+        Err(e) => Err(format!(
+            "{} を {} へ移せません: {e}",
+            old.display(),
+            new.display()
+        )),
+    }
+}
+
+/// Moves the record of before the split into the folder of the formation `formation`: `formations/children.json` becomes `formations/formation/children.json`, and the three files the orchestrator had in `formations/` are deleted (the app writes them again, in the folder of the formation, at each start). A record already there is not written over, and a legacy file that cannot be deleted is left.
 /// An error is a record that could not be moved: the formation would read as having no children, so a change of it must not go on.
 pub fn migrate_legacy(config: &Path) -> Result<(), String> {
     let old = root(config).join(CHILDREN_FILE);
@@ -152,7 +174,7 @@ pub fn migrate_legacy(config: &Path) -> Result<(), String> {
 
 // ---- the record ----
 
-/// One child of the orchestrator, in the order it was planned or launched, as `formation/children.json` holds it (`{"children": [...]}`, camelCase).
+/// One child of the orchestrator, in the order it was planned or launched, as `formations/{name}/children.json` holds it (`{"children": [...]}`, camelCase).
 /// A planned child has only `name`, `repo` and `environment`; a launched one also has the fields of `Launch`, so it is told apart by `launch` (in the JSON: by the `handle`).
 /// Launching a planned child replaces its entry in place.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -517,7 +539,7 @@ pub fn local_first_prompt(repos: &[String]) -> Result<Option<String>, String> {
     first_prompt(&there)
 }
 
-/// What `formation/{name}/formation.json` holds (`{"createdAt": ..., "projects": [...]}`, camelCase). A formation whose folder was made before this file existed has none: it has no project and no time.
+/// What `formations/{name}/formation.json` holds (`{"createdAt": ..., "projects": [...]}`, camelCase). A formation whose folder was made before this file existed has none: it has no project and no time.
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct Meta {
@@ -2605,7 +2627,7 @@ fn close_child_with(
 /// How long a read of the record of a PC waits when the owner is closing or deleting (the screen's read waits `SAVED_PS_TIMEOUT`).
 const PC_RECORD_WAIT: Duration = Duration::from_secs(30);
 
-/// Where `tsunagiai-mcp` of a saved environment's PC keeps the record of `formation`: `formation/{formation}/children.json` in that PC's config folder, which that PC's `dirs::config_dir()` names. This Mac cannot ask it, so these are the two folders it can be in, as Orca expands `~/` on its own PC (`files.resolveTerminalPath`; Orca 1.4.26x): macOS first, then Linux (without `XDG_CONFIG_HOME`). Windows is not checked (AGENTS.md).
+/// Where `tsunagiai-mcp` of a saved environment's PC keeps the record of `formation`: `formations/{formation}/children.json` in that PC's config folder, which that PC's `dirs::config_dir()` names. This Mac cannot ask it, so these are the two folders it can be in, as Orca expands `~/` on its own PC (`files.resolveTerminalPath`; Orca 1.4.26x): macOS first, then Linux (without `XDG_CONFIG_HOME`). Windows is not checked (AGENTS.md).
 fn pc_record_paths(formation: &str) -> Result<[String; 2], String> {
     check_name(formation)?;
     let tail = format!("{IDENTIFIER}/{FOLDER}/{formation}/{CHILDREN_FILE}");
@@ -3338,7 +3360,7 @@ fn children_view(config: &Path, formation: &str) -> Result<Vec<FormationChild>, 
     children_view_with(&children, &screen_read)
 }
 
-/// The children of the formation `name` for the screen (A-37), read from `formation/{name}/children.json` and `orca worktree ps` of the environment of each child.
+/// The children of the formation `name` for the screen (A-37), read from `formations/{name}/children.json` and `orca worktree ps` of the environment of each child.
 #[tauri::command]
 pub async fn formation_children(
     app: tauri::AppHandle,
@@ -3719,7 +3741,7 @@ pub struct FormationDeleteAnswer {
 /// With `force` (the owner's own press on the screen, `formation_delete`: the children as the owner was shown them) the look at git is left out as in `close_child_with` for a child whose name and recorded path are in it, and that child is closed with `--force` and its branch; any other child, one added or whose path was replaced after the owner was shown, is looked at as without `force`, so that when git keeps it the answer is `kept` again and nothing is ended or closed. The checks of the record, the environment and `orca worktree ps` are made as always.
 /// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted. The terminal of the orchestrator of a formation of a saved environment is closed in that Orca right after, before any child is closed, so that its Claude Code adds no child meanwhile (`close_orchestrator_terminal`); a terminal that cannot be closed and is still there stops the deletion with its reason.
 /// Then every child is closed as `close` does, in the order of the record, except that the children that work in a folder tsunagiai did not make go first (a close refuses to remove a worktree while such a child works in it, `folder_holder`); a planned one is dropped from the record. A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
-/// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
+/// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formations/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 fn delete_with(
     config: &Path,
     formation: &str,
@@ -4242,11 +4264,11 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_of_a_formation_is_under_formation_in_the_config_directory() {
-        assert_eq!(dir(Path::new("/c"), "api"), Path::new("/c/formation/api"));
+    fn the_folder_of_a_formation_is_under_formations_in_the_config_directory() {
+        assert_eq!(dir(Path::new("/c"), "api"), Path::new("/c/formations/api"));
         assert_eq!(
             dir(Path::new("/c"), LEGACY_FORMATION),
-            Path::new("/c/formation/formation")
+            Path::new("/c/formations/formation")
         );
     }
 
@@ -4297,7 +4319,7 @@ mod tests {
         );
         assert!(!root(&config).join(CHILDREN_FILE).exists());
         assert!(read_children(&config, "other").is_empty());
-        // The files the orchestrator had there go (a `CLAUDE.md` of `formation/` would be read by every orchestrator under it); the rest of the folder stays.
+        // The files the orchestrator had there go (a `CLAUDE.md` of `formations/` would be read by every orchestrator under it); the rest of the folder stays.
         for file in LEGACY_FILES {
             assert!(!root(&config).join(file).exists(), "{file}");
         }
@@ -4311,6 +4333,92 @@ mod tests {
             names(&read_children(&config, LEGACY_FORMATION)),
             ["a", "b", "c"]
         );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_old_folder_is_moved_whole_to_the_new_name_when_only_it_exists() {
+        let config = temp_dir("folder-old-only");
+        let old = config.join(OLD_FOLDER);
+        std::fs::create_dir_all(old.join("api/.claude")).unwrap();
+        std::fs::write(old.join("api").join(CHILDREN_FILE), "record").unwrap();
+        std::fs::write(old.join("api/.claude/settings.json"), "{}").unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(!old.exists());
+        assert_eq!(
+            std::fs::read_to_string(dir(&config, "api").join(CHILDREN_FILE)).unwrap(),
+            "record"
+        );
+        assert!(dir(&config, "api").join(".claude/settings.json").is_file());
+        // A second run has nothing to move.
+        migrate_folder(&config).unwrap();
+        assert_eq!(formation_names(&config, None), ["api"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_new_folder_that_already_exists_is_left_as_it_is_and_the_old_one_stays() {
+        let config = temp_dir("folder-both");
+        std::fs::create_dir_all(dir(&config, "new")).unwrap();
+        std::fs::create_dir_all(config.join(OLD_FOLDER).join("old")).unwrap();
+        migrate_folder(&config).unwrap();
+        assert_eq!(formation_names(&config, None), ["new"]);
+        assert!(config.join(OLD_FOLDER).join("old").is_dir());
+        // An empty new folder counts as existing too.
+        std::fs::remove_dir_all(dir(&config, "new")).unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(formation_names(&config, None).is_empty());
+        assert!(config.join(OLD_FOLDER).join("old").is_dir());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn nothing_is_made_when_there_is_no_old_folder() {
+        let config = temp_dir("folder-none");
+        std::fs::create_dir_all(&config).unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(!root(&config).exists());
+        assert!(!config.join(OLD_FOLDER).exists());
+        // A file with the old name is not a folder to move.
+        std::fs::write(config.join(OLD_FOLDER), "x").unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(!root(&config).exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_cannot_be_moved_is_an_error_and_stays() {
+        use std::os::unix::fs::PermissionsExt;
+        let config = temp_dir("folder-stuck");
+        std::fs::create_dir_all(config.join(OLD_FOLDER)).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let moved = migrate_folder(&config);
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(moved.is_err());
+        assert!(config.join(OLD_FOLDER).is_dir());
+        assert!(!root(&config).exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_record_of_before_the_split_is_read_from_the_moved_folder() {
+        let config = temp_dir("folder-then-legacy");
+        let old = config.join(OLD_FOLDER);
+        std::fs::create_dir_all(&old).unwrap();
+        let text = serde_json::to_string_pretty(&Record {
+            children: vec![planned("a", "web")],
+        })
+        .unwrap();
+        std::fs::write(old.join(CHILDREN_FILE), &text).unwrap();
+        std::fs::write(old.join("CLAUDE.md"), "old").unwrap();
+        migrate_folder(&config).unwrap();
+        assert_eq!(names(&read_children(&config, LEGACY_FORMATION)), ["a"]);
+        assert_eq!(
+            std::fs::read_to_string(dir(&config, LEGACY_FORMATION).join(CHILDREN_FILE)).unwrap(),
+            text
+        );
+        assert!(!root(&config).join("CLAUDE.md").exists());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -9901,8 +10009,8 @@ mod tests {
     }
 
     const MAC_PATH: &str =
-        "~/Library/Application Support/jp.mysis.tsunagiai/formation/api-work/children.json";
-    const LINUX_PATH: &str = "~/.config/jp.mysis.tsunagiai/formation/api-work/children.json";
+        "~/Library/Application Support/jp.mysis.tsunagiai/formations/api-work/children.json";
+    const LINUX_PATH: &str = "~/.config/jp.mysis.tsunagiai/formations/api-work/children.json";
 
     /// What a PC's `children.json` holds for these children: they are in `local` there.
     fn pc_text(children: &[Child]) -> String {
@@ -9932,7 +10040,7 @@ mod tests {
     #[test]
     fn the_record_of_a_pc_is_looked_for_in_the_config_folders_of_macos_and_linux() {
         assert_eq!(pc_record_paths("api-work").unwrap(), [MAC_PATH, LINUX_PATH]);
-        // A name that is no formation's name could be a path outside `formation/`.
+        // A name that is no formation's name could be a path outside `formations/`.
         for bad in ["", "..", "../x", "A", "a/b"] {
             assert!(pc_record_paths(bad).is_err(), "{bad:?}");
         }

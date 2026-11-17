@@ -13,6 +13,7 @@ pub const IDENTIFIER: &str = "jp.mysis.tsunagiai";
 pub const OLD_IDENTIFIER: &str = "jp.mysis.cookapps";
 
 /// The config folder of the app as Tauri resolves it (`dirs::config_dir()` joined with the identifier), after the move of the old folder.
+/// The folder `formation/` of the formations is renamed `formations/` there too (`formation::migrate_folder`).
 /// A failed move is logged and the app starts with what the new folder holds.
 pub fn config_dir() -> Result<PathBuf, String> {
     let dir = dirs::config_dir()
@@ -20,6 +21,9 @@ pub fn config_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "設定フォルダの場所を特定できません".to_string())?;
     if let Err(e) = migrate_config_dir(&dir) {
         eprintln!("tsunagiai: config_migrate account=- status=- error={e}");
+    }
+    if let Err(e) = crate::formation::migrate_folder(&dir) {
+        eprintln!("tsunagiai: formation_migrate account=- status=- error={e}");
     }
     Ok(dir)
 }

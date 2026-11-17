@@ -355,7 +355,7 @@ export interface Commands {
   claude_code_resize: { args: { id: string; viewport: OrcaViewport }; result: null };
   // A-36: ends the process of the pane `id` that the start `launch` (its answer) made, and what it started; a process of a later start stays.
   claude_code_close: { args: { id: string; launch: number }; result: null };
-  // A-37: the children of the formation `name`, in the order of `formation/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
+  // A-37: the children of the formation `name`, in the order of `formations/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
   // A-37: the environments (this Mac first, then the saved ones) with the repositories of each, read from Orca; an environment that could not be read has `ok` false and its `error`, and the others are read.
   formation_environments: { args: undefined; result: EnvironmentsView };
