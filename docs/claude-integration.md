@@ -69,9 +69,9 @@ Todo 画面の右側は、いつも開いていて、Claude のペインが出�
 - 権限のモードは auto で、組み込みの道具（Bash など）も使えます。道具やコマンドを使う前に確かめるかどうかは、Claude Code の auto モードが決めます。
 - MCP サーバーは `tsunagiai-mcp` だけです。司令塔にだけ、環境（この Mac と Orca に保存した接続先）ごとのリポジトリを読む `formation_environments`、子を予定に入れる `formation_plan`、子を起動する `formation_launch`、子を終える `formation_close` を渡します。ほかに渡すのは読み取りのツール（`list_inbox`、`get_thread`、`list_events`、`db_profiles`）だけで、書き込みのツール（`archive`、`set_read`、`trash`、`db_profile_save`、`db_test`）は渡しません。
 - `formation_launch` には環境、リポジトリ、子の名前、ブランチ、最初の指示を、`formation_plan` には環境とリポジトリを渡します。その環境に無いリポジトリは断り、候補を返します。
-- ブランチは `{種類}/{チケット}` の形（種類は feature、fix、chore、refactor）でないと断ります。この Mac のリポジトリでは `origin/HEAD` から切ります。すでにあるブランチは断ります。
-- `formation_launch` は、指定した環境の Orca で、指定したリポジトリに新しい worktree を作り、そのターミナルで `claude -n {子の名前}` を auto モードで起動して、最初の指示を送ります。司令塔は、その名前に SendMessage で指示します。
-- `formation_close` は、子のターミナルを閉じ、worktree をブランチごと消します。コミットしていない変更、追跡していないファイル、どのリモートにも無いコミットがあるときは、何も消さずに理由を返します。
+- ブランチは `{種類}/{チケット}` の形（種類は feature、fix、chore、refactor）でないと断ります。この Mac のリポジトリでは、そのブランチが `origin` にあれば `origin/{ブランチ}` から同じ名前で切り（前の子が push して閉じたブランチを引き継ぎます）、なければ `origin/HEAD` から切ります。ローカルに別のコミットで同じブランチがあるときと、保存した接続先でリモートにだけあるブランチは断ります。
+- `formation_launch` は、指定した環境の Orca で、指定したリポジトリの `.claude/worktrees/` の下に新しい worktree を作り、そのターミナルで `claude -n {子の名前}` を auto モードで起動して、最初の指示を送ります。司令塔は、その名前に SendMessage で指示します。
+- `formation_close` は、子のターミナルを閉じ、worktree をブランチごと消します。コミットしていない変更、追跡していないファイル、どのリモートにも無いコミットがあるときは、何も消さずに理由を返します。強制して消すことはありません（強制の削除は、画面からあなたが押したときだけです）。
 - 起動した子と予定の子は、フォーメーションごとに `formation/{フォーメーションの名前}/children.json` に記録します。司令塔のツールが読み書きするのは、自分のフォーメーションの記録だけです。子への指示の文は記録しません。
 - サインインは、下の「Claude の接続方式」で選んだ方式です。書体、配色、キーは Orca のターミナルと同じです。
 - 司令塔に打ち込んだ内容と、Claude Code が呼んだツールや道具の結果は、Claude Code を通じて Anthropic に送られます。子への指示は、Orca が動かす子の Claude Code を通じて Anthropic に送られます。
