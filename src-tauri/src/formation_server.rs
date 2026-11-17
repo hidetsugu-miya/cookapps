@@ -394,7 +394,7 @@ fn read_one(config: &Path, formation: &str) -> RemoteChildren {
     }
 }
 
-/// Takes `names` out of the record of `formation`: it is read again and only those names go, so that a child added meanwhile stays (as `drop_from_pc_record` does). A record that holds none of them, or that is not there, is left alone. The number taken out.
+/// Takes `names` out of the record of `formation`: it is read again and only those names go, so that a child added meanwhile stays (as `formation::drop_from_pc` asks it to). A record that holds none of them, or that is not there, is left alone. The number taken out.
 fn drop_children(config: &Path, formation: &str, names: &[String]) -> Result<usize, String> {
     formation::check_name(formation)?;
     for name in names {

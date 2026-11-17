@@ -138,6 +138,8 @@ const answers = {
   formation_close_child: { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null },
   // A-37: one formation, `formation`, with no project and no child (no row is selected until one is pressed).
   formation_list: { formations: [{ name: "formation", projects: [], environment: "local", createdAt: null, counts: { planned: 0, waiting: 0, working: 0, done: 0 } }], readError: null },
+  // A-37 (#893): no PC has the owner's consent yet; a spec that needs one gives `formationConsent` of e2e/support.ts, and one that presses 「同意する」 or 「取り消す」 mocks `formation_consent` or `formation_consent_revoke`.
+  formation_consents: [],
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).

@@ -18,13 +18,16 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(test)]
+use ts_rs::TS;
 
 use crate::{
     accounts,
-    formation::{terminal_close_args, FLOATING_WORKTREE},
+    auth::config_dir,
+    formation::{self, terminal_close_args, FLOATING_WORKTREE, LOCAL},
     formation_server::{
         self, canonical_32, error_line, parse_error_line, parse_ready_line, public_of, random_32,
-        Client,
+        Client, STOPPED_LINE,
     },
     identity::IDENTIFIER,
     keychain, orca, orca_link,
@@ -334,19 +337,20 @@ fn served_in(lines: &[String]) -> Option<Served> {
     })
 }
 
-/// Reads the screen with `read` every `poll` until a line is there, up to `wait`. A read that fails is tried again until the time is out, and is then in the message.
-fn wait_served(
+/// Reads the screen with `read` every `poll` until `find` finds its line on it, up to `wait`. A read that fails is tried again until the time is out, and is then in the message.
+fn wait_line<T>(
     read: &mut dyn FnMut() -> Result<Vec<String>, String>,
     wait: Duration,
     poll: Duration,
-) -> Result<Served, String> {
+    find: &dyn Fn(&[String]) -> Option<T>,
+) -> Result<T, String> {
     let deadline = Instant::now() + wait;
     let mut last_error = None;
     loop {
         match read() {
             Ok(lines) => {
-                if let Some(served) = served_in(&lines) {
-                    return Ok(served);
+                if let Some(found) = find(&lines) {
+                    return Ok(found);
                 }
             }
             Err(e) => last_error = Some(e),
@@ -374,7 +378,33 @@ fn floating_create_args(environment: &str, command: &str) -> Vec<String> {
     orca::with_environment(args, Some(environment))
 }
 
-/// Makes a floating terminal in the Orca of `environment` that runs `command`, waits up to `wait` for the line it prints, and closes the terminal, whatever came of it.
+/// Makes a floating terminal in the Orca of `environment` that runs `command`, waits up to `wait` for the line that `find` finds on its screen, and closes the terminal, whatever came of it.
+fn run_terminal_for<T>(
+    environment: &str,
+    command: &str,
+    wait: Duration,
+    poll: Duration,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    find: &dyn Fn(&[String]) -> Option<T>,
+) -> Result<T, String> {
+    let made = write(&floating_create_args(environment, command))?;
+    let handle = orca::created_of(&made)
+        .handle
+        .ok_or("Orca がターミナルの handle を答えませんでした")?;
+    let screen = orca::screen_args(&handle, Some(environment));
+    let found = wait_line(
+        &mut || read(&screen).map(|result| orca::screen_lines_of(&result)),
+        wait,
+        poll,
+        find,
+    );
+    // The line is read; a terminal that does not close is the Orca's to show.
+    let _ = write(&terminal_close_args(&handle, environment));
+    found
+}
+
+/// `run_terminal_for` the line of a placement or a start.
 fn run_terminal(
     environment: &str,
     command: &str,
@@ -383,19 +413,7 @@ fn run_terminal(
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<Served, String> {
-    let made = write(&floating_create_args(environment, command))?;
-    let handle = orca::created_of(&made)
-        .handle
-        .ok_or("Orca がターミナルの handle を答えませんでした")?;
-    let screen = orca::screen_args(&handle, Some(environment));
-    let served = wait_served(
-        &mut || read(&screen).map(|result| orca::screen_lines_of(&result)),
-        wait,
-        poll,
-    );
-    // The line is read; a terminal that does not close is the Orca's to show.
-    let _ = write(&terminal_close_args(&handle, environment));
-    served
+    run_terminal_for(environment, command, wait, poll, write, read, &served_in)
 }
 
 /// `run_terminal` through the CLI of Orca.
@@ -507,6 +525,176 @@ pub fn start(config: &Path, environment: &str) -> Result<Pin, String> {
     })
 }
 
+// ---- the consent of the owner (#893) ----
+
+/// The PC of a saved environment that the owner agreed to put `tsunagiai-mcp` on: it has a pinned key (`place` pins it), and that pin is the consent. The version is the one the server was placed or started with.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct FormationConsent {
+    pub environment: String,
+    pub version: String,
+}
+
+/// The consents given, in order of the environment's name.
+pub fn consents(config: &Path) -> Result<Vec<FormationConsent>, String> {
+    Ok(pins(config)?
+        .into_iter()
+        .map(|(environment, pin)| FormationConsent {
+            environment,
+            version: pin.version,
+        })
+        .collect())
+}
+
+/// What a consent can be given to: a saved environment. This Mac needs none, and an empty name names nothing.
+fn check_consent_target(environment: &str) -> Result<(), String> {
+    if environment.trim().is_empty() || environment == LOCAL {
+        return Err("同意は、保存した環境の PC に対してだけ取れます".into());
+    }
+    Ok(())
+}
+
+/// How long to wait for the line of a stop.
+const STOP_WAIT: Duration = START_WAIT;
+
+/// The command that stops the server of the placed program on its PC and takes `remote/` away (its program, version, keys and pid), and prints the stopped line. A PC where the program is not there has nothing to stop. The program's own stopped line is not shown (it is kept in the shell's variable), so that the line printed last is the end of the command, and the terminal is not closed before `remote/` is gone. The line is printed from two halves, so that the typed text, which the terminal shows too, is not taken for the line.
+fn stop_command() -> String {
+    let (head, tail) = STOPPED_LINE.split_at(STOPPED_LINE.len() / 2);
+    let mut statements = prelude();
+    statements.extend([
+        format!("d=\"{}\"", remote_dir_shell()),
+        format!("m=\"$d/{PROGRAM_FILE}\""),
+        "if [ -x \"$m\" ]; then o=$(\"$m\" --serve-stop) || { echo \"$o\"; fail \"サーバーを止められません\"; }; fi".to_owned(),
+        "rm -rf \"$d\" || fail \"remote フォルダを消せません\"".to_owned(),
+        format!("echo \"{head}\"\"{tail}\""),
+    ]);
+    sh_command(&statements)
+}
+
+/// The first line of the screen that is the stopped line (`Ok`) or an error line (its reason).
+fn stopped_in(lines: &[String]) -> Option<Result<(), String>> {
+    lines.iter().find_map(|line| {
+        if line.trim() == STOPPED_LINE {
+            Some(Ok(()))
+        } else {
+            parse_error_line(line).map(Err)
+        }
+    })
+}
+
+/// What runs the stop command in a terminal of the PC and gives the line it printed.
+type RunStop<'a> = &'a dyn Fn(&str, Duration) -> Result<Result<(), String>, String>;
+
+#[derive(Debug, PartialEq)]
+enum Revoke {
+    /// Stop the server and take the program away, then forget the pin.
+    Stop,
+    /// The environment is gone from Orca, so its PC cannot be reached: only the pin is forgotten.
+    ForgetOnly,
+}
+
+/// What a revocation does: it is refused while a formation of that PC is left (its orchestrator and its children run on it, and the record of them is read from its server), else it stops the server there, unless the environment is gone from Orca (`gone`, asked only then).
+fn revoke_plan(
+    environment: &str,
+    formations: &[String],
+    gone: &dyn Fn() -> bool,
+) -> Result<Revoke, String> {
+    if !formations.is_empty() {
+        return Err(format!(
+            "環境「{environment}」には、フォーメーション（{}）が残っています。削除してから取り消してください",
+            formations.join("、")
+        ));
+    }
+    Ok(if gone() {
+        Revoke::ForgetOnly
+    } else {
+        Revoke::Stop
+    })
+}
+
+/// Takes the consent of `environment` back: the plan, the stop on its PC when there is one, and last the pin. A stop that failed keeps the pin, so that the revocation can be tried again.
+fn revoke_with(
+    config: &Path,
+    environment: &str,
+    formations: &[String],
+    gone: &dyn Fn() -> bool,
+    run: RunStop<'_>,
+) -> Result<(), String> {
+    if !pins(config)?.contains_key(environment) {
+        return Err(format!("環境「{environment}」には同意がありません"));
+    }
+    if revoke_plan(environment, formations, gone)? == Revoke::Stop {
+        run(&stop_command(), STOP_WAIT)?
+            .map_err(|reason| format!("サーバーを止められませんでした: {reason}"))?;
+    }
+    forget_pin(config, environment)?;
+    Ok(())
+}
+
+/// `run_terminal_for` the stop command, through the CLI of Orca.
+fn run_stop_in_orca(
+    environment: &str,
+    command: &str,
+    wait: Duration,
+) -> Result<Result<(), String>, String> {
+    run_terminal_for(
+        environment,
+        command,
+        wait,
+        POLL,
+        &|args| orca::write(args),
+        &|args| orca::call(args, orca::READ_TIMEOUT).map_err(orca::message_of),
+        &stopped_in,
+    )
+}
+
+/// The PCs the owner agreed to (the settings screen lists them, and the dialog that makes a formation asks).
+#[tauri::command]
+pub async fn formation_consents(app: tauri::AppHandle) -> Result<Vec<FormationConsent>, String> {
+    consents(&config_dir(&app)?)
+}
+
+/// The owner agreed to put `tsunagiai-mcp` on the PC of `environment`: puts the program there, starts it and pins its key (`place`), which is the consent. It blocks for as long as the fetch there takes, so it runs in a thread of its own. A failure carries the words of its reason and nothing is agreed.
+#[tauri::command]
+pub async fn formation_consent(
+    app: tauri::AppHandle,
+    environment: String,
+) -> Result<FormationConsent, String> {
+    let config = config_dir(&app)?;
+    let app_version = app.package_info().version.to_string();
+    orca::blocking(move || {
+        check_consent_target(&environment)?;
+        let pin = place(&config, &environment, &app_version)?;
+        Ok(FormationConsent {
+            environment,
+            version: pin.version,
+        })
+    })
+    .await?
+}
+
+/// Takes the consent of `environment` back (`revoke_with`) and answers the consents that are left. A PC with a formation left is refused with the reason.
+#[tauri::command]
+pub async fn formation_consent_revoke(
+    app: tauri::AppHandle,
+    environment: String,
+) -> Result<Vec<FormationConsent>, String> {
+    let config = config_dir(&app)?;
+    orca::blocking(move || {
+        let formations = formation::formations_on(&config, &environment)?;
+        revoke_with(
+            &config,
+            &environment,
+            &formations,
+            &|| formation::environment_gone_now(&environment),
+            &|command, wait| run_stop_in_orca(&environment, command, wait),
+        )?;
+        consents(&config)
+    })
+    .await?
+}
+
 // ---- connect ----
 
 /// What the server of a connection try said.
@@ -534,8 +722,17 @@ fn decide(heard: &Heard, app_version: &str, started: bool, placed: bool) -> Step
             "サーバーの版（{version}）が、つなぎAI の版（{app_version}）と違います"
         )),
         Heard::Silent(_) if !started => Step::Start,
-        Heard::Silent(reason) => Step::GiveUp(format!("サーバーにつなげません: {reason}")),
+        Heard::Silent(reason) => Step::GiveUp(format!(
+            "サーバーにつなげません: {reason}。その PC の画面にファイアウォールの確認が出ていたら「許可」を押して、もう一度試してください"
+        )),
     }
+}
+
+/// Why an environment with no pinned key is refused: the owner has not allowed the app to put the server on its PC, which is what pins a key.
+fn not_allowed(environment: &str) -> String {
+    format!(
+        "環境「{environment}」の PC にサーバーを置くことを、まだ許可していません。許可すると、つなぎAI がその PC にサーバーを置いて起動します"
+    )
 }
 
 /// One try: connects with the pinned key and asks the version.
@@ -556,10 +753,20 @@ async fn probe(host: &str, port: u16, secret: [u8; 32], key: &str) -> (Heard, Op
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Do {
     Place,
     Start,
+}
+
+/// How long a start or a placement on a PC is not done again, whatever came of it.
+const ACT_PAUSE: Duration = Duration::from_secs(30);
+static ACTING: Mutex<()> = Mutex::new(());
+static ACTED: Mutex<BTreeMap<(String, Do), Instant>> = Mutex::new(BTreeMap::new());
+
+/// Whether a start or a placement done last at `last` may be done again at `now`.
+fn act_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|last| now.duration_since(last) >= ACT_PAUSE)
 }
 
 /// What does a `Do` on the PC: blocking.
@@ -586,7 +793,7 @@ async fn connect_with(
         // Read again at each try: a start or a placement pins the key it found.
         let pin = pins(config)?
             .remove(environment)
-            .ok_or_else(|| format!("環境「{environment}」にはサーバーを置いていません"))?;
+            .ok_or_else(|| not_allowed(environment))?;
         let (heard, client) = probe(host, port, secret, &pin.key).await;
         match decide(&heard, app_version, started, placed) {
             Step::Use => return client.ok_or_else(|| "サーバーにつなげません".to_owned()),
@@ -610,7 +817,7 @@ pub async fn connect(
     app_version: &str,
 ) -> Result<Client, String> {
     if !pins(config)?.contains_key(environment) {
-        return Err(format!("環境「{environment}」にはサーバーを置いていません"));
+        return Err(not_allowed(environment));
     }
     let host = {
         let environment = environment.to_owned();
@@ -623,9 +830,27 @@ pub async fn connect(
             environment.to_owned(),
             app_version.to_owned(),
         );
-        Arc::new(move |what| match what {
-            Do::Place => place(&config, &environment, &version).map(|_| ()),
-            Do::Start => start(&config, &environment).map(|_| ()),
+        Arc::new(move |what| {
+            // One start or placement at a time, and none again soon after one on the same PC: the screen reads every few seconds, and a PC that does not answer would get a terminal at each read.
+            let _one = ACTING.lock().unwrap_or_else(PoisonError::into_inner);
+            let now = Instant::now();
+            let last = ACTED
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&(environment.clone(), what))
+                .copied();
+            if !act_due(last, now) {
+                return Ok(());
+            }
+            let done = match what {
+                Do::Place => place(&config, &environment, &version).map(|_| ()),
+                Do::Start => start(&config, &environment).map(|_| ()),
+            };
+            ACTED
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert((environment.clone(), what), Instant::now());
+            done
         })
     };
     connect_with(
@@ -650,6 +875,18 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
     use tokio::net::TcpListener;
+
+    #[test]
+    fn a_start_or_a_placement_is_not_done_again_until_the_pause_is_over() {
+        let now = Instant::now();
+        assert!(act_due(None, now));
+        assert!(!act_due(Some(now), now));
+        assert!(!act_due(
+            Some(now),
+            now + ACT_PAUSE - Duration::from_secs(1)
+        ));
+        assert!(act_due(Some(now), now + ACT_PAUSE));
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -1164,7 +1401,7 @@ mod tests {
     fn the_screen_is_read_until_a_line_is_there_and_not_past_the_time() {
         let ready = formation_server::ready_line(&key_text(2), "1.2.3");
         let mut reads = 0;
-        let got = wait_served(
+        let got = wait_line(
             &mut || {
                 reads += 1;
                 match reads {
@@ -1175,6 +1412,7 @@ mod tests {
             },
             Duration::from_secs(5),
             Duration::from_millis(1),
+            &served_in,
         );
         assert_eq!(
             got,
@@ -1184,16 +1422,18 @@ mod tests {
             })
         );
         assert_eq!(reads, 3);
-        let silent = wait_served(
+        let silent = wait_line(
             &mut || Ok(lines(&["$ "])),
             Duration::from_millis(30),
             Duration::from_millis(5),
+            &served_in,
         );
         assert_eq!(silent, Err("時間内にサーバーが答えませんでした".to_owned()));
-        let broken = wait_served(
+        let broken = wait_line(
             &mut || Err("Orca が応答しません".into()),
             Duration::from_millis(30),
             Duration::from_millis(5),
+            &served_in,
         )
         .unwrap_err();
         assert!(broken.contains("Orca が応答しません"), "{broken}");
@@ -1283,6 +1523,225 @@ mod tests {
         let (got, calls) = run(vec![], serde_json::json!({}));
         assert!(got.is_err());
         assert_eq!(calls.len(), 1);
+    }
+
+    // ---- the consent of the owner (#893) ----
+
+    #[test]
+    fn the_consents_are_the_pinned_environments_in_order_with_their_versions() {
+        let config = temp_dir("consents");
+        assert!(consents(&config).unwrap().is_empty());
+        let pin = |seed: u8, version: &str| Pin {
+            key: key_text(seed),
+            version: version.to_owned(),
+        };
+        set_pin(&config, "mac-studio", pin(1, "0.83.0")).unwrap();
+        set_pin(&config, "box", pin(2, "0.84.0")).unwrap();
+        assert_eq!(
+            consents(&config).unwrap(),
+            [
+                FormationConsent {
+                    environment: "box".into(),
+                    version: "0.84.0".into()
+                },
+                FormationConsent {
+                    environment: "mac-studio".into(),
+                    version: "0.83.0".into()
+                }
+            ]
+        );
+        std::fs::write(config.join(PINS_FILE), "nope").unwrap();
+        assert!(consents(&config).is_err());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_consent_is_taken_for_a_saved_environment_only() {
+        assert!(check_consent_target("mac-studio").is_ok());
+        for bad in ["local", "", "  "] {
+            assert!(check_consent_target(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_stop_command_stops_the_placed_program_takes_remote_away_and_prints_its_own_line() {
+        let command = stop_command();
+        assert!(command.starts_with("sh -c '"), "{command}");
+        assert!(command.contains("--serve-stop"), "{command}");
+        // Only the folder of the program is deleted, and it is the one `place` puts the program in.
+        assert!(
+            command.contains(&format!("d=\"{}\"", remote_dir_shell())),
+            "{command}"
+        );
+        assert!(command.contains("rm -rf \"$d\""), "{command}");
+        assert!(
+            command.contains(&format!("m=\"$d/{PROGRAM_FILE}\"")),
+            "{command}"
+        );
+        // A PC without the program has nothing to stop.
+        assert!(command.contains("if [ -x \"$m\" ]"), "{command}");
+        // The lines are printed from two halves: the typed text is no line.
+        assert!(!command.contains(STOPPED_LINE), "{command}");
+        assert!(!command.contains(&error_line("")), "{command}");
+        // The stopped line is the last statement, after `remote/` is gone.
+        let rm = command.find("rm -rf").unwrap();
+        let echo = command.rfind("echo").unwrap();
+        assert!(rm < echo, "{command}");
+        // No quote inside the quoted word.
+        assert_eq!(command.matches('\'').count(), 2, "{command}");
+    }
+
+    #[test]
+    fn the_first_stopped_or_error_line_of_the_screen_is_what_the_stop_printed() {
+        assert_eq!(
+            stopped_in(&lines(&["$ x", "  TSUNAGIAI-SERVE-STOPPED  ", "$ "])),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            stopped_in(&lines(&[&error_line("止められません"), STOPPED_LINE])),
+            Some(Err("止められません".into()))
+        );
+        for none in [
+            lines(&[]),
+            lines(&["$ echo TSUNAGIAI-SERVE-STOPPED"]),
+            lines(&[&formation_server::ready_line(&key_text(2), "1.2.3")]),
+        ] {
+            assert_eq!(stopped_in(&none), None, "{none:?}");
+        }
+    }
+
+    fn pinned_config(name: &str) -> PathBuf {
+        let config = temp_dir(name);
+        for environment in ["mac-studio", "box"] {
+            set_pin(
+                &config,
+                environment,
+                Pin {
+                    key: key_text(1),
+                    version: "0.83.0".into(),
+                },
+            )
+            .unwrap();
+        }
+        config
+    }
+
+    fn pinned_names(config: &Path) -> Vec<String> {
+        pins(config).unwrap().into_keys().collect()
+    }
+
+    #[test]
+    fn a_revocation_with_a_formation_left_on_the_pc_is_refused_with_the_names_and_does_nothing() {
+        let config = pinned_config("revoke-left");
+        let asked = RefCell::new(0);
+        let err = revoke_with(
+            &config,
+            "mac-studio",
+            &["won-1".to_owned(), "won-2".to_owned()],
+            &|| {
+                *asked.borrow_mut() += 1;
+                false
+            },
+            &|_, _| panic!("nothing is run on the PC"),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("環境「mac-studio」") && err.contains("won-1、won-2"),
+            "{err}"
+        );
+        // The environment is not even looked up, and the consent stays.
+        assert_eq!(*asked.borrow(), 0);
+        assert_eq!(pinned_names(&config), ["box", "mac-studio"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_revocation_runs_the_stop_on_the_pc_and_then_forgets_only_that_pin() {
+        let config = pinned_config("revoke-stop");
+        let seen = RefCell::new(Vec::<(String, Duration)>::new());
+        revoke_with(&config, "mac-studio", &[], &|| false, &|command, wait| {
+            // The pin is still there while the command runs: a failure keeps it.
+            assert!(pins(&config).unwrap().contains_key("mac-studio"));
+            seen.borrow_mut().push((command.to_owned(), wait));
+            Ok(Ok(()))
+        })
+        .unwrap();
+        assert_eq!(*seen.borrow(), [(stop_command(), STOP_WAIT)]);
+        assert_eq!(pinned_names(&config), ["box"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_revocation_of_an_environment_gone_from_orca_touches_no_pc_and_forgets_the_pin() {
+        let config = pinned_config("revoke-gone");
+        revoke_with(&config, "box", &[], &|| true, &|_, _| {
+            panic!("nothing is run on the PC")
+        })
+        .unwrap();
+        assert_eq!(pinned_names(&config), ["mac-studio"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_stop_that_failed_keeps_the_consent_with_the_reason() {
+        let config = pinned_config("revoke-failed");
+        let reason = revoke_with(&config, "box", &[], &|| false, &|_, _| {
+            Ok(Err("サーバーを止められません".into()))
+        })
+        .unwrap_err();
+        assert!(
+            reason.contains("サーバーを止められませんでした") && reason.contains("止められません"),
+            "{reason}"
+        );
+        let silent = revoke_with(&config, "box", &[], &|| false, &|_, _| {
+            Err("時間内にサーバーが答えませんでした".into())
+        })
+        .unwrap_err();
+        assert_eq!(silent, "時間内にサーバーが答えませんでした");
+        assert_eq!(pinned_names(&config), ["box", "mac-studio"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn an_environment_with_no_consent_has_none_to_take_back_and_nothing_is_run() {
+        let config = pinned_config("revoke-none");
+        let err = revoke_with(&config, "mac-mini", &[], &|| false, &|_, _| {
+            panic!("nothing is run on the PC")
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("環境「mac-mini」") && err.contains("同意がありません"),
+            "{err}"
+        );
+        assert_eq!(pinned_names(&config), ["box", "mac-studio"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_stop_terminal_waits_for_the_stopped_line_and_is_closed() {
+        let calls = RefCell::new(Vec::<String>::new());
+        let write = |args: &[String]| {
+            calls.borrow_mut().push(args[..2].join(" "));
+            Ok(serde_json::json!({"terminal": {"handle": "term_1"}}))
+        };
+        let read = |args: &[String]| {
+            calls.borrow_mut().push(args[..2].join(" "));
+            Ok(serde_json::json!({"terminal": {"tail": ["$ ", STOPPED_LINE]}}))
+        };
+        let got = run_terminal_for(
+            "mac-studio",
+            &stop_command(),
+            Duration::from_millis(40),
+            Duration::from_millis(5),
+            &write,
+            &read,
+            &stopped_in,
+        );
+        assert_eq!(got, Ok(Ok(())));
+        assert_eq!(
+            *calls.borrow(),
+            ["terminal create", "terminal read", "terminal close"]
+        );
     }
 
     // ---- place and start ----
@@ -1449,7 +1908,10 @@ mod tests {
         assert_eq!(decide(&silent(), "1.2.3", false, false), Step::Start);
         assert_eq!(
             decide(&silent(), "1.2.3", true, false),
-            Step::GiveUp("サーバーにつなげません: refused".into())
+            Step::GiveUp(
+                "サーバーにつなげません: refused。その PC の画面にファイアウォールの確認が出ていたら「許可」を押して、もう一度試してください"
+                    .into()
+            )
         );
         // Another version: place once, then give up; a start before does not stop a placement.
         assert_eq!(
@@ -1565,7 +2027,7 @@ mod tests {
         let act = counting(&calls, |_| Ok(()));
         let reason = pcs.connect(&act).await.err().unwrap();
         assert!(
-            reason.contains("環境「pc」") && reason.contains("置いていません"),
+            reason.contains("環境「pc」") && reason.contains("許可していません"),
             "{reason}"
         );
         assert!(calls.lock().unwrap().is_empty());
@@ -1660,7 +2122,10 @@ mod tests {
             .await
             .err()
             .unwrap();
-        assert!(reason.contains("サーバーにつなげません"), "{reason}");
+        assert!(
+            reason.contains("サーバーにつなげません") && reason.contains("ファイアウォール"),
+            "{reason}"
+        );
         assert_eq!(*calls.lock().unwrap(), [Do::Start]);
         std::fs::remove_dir_all(&pcs.config).unwrap();
     }

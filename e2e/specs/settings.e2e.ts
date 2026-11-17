@@ -1,4 +1,4 @@
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
@@ -1224,13 +1224,81 @@ describe("settings: Ghostty (the Orca tab)", () => {
   });
 });
 
+// A-37 (#893): the PCs that the owner agreed to put tsunagiai-mcp on, in the Orca tab.
+describe("settings: the PCs with the server of the orchestration (the Orca tab)", () => {
+  async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#settings-panel-orca")).toBeDisplayed();
+  }
+
+  const names = () => textsOf("#formation-consent-items .item-name");
+  const revokeButton = (environment: string) => $(`#formation-consent-items button[aria-label="${environment} の同意を取り消す"]`);
+
+  it("says that no PC has the server when none was agreed, and reads the consents once the tab is shown", async () => {
+    await openOrcaTab();
+    await expect($("#formation-consent-items .card-empty")).toHaveText("サーバーを置いた PC はありません");
+    expect(await callsOf("formation_consents")).toEqual([null]);
+    expect(await callsOf("formation_consent_revoke")).toEqual([]);
+  });
+
+  it("lists each PC with the version of its server, its state and a button that takes the consent back", async () => {
+    await openOrcaTab({ formation_consents: [formationConsent("box", "0.83.0"), formationConsent("mac-studio", "0.84.0")] });
+    await browser.waitUntil(async () => (await names()).length === 2);
+    expect(await names()).toEqual(["box", "mac-studio"]);
+    expect(await textsOf("#formation-consent-items .item-meta")).toEqual(["tsunagiai-mcp 0.83.0", "tsunagiai-mcp 0.84.0"]);
+    expect(await textsOf("#formation-consent-items .status")).toEqual(["置き済み", "置き済み"]);
+    expect(await textsOf("#formation-consent-items .text-btn")).toEqual(["取り消す", "取り消す"]);
+    await expect($("#formation-consent-help")).toHaveAttribute("aria-label", "サーバーを置いた PC の説明");
+  });
+
+  it("takes the consent of that PC back with the environment's name, and draws the consents that are left", async () => {
+    await openOrcaTab({ formation_consents: [formationConsent("box"), formationConsent("mac-studio")] });
+    await browser.waitUntil(async () => (await names()).length === 2);
+    const revoke = await mock("formation_consent_revoke", [formationConsent("mac-studio")]);
+    await revokeButton("box").click();
+    expect(await waitForCalls(revoke)).toEqual([{ environment: "box" }]);
+    await browser.waitUntil(async () => (await names()).join() === "mac-studio");
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("keeps the button off while the PC is being cleared, and draws nothing new until the answer", async () => {
+    await openOrcaTab({ formation_consents: [formationConsent("box")] });
+    await browser.waitUntil(async () => (await names()).length === 1);
+    const revoke = await mock("formation_consent_revoke", holds);
+    await revokeButton("box").click();
+    await waitForCalls(revoke);
+    await expect(revokeButton("box")).toBeDisabled();
+    await release(revoke, []);
+    await expect($("#formation-consent-items .card-empty")).toHaveText("サーバーを置いた PC はありません");
+    expect(await callsOf(revoke)).toHaveLength(1);
+  });
+
+  it("shows the words of a refusal where the other settings show a failure, and keeps the PC listed with its button on", async () => {
+    await openOrcaTab({ formation_consents: [formationConsent("mac-studio")] });
+    await browser.waitUntil(async () => (await names()).length === 1);
+    const reason = "環境「mac-studio」には、フォーメーション（won-1）が残っています。削除してから取り消してください";
+    await mock("formation_consent_revoke", rejects(reason));
+    await revokeButton("mac-studio").click();
+    await expect($("#error")).toHaveText(reason);
+    expect(await names()).toEqual(["mac-studio"]);
+    await expect(revokeButton("mac-studio")).toBeEnabled();
+  });
+
+  it("shows the words when the consents cannot be read", async () => {
+    await openOrcaTab({ formation_consents: rejects("formation-remote.json を読めません") });
+    await expect($("#error")).toHaveText("formation-remote.json を読めません");
+  });
+});
+
 describe("settings: the Orca tab has no card of the target (A-6)", () => {
-  it("has the cards of the terminal colors, the editor and Ghostty's settings, and none of the target", async () => {
+  it("has the cards of the terminal colors, the editor, Ghostty's settings and the PCs with the server, and none of the target", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("orca");
     await expect($("#settings-panel-orca")).toBeDisplayed();
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC"]);
     expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
   });
 });
