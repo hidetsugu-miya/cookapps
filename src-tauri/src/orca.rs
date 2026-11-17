@@ -1184,7 +1184,7 @@ pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     }
 }
 
-fn check_environment(name: &str, environments: &[String]) -> Result<(), String> {
+pub(crate) fn check_environment(name: &str, environments: &[String]) -> Result<(), String> {
     if environments.iter().any(|e| e == name) {
         Ok(())
     } else {
@@ -1382,7 +1382,7 @@ pub(crate) fn call(args: &[String], timeout: Duration) -> Result<Value, RunError
     parse_output(&run(args, timeout)?).map_err(RunError::Failed)
 }
 
-fn read_environments() -> Result<Vec<String>, RunError> {
+pub(crate) fn read_environments() -> Result<Vec<String>, RunError> {
     call(&args_of(&["environment", "list", "--json"]), READ_TIMEOUT)
         .map(|result| environments_of(&result))
 }

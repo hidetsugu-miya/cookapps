@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use ts_rs::TS;
 
 use crate::{
-    orca::{args_of, call, environments_of, message_of, READ_TIMEOUT},
+    orca::{check_environment, message_of, read_environments},
     orca_attach::Rpc,
     orca_link::Connection,
 };
@@ -45,15 +45,6 @@ fn call_path(path: &str) -> &str {
         HOME
     } else {
         path
-    }
-}
-
-/// The environment must be one of the saved ones read just now (a name is never handed to Orca otherwise).
-fn check_saved(name: &str, saved: &[String]) -> Result<(), String> {
-    if saved.iter().any(|e| e == name) {
-        Ok(())
-    } else {
-        Err(format!("保存されていない接続先です: {name}"))
     }
 }
 
@@ -100,21 +91,16 @@ async fn browse(rpc: &mut impl Rpc, path: &str) -> Result<BrowsedDir, String> {
     parse_browse(&answer)
 }
 
-/// The names of the saved environments, from `orca environment list`.
-fn saved_environments() -> Result<Vec<String>, String> {
-    call(&args_of(&["environment", "list", "--json"]), READ_TIMEOUT)
-        .map(|result| environments_of(&result))
-        .map_err(message_of)
-}
-
 /// #780: the folders in `path` of the saved environment `environment` (an empty `path` is its home folder). `environment` must be a saved one (read just now), so this machine and an SSH host are not asked, and `path` must hold no NUL and be at most 4096 characters. Only reads.
 #[tauri::command]
 pub async fn orca_browse_dir(environment: String, path: String) -> Result<BrowsedDir, String> {
     check_browse_path(&path)?;
     let name = environment.clone();
-    tokio::task::spawn_blocking(move || check_saved(&name, &saved_environments()?))
-        .await
-        .map_err(|e| e.to_string())??;
+    tokio::task::spawn_blocking(move || {
+        check_environment(&name, &read_environments().map_err(message_of)?)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let mut connection = Connection::open(Some(environment)).await?;
     browse(&mut connection, &path).await
 }
@@ -264,15 +250,5 @@ mod tests {
         assert!(check_browse_path(&"a".repeat(PATH_LIMIT + 1)).is_err());
         // The limit counts characters, not bytes.
         assert!(check_browse_path(&"あ".repeat(PATH_LIMIT)).is_ok());
-    }
-
-    #[test]
-    fn the_environment_must_be_a_saved_one() {
-        let saved = vec!["Studio".to_owned(), "Plain".to_owned()];
-        assert!(check_saved("Studio", &saved).is_ok());
-        assert!(check_saved("studio", &saved).is_err());
-        assert!(check_saved("--json", &saved).is_err());
-        assert!(check_saved("", &saved).is_err());
-        assert!(check_saved("Studio", &[]).is_err());
     }
 }
