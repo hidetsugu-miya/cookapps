@@ -4,6 +4,8 @@ import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationState } from "./bindings/FormationState";
 import { FORMATION_NAME } from "./claude-code.js";
 import { $, span, tag } from "./dom.js";
+import { openFormationDialog } from "./formation-new.js";
+import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { elapsed } from "./orca.js";
 
@@ -19,6 +21,8 @@ export const currentFormation = () => current;
 let formations: FormationEntry[] = [];
 let failure: string | null = null;
 let reading = false;
+// Counts the formations made by this screen: a read that began before one was made does not know it, and its answer is dropped.
+let made = 0;
 // What the list shows now; it is drawn again only when the key changes.
 let listKey = "";
 // Told the name of the formation that was selected (a press, or the fallback when the shown one left the list).
@@ -29,11 +33,14 @@ export async function readList() {
   if (reading || document.hidden) return;
   reading = true;
   let read = false;
+  const before = made;
   try {
     const answer = await invoke("formation_list");
-    formations = answer.formations;
-    failure = answer.readError;
-    read = true;
+    if (before === made) {
+      formations = answer.formations;
+      failure = answer.readError;
+      read = true;
+    }
   } catch (e) {
     failure = String(e);
   } finally {
@@ -42,6 +49,14 @@ export async function readList() {
   // The shown formation left the list: its flow is read no more, and the first formation is shown.
   if (read && formations.length > 0 && !formations.some((f) => f.name === current)) choose(formations[0].name);
   draw();
+}
+
+// A formation was made in the dialog: it is in the list now, in the order of the names, and it is selected (its orchestrator starts).
+function added(entry: FormationEntry) {
+  made++;
+  formations = [...formations.filter((f) => f.name !== entry.name), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  choose(entry.name);
+  void readList();
 }
 
 // Selects the formation `name`: its orchestrator and its flow are shown.
@@ -98,5 +113,8 @@ function draw() {
 
 export function initFormationList(changed: (name: string) => void) {
   onChange = changed;
+  const plus = $<HTMLButtonElement>("formation-new");
+  plus.innerHTML = PLUS_SVG;
+  plus.onclick = () => openFormationDialog(plus, added);
   draw();
 }

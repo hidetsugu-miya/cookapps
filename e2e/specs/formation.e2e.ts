@@ -1,4 +1,4 @@
-import { boot, callsOf, formationChild, formationEntry, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, formationChild, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, textsOf, timers, waitForCalls } from "../support";
 
 // A-37: the development screen's orchestration mode. The orchestrator's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
 const FOOTER_MODES = "#footer-modes";
@@ -806,10 +806,17 @@ async function openList(extra: Record<string, unknown> = {}) {
 }
 
 describe("orchestration mode: the list of the formations", () => {
-  it("heads the list with フォーメーション, with no button in it", async () => {
+  it("heads the list with フォーメーション, with the one button that makes a formation at its right end", async () => {
     await openList();
     await expect($("#formation-list h1")).toHaveText("フォーメーション");
-    expect(await browser.execute(() => document.querySelectorAll("#formation-list-head button").length)).toBe(0);
+    expect(await textsOf("#formation-list-head button")).toEqual([""]);
+    await expect($("#formation-new")).toHaveAttribute("aria-label", "フォーメーションを作る");
+    expect(await count("#formation-new svg")).toBe(1);
+    const place = await browser.execute(() => {
+      const [head, button] = [document.getElementById("formation-list-head")!.getBoundingClientRect(), document.getElementById("formation-new")!.getBoundingClientRect()];
+      return { right: head.right - button.right < 16, inside: button.top >= head.top && button.bottom <= head.bottom };
+    });
+    expect(place).toEqual({ right: true, inside: true });
   });
 
   it("draws a row for each formation, in the order given, with the time, the projects and the number of children in each state", async () => {
@@ -956,6 +963,188 @@ describe("orchestration mode: the list of the formations", () => {
     await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("formation-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowRight");
     await expect(split).toHaveAttribute("aria-valuenow", "27");
     expect(await share()).toBeCloseTo(0.27, 2);
+  });
+});
+
+// A-37 (#823): the dialog that makes a formation.
+describe("orchestration mode: the dialog that makes a formation", () => {
+  const ENVIRONMENTS = () => formationEnvironments(["wonder-knowledge", "wonder-api", "tsunagiai"], { "dev-server": ["wonder-api"] });
+  const dialog = () => $('.formation-new-pop[role="dialog"]');
+  const nameField = () => $('.formation-new-pop input[aria-label="名前"]');
+  const filterField = () => $('.formation-new-pop input[aria-label="プロジェクトを絞り込む"]');
+  const makeButton = () => $(".formation-new-actions .text-btn.primary");
+  const repos = () => textsOf(".formation-new-repo");
+  const checked = () => browser.execute(() => [...document.querySelectorAll<HTMLInputElement>(".formation-new-repo input")].map((b) => b.checked));
+  // The page's own press: the driver's click takes the focus to the button after the handler, which a real press does not.
+  const pressNew = () => browser.execute(() => document.getElementById("formation-new")!.click());
+  async function ask(extra: Record<string, unknown> = {}) {
+    await openList({ formation_environments: ENVIRONMENTS(), ...extra });
+    await pressNew();
+    await expect(dialog()).toBeDisplayed();
+    await browser.waitUntil(async () => (await repos()).length > 0);
+  }
+  // Presses the box of the n-th repository among all the rows of the list (the headers are not rows), in the page.
+  const pick = (index: number) => browser.execute((i) => document.querySelectorAll<HTMLInputElement>(".formation-new-repo input")[i].click(), index);
+
+  it("opens under the plus with a field for the name, a field that narrows the projects, the environments with their repositories as unchecked boxes, and the two buttons", async () => {
+    await ask();
+    await expect(nameField()).toBeFocused();
+    expect(await textsOf(".formation-new-field > span")).toEqual(["名前", "プロジェクト"]);
+    expect(await textsOf(".formation-new-env")).toEqual(["この Mac", "dev-server"]);
+    expect(await repos()).toEqual(["wonder-knowledge", "wonder-api", "tsunagiai", "wonder-api"]);
+    expect(await checked()).toEqual([false, false, false, false]);
+    expect(await textsOf(".formation-new-actions button")).toEqual(["キャンセル", "作成"]);
+    // No placeholder and no line of help.
+    expect(await count(".formation-new-pop [placeholder]")).toBe(0);
+    expect(await count(".formation-new-pop p:not(.formation-new-env)")).toBe(0);
+    const where = await browser.execute(() => {
+      const [p, b] = [document.querySelector(".formation-new-pop")!.getBoundingClientRect(), document.getElementById("formation-new")!.getBoundingClientRect()];
+      return { belowPlus: p.top >= b.bottom, inside: p.right <= innerWidth && p.left >= 0 && p.bottom <= innerHeight };
+    });
+    expect(where).toEqual({ belowPlus: true, inside: true });
+    // The environments are read once, and nothing is made until it is asked.
+    expect(await callsOf("formation_environments")).toHaveLength(1);
+    expect(await callsOf("formation_create")).toEqual([]);
+  });
+
+  it("narrows the repositories by the text of the filter, and hides the environment that has none left", async () => {
+    await ask();
+    await filterField().setValue("TSUNA");
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".formation-new-repo")].filter((e) => !e.hidden).map((e) => e.textContent))).toEqual(["tsunagiai"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".formation-new-env")].filter((e) => !e.hidden).map((e) => e.textContent))).toEqual(["この Mac"]);
+    await filterField().setValue("");
+    expect(await browser.execute(() => document.querySelectorAll(".formation-new-repo:not([hidden])").length)).toBe(4);
+  });
+
+  it("makes the formation with the name typed and the projects checked, in the order of the lists, and selects it so that its orchestrator starts", async () => {
+    await ask();
+    const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0, repos: ["wonder-knowledge", "wonder-api"] }));
+    await mock("formation_list", formationList([...listed().formations, formationEntry("mail-api", { minutes: 0, repos: ["wonder-knowledge", "wonder-api"] })]));
+    await browser.keys("mail-api");
+    // Chosen out of order: the call keeps the order of the lists.
+    await pick(3);
+    await pick(0);
+    await makeButton().click();
+    expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "local", repo: "wonder-knowledge" }, { environment: "dev-server", repo: "wonder-api" }] }]);
+    await expect(dialog()).not.toExist();
+    await browser.waitUntil(async () => (await pressedRows()).join() === "mail-api");
+    expect(await rowNames()).toContain("mail-api");
+    expect(await headName()).toBe("mail-api");
+    await browser.waitUntil(async () => (await callsOf("claude_code_start")).some((c) => (c as { id: string }).id === "formation:mail-api"));
+    await browser.waitUntil(async () => (await callsOf("formation_children")).some((c) => (c as { name: string }).name === "mail-api"));
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("makes it on Enter in the name field, with no project when none is checked", async () => {
+    await ask();
+    const create = await mock("formation_create", formationEntry("solo", { minutes: 0 }));
+    await browser.keys("solo");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ name: "solo", projects: [] }]);
+    await expect(dialog()).not.toExist();
+    await browser.waitUntil(async () => (await pressedRows()).join() === "solo");
+  });
+
+  it("sends the name as typed, and sends nothing for an empty name", async () => {
+    await ask();
+    const create = await mock("formation_create", formationEntry("x", { minutes: 0 }));
+    await makeButton().click();
+    await browser.keys("Enter");
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+    await expect(dialog()).toBeDisplayed();
+    await nameField().setValue(" Bad Name");
+    await makeButton().click();
+    expect((await waitForCalls(create))[0]).toMatchObject({ name: " Bad Name" });
+  });
+
+  it("shows the words of a failed creation where the other screens show an error, and keeps the dialog with what was typed", async () => {
+    await ask();
+    await mock("formation_create", rejects("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください"));
+    await browser.keys("Bad Name");
+    await pick(1);
+    await makeButton().click();
+    await expect($("#error")).toHaveText("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください");
+    await expect(dialog()).toBeDisplayed();
+    await expect(nameField()).toHaveValue("Bad Name");
+    expect(await checked()).toEqual([false, true, false, false]);
+    await expect(makeButton()).toBeEnabled();
+    // The formation is not made, so none is selected in its place.
+    expect(await pressedRows()).toEqual(["formation"]);
+    expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+  });
+
+  it("makes no more than one formation while a creation is on its way", async () => {
+    await ask();
+    const create = await mock("formation_create", holds);
+    await browser.keys("one");
+    await makeButton().click();
+    await waitForCalls(create);
+    await expect(makeButton()).toBeDisabled();
+    await browser.keys("Enter");
+    await browser.pause(200);
+    expect(await callsOf(create)).toHaveLength(1);
+    await release("formation_create", formationEntry("one", { minutes: 0 }));
+    await expect(dialog()).not.toExist();
+  });
+
+  it("closes on 「キャンセル」, on Escape and on a press outside, and makes nothing", async () => {
+    await ask();
+    const create = await mock("formation_create", formationEntry("x", { minutes: 0 }));
+    await $(".formation-new-actions .text-btn:not(.primary)").click();
+    await expect(dialog()).not.toExist();
+    await pressNew();
+    await expect(dialog()).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect(dialog()).not.toExist();
+    await pressNew();
+    await expect(dialog()).toBeDisplayed();
+    // WebDriver's element click sends no pointerdown, which is what closes a popup: the page's own press elsewhere.
+    await browser.execute(
+      (once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.getElementById("formation-list-head")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+      },
+      onceId(),
+    );
+    await expect(dialog()).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(create)).toEqual([]);
+    expect(await pressedRows()).toEqual(["formation"]);
+  });
+
+  it("says why an environment could not be read, with no box under it, and why the list of the saved ones could not", async () => {
+    await ask({ formation_environments: formationEnvironments(["tsunagiai"], {}, { "dev-server": "届きません" }, "環境の一覧を読めません") });
+    expect(await textsOf(".formation-new-env")).toEqual(["この Mac", "dev-server"]);
+    expect(await textsOf(".formation-new-note")).toEqual(["環境の一覧を読めません", "届きません"]);
+    expect(await repos()).toEqual(["tsunagiai"]);
+  });
+
+  it("closes with the words of the failure when the environments cannot be read", async () => {
+    await openList({ formation_environments: rejects("Orca に届きません") });
+    await pressNew();
+    await expect($("#error")).toHaveText("Orca に届きません");
+    await expect(dialog()).not.toExist();
+  });
+
+  it("keeps the new formation selected when a read of the list that began before it was made answers late", async () => {
+    await ask();
+    const list = await mock("formation_list", holds);
+    await waitForCalls(list);
+    // The next reads answer with the formation; only the one that is on its way does not know it.
+    const full = formationList([...listed().formations, formationEntry("late", { minutes: 0 })]);
+    await mock("formation_list", full);
+    await mock("formation_create", formationEntry("late", { minutes: 0 }));
+    await browser.keys("late");
+    await makeButton().click();
+    await browser.waitUntil(async () => (await pressedRows()).join() === "late");
+    // The answer of the read that began before the formation was made is dropped, and the first formation is not selected in its place.
+    await release("formation_list", listed());
+    await browser.pause(READ * 2);
+    expect(await pressedRows()).toEqual(["late"]);
+    expect(await headName()).toBe("late");
+    await browser.waitUntil(async () => (await rowNames()).includes("late"));
+    expect(await pressedRows()).toEqual(["late"]);
   });
 });
 
