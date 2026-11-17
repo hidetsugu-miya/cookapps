@@ -3,6 +3,7 @@
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationState } from "./bindings/FormationState";
+import { FORMATION_ID } from "./claude-code.js";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { invoke } from "./ipc.js";
@@ -41,7 +42,7 @@ async function read() {
   if (reading || document.hidden) return;
   reading = true;
   try {
-    children = await invoke("formation_children");
+    children = await invoke("formation_children", { name: FORMATION_ID });
     failure = null;
   } catch (e) {
     failure = String(e);

@@ -34,12 +34,12 @@ const FOLDER: &str = "claude-code";
 const MCP_FILE: &str = "mcp.json";
 const SCRIPT_FILE: &str = "start.sh";
 const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
-/// A-37: the orchestrator is the pane with this id (the screen names its pane so), and it runs in `formation/` of the config directory, not in `claude-code/`.
+/// A-37: the orchestrator is the pane with this id (the screen names its pane so), and it runs in `formation/formation/` of the config directory (the folder of the formation of that name), not in `claude-code/`.
 const FORMATION_ID: &str = "formation";
 const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The fixed text of the orchestrator's `CLAUDE.md`: its role and its steps. It holds nothing that comes from outside.
 const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
-/// The argument that makes `tsunagiai-mcp` offer the tools of the orchestrator (`formation_*`), which the panes' own `mcp.json` does not pass.
+/// The argument that makes `tsunagiai-mcp` offer the tools of the orchestrator (`formation_*`), which the panes' own `mcp.json` does not pass. The name of the formation follows it.
 const FORMATION_MCP_ARG: &str = "--formation";
 /// The name the MCP server has in Claude Code (`mcp__tsunagiai__...`), as in `.mcp.json` of the repository.
 const MCP_NAME: &str = "tsunagiai";
@@ -220,13 +220,20 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json`, the launch script and an empty `.claude/settings.json` in `formation/` of `config` and answers the script's path. The other files of the folder stay.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script and an empty `.claude/settings.json` in `formation/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
 /// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
-fn write_formation_files(config: &Path, claude: &Path, mcp: &Path) -> Result<PathBuf, String> {
-    let dir = crate::formation::dir(config);
+fn write_formation_files(
+    config: &Path,
+    name: &str,
+    claude: &Path,
+    mcp: &Path,
+) -> Result<PathBuf, String> {
+    crate::formation::check_name(name)?;
+    crate::formation::migrate_legacy(config)?;
+    let dir = crate::formation::dir(config, name);
     let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
     crate::accounts::write_atomic(&dir, FORMATION_CLAUDE_MD_FILE, FORMATION_CLAUDE_MD)?;
-    crate::accounts::write_atomic(&dir, MCP_FILE, &mcp_config(mcp, &[FORMATION_MCP_ARG]))?;
+    crate::accounts::write_atomic(&dir, MCP_FILE, &mcp_config(mcp, &[FORMATION_MCP_ARG, name]))?;
     crate::accounts::write_atomic(
         &dir,
         SCRIPT_FILE,
@@ -652,8 +659,8 @@ fn prepare(
         .transpose()?;
     let (script, cwd) = if formation {
         (
-            write_formation_files(config, &claude, &mcp)?,
-            crate::formation::dir(config),
+            write_formation_files(config, FORMATION_ID, &claude, &mcp)?,
+            crate::formation::dir(config, FORMATION_ID),
         )
     } else {
         (
@@ -782,14 +789,14 @@ mod tests {
     fn the_orchestrators_mcp_config_passes_formation_and_nothing_else_changes() {
         let config: serde_json::Value = serde_json::from_str(&mcp_config(
             Path::new("/app/tsunagiai-mcp"),
-            &["--formation"],
+            &["--formation", "formation"],
         ))
         .unwrap();
         assert_eq!(
             config,
             serde_json::json!({"mcpServers": {"tsunagiai": {
                 "command": "/app/tsunagiai-mcp",
-                "args": ["--formation"]
+                "args": ["--formation", "formation"]
             }}})
         );
     }
@@ -974,7 +981,7 @@ mod tests {
     fn the_orchestrators_settings_are_written_where_a_link_of_its_own_would_not_lead() {
         use std::os::unix::fs::symlink;
         let config = temp_dir("formation-links");
-        let dir = config.join("formation");
+        let dir = config.join("formation/formation");
         let elsewhere = config.join("elsewhere");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(&elsewhere).unwrap();
@@ -982,6 +989,7 @@ mod tests {
         let write = || {
             write_formation_files(
                 &config,
+                "formation",
                 Path::new("/bin/claude"),
                 Path::new("/app/tsunagiai-mcp"),
             )
@@ -1024,7 +1032,7 @@ mod tests {
     #[test]
     fn the_orchestrators_files_are_written_in_its_folder_and_the_other_files_stay() {
         let config = temp_dir("formation-files");
-        let dir = config.join("formation");
+        let dir = config.join("formation/formation");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("children.json"), "[]").unwrap();
         // What the orchestrator added to its project settings in an earlier run does not stay.
@@ -1036,6 +1044,7 @@ mod tests {
         .unwrap();
         let script = write_formation_files(
             &config,
+            "formation",
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
         )
@@ -1051,7 +1060,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
         assert_eq!(
             mcp["mcpServers"]["tsunagiai"]["args"],
-            serde_json::json!(["--formation"])
+            serde_json::json!(["--formation", "formation"])
         );
         assert_eq!(
             std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
@@ -1068,6 +1077,32 @@ mod tests {
         );
         // The folder of the other panes is not touched.
         assert!(!config.join("claude-code").exists());
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_files_of_a_formation_are_written_in_its_own_folder_and_name_it_in_mcp_json() {
+        let config = temp_dir("formation-named");
+        let claude = Path::new("/bin/claude");
+        let mcp_binary = Path::new("/app/tsunagiai-mcp");
+        let script = write_formation_files(&config, "api-work", claude, mcp_binary).unwrap();
+        let dir = config.join("formation/api-work");
+        assert_eq!(script, dir.join("start.sh"));
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            mcp["mcpServers"]["tsunagiai"]["args"],
+            serde_json::json!(["--formation", "api-work"])
+        );
+        assert!(!config.join("formation/formation").exists());
+        // A name that is not a folder name of its own writes nothing, least of all outside `formation/`.
+        for bad in ["", "..", "../x", "a/b", "A", ".claude"] {
+            assert!(
+                write_formation_files(&config, bad, claude, mcp_binary).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(!config.join("x").exists());
         std::fs::remove_dir_all(config).unwrap();
     }
 

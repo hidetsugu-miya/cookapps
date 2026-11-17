@@ -290,6 +290,12 @@ describe("orchestration mode: the flow pane", () => {
     expect(await browser.execute(() => document.querySelector('#formation-flow-list .formation-card[data-state="working"]')!.tagName)).toBe("BUTTON");
   });
 
+  it("reads the children of the formation named formation", async () => {
+    await openFlow(mixed());
+    const calls = await waitForCalls("formation_children", 1);
+    expect(calls[0]).toEqual({ name: "formation" });
+  });
+
   it("makes a planned child a normal card in the same place when it is launched", async () => {
     await openFlow(mixed());
     await browser.waitUntil(async () => (await cardNames()).length === 5);

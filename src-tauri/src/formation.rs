@@ -1,4 +1,4 @@
-//! The orchestration of A-37: the folder of the orchestrator Claude Code (`formation/` in the config directory), the record of its children, and the tools of `tsunagiai-mcp` that launch, plan and close them.
+//! The orchestration of A-37: the folder of each formation (`formation/{name}/` in the config directory: the orchestrator Claude Code's files and the record of its children), and the tools of `tsunagiai-mcp` that launch, plan and close them.
 //! A child is a Claude Code that runs in a terminal of Orca, in a worktree of its own. Its state is Orca's (`orca worktree ps`); only what Orca cannot tell is recorded here.
 //! Every command of Orca and of git is run with an argument list, never through a shell, and what they print is data: it is quoted in the answer and never read as an instruction.
 
@@ -22,8 +22,10 @@ use crate::{
 
 const FOLDER: &str = "formation";
 const CHILDREN_FILE: &str = "children.json";
-/// The name of the orchestrator itself (`claude -n formation`): a child cannot have it, or a message to it would reach the wrong session.
-const ORCHESTRATOR: &str = "formation";
+/// The name of the formation that exists before any other (the one the screen reads for now), and the name its orchestrator has (`claude -n formation`). It is the name of the one formation that had `formation/children.json` before the record was split by formation.
+pub const ORCHESTRATOR: &str = "formation";
+/// The files of the orchestrator that `formation/` held before each formation had its own folder. The app writes them at each start, and a `CLAUDE.md` left there would be read by the orchestrators of the folders under it.
+const LEGACY_FILES: [&str; 3] = ["CLAUDE.md", "mcp.json", "start.sh"];
 /// The environment of this Mac: the CLI's own `--environment=local`, which is this machine's Orca whatever `ORCA_ENVIRONMENT` holds. A saved environment is named by its name (or its id) in `orca environment list`.
 pub const LOCAL: &str = "local";
 /// How this Mac is named to the owner in the list of environments.
@@ -51,9 +53,63 @@ const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
 const STEP_LISTED: &str = "worktree の一覧の読み取り";
 
-/// `formation/` in the config directory: the folder the orchestrator runs in, with its `CLAUDE.md`, `mcp.json` and `children.json`.
-pub fn dir(config: &Path) -> PathBuf {
+/// `formation/` in the config directory: the folder of the formations, one folder under it for each.
+fn root(config: &Path) -> PathBuf {
     config.join(FOLDER)
+}
+
+/// `formation/{formation}/` in the config directory: the folder the orchestrator of that formation runs in, with its `CLAUDE.md`, `mcp.json`, launch script and `children.json`. `formation` must have passed `check_name`, or it could name a path outside `formation/`.
+pub fn dir(config: &Path, formation: &str) -> PathBuf {
+    root(config).join(formation)
+}
+
+/// The names of the formations: the folders of `formation/` that are named as a formation is, and `extra` and the first formation, which may have no folder yet. In order of name.
+fn formation_names(config: &Path, extra: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root(config))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| check_name(name).is_ok())
+        .collect();
+    for name in [ORCHESTRATOR, extra] {
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort();
+    names
+}
+
+/// Moves the record of before the split into the first formation's folder: `formation/children.json` becomes `formation/formation/children.json`, and the three files the orchestrator had in `formation/` are deleted (the app writes them again, in the folder of the formation, at each start). A record already there is not written over, and a legacy file that cannot be deleted is left.
+/// An error is a record that could not be moved: the formation would read as having no children, so a change of it must not go on.
+pub fn migrate_legacy(config: &Path) -> Result<(), String> {
+    let old = root(config).join(CHILDREN_FILE);
+    let new = dir(config, ORCHESTRATOR).join(CHILDREN_FILE);
+    if old.is_file() && !new.exists() {
+        std::fs::create_dir_all(dir(config, ORCHESTRATOR))
+            .map_err(|e| format!("{} を作れません: {e}", dir(config, ORCHESTRATOR).display()))?;
+        // The same move may be made by the app and by `tsunagiai-mcp` at once: the one that finds the file gone has nothing to do.
+        match std::fs::rename(&old, &new) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!(
+                    "{} を {} へ移せません: {e}",
+                    old.display(),
+                    new.display()
+                ))
+            }
+        }
+    }
+    for file in LEGACY_FILES {
+        let path = root(config).join(file);
+        if path.is_file() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 // ---- the record ----
@@ -96,9 +152,12 @@ struct Record {
     children: Vec<Child>,
 }
 
-/// The children of `children.json`, in order. A missing or broken file reads as none.
-pub fn read_children(config: &Path) -> Vec<Child> {
-    std::fs::read_to_string(dir(config).join(CHILDREN_FILE))
+/// The children of `children.json` of `formation`, in order. A missing or broken file reads as none.
+pub fn read_children(config: &Path, formation: &str) -> Vec<Child> {
+    if migrate_legacy(config).is_err() {
+        return Vec::new();
+    }
+    std::fs::read_to_string(dir(config, formation).join(CHILDREN_FILE))
         .ok()
         .and_then(|text| serde_json::from_str::<Record>(&text).ok())
         .unwrap_or_default()
@@ -106,8 +165,9 @@ pub fn read_children(config: &Path) -> Vec<Child> {
 }
 
 /// The children of `children.json` for a change of it: a missing file is none, but a file that is there and cannot be read is an error, so that the change does not write over the record of the children already launched.
-fn read_record(config: &Path) -> Result<Vec<Child>, String> {
-    let path = dir(config).join(CHILDREN_FILE);
+fn read_record(config: &Path, formation: &str) -> Result<Vec<Child>, String> {
+    migrate_legacy(config)?;
+    let path = dir(config, formation).join(CHILDREN_FILE);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -123,24 +183,25 @@ fn read_record(config: &Path) -> Result<Vec<Child>, String> {
         })
 }
 
-fn write_children(config: &Path, children: &[Child]) -> Result<(), String> {
+fn write_children(config: &Path, formation: &str, children: &[Child]) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&Record {
         children: children.to_vec(),
     })
     .map_err(|e| e.to_string())?;
-    accounts::write_atomic(&dir(config), CHILDREN_FILE, &text)
+    accounts::write_atomic(&dir(config, formation), CHILDREN_FILE, &text)
 }
 
-/// The record is read, changed and written while this is held: the tools may run side by side, and two of them must not overwrite each other.
+/// The record is read, changed and written while this is held: the tools may run side by side, and two of them must not overwrite each other (one lock for every formation, which is more than needed and costs nothing).
 static RECORD: Mutex<()> = Mutex::new(());
 
 fn update(
     config: &Path,
+    formation: &str,
     change: impl FnOnce(Vec<Child>) -> Result<Vec<Child>, String>,
 ) -> Result<Vec<Child>, String> {
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    let children = change(read_record(config)?)?;
-    write_children(config, &children)?;
+    let children = change(read_record(config, formation)?)?;
+    write_children(config, formation, &children)?;
     Ok(children)
 }
 
@@ -205,7 +266,7 @@ fn already_launched(name: &str) -> String {
 
 // ---- the checks ----
 
-/// A name is a lowercase letter or digit first, then lowercase letters, digits and hyphens, at most 40 characters; and not the orchestrator's own.
+/// A name, of a child or of a formation, is a lowercase letter or digit first, then lowercase letters, digits and hyphens, at most 40 characters. The shape is also what keeps a formation's name a folder name of its own.
 pub fn check_name(name: &str) -> Result<(), String> {
     let mut chars = name.chars();
     let plain = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
@@ -214,12 +275,41 @@ pub fn check_name(name: &str) -> Result<(), String> {
         && chars.all(|c| plain(c) || c == '-');
     if !shaped {
         return Err(format!(
-            "子の名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの {NAME_LIMIT} 文字までにしてください"
+            "名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの {NAME_LIMIT} 文字までにしてください"
         ));
     }
-    if name == ORCHESTRATOR {
+    Ok(())
+}
+
+/// A child's name must reach one session with SendMessage: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
+fn check_child_name(config: &Path, formation: &str, name: &str) -> Result<(), String> {
+    check_name(name)?;
+    migrate_legacy(config)?;
+    let formations = formation_names(config, formation);
+    let mut others = Vec::new();
+    for other in formations.iter().filter(|f| *f != formation) {
+        others.push((other.clone(), read_record(config, other)?));
+    }
+    name_conflict(name, &formations, &others)
+}
+
+/// `others` are the children of the formations other than the one the child is for.
+fn name_conflict(
+    name: &str,
+    formations: &[String],
+    others: &[(String, Vec<Child>)],
+) -> Result<(), String> {
+    if formations.iter().any(|f| f == name) {
         return Err(format!(
-            "「{ORCHESTRATOR}」は司令塔の名前なので、子には付けられません"
+            "「{name}」はフォーメーションの名前（その司令塔のセッション名）なので、子には付けられません"
+        ));
+    }
+    if let Some((owner, _)) = others
+        .iter()
+        .find(|(_, children)| children.iter().any(|c| c.name == name))
+    {
+        return Err(format!(
+            "「{name}」はフォーメーション「{owner}」の子の名前です。SendMessage の宛先が決まらなくなるので、別の名前にしてください"
         ));
     }
     Ok(())
@@ -743,17 +833,18 @@ fn now_ms() -> u64 {
 }
 
 /// Plans children: each is put in the record after the ones there, or in the place of a planned one of its name.
-pub fn plan(config: &Path, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
+pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
+    check_name(formation)?;
     if wanted.is_empty() {
         return Err("予定の子を 1 つ以上渡してください".to_owned().into());
     }
     for (i, child) in wanted.iter().enumerate() {
-        check_name(&child.name)?;
+        check_child_name(config, formation, &child.name)?;
         if wanted[..i].iter().any(|o| o.name == child.name) {
             return Err(format!("「{}」が予定に 2 回あります", child.name).into());
         }
     }
-    let known = read_record(config)?;
+    let known = read_record(config, formation)?;
     if let Some(taken) = wanted.iter().find(|c| is_launched(&known, &c.name)) {
         return Err(already_launched(&taken.name).into());
     }
@@ -786,21 +877,23 @@ pub fn plan(config: &Path, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
             environment: environment.clone(),
         });
     }
-    let children = update(config, |old| with_planned(old, &planned))?;
+    let children = update(config, formation, |old| with_planned(old, &planned))?;
     Ok(json!({ "children": children }))
 }
 
 /// Launches a child: a worktree in the repository of the environment, a terminal with `claude -n {name}` in it, the first instruction, and the record. Every command of Orca is run against that environment. A step that fails after the worktree was made says which, and leaves the worktree.
 pub fn launch(
     config: &Path,
+    formation: &str,
     environment: &str,
     repo: &str,
     name: &str,
     prompt: &str,
 ) -> Result<Value, Refusal> {
-    check_name(name)?;
+    check_name(formation)?;
+    check_child_name(config, formation, name)?;
     let prompt = check_prompt(prompt)?;
-    if is_launched(&read_record(config)?, name) {
+    if is_launched(&read_record(config, formation)?, name) {
         return Err(already_launched(name).into());
     }
     let environment = chosen_environment(&mut None, environment)?;
@@ -837,7 +930,7 @@ pub fn launch(
         }),
     };
     // Recorded before it is asked anything, so that a child that stays half-launched can be closed.
-    update(config, |old| with_launched(old, child)).map_err(|e| {
+    update(config, formation, |old| with_launched(old, child)).map_err(|e| {
         kept(STEP_RECORD, e)
             .with("handle", handle.as_str())
             .saying("ターミナルは動いたままで、記録にありません")
@@ -1004,9 +1097,11 @@ fn remote_git_text(status: &Value, history: &Value) -> Result<(String, String), 
 /// A child whose saved environment is gone (`orca environment list` was read and has no environment of the recorded name or id) has only its entry dropped, with no command of Orca: there is nothing of it to ask. A list that cannot be read, or a value that fits two saved environments, refuses as below.
 /// A worktree that is gone (the owner removed it in Orca) has only its terminal closed, when `orca worktree ps` lists an agent of the recorded pane under the recorded path, and its entry dropped. This Mac's worktree is gone when the folder is not on the disk; a saved environment's, which this Mac cannot see, when its `orca worktree ps` was read whole and lists no worktree of that path.
 /// The record is not trusted: the path and the handle must be well formed, the environment must be this Mac or exactly one saved environment, and `orca worktree ps` of it must list a worktree of that path that is not the repository's own folder, or nothing is deleted.
-pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
+pub fn close(config: &Path, formation: &str, name: &str) -> Result<Value, Refusal> {
+    check_name(formation)?;
     close_with(
         config,
+        formation,
         name,
         &orca_read,
         &|args| orca::write(args),
@@ -1016,16 +1111,21 @@ pub fn close(config: &Path, name: &str) -> Result<Value, Refusal> {
 
 fn close_with(
     config: &Path,
+    formation: &str,
     name: &str,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
 ) -> Result<Value, Refusal> {
-    let child = read_record(config)?
+    let child = read_record(config, formation)?
         .into_iter()
         .find(|c| c.name == name)
-        .ok_or_else(|| Refusal::from(format!("「{name}」という子は記録にありません")))?;
-    let dropped = || update(config, |old| Ok(without(old, name))).map(|_| ());
+        .ok_or_else(|| {
+            Refusal::from(format!(
+                "「{name}」という子はフォーメーション「{formation}」の記録にありません"
+            ))
+        })?;
+    let dropped = || update(config, formation, |old| Ok(without(old, name))).map(|_| ());
     let Some(launch) = child.launch else {
         dropped()?;
         return Ok(json!({ "name": name, "planned": true, "dropped": true }));
@@ -1351,22 +1451,29 @@ fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<Formati
     }
 }
 
-fn children_view(config: &Path) -> Result<Vec<FormationChild>, String> {
-    children_view_with(&read_children(config), &|args, timeout| {
+fn children_view(config: &Path, formation: &str) -> Result<Vec<FormationChild>, String> {
+    check_name(formation)?;
+    children_view_with(&read_children(config, formation), &|args, timeout| {
         orca::call(args, timeout).map_err(orca::message_of)
     })
 }
 
-/// The children of the orchestrator for its screen (A-37), read from `formation/children.json` and `orca worktree ps` of the environment of each child.
+/// The children of the formation `name` for the screen (A-37), read from `formation/{name}/children.json` and `orca worktree ps` of the environment of each child.
 #[tauri::command]
-pub async fn formation_children(app: tauri::AppHandle) -> Result<Vec<FormationChild>, String> {
+pub async fn formation_children(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<FormationChild>, String> {
     let dir = config_dir(&app)?;
-    orca::blocking(move || children_view(&dir)).await?
+    orca::blocking(move || children_view(&dir, &name)).await?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The formation the tests of the record work in.
+    const F: &str = ORCHESTRATOR;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -1417,12 +1524,16 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_is_formation_in_the_config_directory() {
-        assert_eq!(dir(Path::new("/c")), Path::new("/c/formation"));
+    fn the_folder_of_a_formation_is_under_formation_in_the_config_directory() {
+        assert_eq!(dir(Path::new("/c"), "api"), Path::new("/c/formation/api"));
+        assert_eq!(
+            dir(Path::new("/c"), ORCHESTRATOR),
+            Path::new("/c/formation/formation")
+        );
     }
 
     #[test]
-    fn a_name_is_lowercase_letters_digits_and_hyphens_and_not_the_orchestrators() {
+    fn a_name_is_lowercase_letters_digits_and_hyphens() {
         for good in ["a", "0", "web-2", "a-b-c", &"a".repeat(40)] {
             assert!(check_name(good).is_ok(), "{good}");
         }
@@ -1436,12 +1547,183 @@ mod tests {
             "é",
             "a\n",
             ".",
-            "formation",
+            "..",
+            ".claude",
             &"a".repeat(41),
         ] {
             assert!(check_name(bad).is_err(), "{bad:?}");
         }
         assert!(check_name("formation-2").is_ok());
+        assert!(check_name("formation").is_ok());
+    }
+
+    #[test]
+    fn the_record_of_before_the_split_becomes_that_of_the_first_formation() {
+        let config = temp_dir("legacy");
+        std::fs::create_dir_all(root(&config).join(".claude")).unwrap();
+        let old = vec![launched("a", "agents"), planned("b", "web")];
+        let text = serde_json::to_string_pretty(&Record {
+            children: old.clone(),
+        })
+        .unwrap();
+        std::fs::write(root(&config).join(CHILDREN_FILE), &text).unwrap();
+        for file in LEGACY_FILES {
+            std::fs::write(root(&config).join(file), "old").unwrap();
+        }
+        std::fs::write(root(&config).join(".claude/settings.json"), "{}").unwrap();
+        assert_eq!(read_children(&config, ORCHESTRATOR), old);
+        // The record is the same file, moved, and no formation but the first has it.
+        assert_eq!(
+            std::fs::read_to_string(dir(&config, ORCHESTRATOR).join(CHILDREN_FILE)).unwrap(),
+            text
+        );
+        assert!(!root(&config).join(CHILDREN_FILE).exists());
+        assert!(read_children(&config, "other").is_empty());
+        // The files the orchestrator had there go (a `CLAUDE.md` of `formation/` would be read by every orchestrator under it); the rest of the folder stays.
+        for file in LEGACY_FILES {
+            assert!(!root(&config).join(file).exists(), "{file}");
+        }
+        assert!(root(&config).join(".claude/settings.json").exists());
+        // A change goes on from the moved record, and a second read moves nothing.
+        update(&config, ORCHESTRATOR, |old| {
+            with_planned(old, &[wanted("c", "x")])
+        })
+        .unwrap();
+        assert_eq!(
+            names(&read_children(&config, ORCHESTRATOR)),
+            ["a", "b", "c"]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_record_that_is_already_in_the_folder_is_not_written_over_by_the_old_one() {
+        let config = temp_dir("legacy-both");
+        write_children(&config, ORCHESTRATOR, &[planned("new", "r")]).unwrap();
+        let old = serde_json::to_string(&Record {
+            children: vec![planned("old", "r")],
+        })
+        .unwrap();
+        std::fs::write(root(&config).join(CHILDREN_FILE), &old).unwrap();
+        assert_eq!(names(&read_children(&config, ORCHESTRATOR)), ["new"]);
+        assert_eq!(
+            std::fs::read_to_string(root(&config).join(CHILDREN_FILE)).unwrap(),
+            old
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_moved_stops_a_change_and_reads_as_none() {
+        let config = temp_dir("legacy-stuck");
+        std::fs::create_dir_all(root(&config)).unwrap();
+        std::fs::write(root(&config).join(CHILDREN_FILE), r#"{"children": []}"#).unwrap();
+        // A file where the folder of the first formation would be: it cannot be made.
+        std::fs::write(dir(&config, ORCHESTRATOR), "in the way").unwrap();
+        assert!(read_children(&config, ORCHESTRATOR).is_empty());
+        assert!(update(&config, ORCHESTRATOR, Ok).is_err());
+        assert!(root(&config).join(CHILDREN_FILE).exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn each_formation_has_its_own_record() {
+        let config = temp_dir("per-formation");
+        write_children(&config, "alpha", &[launched("a", "x")]).unwrap();
+        write_children(&config, "beta", &[planned("b", "y")]).unwrap();
+        assert_eq!(names(&read_children(&config, "alpha")), ["a"]);
+        assert_eq!(names(&read_children(&config, "beta")), ["b"]);
+        assert!(read_children(&config, "gamma").is_empty());
+        update(&config, "beta", |old| {
+            with_planned(old, &[wanted("c", "y")])
+        })
+        .unwrap();
+        assert_eq!(names(&read_children(&config, "alpha")), ["a"]);
+        assert_eq!(names(&read_children(&config, "beta")), ["b", "c"]);
+        // A close in one formation does not find a child of another.
+        let err = close(&config, "alpha", "b").unwrap_err();
+        assert!(err.error.contains("alpha"), "{}", err.error);
+        assert_eq!(names(&read_children(&config, "beta")), ["b", "c"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_formations_are_the_folders_named_as_a_formation_is_and_the_first_one() {
+        let config = temp_dir("names");
+        assert_eq!(formation_names(&config, "alpha"), ["alpha", "formation"]);
+        for folder in ["beta", "Bad", ".claude", "a b"] {
+            std::fs::create_dir_all(root(&config).join(folder)).unwrap();
+        }
+        std::fs::write(root(&config).join("file"), "").unwrap();
+        assert_eq!(formation_names(&config, "beta"), ["beta", "formation"],);
+        assert_eq!(
+            formation_names(&config, "gamma"),
+            ["beta", "formation", "gamma"],
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_name_is_no_formation_name_and_no_child_of_another_formation() {
+        let formations = vec![
+            "alpha".to_owned(),
+            "beta".to_owned(),
+            "formation".to_owned(),
+        ];
+        let others = vec![(
+            "beta".to_owned(),
+            vec![planned("b1", "r"), launched("b2", "r")],
+        )];
+        for taken in ["alpha", "beta", "formation"] {
+            let err = name_conflict(taken, &formations, &others).unwrap_err();
+            assert!(err.contains("フォーメーションの名前"), "{taken}: {err}");
+        }
+        for taken in ["b1", "b2"] {
+            let err = name_conflict(taken, &formations, &others).unwrap_err();
+            assert!(err.contains("「beta」"), "{taken}: {err}");
+        }
+        assert!(name_conflict("a1", &formations, &others).is_ok());
+        assert!(name_conflict("alpha-2", &formations, &others).is_ok());
+    }
+
+    #[test]
+    fn plan_and_launch_refuse_a_name_of_another_formation_and_nothing_is_written() {
+        let config = temp_dir("names-across");
+        write_children(
+            &config,
+            "beta",
+            &[planned("shared", "r"), launched("b2", "r")],
+        )
+        .unwrap();
+        write_children(&config, "alpha", &[planned("own", "r")]).unwrap();
+        for taken in ["shared", "b2", "alpha", "beta", "formation"] {
+            let err = plan(&config, "alpha", &[wanted(taken, "r")]).unwrap_err();
+            assert!(err.error.contains(taken), "{taken}: {}", err.error);
+            let err = launch(&config, "alpha", "local", "r", taken, "go").unwrap_err();
+            assert!(err.error.contains(taken), "{taken}: {}", err.error);
+        }
+        assert_eq!(names(&read_children(&config, "alpha")), ["own"]);
+        assert_eq!(names(&read_children(&config, "beta")), ["shared", "b2"]);
+        // The formation's own children are not "another formation's": the same name is the one plan replaces.
+        assert!(check_child_name(&config, "alpha", "own").is_ok());
+        // A formation named like no folder is refused before a path is made from it.
+        for bad in ["../x", "A", ""] {
+            assert!(plan(&config, bad, &[wanted("n", "r")]).is_err(), "{bad:?}");
+            assert!(launch(&config, bad, "local", "r", "n", "go").is_err());
+            assert!(close(&config, bad, "n").is_err());
+            assert!(children_view(&config, bad).is_err());
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_broken_record_of_another_formation_stops_a_name_from_being_taken() {
+        let config = temp_dir("names-broken");
+        std::fs::create_dir_all(dir(&config, "beta")).unwrap();
+        std::fs::write(dir(&config, "beta").join(CHILDREN_FILE), "not json").unwrap();
+        assert!(check_child_name(&config, "alpha", "n").is_err());
+        assert!(!dir(&config, "alpha").exists());
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
@@ -1496,8 +1778,8 @@ mod tests {
     #[test]
     fn a_missing_or_broken_record_reads_as_empty() {
         let config = temp_dir("broken");
-        assert!(read_children(&config).is_empty());
-        std::fs::create_dir_all(dir(&config)).unwrap();
+        assert!(read_children(&config, F).is_empty());
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         for text in [
             "",
             "not json",
@@ -1505,8 +1787,8 @@ mod tests {
             r#"{"children": "x"}"#,
             r#"{"children": [{"name": 1}]}"#,
         ] {
-            std::fs::write(dir(&config).join(CHILDREN_FILE), text).unwrap();
-            assert!(read_children(&config).is_empty(), "{text:?}");
+            std::fs::write(dir(&config, F).join(CHILDREN_FILE), text).unwrap();
+            assert!(read_children(&config, F).is_empty(), "{text:?}");
         }
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -1519,9 +1801,9 @@ mod tests {
             planned("b", "web"),
             launched("c", "web"),
         ];
-        write_children(&config, &children).unwrap();
-        assert_eq!(read_children(&config), children);
-        let text = std::fs::read_to_string(dir(&config).join(CHILDREN_FILE)).unwrap();
+        write_children(&config, F, &children).unwrap();
+        assert_eq!(read_children(&config, F), children);
+        let text = std::fs::read_to_string(dir(&config, F).join(CHILDREN_FILE)).unwrap();
         let doc: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
             doc["children"][0],
@@ -1534,20 +1816,20 @@ mod tests {
             doc["children"][1],
             json!({"name": "b", "repo": "web", "environment": "local"})
         );
-        assert!(!dir(&config).join("children.json.tmp").exists());
+        assert!(!dir(&config, F).join("children.json.tmp").exists());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
     fn an_entry_that_lacks_a_field_of_a_launch_is_planned() {
         let config = temp_dir("partial");
-        std::fs::create_dir_all(dir(&config)).unwrap();
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         std::fs::write(
-            dir(&config).join(CHILDREN_FILE),
+            dir(&config, F).join(CHILDREN_FILE),
             r#"{"children": [{"name": "a", "repo": "r", "path": "/w/a"}]}"#,
         )
         .unwrap();
-        assert_eq!(read_children(&config), vec![planned("a", "r")]);
+        assert_eq!(read_children(&config, F), vec![planned("a", "r")]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -1598,11 +1880,11 @@ mod tests {
     #[test]
     fn an_update_writes_what_the_change_returns_and_keeps_the_file_when_it_refuses() {
         let config = temp_dir("update");
-        update(&config, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
-        update(&config, |old| with_launched(old, launched("a", "x"))).unwrap();
-        assert_eq!(read_children(&config), vec![launched("a", "x")]);
-        assert!(update(&config, |old| with_planned(old, &[wanted("a", "x")])).is_err());
-        assert_eq!(read_children(&config), vec![launched("a", "x")]);
+        update(&config, F, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
+        update(&config, F, |old| with_launched(old, launched("a", "x"))).unwrap();
+        assert_eq!(read_children(&config, F), vec![launched("a", "x")]);
+        assert!(update(&config, F, |old| with_planned(old, &[wanted("a", "x")])).is_err());
+        assert_eq!(read_children(&config, F), vec![launched("a", "x")]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -1902,10 +2184,10 @@ mod tests {
             vec![wanted("formation", "x")],
             vec![wanted("a", "x"), wanted("a", "y")],
         ] {
-            assert!(plan(&config, &bad).is_err());
+            assert!(plan(&config, F, &bad).is_err());
         }
-        write_children(&config, &[launched("a", "x")]).unwrap();
-        let err = plan(&config, &[wanted("a", "x")]).unwrap_err();
+        write_children(&config, F, &[launched("a", "x")]).unwrap();
+        let err = plan(&config, F, &[wanted("a", "x")]).unwrap_err();
         assert!(answer(Err(err)).contains("もう起動してあります"));
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -1913,10 +2195,10 @@ mod tests {
     #[test]
     fn a_launch_is_refused_before_orca_is_asked_when_it_is_not_valid() {
         let config = temp_dir("launch-refused");
-        assert!(launch(&config, "local", "r", "Bad Name", "go").is_err());
-        assert!(launch(&config, "local", "r", "ok", "").is_err());
-        write_children(&config, &[launched("ok", "r")]).unwrap();
-        let err = launch(&config, "local", "r", "ok", "go").unwrap_err();
+        assert!(launch(&config, F, "local", "r", "Bad Name", "go").is_err());
+        assert!(launch(&config, F, "local", "r", "ok", "").is_err());
+        write_children(&config, F, &[launched("ok", "r")]).unwrap();
+        let err = launch(&config, F, "local", "r", "ok", "go").unwrap_err();
         assert!(answer(Err(err)).contains("もう起動してあります"));
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -1924,11 +2206,11 @@ mod tests {
     #[test]
     fn a_planned_child_is_closed_by_dropping_it_and_an_unknown_one_is_refused() {
         let config = temp_dir("close-planned");
-        write_children(&config, &[planned("a", "x"), planned("b", "x")]).unwrap();
-        let done = close(&config, "a").unwrap();
+        write_children(&config, F, &[planned("a", "x"), planned("b", "x")]).unwrap();
+        let done = close(&config, F, "a").unwrap();
         assert_eq!(done, json!({"name": "a", "planned": true, "dropped": true}));
-        assert_eq!(read_children(&config), vec![planned("b", "x")]);
-        assert!(close(&config, "a").is_err());
+        assert_eq!(read_children(&config, F), vec![planned("b", "x")]);
+        assert!(close(&config, F, "a").is_err());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -1955,20 +2237,20 @@ mod tests {
     fn a_broken_record_is_not_written_over_by_a_change() {
         let config = temp_dir("update-broken");
         // No file: the change starts from none.
-        update(&config, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
+        update(&config, F, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
         for text in ["", "not json", "[1]", r#"{"children": "x"}"#] {
-            std::fs::write(dir(&config).join(CHILDREN_FILE), text).unwrap();
-            let err = update(&config, |old| with_planned(old, &[wanted("b", "x")])).unwrap_err();
+            std::fs::write(dir(&config, F).join(CHILDREN_FILE), text).unwrap();
+            let err = update(&config, F, |old| with_planned(old, &[wanted("b", "x")])).unwrap_err();
             assert!(err.contains("何も書いていません"), "{text:?}");
             assert_eq!(
-                std::fs::read_to_string(dir(&config).join(CHILDREN_FILE)).unwrap(),
+                std::fs::read_to_string(dir(&config, F).join(CHILDREN_FILE)).unwrap(),
                 text
             );
-            assert!(plan(&config, &[wanted("b", "x")]).is_err());
-            assert!(close(&config, "a").is_err());
+            assert!(plan(&config, F, &[wanted("b", "x")]).is_err());
+            assert!(close(&config, F, "a").is_err());
         }
         // The screen still reads it as none.
-        assert!(read_children(&config).is_empty());
+        assert!(read_children(&config, F).is_empty());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -2052,7 +2334,7 @@ mod tests {
         launch.path = path.into();
         launch.handle = handle.into();
         launch.branch = branch.into();
-        write_children(config, &[planned("p", "x"), child]).unwrap();
+        write_children(config, F, &[planned("p", "x"), child]).unwrap();
     }
 
     #[test]
@@ -2065,6 +2347,7 @@ mod tests {
         let orca = Calls::new();
         let done = close_with(
             &config,
+            F,
             "a",
             &|_| Ok(listed.clone()),
             &|args| orca.run(args),
@@ -2077,7 +2360,7 @@ mod tests {
         // Only the terminal is closed: nothing is removed.
         assert_eq!(orca.names(), ["terminal close"]);
         assert_eq!(orca.0.borrow()[0], terminal_close_args("term_a", "local"));
-        assert_eq!(names(&read_children(&config)), ["p"]);
+        assert_eq!(names(&read_children(&config, F)), ["p"]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -2098,6 +2381,7 @@ mod tests {
             let orca = Calls::new();
             let done = close_with(
                 &config,
+                F,
                 "a",
                 &|_| listed.clone(),
                 &|args| orca.run(args),
@@ -2107,7 +2391,7 @@ mod tests {
             assert_eq!(done["worktreeGone"], true, "{i}");
             assert_eq!(done["terminalClosed"], false, "{i}");
             assert!(orca.0.borrow().is_empty(), "{i}");
-            assert_eq!(names(&read_children(&config)), ["p"], "{i}");
+            assert_eq!(names(&read_children(&config, F)), ["p"], "{i}");
         }
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -2140,6 +2424,7 @@ mod tests {
             let orca = Calls::new();
             let err = close_with(
                 &config,
+                F,
                 "a",
                 &|_| Ok(listed.clone()),
                 &|args| orca.run(args),
@@ -2151,13 +2436,18 @@ mod tests {
                 "{p} {handle}"
             );
             assert!(orca.0.borrow().is_empty(), "{p} {handle}");
-            assert_eq!(names(&read_children(&config)), ["p", "a"], "{p} {handle}");
+            assert_eq!(
+                names(&read_children(&config, F)),
+                ["p", "a"],
+                "{p} {handle}"
+            );
         }
         // A list that cannot be read stops the close too.
         recorded(&config, &path, "term_a", "me/a");
         let orca = Calls::new();
         let err = close_with(
             &config,
+            F,
             "a",
             &|_| Err("orca が答えません".into()),
             &|args| orca.run(args),
@@ -2364,18 +2654,18 @@ mod tests {
     #[test]
     fn a_broken_or_missing_record_is_an_empty_list_and_asks_no_orca() {
         let config = temp_dir("view-broken");
-        assert_eq!(children_view(&config).unwrap(), vec![]);
-        std::fs::create_dir_all(dir(&config)).unwrap();
-        std::fs::write(dir(&config).join(CHILDREN_FILE), "{ not json").unwrap();
-        assert_eq!(children_view(&config).unwrap(), vec![]);
+        assert_eq!(children_view(&config, F).unwrap(), vec![]);
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        std::fs::write(dir(&config, F).join(CHILDREN_FILE), "{ not json").unwrap();
+        assert_eq!(children_view(&config, F).unwrap(), vec![]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
     fn a_record_of_planned_children_alone_is_listed_without_orca() {
         let config = temp_dir("view-planned");
-        write_children(&config, &[planned("a", "r1"), planned("b", "r2")]).unwrap();
-        let rows = children_view(&config).unwrap();
+        write_children(&config, F, &[planned("a", "r1"), planned("b", "r2")]).unwrap();
+        let rows = children_view(&config, F).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.state == FormationState::Planned));
         std::fs::remove_dir_all(&config).unwrap();
@@ -2499,9 +2789,9 @@ mod tests {
     #[test]
     fn a_record_without_an_environment_is_this_macs() {
         let config = temp_dir("old-record");
-        std::fs::create_dir_all(dir(&config)).unwrap();
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         std::fs::write(
-            dir(&config).join(CHILDREN_FILE),
+            dir(&config, F).join(CHILDREN_FILE),
             r#"{"children": [
                 {"name": "a", "repo": "agents", "path": "/work/a", "branch": "user/a", "handle": "term_a", "paneKey": "tab-a:leaf", "launchedAt": 1},
                 {"name": "b", "repo": "web"},
@@ -2509,15 +2799,15 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let children = read_children(&config);
+        let children = read_children(&config, F);
         assert_eq!(children.len(), 3);
         assert_eq!(children[0].environment, LOCAL);
         assert_eq!(children[0].launch.as_ref().unwrap().handle, "term_a");
         assert_eq!(children[1], planned("b", "web"));
         assert_eq!(children[2].environment, "mac-studio");
         // A change of the record keeps them, and writes the environment of the old ones.
-        update(&config, |old| with_planned(old, &[wanted("d", "x")])).unwrap();
-        let text = std::fs::read_to_string(dir(&config).join(CHILDREN_FILE)).unwrap();
+        update(&config, F, |old| with_planned(old, &[wanted("d", "x")])).unwrap();
+        let text = std::fs::read_to_string(dir(&config, F).join(CHILDREN_FILE)).unwrap();
         let doc: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["children"][0]["environment"], "local");
         assert_eq!(doc["children"][2]["environment"], "mac-studio");
@@ -2531,10 +2821,11 @@ mod tests {
         let kept = in_environment(launched("a", "web"), "mac-studio");
         write_children(
             &config,
+            F,
             &[in_environment(planned("p", "web"), "build"), kept.clone()],
         )
         .unwrap();
-        let children = read_children(&config);
+        let children = read_children(&config, F);
         assert_eq!(children[0].environment, "build");
         assert_eq!(children[1], kept);
         // Planning in place takes the new environment with the new repo.
@@ -2550,9 +2841,9 @@ mod tests {
         let config = temp_dir("plan-blank-environment");
         let mut child = wanted("a", "x");
         child.environment = String::new();
-        assert!(plan(&config, &[child]).is_err());
-        assert!(launch(&config, "", "x", "a", "go").is_err());
-        assert!(read_children(&config).is_empty());
+        assert!(plan(&config, F, &[child]).is_err());
+        assert!(launch(&config, F, "", "x", "a", "go").is_err());
+        assert!(read_children(&config, F).is_empty());
     }
 
     #[test]
@@ -2626,9 +2917,9 @@ mod tests {
     /// A child of the saved environment `mac-studio` (id `env-1`), recorded at a path this Mac does not have.
     fn recorded_saved(config: &Path, environment: &str) {
         recorded(config, REMOTE_PATH, "term_a", "me/a");
-        let mut children = read_children(config);
+        let mut children = read_children(config, F);
         children[1].environment = environment.into();
-        write_children(config, &children).unwrap();
+        write_children(config, F, &children).unwrap();
     }
 
     fn ps_with(worktree: Value) -> Value {
@@ -2699,6 +2990,7 @@ mod tests {
         let asked = std::cell::RefCell::new(Vec::new());
         let done = close_with(
             config,
+            F,
             "a",
             &|args| saved.read(args),
             &|args| orca.run(args),
@@ -2742,7 +3034,7 @@ mod tests {
             assert_eq!(closed.writes[0].last().unwrap(), "--environment=mac-studio");
             assert_eq!(closed.reads, ["environment list", "worktree ps"]);
             assert_eq!(closed.asked, [format!("mac-studio {REMOTE_PATH}")]);
-            assert_eq!(names(&read_children(&config)), ["p"]);
+            assert_eq!(names(&read_children(&config, F)), ["p"]);
         }
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -2780,7 +3072,7 @@ mod tests {
             }
             // Nothing is closed or removed, and the entry stays.
             assert!(closed.writes.is_empty());
-            assert_eq!(names(&read_children(&config)), ["p", "a"]);
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
         }
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -2827,7 +3119,7 @@ mod tests {
             assert!(said.contains(reason), "{reason}: {said}");
             assert!(said.contains("何も消していません"), "{said}");
             assert!(closed.writes.is_empty());
-            assert_eq!(names(&read_children(&config)), ["p", "a"]);
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
         }
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -2881,7 +3173,7 @@ mod tests {
         assert!(closed.writes.is_empty());
         assert!(closed.asked.is_empty());
         assert_eq!(closed.reads, ["environment list", "worktree ps"]);
-        assert_eq!(names(&read_children(&config)), ["p"]);
+        assert_eq!(names(&read_children(&config, F)), ["p"]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -2908,7 +3200,7 @@ mod tests {
             }
             assert!(closed.writes.is_empty());
             assert!(closed.asked.is_empty());
-            assert_eq!(names(&read_children(&config)), ["p", "a"]);
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
         }
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -2932,13 +3224,14 @@ mod tests {
             assert!(closed.asked.is_empty(), "{environment}");
             // Only the list of the saved environments was read.
             assert_eq!(closed.reads, ["environment list"], "{environment}");
-            assert_eq!(names(&read_children(&config)), ["p"], "{environment}");
+            assert_eq!(names(&read_children(&config, F)), ["p"], "{environment}");
         }
         // A value that fits two saved environments is not one of them gone: it is refused, and nothing is changed.
         recorded_saved(&config, "dup");
         let orca = Calls::new();
         let err = close_with(
             &config,
+            F,
             "a",
             &|_| Ok(json!({"environments": [{"id": "x", "name": "dup"}, {"id": "dup", "name": "other"}]})),
             &|args| orca.run(args),
@@ -2947,12 +3240,13 @@ mod tests {
         .unwrap_err();
         assert!(answer(Err(err)).contains("何も消していません"));
         assert!(orca.0.borrow().is_empty());
-        assert_eq!(names(&read_children(&config)), ["p", "a"]);
+        assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
         // The list of the saved environments cannot be read.
         recorded_saved(&config, "mac-studio");
         let orca = Calls::new();
         let err = close_with(
             &config,
+            F,
             "a",
             &|_| Err("orca が答えません".into()),
             &|args| orca.run(args),
@@ -2965,11 +3259,12 @@ mod tests {
         // A path that is not absolute and a handle that is not one are refused before any read.
         for (path, handle) in [("relative/path", "term_a"), (REMOTE_PATH, "--force")] {
             recorded(&config, path, handle, "me/a");
-            let mut children = read_children(&config);
+            let mut children = read_children(&config, F);
             children[1].environment = "mac-studio".into();
-            write_children(&config, &children).unwrap();
+            write_children(&config, F, &children).unwrap();
             let err = close_with(
                 &config,
+                F,
                 "a",
                 &|_| panic!("nothing is read for a record that is not well formed"),
                 &|args| orca.run(args),
@@ -2978,15 +3273,16 @@ mod tests {
             .unwrap_err();
             assert!(answer(Err(err)).contains("何も消していません"));
         }
-        assert_eq!(names(&read_children(&config)), ["p", "a"]);
+        assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
         // A child that is only planned has nothing in Orca, so it is dropped as any.
         write_children(
             &config,
+            F,
             &[in_environment(planned("a", "web"), "mac-studio")],
         )
         .unwrap();
-        assert_eq!(close(&config, "a").unwrap()["dropped"], true);
-        assert!(read_children(&config).is_empty());
+        assert_eq!(close(&config, F, "a").unwrap()["dropped"], true);
+        assert!(read_children(&config, F).is_empty());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -3228,9 +3524,9 @@ mod tests {
     #[test]
     fn an_old_record_with_no_environment_is_read_as_this_mac() {
         let config = temp_dir("view-old-record");
-        std::fs::create_dir_all(dir(&config)).unwrap();
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         std::fs::write(
-            dir(&config).join(CHILDREN_FILE),
+            dir(&config, F).join(CHILDREN_FILE),
             r#"{"children":[{"name":"a","repo":"web","path":"/work/a","branch":"user/a","handle":"term_a","paneKey":"tab-a:leaf","launchedAt":1}]}"#,
         )
         .unwrap();
@@ -3238,7 +3534,7 @@ mod tests {
             "--environment=local",
             Ok(ps_of(vec![agent("tab-a:leaf", "working", None)])),
         )]);
-        let rows = fake.view(&read_children(&config)).unwrap();
+        let rows = fake.view(&read_children(&config, F)).unwrap();
         assert_eq!(rows[0].environment, "local");
         assert_eq!(rows[0].state, FormationState::Working);
         assert_eq!(fake.reads_of_ps(), ["--environment=local"]);
