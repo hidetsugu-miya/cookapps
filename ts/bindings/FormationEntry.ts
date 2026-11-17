@@ -7,6 +7,6 @@ import type { FormationProject } from "./FormationProject";
  */
 export type FormationEntry = { name: string, projects: Array<FormationProject>, 
 /**
- * When it was created (epoch milliseconds); `None` for the first formation, which exists before any is created.
+ * When it was created (epoch milliseconds); `None` for a formation that has no `formation.json`.
  */
 createdAt: number | null, counts: ChildCounts, };

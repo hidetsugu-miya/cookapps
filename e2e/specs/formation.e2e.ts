@@ -11,10 +11,12 @@ const starts = async () => (await callsOf("claude_code_start")).length;
 const pressRestart = () => browser.execute(() => document.getElementById("formation-restart")!.click());
 const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
 
-async function openFormation() {
+// Opens the mode. No formation is selected at the start, so the row of `select` (the one the default fixture has, `formation`) is pressed unless it is `null`.
+async function openFormation(select: string | null = "formation") {
   await $("#nav-orca").click();
   await $("#footer-mode-formation").click();
   await expect($("#formation")).toBeDisplayed();
+  if (select !== null) await $(`#formation-list-feed [data-formation="${select}"]`).click();
 }
 
 describe("development screen: orchestration mode", () => {
@@ -393,6 +395,7 @@ describe("orchestration mode: the flow pane", () => {
     await waitForCalls("formation_list", 1);
     expect(await callsOf("formation_children")).toEqual([]);
     await $("#footer-mode-formation").click();
+    await $('#formation-list-feed [data-formation="formation"]').click();
     const afterMode = (await callsOf("formation_children")).length;
     await waitForCalls("formation_children", afterMode + 1);
     await $("#nav-mail").click();
@@ -800,14 +803,15 @@ const listed = () =>
     formationEntry("mail-summary", { minutes: 90, repos: ["tsunagiai"], counts: { planned: 0, waiting: 1, working: 0, done: 2 } }),
   ]);
 
-// The list with a formation, `api-work`, whose name sorts before the first formation's: the first formation is selected when the shown one goes, not the first row.
+// The list with a formation, `api-work`, whose name sorts before `formation`: no row is selected when the shown one goes, not the first row.
 const listedFirst = () => formationList([formationEntry("api-work", { minutes: 3 }), ...listed().formations]);
 
-async function openList(extra: Record<string, unknown> = {}) {
+async function openList(extra: Record<string, unknown> = {}, select: string | null = "formation") {
   await boot({ inbox: inbox(), formation_list: listed(), ...timers({ formationFlow: READ }), ...extra });
-  await openFormation();
+  await openFormation(null);
   const rows = ((extra.formation_list as FormationList | undefined) ?? listed()).formations.length;
   await browser.waitUntil(async () => (await rowNames()).length === rows);
+  if (select !== null) await row(select).click();
 }
 
 describe("orchestration mode: the list of the formations", () => {
@@ -827,7 +831,7 @@ describe("orchestration mode: the list of the formations", () => {
   it("draws a row for each formation, in the order given, with the time, the projects and the number of children in each state", async () => {
     await openList();
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
-    // The first formation has no time and no project; the others show how long ago they were made.
+    // `formation` has no time and no project (no file); the others show how long ago they were made.
     expect(await textsOf(`${ROWS} .formation-row-time`)).toEqual(["12 分", "1 時間"]);
     expect(await textsOf(`${ROWS}[data-formation="won-2485"] .formation-row-project`)).toEqual(["wonder-knowledge", "wonder-api"]);
     expect(await textsOf(`${ROWS}[data-formation="formation"] .formation-row-project, ${ROWS}[data-formation="formation"] .formation-row-count`)).toEqual([]);
@@ -836,13 +840,39 @@ describe("orchestration mode: the list of the formations", () => {
     expect(await browser.execute(() => [...document.querySelectorAll(".formation-row-count")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["working", "planned", "waiting", "done"]);
   });
 
-  it("selects the first formation at the start, and reads its children and shows its orchestrator", async () => {
+  it("selects nothing at the start, shows the list alone and starts and reads nothing", async () => {
+    await openList({ formation_children: mixed() }, null);
+    expect(await pressedRows()).toEqual([]);
+    await expect($("#formation-list")).toBeDisplayed();
+    await expect($("#formation-orchestrator")).not.toBeDisplayed();
+    await expect($("#formation-split")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await browser.pause(READ * 2);
+    expect(await starts()).toBe(0);
+    expect(await callsOf("formation_children")).toEqual([]);
+  });
+
+  it("selects the formation that is pressed, and reads its children and starts its orchestrator", async () => {
     await openList();
     expect(await pressedRows()).toEqual(["formation"]);
     expect((await waitForCalls("formation_children", 1))[0]).toEqual({ name: "formation" });
     expect(await headName()).toBe("formation");
     expect(await textsOf("#formation-flow-root .formation-card-name")).toEqual(["formation"]);
     expect((await waitForCalls("claude_code_start", 1))[0]).toMatchObject({ id: "formation:formation" });
+    await expect($("#formation-orchestrator")).toBeDisplayed();
+  });
+
+  it("shows only the plus of the list when the list is empty", async () => {
+    await openList({ formation_list: formationList([]) }, null);
+    await expect($("#formation-new")).toBeDisplayed();
+    expect(await rowNames()).toEqual([]);
+    await expect($("#formation-orchestrator")).not.toBeDisplayed();
+    await expect($("#formation-split")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    await browser.pause(READ * 2);
+    expect(await starts()).toBe(0);
+    expect(await callsOf("formation_children")).toEqual([]);
+    expect(await textsOf("#formation-list-feed")).toEqual([""]);
   });
 
   it("shows the orchestrator and the flow of the formation that is pressed, and ends no process", async () => {
@@ -917,17 +947,21 @@ describe("orchestration mode: the list of the formations", () => {
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update");
   });
 
-  it("shows the first formation when the one that is shown leaves the list, and reads its children", async () => {
+  it("selects nothing when the one that is shown leaves the list, and reads no children", async () => {
     await openList({ formation_list: listedFirst() });
     await row("mail-summary").click();
     await waitForStarts(2);
     await mock("formation_list", formationList([formationEntry("api-work", { minutes: 3 }), formationEntry("formation")]));
     await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation");
-    expect(await pressedRows()).toEqual(["formation"]);
-    expect(await headName()).toBe("formation");
+    expect(await pressedRows()).toEqual([]);
+    await expect($("#formation-orchestrator")).not.toBeDisplayed();
+    await expect($("#formation-split")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
     await mock("formation_children", []);
-    await waitForCalls("formation_children", 2);
-    expect([...new Set((await callsOf("formation_children")).map((c) => (c as { name: string }).name))]).toEqual(["formation"]);
+    const before = (await callsOf("formation_children")).length;
+    await browser.pause(READ * 3);
+    expect((await callsOf("formation_children")).length).toBe(before);
+    expect(await starts()).toBe(2);
   });
 
   it("reads the list for its rows while the orchestration mode is shown, and reads it no more once the screen is left", async () => {
@@ -1146,7 +1180,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await browser.keys("late");
     await makeButton().click();
     await browser.waitUntil(async () => (await pressedRows()).join() === "late");
-    // The answer of the read that began before the formation was made is dropped, and the first formation is not selected in its place.
+    // The answer of the read that began before the formation was made is dropped, and the formation that was shown is not selected in its place.
     await release("formation_list", listed());
     await browser.pause(READ * 2);
     expect(await pressedRows()).toEqual(["late"]);
@@ -1177,7 +1211,7 @@ describe("orchestration mode: delete a formation", () => {
     await expect(confirm()).toBeDisplayed();
   }
 
-  it("opens a menu with 削除 alone on a right press of a row, and has none on the first formation", async () => {
+  it("opens a menu with 削除 alone on a right press of a row, on `formation` too", async () => {
     await openList();
     await rightPress("won-2485");
     await expect($(".menu")).toBeDisplayed();
@@ -1187,8 +1221,26 @@ describe("orchestration mode: delete a formation", () => {
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     await rightPress("formation");
-    await browser.pause(200);
-    await expect($(".menu")).not.toExist();
+    await expect($(".menu")).toBeDisplayed();
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["削除"]);
+  });
+
+  it("deletes `formation` as any other, and selects nothing when it is the shown one", async () => {
+    await openList();
+    await waitForStarts(1);
+    const del = await mock("formation_delete", null);
+    await mock("formation_list", without("formation"));
+    await mock("formation_children", []);
+    await ask("formation");
+    await yes().click();
+    expect(await waitForCalls(del)).toEqual([{ name: "formation" }]);
+    await browser.waitUntil(async () => (await rowNames()).join() === "won-2485,mail-summary");
+    expect(await pressedRows()).toEqual([]);
+    expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:formation" }]);
+    await expect($("#formation-orchestrator")).not.toBeDisplayed();
+    await expect($("#formation-split")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    expect(await starts()).toBe(1);
   });
 
   it("asks first, with the name, and calls nothing on キャンセル", async () => {
@@ -1216,7 +1268,7 @@ describe("orchestration mode: delete a formation", () => {
     expect(await starts()).toBe(1);
   });
 
-  it("shows the first formation and stops reading the deleted one's children when the shown one is deleted", async () => {
+  it("selects nothing and stops reading the deleted one's children when the shown one is deleted", async () => {
     await openList({ formation_list: listedFirst() });
     await row("won-2485").click();
     await waitForStarts(2);
@@ -1228,14 +1280,17 @@ describe("orchestration mode: delete a formation", () => {
     await yes().click();
     await waitForCalls(del);
     await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation,mail-summary");
-    expect(await pressedRows()).toEqual(["formation"]);
-    expect(await headName()).toBe("formation");
-    // The terminal of the deleted formation's orchestrator is dropped, and the first formation's goes on without a new start.
+    expect(await pressedRows()).toEqual([]);
+    await expect($("#formation-orchestrator")).not.toBeDisplayed();
+    await expect($("#formation-split")).not.toBeDisplayed();
+    await expect($("#formation-flow")).not.toBeDisplayed();
+    // The terminal of the deleted formation's orchestrator is dropped, and no new start is made.
     expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:won-2485" }]);
     expect(await starts()).toBe(2);
-    await waitForCalls("formation_children", 2);
-    await browser.pause(READ * 2);
-    expect([...new Set((await callsOf("formation_children")).map((c) => (c as { name: string }).name))]).toEqual(["formation"]);
+    // The read of the deleted formation's children stops, and no other formation is read in its place.
+    const before = (await callsOf("formation_children")).length;
+    await browser.pause(READ * 3);
+    expect((await callsOf("formation_children")).length).toBe(before);
   });
 
   it("says why a child was refused, and keeps the formation, its row and what is shown", async () => {

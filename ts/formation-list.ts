@@ -1,8 +1,7 @@
 // The list of the formations at the left of the orchestration mode (A-37): a row for each formation with its name, the time since it was made, its projects and the number of its children in each state (`formation_list`).
-// The formation of the selected row is the one the middle pane (its orchestrator) and the right pane (its flow) show. The list is read on the clock of the flow (formation-flow.ts), so it is read only while the mode is shown.
+// The formation of the selected row is the one the middle pane (its orchestrator) and the right pane (its flow) show; with no row selected (at each start, and after the selected one is deleted) neither pane is shown. The list is read on the clock of the flow (formation-flow.ts), so it is read only while the mode is shown.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationState } from "./bindings/FormationState";
-import { FORMATION_NAME } from "./claude-code.js";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
 import { confirmFormationDelete } from "./hint.js";
@@ -15,8 +14,8 @@ export const STATE_LABELS: Record<FormationState, string> = { working: "作業�
 // The order of the counts of a row.
 const COUNT_ORDER: FormationState[] = ["waiting", "working", "planned", "done"];
 
-// The name of the formation the screen shows: the first one at each start of the app, in memory only.
-let current = FORMATION_NAME;
+// The name of the formation the screen shows: none at each start of the app, in memory only.
+let current: string | null = null;
 export const currentFormation = () => current;
 
 // The last read; a read that failed keeps it and says why in `failure`.
@@ -27,8 +26,8 @@ let reading = false;
 let made = 0;
 // What the list shows now; it is drawn again only when the key changes.
 let listKey = "";
-// Told the name of the formation that was selected (a press, or the fallback when the shown one left the list).
-let onChange: (name: string) => void = () => {};
+// Told the name of the formation that was selected (a press), or null when none is selected any more (the shown one left the list).
+let onChange: (name: string | null) => void = () => {};
 // Told the name of a formation that was deleted, so that the terminal of its orchestrator is dropped.
 let onRemoved: (name: string) => void = () => {};
 // The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
@@ -53,8 +52,8 @@ export async function readList() {
   } finally {
     reading = false;
   }
-  // The shown formation left the list: its flow is read no more, and the first formation, `formation`, is shown.
-  if (read && formations.length > 0 && !formations.some((f) => f.name === current)) choose(FORMATION_NAME);
+  // The shown formation left the list: its flow is read no more, and none is shown.
+  if (read && current !== null && !formations.some((f) => f.name === current)) choose(null);
   draw();
 }
 
@@ -87,22 +86,22 @@ async function remove(name: string) {
   // A read that began before the deletion still lists it: its answer is dropped.
   made++;
   formations = formations.filter((f) => f.name !== name);
-  // The shown formation is deleted: the first formation, `formation`, which is always there, is shown, and the read of the flow of the deleted one stops.
-  if (current === name) choose(FORMATION_NAME);
+  // The shown formation is deleted: none is shown, and the read of the flow of the deleted one stops.
+  if (current === name) choose(null);
   onRemoved(name);
   draw();
   void readList();
 }
 
-// The menu of a right press on a row: the first formation is always in the list and has none.
+// The menu of a right press on a row.
 function openRowMenu(f: FormationEntry, anchor: Element, e: MouseEvent) {
   e.preventDefault();
-  if (f.name === FORMATION_NAME || deleting.has(f.name)) return;
+  if (deleting.has(f.name)) return;
   openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name)) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
-// Selects the formation `name`: its orchestrator and its flow are shown.
-function choose(name: string) {
+// Selects the formation `name`: its orchestrator and its flow are shown. `null` selects none, and neither is shown.
+function choose(name: string | null) {
   if (name === current) return;
   current = name;
   draw();
@@ -162,7 +161,7 @@ function draw() {
   if (focused) feed.querySelector<HTMLElement>(`[data-formation="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
-export function initFormationList(changed: (name: string) => void, removed: (name: string) => void) {
+export function initFormationList(changed: (name: string | null) => void, removed: (name: string) => void) {
   onChange = changed;
   onRemoved = removed;
   const plus = $<HTMLButtonElement>("formation-new");
