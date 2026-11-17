@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.82.5
+
+A-37: the orchestrator of a formation of a saved environment no longer fails to start with 「時間内に入力待ちになりませんでした」 (#882). Claude Code asks once whether to trust a new folder, and the app waited for it to be ready before it showed the terminal, so the question could not be answered. The app now shows the terminal as soon as it is made, and the owner answers the question there. The projects of the formation are given to the orchestrator as its first instruction when it starts (`tsunagiai-mcp --formation-start {name} --project {repo}`), as on this Mac, so nothing is typed into the terminal afterwards. A repository whose name holds `\` is refused for it. The `tsunagiai-mcp` of that PC must be this version or later; an older one starts the orchestrator without its first instruction.
+
 ## v0.82.4
 
 A-18: several files and folders of the Orca file pane can be chosen and deleted at once (#826). A press chooses a row, ⌘ adds or takes one off, and Shift chooses the rows between; a double press still opens a file. The chosen rows are painted in the accent colour with white text. 「n 件を削除」 of the right-press menu, or the Delete key, deletes them after one confirmation (「n 件を完全に削除します。元に戻せません。」); a row inside a chosen folder is deleted with the folder.
