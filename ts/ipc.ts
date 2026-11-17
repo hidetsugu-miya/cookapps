@@ -19,6 +19,7 @@ import type { EmojiCatalog } from "./bindings/EmojiCatalog";
 import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
 import type { FormationChild } from "./bindings/FormationChild";
+import type { FormationProject } from "./bindings/FormationProject";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
@@ -330,8 +331,8 @@ export interface Commands {
   orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
-  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given. The answer is the number of this start. A failure is the message the pane shows.
-  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; channel: unknown }; result: number };
+  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given, `projects` the projects of an orchestrator's formation (A-37), which its first instruction names. The answer is the number of this start. A failure is the message the pane shows.
+  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; projects: FormationProject[] | null; channel: unknown }; result: number };
   // A-36: types `text` into the pane `id` as it is (no Enter is added).
   claude_code_input: { args: { id: string; text: string }; result: null };
   // A-36: the new size of the pane `id` in cells.

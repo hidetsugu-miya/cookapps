@@ -76,10 +76,10 @@ describe("development screen: orchestration mode", () => {
     expect(await nameOf("footer-mode-orca")).toEqual(["Orca"]);
   });
 
-  it("starts the orchestrator with the pane id formation, Claude Code's own tools and no skill, in the size of the left pane", async () => {
+  it("starts the orchestrator with the pane id of its formation, Claude Code's own tools, no skill and no project, in the size of the left pane", async () => {
     await openFormation();
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "formation", builtinTools: true, skill: null });
+    expect(start).toMatchObject({ id: "formation:formation", builtinTools: true, skill: null, projects: null });
     const { cols, rows } = (start as { viewport: { cols: number; rows: number } }).viewport;
     expect(cols).toBeGreaterThan(30);
     expect(rows).toBeGreaterThan(8);
@@ -140,8 +140,8 @@ describe("development screen: orchestration mode", () => {
     await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("old conversation"));
     await pressRestart();
     await waitForStarts(2);
-    expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation", launch: 1 }]);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation", builtinTools: true, skill: null }, { id: "formation", builtinTools: true, skill: null }]);
+    expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation:formation", launch: 1 }]);
+    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation", builtinTools: true, skill: null, projects: null }, { id: "formation:formation", builtinTools: true, skill: null, projects: null }]);
     // The screen is new, and the terminal takes the keys.
     expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("old conversation");
     expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
@@ -174,7 +174,7 @@ describe("development screen: orchestration mode", () => {
     await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Claude Code が終わりました"));
     await pressRestart();
     await waitForStarts(2);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation" }, { id: "formation" }]);
+    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation" }, { id: "formation:formation" }]);
     expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("Claude Code が終わりました");
     expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
   });

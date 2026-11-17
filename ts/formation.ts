@@ -1,6 +1,6 @@
 // The orchestration mode of the development screen (A-37): two panes, the orchestrator's terminal at the left and the flow at the right, with the session of the selected child under it (formation-flow.ts).
 // The mode is kept only while the app runs; the first one is Orca.
-import { claudeCodeStarted, closeClaudeCode, FORMATION_ID, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
+import { claudeCodeStarted, closeClaudeCode, FORMATION_NAME, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { hideSession, startCount, startFlow, stopFlow } from "./formation-flow.js";
 import { RELOAD_SVG } from "./icons.js";
@@ -10,6 +10,8 @@ export type DevMode = "orca" | "formation";
 
 // The name of the pane's owner: what `hideClaudeCode` is told when the mode or the screen is left.
 const OWNER = "formation-screen";
+// The pane of the orchestrator of the formation the screen shows (the first one, until the screen lists more).
+const PANE = formationPaneId(FORMATION_NAME);
 
 let mode: DevMode = "orca";
 export const devMode = () => mode;
@@ -22,7 +24,7 @@ export function showFormation() {
   show("formation");
   startFlow();
   const host = $("formation-term");
-  if (!isClaudeCodeShowing(host, FORMATION_ID, OWNER)) showClaudeCode(host, { id: FORMATION_ID, kind: "formation" }, OWNER);
+  if (!isClaudeCodeShowing(host, PANE, OWNER)) showClaudeCode(host, { id: PANE, kind: "formation" }, OWNER);
 }
 
 // The restart button of the header: ends the orchestrator's process if it is running (or has ended), and begins a new one with the keyboard, as a first show does (A-37). The children are not touched.
@@ -32,9 +34,9 @@ export function initFormation() {
   const button = $<HTMLButtonElement>("formation-restart");
   button.onclick = () => {
     button.disabled = true;
-    closeClaudeCode(FORMATION_ID, OWNER);
-    showClaudeCode($("formation-term"), { id: FORMATION_ID, kind: "formation" }, OWNER);
-    void claudeCodeStarted(FORMATION_ID).then(() => {
+    closeClaudeCode(PANE, OWNER);
+    showClaudeCode($("formation-term"), { id: PANE, kind: "formation" }, OWNER);
+    void claudeCodeStarted(PANE).then(() => {
       button.disabled = false;
     });
   };
