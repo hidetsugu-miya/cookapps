@@ -515,16 +515,18 @@ fn reason(error: CallError) -> String {
     }
 }
 
-/// The entries of `dir`, from `files.readDir` alone. `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and every entry is marked so. Otherwise no entry is marked, and `orca_files_ignored` is asked after it.
-async fn list(rpc: &mut impl Rpc, path: &str, dir: &str, ignored: bool) -> Result<OrcaDir, String> {
+/// The entries of `dir`, from `files.readDir` alone, at most `limit` of them (the file pane asks for `LIST_LIMIT`). `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and every entry is marked so. Otherwise no entry is marked, and `orca_files_ignored` is asked after it.
+pub(crate) async fn list(
+    rpc: &mut impl Rpc,
+    path: &str,
+    dir: &str,
+    ignored: bool,
+    limit: usize,
+) -> Result<OrcaDir, String> {
     let answer = rpc
         .call(
             "files.readDir",
-            worktree_params(
-                path,
-                None,
-                json!({"relativePath": dir, "limit": LIST_LIMIT}),
-            ),
+            worktree_params(path, None, json!({"relativePath": dir, "limit": limit})),
         )
         .await
         .map_err(reason)?;
@@ -610,7 +612,11 @@ pub(crate) fn editor_text(
     })
 }
 
-async fn read(rpc: &mut impl Rpc, path: &str, relative: &str) -> Result<OrcaFileText, String> {
+pub(crate) async fn read(
+    rpc: &mut impl Rpc,
+    path: &str,
+    relative: &str,
+) -> Result<OrcaFileText, String> {
     let answer = rpc
         .call(
             "files.read",
@@ -1230,7 +1236,10 @@ fn parse_local_branches(result: &Value, path: &str) -> Result<Vec<OrcaLocalBranc
     Ok(branches.into_iter().map(|(branch, _)| branch).collect())
 }
 
-async fn local_branches(rpc: &mut impl Rpc, path: &str) -> Result<Vec<OrcaLocalBranch>, String> {
+pub(crate) async fn local_branches(
+    rpc: &mut impl Rpc,
+    path: &str,
+) -> Result<Vec<OrcaLocalBranch>, String> {
     let answer = rpc
         .call("git.localBranches", worktree_params(path, None, json!({})))
         .await
@@ -1281,7 +1290,7 @@ fn remote_params(repo: &str, query: &str) -> Value {
     json!({"repo": format!("id:{repo}"), "query": query, "limit": BRANCH_LIMIT, "namespace": "remote"})
 }
 
-async fn remote_branches(
+pub(crate) async fn remote_branches(
     rpc: &mut impl Rpc,
     repo: &str,
     query: &str,
@@ -1307,7 +1316,7 @@ fn check_repo(repo: &str) -> Result<(), String> {
 }
 
 /// The text of a search: at most `MAX_QUERY` bytes and no control character (blank is allowed and finds the first branches).
-fn check_query(query: &str) -> Result<(), String> {
+pub(crate) fn check_query(query: &str) -> Result<(), String> {
     if query.len() > MAX_QUERY || query.chars().any(char::is_control) {
         Err("検索する文字が正しくありません".into())
     } else {
@@ -1816,7 +1825,7 @@ pub async fn orca_files_list(
     cached_host_of(&path, environment.as_deref()).await?;
     let read = async {
         let mut connection = Connection::open(environment.clone()).await?;
-        list(&mut connection, &path, &dir, ignored).await
+        list(&mut connection, &path, &dir, ignored, LIST_LIMIT).await
     };
     forgetting(read.await, &path, environment.as_deref())
 }
@@ -2829,7 +2838,9 @@ mod tests {
             ),
             ("git.checkIgnored", Ok(json!(["lib/target/", "lib/b.log"]))),
         ]);
-        let dir = list(&mut orca, "/work/a", "lib", false).await.unwrap();
+        let dir = list(&mut orca, "/work/a", "lib", false, LIST_LIMIT)
+            .await
+            .unwrap();
         assert_eq!(names(&dir.entries), ["src", "target", "b.log"]);
         assert!(dir.entries.iter().all(|e| !e.ignored));
         assert_eq!(dir.total, 3);
@@ -2873,7 +2884,9 @@ mod tests {
                 {"name": "deps", "isDirectory": true},
             ], "total": 2})),
         )]);
-        let dir = list(&mut orca, "/work/a", "target", true).await.unwrap();
+        let dir = list(&mut orca, "/work/a", "target", true, LIST_LIMIT)
+            .await
+            .unwrap();
         assert_eq!(names(&dir.entries), ["deps", "a.o"]);
         assert!(dir.entries.iter().all(|e| e.ignored));
         assert_eq!(orca.calls.len(), 1);
@@ -3279,12 +3292,16 @@ mod tests {
             )),
         )]);
         assert_eq!(
-            list(&mut orca, "/work/a", "gone", false).await.unwrap_err(),
+            list(&mut orca, "/work/a", "gone", false, LIST_LIMIT)
+                .await
+                .unwrap_err(),
             "ファイルが見つかりません"
         );
         let mut orca = fake(vec![("files.readDir", Ok(json!({"entries": 1})))]);
         assert_eq!(
-            list(&mut orca, "/work/a", "", false).await.unwrap_err(),
+            list(&mut orca, "/work/a", "", false, LIST_LIMIT)
+                .await
+                .unwrap_err(),
             NOT_LISTED
         );
     }

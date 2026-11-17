@@ -92,9 +92,10 @@ export function confirmFormationDelete(button: Element, name: string, onConfirm:
   confirmPop(button, `${name} を削除`, `${name} を削除しますか？`, "子をすべて閉じてから削除します。閉じられない子があるときは、削除しません。", "削除", onConfirm, " pop-confirm");
 }
 
-// The confirmation before a child of a formation is closed from its card (A-37): its worktree and its branch go, and a child that has something to lose is not closed.
-export function confirmChildDelete(button: Element, name: string, onConfirm: () => void) {
-  confirmPop(button, `${name} を削除`, `${name} を削除しますか？`, "worktree とブランチを消します。変更や追跡していないファイル、どのリモートにもないコミットがあるときは、消しません。", "削除", onConfirm, " pop-confirm");
+// The confirmation before a child of a formation is closed from its card (A-37): its worktree and its branch go, and a child that has something to lose is not closed. A child in a folder that tsunagiai did not make (`created` false) loses only its terminal and its card, and the words say that nothing is removed.
+export function confirmChildDelete(button: Element, name: string, created: boolean, onConfirm: () => void) {
+  const body = created ? "worktree とブランチを消します。変更や追跡していないファイル、どのリモートにもないコミットがあるときは、消しません。" : "ターミナルを閉じて、一覧から外します。フォルダ、worktree、ブランチは消しません。";
+  confirmPop(button, `${name} を削除`, `${name} を削除しますか？`, body, "削除", onConfirm, " pop-confirm");
 }
 
 // What a refused close of a child (A-37) would lose if it were forced: git's lines under a head each (data from git, drawn as text), and the head of a group that has none is not drawn.
