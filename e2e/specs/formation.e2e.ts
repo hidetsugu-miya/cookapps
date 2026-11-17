@@ -1,4 +1,4 @@
-import { boot, callsOf, count, formationChild, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, formationChild, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
 import type { FormationList } from "../../ts/bindings/FormationList";
 
 // A-37: the development screen's orchestration mode. The orchestrator's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
@@ -716,7 +716,7 @@ describe("orchestration mode: the session of a child", () => {
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_batch-update")).toBe(true);
   });
 
-  it("reads and types into the terminal of a child of a saved environment in that environment, and the one of this Mac as before", async () => {
+  it("mirrors a child of a saved environment that the Orca screen does not stream, reading and typing in that environment, and the one of this Mac as before", async () => {
     await openSession([formationChild("a-update", "working"), formationChild("lab-update", "waiting", { minutes: 3, environment: "mac-studio" })]);
     // The follow selects the child that waits: it runs in the saved environment.
     expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_lab-update", environment: "mac-studio" });
@@ -731,6 +731,96 @@ describe("orchestration mode: the session of a child", () => {
     await mock("orca_terminal_read", ["$ npm test"]);
     await browser.waitUntil(async () => (await readHandles()).join() === "term_a-update");
     expect((await callsOf("orca_terminal_read")).every((c) => JSON.stringify(c) === JSON.stringify({ handle: "term_a-update" }))).toBe(true);
+  });
+
+  // A-37, #839: a saved environment that the Orca screen streams (A-12) streams the terminals of its children.
+  const STUDIO = { orca_overview: orcaOverview([], [], { target: "Studio", environments: ["Studio"] }) };
+  const studioChildren = () => [formationChild("a-update", "working"), formationChild("lab-update", "waiting", { minutes: 3, environment: "Studio" })];
+  const openStudio = async (children: unknown = studioChildren()) => {
+    await openSession(children, STUDIO);
+    await waitForCalls("orca_stream_open");
+  };
+  const streamed = async (n = 1) => (await waitForCalls("orca_stream_terminal", n)) as { handle: string; generation: number; viewport: { cols: number; rows: number } }[];
+  const closed = async (n = 1) => (await waitForCalls("orca_stream_terminal_close", n)) as { handle: string; generation: number }[];
+
+  it("streams the terminal of a child of the saved environment that the Orca screen streams, with the size of the pane and its colors, and reads nothing", async () => {
+    await openStudio();
+    await sendStream(streamList([], []));
+    const [call] = await streamed();
+    expect(call.handle).toBe("term_lab-update");
+    const host = await rectOf("#formation-child-term");
+    expect(call.viewport.cols).toBeGreaterThan(10);
+    expect(call.viewport.cols).toBeLessThan(Math.ceil(host.right - host.left));
+    await sendTerm({ kind: "snapshot", data: "\x1b[31m$ claude\x1b[0m\r\n> 確認します", cols: 80, rows: 24 });
+    await browser.waitUntil(async () => (await screenText()).includes("確認します"), { timeoutMsg: "the streamed screen never showed" });
+    // The color of the stream is drawn (red is the color 1 of the palette).
+    expect(await browser.execute(() => document.querySelectorAll("#formation-child-term .xterm-fg-1").length)).toBeGreaterThan(0);
+    expect(await callsOf("orca_terminal_read")).toEqual([]);
+  });
+
+  it("sends the keys typed in a streamed terminal through orca_stream_input", async () => {
+    await openStudio();
+    await streamed();
+    const input = await mock("orca_stream_input", null);
+    await browser.execute(() => document.querySelector<HTMLElement>('#formation-flow-list [data-child="lab-update"]')!.click());
+    await browser.keys(["c", "d"]);
+    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
+    expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_lab-update")).toBe(true);
+    expect(await callsOf("orca_terminal_input")).toEqual([]);
+  });
+
+  it("closes the stream when another child is selected, mirrors the child of this Mac, and streams the first again when it is selected again", async () => {
+    await openStudio();
+    const [first] = await streamed();
+    await card("a-update").click();
+    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    // The child of this Mac is mirrored (its Orca does not stream), and no other stream is asked for.
+    await mock("orca_terminal_read", ["$ npm test"]);
+    await browser.waitUntil(async () => (await readHandles()).join() === "term_a-update");
+    expect((await callsOf("orca_terminal_read")).every((c) => JSON.stringify(c) === JSON.stringify({ handle: "term_a-update" }))).toBe(true);
+    expect(await callsOf("orca_stream_terminal")).toHaveLength(1);
+    await card("lab-update").click();
+    const [, second] = await streamed(2);
+    expect(second.handle).toBe("term_lab-update");
+    expect(second.generation).not.toBe(first.generation);
+    // The mirror of the child of this Mac has stopped.
+    await mock("orca_terminal_read", ["$"]);
+    await browser.pause(MIRROR * 3);
+    expect(await callsOf("orca_terminal_read")).toEqual([]);
+  });
+
+  it("closes the stream when the mode is left, and streams again when it is shown", async () => {
+    await openStudio();
+    const [first] = await streamed();
+    await $("#footer-mode-orca").click();
+    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    await $("#footer-mode-formation").click();
+    const [, second] = await streamed(2);
+    expect(second.handle).toBe("term_lab-update");
+    await $("#nav-mail").click();
+    expect(await closed(2)).toEqual([
+      { handle: "term_lab-update", generation: first.generation },
+      { handle: "term_lab-update", generation: second.generation },
+    ]);
+  });
+
+  it("closes the stream of a child that is gone from the list", async () => {
+    await openStudio();
+    const [first] = await streamed();
+    await mock("formation_children", [formationChild("a-update", "working")]);
+    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    await mock("orca_terminal_read", ["$ next"]);
+    await browser.waitUntil(async () => (await readHandles()).join() === "term_a-update");
+    expect(await callsOf("orca_stream_terminal")).toHaveLength(1);
+  });
+
+  it("closes the stream of a child of the formation that was shown when another formation is pressed", async () => {
+    await openList({ formation_children: studioChildren(), ...timers({ formationFlow: READ, orcaMirror: MIRROR }), ...STUDIO });
+    await waitForCalls("orca_stream_open");
+    const [first] = await streamed();
+    await mock("formation_children", []);
+    await row("won-2485").click();
+    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
   });
 
   it("does not take the keyboard when the follow moves the selection", async () => {

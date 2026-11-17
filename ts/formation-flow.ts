@@ -1,4 +1,4 @@
-// The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal mirrored from the Orca of the child's environment as the Orca screen's are (A-8).
+// The right pane of the orchestration mode (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait in all the formations, on the footer's icon.
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
@@ -11,7 +11,7 @@ import { confirmChildDelete, confirmChildForce } from "./hint.js";
 import { DELETE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
-import { elapsed, shownMs } from "./orca.js";
+import { elapsed, shownMs, streamsEnvironment } from "./orca.js";
 import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
 const READ_MS = 3000;
@@ -141,7 +141,9 @@ function placementOf(child: FormationChild): Placement {
   const handle = child.handle!;
   // The terminal is read and typed into in the Orca of the child's environment.
   const environment = child.environment === LOCAL ? null : child.environment;
-  return { id: handle, source: { kind: "mirror", handle, path: "", environment }, host: $("formation-child-term") };
+  // A saved environment that the Orca screen streams (A-12) streams the terminal, with its colors and the size of the pane; this Mac's Orca cannot stream, and a saved environment that is not streamed is mirrored, as the Orca screen's are.
+  const kind = environment !== null && streamsEnvironment(environment) ? "stream" : "mirror";
+  return { id: handle, source: { kind, handle, path: "", environment }, host: $("formation-child-term") };
 }
 
 // Shows the terminal of the selected child, and hides the others (their reads stop). `focus` gives it the keyboard: only a press of the user does, never the follow, so the orchestrator's terminal keeps the keys the owner is typing.
