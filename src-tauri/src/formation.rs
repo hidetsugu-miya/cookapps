@@ -54,6 +54,9 @@ const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
 const STEP_LISTED: &str = "worktree の一覧の読み取り";
+/// The kinds a child's branch starts with: `{kind}/{ticket}`.
+const BRANCH_KINDS: [&str; 4] = ["feature", "fix", "chore", "refactor"];
+const BRANCH_LIMIT: usize = 100;
 
 /// `formation/` in the config directory: the folder of the formations, one folder under it for each.
 fn root(config: &Path) -> PathBuf {
@@ -281,6 +284,59 @@ pub fn check_name(name: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The branch of a child is `{kind}/{ticket}`: the kind is one of `BRANCH_KINDS`, the ticket is one path component of ASCII letters, digits, `-`, `_` and `.` that starts with a letter or a digit, and the whole is a name `git check-ref-format` accepts. No prefix of a user name, so that one ticket has one branch name in every repository.
+pub fn check_branch(branch: &str) -> Result<(), String> {
+    let shaped = branch.len() <= BRANCH_LIMIT
+        && branch.split_once('/').is_some_and(|(kind, ticket)| {
+            BRANCH_KINDS.contains(&kind)
+                && ticket.starts_with(|c: char| c.is_ascii_alphanumeric())
+                && ticket
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        });
+    if !shaped || orca::check_ref("branch", Some(branch)).is_err() {
+        return Err(format!(
+            "branch は {} のどれかで始まる「種類/チケット」の形にしてください（例 feature/WON-2482）。利用者名などの接頭辞は付けません",
+            BRANCH_KINDS.join("、")
+        ));
+    }
+    Ok(())
+}
+
+/// The branch that Orca made must be the one asked for. Orca's CLI makes a branch of a taken name (one that exists locally with other commits than its base, or on a remote) under the name with a numeric suffix (`feature/a-2`), and says nothing.
+fn check_created_branch(requested: &str, created: &str) -> Result<(), String> {
+    if created == requested {
+        return Ok(());
+    }
+    if created.is_empty() {
+        return Err(format!(
+            "Orca が作った branch の名前が分からないので、「{requested}」かどうか確かめられません"
+        ));
+    }
+    Err(format!(
+        "branch「{requested}」はもうあるので、Orca は別の名前「{created}」で作りました。あるブランチは引き継げません"
+    ))
+}
+
+/// The ref a child starts from, `origin/HEAD` of the repository on this Mac (`origin/main`); `None` leaves the start to Orca, whose default is `origin/HEAD` too (`origin/main`, `origin/master`, `main`, `master` when it is not set). A repository of a saved environment is on another machine, so it is left to its Orca.
+fn default_base(environment: &str, path: &str) -> Option<String> {
+    if environment != LOCAL || path.is_empty() {
+        return None;
+    }
+    git(&git_origin_head_args(path))
+        .ok()
+        .and_then(|output| base_of(&output))
+}
+
+/// What `git symbolic-ref --short refs/remotes/origin/HEAD` printed, when it names a ref of `origin`.
+fn base_of(output: &str) -> Option<String> {
+    let line = output.trim();
+    let named = line
+        .strip_prefix("origin/")
+        .is_some_and(|rest| !rest.is_empty());
+    (named && orca::check_ref("起点", Some(line)).is_ok()).then(|| line.to_owned())
 }
 
 /// A child's name must reach one session with SendMessage: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
@@ -696,6 +752,18 @@ fn git_status_args(path: &str) -> Vec<String> {
     ]
 }
 
+fn git_origin_head_args(path: &str) -> Vec<String> {
+    [
+        "-C",
+        path,
+        "symbolic-ref",
+        "--short",
+        "refs/remotes/origin/HEAD",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
 fn git_remote_args(path: &str) -> Vec<String> {
     vec!["-C".into(), path.into(), "remote".into()]
 }
@@ -1026,17 +1094,19 @@ pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<V
     Ok(json!({ "children": children }))
 }
 
-/// Launches a child: a worktree in the repository of the environment, a terminal with `claude -n {name}` in it, the first instruction, and the record. Every command of Orca is run against that environment. A step that fails after the worktree was made says which, and leaves the worktree.
+/// Launches a child: a worktree on the branch `branch` in the repository of the environment, a terminal with `claude -n {name}` in it, the first instruction, and the record. Every command of Orca is run against that environment. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not `branch` is removed again at once.
 pub fn launch(
     config: &Path,
     formation: &str,
     environment: &str,
     repo: &str,
     name: &str,
+    branch: &str,
     prompt: &str,
 ) -> Result<Value, Refusal> {
     check_name(formation)?;
     check_child_name(config, formation, name)?;
+    check_branch(branch)?;
     let prompt = check_prompt(prompt)?;
     if is_launched(&read_record(config, formation)?, name) {
         return Err(already_launched(name).into());
@@ -1045,17 +1115,21 @@ pub fn launch(
     let environment = environment.as_str();
     let list = repos(environment)?;
     let repo = chosen_repo(&list, environment, repo)?;
+    let base = default_base(environment, &repo.path);
     let made = orca::write(&orca::create_worktree_args(
         &repo.id,
         name,
-        None,
-        None,
+        Some(branch),
+        base.as_deref(),
         Some(environment),
     ))
     .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
     let path =
         orca::created_worktree_path_of(&made).map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
-    let branch = created_branch_of(&made);
+    if let Err(message) = check_created_branch(branch, &created_branch_of(&made)) {
+        return Err(unwanted_worktree(&path, environment, message));
+    }
+    let branch = branch.to_owned();
     let kept = |step: &'static str, e: String| Refusal::failed(step, e).keeping(&path);
     // Orca opens a plain shell in a new worktree: it is closed, so that the child is the only terminal.
     let closed = close_shells(&path, environment);
@@ -1104,6 +1178,20 @@ pub fn launch(
         "paneKey": pane_key,
         "closedShells": closed,
     }))
+}
+
+/// A worktree that was just made on a branch other than the one asked for: it holds nothing, so it is removed again with its branch, and the refusal says so; one that cannot be removed is left, and named.
+fn unwanted_worktree(path: &str, environment: &str, message: String) -> Refusal {
+    close_shells(path, environment);
+    let refusal = Refusal {
+        error: message,
+        step: Some(STEP_WORKTREE),
+        data: None,
+    };
+    match orca::write(&worktree_rm_args(path, environment)) {
+        Ok(_) => refusal.saying("作った worktree は消してあります"),
+        Err(e) => refusal.with("output", e).keeping(path),
+    }
 }
 
 /// Closes the terminals Orca has in the worktree it just made, and says how many. A terminal that will not close is left: it is a plain shell, and no reason to stop.
@@ -2173,7 +2261,7 @@ mod tests {
         for taken in ["shared", "b2", "alpha", "beta", "formation"] {
             let err = plan(&config, "alpha", &[wanted(taken, "r")]).unwrap_err();
             assert!(err.error.contains(taken), "{taken}: {}", err.error);
-            let err = launch(&config, "alpha", "local", "r", taken, "go").unwrap_err();
+            let err = launch(&config, "alpha", "local", "r", taken, "feature/a", "go").unwrap_err();
             assert!(err.error.contains(taken), "{taken}: {}", err.error);
         }
         assert_eq!(names(&read_children(&config, "alpha")), ["own"]);
@@ -2183,7 +2271,7 @@ mod tests {
         // A formation named like no folder is refused before a path is made from it.
         for bad in ["../x", "A", ""] {
             assert!(plan(&config, bad, &[wanted("n", "r")]).is_err(), "{bad:?}");
-            assert!(launch(&config, bad, "local", "r", "n", "go").is_err());
+            assert!(launch(&config, bad, "local", "r", "n", "feature/a", "go").is_err());
             assert!(close(&config, bad, "n").is_err());
             assert!(children_view(&config, bad).is_err());
         }
@@ -2360,6 +2448,116 @@ mod tests {
         assert!(update(&config, F, |old| with_planned(old, &[wanted("a", "x")])).is_err());
         assert_eq!(read_children(&config, F), vec![launched("a", "x")]);
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_branch_is_a_kind_and_a_ticket_with_no_prefix_of_a_user() {
+        for good in [
+            "feature/WON-2482",
+            "fix/won-2485",
+            "chore/ci_1",
+            "refactor/v1.2",
+            "feature/824",
+        ] {
+            assert_eq!(check_branch(good), Ok(()), "{good}");
+        }
+        let long = format!("fix/{}", "a".repeat(BRANCH_LIMIT));
+        for bad in [
+            "",
+            "feature",
+            "feature/",
+            "/WON-1",
+            "me/feature/WON-1",
+            "feature/WON-1/a",
+            "hotfix/WON-1",
+            "Feature/WON-1",
+            "feature/-x",
+            "feature/.x",
+            "feature/_x",
+            "feature/a..b",
+            "feature/a b",
+            "feature/a.lock",
+            "feature/a.",
+            " feature/WON-1",
+            "feature/WON-1\n",
+            "feature/x~1",
+            "feature/あ",
+            "--feature/a",
+            long.as_str(),
+        ] {
+            assert!(check_branch(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_branch_that_is_not_asked_for_is_told_with_both_names() {
+        assert_eq!(check_created_branch("feature/a", "feature/a"), Ok(()));
+        let taken = check_created_branch("feature/a", "feature/a-2").unwrap_err();
+        assert!(
+            taken.contains("feature/a") && taken.contains("feature/a-2"),
+            "{taken}"
+        );
+        assert!(check_created_branch("feature/a", "").is_err());
+        // The branch of a user's prefix that Orca would have made is not the one asked for either.
+        assert!(check_created_branch("feature/a", "me/a").is_err());
+    }
+
+    #[test]
+    fn the_start_is_the_origin_head_of_this_mac_and_nothing_else() {
+        assert_eq!(base_of("origin/main\n"), Some("origin/main".into()));
+        assert_eq!(
+            base_of("origin/release/1.0"),
+            Some("origin/release/1.0".into())
+        );
+        for bad in [
+            "",
+            "\n",
+            "main",
+            "origin/",
+            "upstream/main",
+            "origin/ma in",
+            "origin/main\norigin/x",
+            "origin/-x/..",
+        ] {
+            assert_eq!(base_of(bad), None, "{bad:?}");
+        }
+        // A saved environment's repository is on another machine, and a path that is not known is not asked.
+        assert_eq!(default_base("Studio", "/repo"), None);
+        assert_eq!(default_base(LOCAL, ""), None);
+        assert_eq!(
+            git_origin_head_args("/--repo"),
+            [
+                "-C",
+                "/--repo",
+                "symbolic-ref",
+                "--short",
+                "refs/remotes/origin/HEAD"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_worktree_takes_the_branch_and_the_start_it_is_given() {
+        assert_eq!(
+            orca::create_worktree_args(
+                "repo1",
+                "web-2",
+                Some("feature/WON-1"),
+                Some("origin/main"),
+                Some("local")
+            ),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=web-2",
+                "--branch=feature/WON-1",
+                "--base-branch=origin/main",
+                "--no-parent",
+                "--json",
+                "--environment=local"
+            ]
+        );
     }
 
     #[test]
@@ -2669,10 +2867,17 @@ mod tests {
     #[test]
     fn a_launch_is_refused_before_orca_is_asked_when_it_is_not_valid() {
         let config = temp_dir("launch-refused");
-        assert!(launch(&config, F, "local", "r", "Bad Name", "go").is_err());
-        assert!(launch(&config, F, "local", "r", "ok", "").is_err());
+        assert!(launch(&config, F, "local", "r", "Bad Name", "feature/a", "go").is_err());
+        assert!(launch(&config, F, "local", "r", "ok", "feature/a", "").is_err());
+        // The branch is checked before Orca is asked, and nothing is recorded.
+        for branch in ["", "me/feature/a", "feature", "main"] {
+            let err = launch(&config, F, "local", "r", "ok", branch, "go").unwrap_err();
+            assert!(err.error.contains("branch"), "{branch:?}: {}", err.error);
+            assert!(err.step.is_none(), "{branch:?}");
+        }
+        assert!(read_children(&config, F).is_empty());
         write_children(&config, F, &[launched("ok", "r")]).unwrap();
-        let err = launch(&config, F, "local", "r", "ok", "go").unwrap_err();
+        let err = launch(&config, F, "local", "r", "ok", "feature/a", "go").unwrap_err();
         assert!(answer(Err(err)).contains("もう起動してあります"));
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -3316,7 +3521,7 @@ mod tests {
         let mut child = wanted("a", "x");
         child.environment = String::new();
         assert!(plan(&config, F, &[child]).is_err());
-        assert!(launch(&config, F, "", "x", "a", "go").is_err());
+        assert!(launch(&config, F, "", "x", "a", "feature/a", "go").is_err());
         assert!(read_children(&config, F).is_empty());
     }
 
