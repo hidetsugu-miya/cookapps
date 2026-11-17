@@ -1318,6 +1318,13 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await repos()).toEqual(["wonder-knowledge", "wonder-api", "tsunagiai", "wonder-api"]);
     expect(await checked()).toEqual([false, false, false, false]);
     expect(await textsOf(".formation-new-actions button")).toEqual(["キャンセル", "作成"]);
+    // The box is 16px square, and the row is at least 32px high with 10px between the box and the name (#886).
+    const box = await browser.execute(() => {
+      const row = document.querySelector<HTMLElement>(".formation-new-repo")!;
+      const [b, name] = [row.querySelector("input")!.getBoundingClientRect(), row.querySelector("span")!.getBoundingClientRect()];
+      return { width: b.width, height: b.height, row: row.getBoundingClientRect().height >= 32, gap: Math.round(name.left - b.right) };
+    });
+    expect(box).toEqual({ width: 16, height: 16, row: true, gap: 10 });
     // No placeholder and no line of help.
     expect(await count(".formation-new-pop [placeholder]")).toBe(0);
     expect(await count(".formation-new-pop p:not(.formation-new-env)")).toBe(0);
