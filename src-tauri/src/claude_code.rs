@@ -1198,13 +1198,18 @@ mod tests {
             "formation_plan",
             "formation_close",
             "formation_environments",
+            "formation_worktrees",
+            "formation_files",
+            "formation_read",
+            "formation_git",
             "オーナーに聞きます",
             "SendMessage",
             "AskUserQuestion",
             "英小文字、数字、ハイフン",
             "プロジェクト",
-            "{種類}/{チケット}",
-            "origin/HEAD",
+            "目的、ゴール",
+            "`folder`",
+            "取り消せない操作",
         ] {
             assert!(FORMATION_CLAUDE_MD.contains(needle), "{needle}");
         }
