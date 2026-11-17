@@ -445,6 +445,9 @@ pub fn run() {
             formation::formation_create,
             formation::formation_delete,
             formation::formation_close_child,
+            formation_remote::formation_consents,
+            formation_remote::formation_consent,
+            formation_remote::formation_consent_revoke,
             set_badge
         ])
         .build(tauri::generate_context!())

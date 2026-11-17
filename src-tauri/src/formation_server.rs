@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Notify, Semaphore},
-    time::timeout,
+    time::{timeout, Instant},
 };
 use tokio_tungstenite::{
     accept_async_with_config, client_async_with_config,
@@ -511,6 +511,8 @@ async fn handle<S>(stream: S, setup: &Setup, stop: &Notify) -> Option<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    // From the accept to the first sealed frame, one limit for the whole: a client that is slow in each step is cut at `HANDSHAKE_DEADLINE`, not at three times that.
+    let begun = Instant::now();
     let mut socket = timeout(
         HANDSHAKE_DEADLINE,
         accept_async_with_config(stream, Some(socket_config())),
@@ -518,12 +520,15 @@ where
     .await
     .ok()?
     .ok()?;
-    let hello = timeout(HANDSHAKE_DEADLINE, next_binary(&mut socket))
-        .await
-        .ok()??;
+    let hello = timeout(
+        HANDSHAKE_DEADLINE.saturating_sub(begun.elapsed()),
+        next_binary(&mut socket),
+    )
+    .await
+    .ok()??;
     let (ready, mut channel) = accept_hello(&setup.secret, &setup.client_public, &hello).ok()?;
     socket.send(Message::Binary(ready.into())).await.ok()?;
-    let mut limit = HANDSHAKE_DEADLINE;
+    let mut limit = HANDSHAKE_DEADLINE.saturating_sub(begun.elapsed());
     loop {
         let frame = timeout(limit, next_binary(&mut socket)).await.ok()??;
         limit = IDLE_LIMIT;
@@ -1048,10 +1053,10 @@ pub enum Mode {
     Stop,
 }
 
-/// The server mode that `args` ask for, or none when no `--serve*` flag is in them. A flag with no value, or `--serve` with no `--bind`, is an error.
+/// The server mode that `args` ask for, or none when the first argument is no `--serve*` flag: a `--serve-stop` that is the value of another flag (`--formation-start x --project --serve-stop`) is no mode. A flag with no value, or `--serve` with no `--bind`, is an error.
 pub fn mode_of(args: impl IntoIterator<Item = String>) -> Result<Option<Mode>, String> {
     let args: Vec<String> = args.into_iter().collect();
-    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let has = |flag: &str| args.first().is_some_and(|a| a == flag);
     let value = |flag: &str| -> Result<Option<String>, String> {
         match args.iter().position(|a| a == flag) {
             None => Ok(None),
@@ -1395,6 +1400,15 @@ mod tests {
         assert_eq!(mode_of(args(&["--serve-stop"])), Ok(Some(Mode::Stop)));
         assert_eq!(mode_of(args(&["--formation", "a"])), Ok(None));
         assert_eq!(mode_of(args(&[])), Ok(None));
+        // Only the first argument names a mode: the same words further on are the values of other flags.
+        for other in [
+            &["--formation-start", "x", "--project", "--serve-stop"][..],
+            &["--formation-start", "x", "--project", "--serve-run"],
+            &["--formation-start", "x", "--project", "--serve"],
+            &["--formation", "a", "--serve", "--bind", "10.0.0.2"],
+        ] {
+            assert_eq!(mode_of(args(other)), Ok(None), "{other:?}");
+        }
         for bad in [
             &["--serve"][..],
             &["--serve", "--bind"],
@@ -1837,6 +1851,36 @@ mod tests {
         assert_eq!(served.client().await.version().await.unwrap(), "9.9.9");
         served.task.abort();
         std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_deadline_to_the_first_frame_is_one_for_the_accept_and_the_steps_after_it() {
+        let (client_secret, client_public) = pair(1);
+        let (server_secret, server_public) = pair(2);
+        let setup = Setup {
+            config: temp_dir("net-deadline"),
+            secret: server_secret,
+            client_public,
+            version: "9.9.9".to_owned(),
+        };
+        let (client_end, server_end) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(async move { handle(server_end, &setup, &Notify::new()).await });
+        let (mut socket, _) =
+            client_async_with_config("ws://x/".to_owned(), client_end, Some(socket_config()))
+                .await
+                .unwrap();
+        // The hello comes 6 seconds after the accept, which leaves 4 of the 10 for the first request.
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        let handshake = ClientHandshake::new(client_secret, server_public).unwrap();
+        socket
+            .send(Message::Binary(handshake.hello().into()))
+            .await
+            .unwrap();
+        assert!(next_binary(&mut socket).await.is_some());
+        // No request follows: the server closes at 10 seconds from the accept (4 from now), not 10 from the answer.
+        let heard = timeout(Duration::from_secs(8), next_binary(&mut socket)).await;
+        assert_eq!(heard, Ok(None), "the server must have closed it");
+        assert_eq!(server.await.unwrap(), None);
     }
 
     #[tokio::test]

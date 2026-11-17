@@ -37,22 +37,23 @@ function openConsentDialog(anchor: Element, environment: string): Promise<boolea
 
   return new Promise((resolve) => {
     let done = false;
+    // While the program is put on the PC, the dialog's leaving the page decides nothing: the placement answers, and the answer is the owner's consent.
+    let busy = false;
     const settle = (answer: boolean) => {
       if (done) return;
       done = true;
       watch.disconnect();
       resolve(answer);
     };
-    // Any way the dialog leaves the page is a decline (Escape and a press elsewhere close it without a button).
+    // Any way the dialog leaves the page before the owner agreed is a decline (Escape and a press elsewhere close it without a button).
     const watch = new MutationObserver(() => {
-      if (!pop.isConnected) settle(false);
+      if (!pop.isConnected && !busy) settle(false);
     });
     watch.observe(document.body, { childList: true });
     decline.onclick = () => {
       closeMenu();
       settle(false);
     };
-    let busy = false;
     agree.onclick = async () => {
       if (busy) return;
       busy = true;
@@ -62,13 +63,16 @@ function openConsentDialog(anchor: Element, environment: string): Promise<boolea
         if (pop.isConnected) closeMenu();
         settle(true);
       } catch (e) {
-        // The reason is shown, and the dialog stays for another try.
+        // The reason is shown, and the dialog stays for another try. A dialog that was closed while it waited is a decline.
         showError(e);
         busy = false;
         agree.disabled = decline.disabled = false;
+        if (!pop.isConnected) settle(false);
       }
     };
-    showMenu(anchor, pop);
+    // The anchor may sit in the menu that `showMenu` closes (the dialog that makes a formation), so its place is taken first.
+    const at = anchor.getBoundingClientRect();
+    showMenu(anchor, pop, undefined, { x: at.left, y: at.bottom + 4 });
     decline.focus();
   });
 }

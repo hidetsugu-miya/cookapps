@@ -11,7 +11,7 @@ use std::{
     collections::BTreeMap,
     net::IpAddr,
     path::Path,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -48,7 +48,7 @@ const TERMINAL_TITLE: &str = "tsunagiai-server";
 const PLACE_WAIT: Duration = Duration::from_secs(120);
 const START_WAIT: Duration = Duration::from_secs(20);
 /// How often the screen is read.
-const POLL: Duration = Duration::from_millis(500);
+const POLL: Duration = Duration::from_secs(1);
 /// `tauri.conf.json` holds the repository of the releases, as the updater's endpoint.
 const TAURI_CONF: &str = include_str!("../tauri.conf.json");
 
@@ -67,12 +67,17 @@ fn secret_with(
     Ok(secret)
 }
 
-/// The app's secret key, made and stored in the keychain at the first use.
+/// The app's secret key, made and stored in the keychain at the first use, and kept in the process after that: the keychain is read once (the screen connects every few seconds). A failure is not kept.
 pub fn app_secret() -> Result<[u8; 32], String> {
-    secret_with(
+    static SECRET: OnceLock<[u8; 32]> = OnceLock::new();
+    if let Some(secret) = SECRET.get() {
+        return Ok(*secret);
+    }
+    let secret = secret_with(
         &|| keychain::read(KEYCHAIN_SERVICE, KEYCHAIN_USER),
         &|value| keychain::write(KEYCHAIN_SERVICE, KEYCHAIN_USER, value),
-    )
+    )?;
+    Ok(*SECRET.get_or_init(|| secret))
 }
 
 // ---- what is pinned ----
@@ -761,24 +766,114 @@ enum Do {
 
 /// How long a start or a placement on a PC is not done again, whatever came of it.
 const ACT_PAUSE: Duration = Duration::from_secs(30);
-static ACTING: Mutex<()> = Mutex::new(());
-static ACTED: Mutex<BTreeMap<(String, Do), Instant>> = Mutex::new(BTreeMap::new());
 
 /// Whether a start or a placement done last at `last` may be done again at `now`.
 fn act_due(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|last| now.duration_since(last) >= ACT_PAUSE)
 }
 
+/// What a read that does not wait answers while the PC is being started or placed again, and what a read that waits answers when another has the PC in hand.
+fn in_progress(what: Do) -> String {
+    match what {
+        Do::Start => "その PC のサーバーを起動しています".to_owned(),
+        Do::Place => "その PC のサーバーを入れ直しています".to_owned(),
+    }
+}
+
+#[derive(Default)]
+struct ActingState {
+    /// The start or the placement that is running on a PC now.
+    running: BTreeMap<String, Do>,
+    /// When the last one of each kind ended.
+    acted: BTreeMap<(String, Do), Instant>,
+}
+
+/// The starts and placements of the PCs: one at a time for each environment, and none again within `ACT_PAUSE` of the last one, because the screen reads every few seconds and a PC that does not answer would get a terminal at each read.
+#[derive(Clone, Default)]
+struct Acting(Arc<Mutex<ActingState>>);
+
+/// A start or a placement in hand: the environment is free for the next one (after the pause) when this is dropped.
+struct Busy {
+    acting: Acting,
+    environment: String,
+    what: Do,
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        let mut state = self.acting.0.lock().unwrap_or_else(PoisonError::into_inner);
+        state.running.remove(&self.environment);
+        state
+            .acted
+            .insert((self.environment.clone(), self.what), Instant::now());
+    }
+}
+
+enum Begin {
+    /// Nothing is running there, and the pause is over: the caller does it.
+    Run(Busy),
+    /// Another start or placement is running there.
+    Running(Do),
+    /// One of the kind ended a moment ago: nothing is done.
+    Paused,
+}
+
+impl Acting {
+    fn begin(&self, environment: &str, what: Do, now: Instant) -> Begin {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(running) = state.running.get(environment) {
+            return Begin::Running(*running);
+        }
+        let last = state.acted.get(&(environment.to_owned(), what)).copied();
+        if !act_due(last, now) {
+            return Begin::Paused;
+        }
+        state.running.insert(environment.to_owned(), what);
+        Begin::Run(Busy {
+            acting: self.clone(),
+            environment: environment.to_owned(),
+            what,
+        })
+    }
+}
+
+static ACTING: LazyLock<Acting> = LazyLock::new(Acting::default);
+
 /// What does a `Do` on the PC: blocking.
 type Act = Arc<dyn Fn(Do) -> Result<(), String> + Send + Sync>;
 
-async fn act_on_pc(act: &Act, what: Do) -> Result<(), String> {
+/// Does `what` on the PC of `environment` through `act`. A read that waits (`wait`) waits for it. A read that does not goes on at once: the work runs in a thread of its own, and the answer is the words of what is going on. Where another start or placement is running on that PC, none is begun and the answer is the words of the one that runs. Ok when it was done, or when one ended a moment ago and nothing is done.
+async fn act_on_pc(
+    acting: &Acting,
+    act: &Act,
+    environment: &str,
+    what: Do,
+    wait: bool,
+) -> Result<(), String> {
+    let busy = match acting.begin(environment, what, Instant::now()) {
+        Begin::Run(busy) => busy,
+        Begin::Running(running) => return Err(in_progress(running)),
+        Begin::Paused => return Ok(()),
+    };
     let act = act.clone();
-    tokio::task::spawn_blocking(move || act(what))
-        .await
-        .map_err(|e| e.to_string())?
+    let work = tokio::task::spawn_blocking(move || {
+        let _busy = busy;
+        act(what)
+    });
+    if !wait {
+        return Err(in_progress(what));
+    }
+    work.await.map_err(|e| e.to_string())?
 }
 
+/// Reads the pinned server of `environment`: the owner must have allowed it.
+fn pin_of(config: &Path, environment: &str) -> Result<Pin, String> {
+    pins(config)?
+        .remove(environment)
+        .ok_or_else(|| not_allowed(environment))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn connect_with(
     config: &Path,
     environment: &str,
@@ -786,39 +881,41 @@ async fn connect_with(
     host: &str,
     port: u16,
     secret: [u8; 32],
+    first: Pin,
+    wait: bool,
+    acting: &Acting,
     act: &Act,
 ) -> Result<Client, String> {
     let (mut started, mut placed) = (false, false);
+    let mut pin = first;
     loop {
-        // Read again at each try: a start or a placement pins the key it found.
-        let pin = pins(config)?
-            .remove(environment)
-            .ok_or_else(|| not_allowed(environment))?;
         let (heard, client) = probe(host, port, secret, &pin.key).await;
         match decide(&heard, app_version, started, placed) {
             Step::Use => return client.ok_or_else(|| "サーバーにつなげません".to_owned()),
             Step::Start => {
-                act_on_pc(act, Do::Start).await?;
+                act_on_pc(acting, act, environment, Do::Start, wait).await?;
                 started = true;
             }
             Step::Place => {
-                act_on_pc(act, Do::Place).await?;
+                act_on_pc(acting, act, environment, Do::Place, wait).await?;
                 (placed, started) = (true, true);
             }
             Step::GiveUp(reason) => return Err(reason),
         }
+        // A start or a placement pins the key it found: read again after one.
+        pin = pin_of(config, environment)?;
     }
 }
 
 /// Connects to the server of `environment` with the pinned key, and checks that its version is `app_version`. When nobody answers, the server is started on the PC once and the connection is tried again; when its version is another, the program is placed again once (`place`) and the connection is tried again. An environment with no pinned key is refused with the reason and nothing is done on its PC.
+/// With `wait` false (the screen's reads) a start or a placement is not waited for: it runs in the background, one at a time for a PC, and the answer is the words of what is going on (`in_progress`), so that a read does not hold the screen for the 20 or 120 seconds it takes. A close or a delete waits.
 pub async fn connect(
     config: &Path,
     environment: &str,
     app_version: &str,
+    wait: bool,
 ) -> Result<Client, String> {
-    if !pins(config)?.contains_key(environment) {
-        return Err(not_allowed(environment));
-    }
+    let pin = pin_of(config, environment)?;
     let host = {
         let environment = environment.to_owned();
         orca::blocking(move || bind_host(&environment)).await??
@@ -830,27 +927,9 @@ pub async fn connect(
             environment.to_owned(),
             app_version.to_owned(),
         );
-        Arc::new(move |what| {
-            // One start or placement at a time, and none again soon after one on the same PC: the screen reads every few seconds, and a PC that does not answer would get a terminal at each read.
-            let _one = ACTING.lock().unwrap_or_else(PoisonError::into_inner);
-            let now = Instant::now();
-            let last = ACTED
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(&(environment.clone(), what))
-                .copied();
-            if !act_due(last, now) {
-                return Ok(());
-            }
-            let done = match what {
-                Do::Place => place(&config, &environment, &version).map(|_| ()),
-                Do::Start => start(&config, &environment).map(|_| ()),
-            };
-            ACTED
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert((environment.clone(), what), Instant::now());
-            done
+        Arc::new(move |what| match what {
+            Do::Place => place(&config, &environment, &version).map(|_| ()),
+            Do::Start => start(&config, &environment).map(|_| ()),
         })
     };
     connect_with(
@@ -860,6 +939,9 @@ pub async fn connect(
         &host,
         formation_server::PORT,
         secret,
+        pin,
+        wait,
+        &ACTING,
         &act,
     )
     .await
@@ -886,6 +968,39 @@ mod tests {
             now + ACT_PAUSE - Duration::from_secs(1)
         ));
         assert!(act_due(Some(now), now + ACT_PAUSE));
+    }
+
+    #[test]
+    fn a_pc_has_one_start_or_placement_at_a_time_and_a_pause_after_it() {
+        let acting = Acting::default();
+        let now = Instant::now();
+        let Begin::Run(first) = acting.begin("pc", Do::Start, now) else {
+            panic!("the first one runs");
+        };
+        // Another environment is free, and this one answers what runs on it, whatever is asked.
+        assert!(matches!(
+            acting.begin("other", Do::Start, now),
+            Begin::Run(_)
+        ));
+        assert!(matches!(
+            acting.begin("pc", Do::Place, now),
+            Begin::Running(Do::Start)
+        ));
+        drop(first);
+        // The kind that ended is paused; the other kind is not.
+        assert!(matches!(
+            acting.begin("pc", Do::Start, Instant::now()),
+            Begin::Paused
+        ));
+        assert!(matches!(
+            acting.begin("pc", Do::Place, Instant::now()),
+            Begin::Run(_)
+        ));
+        assert_eq!(in_progress(Do::Start), "その PC のサーバーを起動しています");
+        assert_eq!(
+            in_progress(Do::Place),
+            "その PC のサーバーを入れ直しています"
+        );
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1975,6 +2090,15 @@ mod tests {
         }
 
         async fn connect(&self, act: &Act) -> Result<Client, String> {
+            self.connect_in(&Acting::default(), true, act).await
+        }
+
+        async fn connect_in(
+            &self,
+            acting: &Acting,
+            wait: bool,
+            act: &Act,
+        ) -> Result<Client, String> {
             connect_with(
                 &self.config,
                 "pc",
@@ -1982,6 +2106,9 @@ mod tests {
                 "127.0.0.1",
                 self.port,
                 self.secret,
+                pin_of(&self.config, "pc")?,
+                wait,
+                acting,
                 act,
             )
             .await
@@ -2189,6 +2316,90 @@ mod tests {
         let mut client = pcs.connect(&act).await.unwrap();
         assert_eq!(client.version().await.unwrap(), "1.2.3");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        client.stop().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        std::fs::remove_dir_all(&pcs.config).unwrap();
+    }
+    /// An act that waits until `release` is sent, so that a start or a placement is "running" for as long as a test wants.
+    fn held(calls: &Arc<Mutex<Vec<Do>>>) -> (Act, std::sync::mpsc::Sender<()>) {
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let act = counting(calls, move |_| {
+            let _ = wait.lock().unwrap().recv();
+            Ok(())
+        });
+        (act, release)
+    }
+
+    async fn free(acting: &Acting, environment: &str) {
+        for _ in 0..100 {
+            if !acting.0.lock().unwrap().running.contains_key(environment) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the start did not end");
+    }
+
+    #[tokio::test]
+    async fn a_read_that_does_not_wait_starts_the_server_in_the_background_and_answers_what_is_going_on(
+    ) {
+        let pcs = Pcs::new("connect-no-wait-start");
+        pcs.pin(&pcs.server_secret, "1.2.3");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (act, release) = held(&calls);
+        let acting = Acting::default();
+        let began = Instant::now();
+        let reason = pcs.connect_in(&acting, false, &act).await.err().unwrap();
+        assert!(reason.contains("起動しています"), "{reason}");
+        // It did not wait for the start, which is still held.
+        assert!(began.elapsed() < Duration::from_secs(5));
+        // The next read finds it running: the same words, and no second start.
+        let reason = pcs.connect_in(&acting, false, &act).await.err().unwrap();
+        assert!(reason.contains("起動しています"), "{reason}");
+        // A read that waits does not begin a second one either, and does not wait for the first.
+        let reason = pcs.connect_in(&acting, true, &act).await.err().unwrap();
+        assert!(reason.contains("起動しています"), "{reason}");
+        release.send(()).unwrap();
+        free(&acting, "pc").await;
+        assert_eq!(*calls.lock().unwrap(), [Do::Start]);
+        std::fs::remove_dir_all(&pcs.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_read_that_does_not_wait_places_the_program_again_in_the_background_and_says_so() {
+        let pcs = Pcs::new("connect-no-wait-place");
+        pcs.pin(&pcs.server_secret, "1.2.2");
+        let task = pcs.serve("1.2.2");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (act, release) = held(&calls);
+        let acting = Acting::default();
+        let reason = pcs.connect_in(&acting, false, &act).await.err().unwrap();
+        assert!(reason.contains("入れ直しています"), "{reason}");
+        let reason = pcs.connect_in(&acting, false, &act).await.err().unwrap();
+        assert!(reason.contains("入れ直しています"), "{reason}");
+        release.send(()).unwrap();
+        free(&acting, "pc").await;
+        assert_eq!(*calls.lock().unwrap(), [Do::Place]);
+        task.abort();
+        std::fs::remove_dir_all(&pcs.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_read_that_does_not_wait_uses_a_server_that_answers_with_no_start() {
+        let pcs = Pcs::new("connect-no-wait-ok");
+        pcs.pin(&pcs.server_secret, "1.2.3");
+        let task = pcs.serve("1.2.3");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut client = pcs
+            .connect_in(&Acting::default(), false, &counting(&calls, |_| Ok(())))
+            .await
+            .unwrap();
+        assert_eq!(client.version().await.unwrap(), "1.2.3");
+        assert!(calls.lock().unwrap().is_empty());
         client.stop().await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await

@@ -114,17 +114,21 @@ fn formation_names(config: &Path, extra: Option<&str>) -> Vec<String> {
     names
 }
 
-/// Moves the folder `formation/` of before the rename (#889) to `formations/` in the config directory. Nothing is done when there is no such folder, or when `formations/` already exists (a move that was made, or a folder made by a newer app, is never written over).
-/// The move is one `rename`, which `tsunagiai-mcp` and the app may both try at once: the one that finds the old folder gone, or the new one there, has nothing to do.
+/// Moves the folder `formation/` of before the rename (#889) to `formations/` in the config directory, and leaves a symbolic link `formation` -> `formations` in its place, so that the `tsunagiai-mcp` of an orchestrator that has run since before the update (it was started with the old path) still reaches the same folder. Nothing is done when `formation` is not a real folder (there is none, it is the link this leaves, or a link of any other kind, which is never moved), or when `formations/` already exists (a move that was made, or a folder made by a newer app, is never written over).
+/// The move is one `rename`, which `tsunagiai-mcp` and the app may both try at once: the one that finds the old folder gone, or the new one there, has nothing to do. A link that cannot be made is left out: the move was made.
 /// An error is a folder that could not be moved: the formations would read as none until the next start.
 pub fn migrate_folder(config: &Path) -> Result<(), String> {
     let old = config.join(OLD_FOLDER);
     let new = root(config);
-    if !old.is_dir() || new.symlink_metadata().is_ok() {
+    if !old.symlink_metadata().is_ok_and(|m| m.is_dir()) || new.symlink_metadata().is_ok() {
         return Ok(());
     }
     match std::fs::rename(&old, &new) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink(FOLDER, &old);
+            Ok(())
+        }
         Err(_) if !old.exists() || new.is_dir() => Ok(()),
         Err(e) => Err(format!(
             "{} を {} へ移せません: {e}",
@@ -258,8 +262,39 @@ fn write_children(config: &Path, formation: &str, children: &[Child]) -> Result<
 }
 
 /// The record is read, changed and written while this is held: the tools may run side by side, and two of them must not overwrite each other (one lock for every formation, which is more than needed and costs nothing).
-/// It is a lock of this process: the tools of `tsunagiai-mcp` run in another one and are not held by it, so what keeps them from the deletion of a formation is that the deletion ends the orchestrator, and with it the tools, before anything else (`delete_with`).
+/// It is a lock of this process. The tools of `tsunagiai-mcp` and the server's `children.drop` run in other processes, which `RecordLock` holds apart (`update`).
 static RECORD: Mutex<()> = Mutex::new(());
+
+/// The file beside `children.json` that carries the lock between processes.
+const LOCK_FILE: &str = "children.json.lock";
+
+/// An exclusive `flock` on the lock file of a formation's record, for as long as it lives (closing the file frees it, so a process that dies frees it too). The server's `children.drop` and the orchestrator's `tsunagiai-mcp --formation` are separate processes that read, change and write the same `children.json`, and `RECORD` does not reach between them.
+struct RecordLock(#[allow(dead_code)] std::fs::File);
+
+fn lock_record(config: &Path, formation: &str) -> Result<RecordLock, String> {
+    let path = dir(config, formation).join(LOCK_FILE);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("{} を開けません: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        loop {
+            // SAFETY: `flock` on a file descriptor that `file` owns.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                break;
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("{} をロックできません: {e}", path.display()));
+            }
+        }
+    }
+    Ok(RecordLock(file))
+}
 
 pub(crate) fn update(
     config: &Path,
@@ -273,6 +308,7 @@ pub(crate) fn update(
             "フォーメーション「{formation}」はありません（削除されました）"
         ));
     }
+    let _other_processes = lock_record(config, formation)?;
     let children = change(read_record(config, formation)?)?;
     write_children(config, formation, &children)?;
     Ok(children)
@@ -2623,7 +2659,7 @@ fn close_child_with(
 
 // ---- the record of a formation of a saved environment ----
 
-/// How long a read or a removal of the record of a PC waits, the connection included: `formation_remote::connect` starts the server of that PC when nobody answers (up to `START_WAIT`), so the screen's polls wait as long as a close does.
+/// How long a read or a removal of the record of a PC for a close or a delete waits, the connection included: `formation_remote::connect` starts the server of that PC when nobody answers (up to `START_WAIT`). The screen's reads wait `SAVED_PS_TIMEOUT` instead, and do not wait for a start.
 const PC_RECORD_WAIT: Duration = Duration::from_secs(30);
 
 /// `children` without the entries of `removed` (by name).
@@ -2634,25 +2670,27 @@ pub(crate) fn without_names(children: Vec<Child>, removed: &[String]) -> Vec<Chi
         .collect()
 }
 
-/// Makes a connection to the server of the PC of a saved environment, by the name of the environment (`formation_remote::connect`: it starts the server on the PC when nobody answers, and places it again when its version is not the app's). A PC whose server the owner has not allowed (no pinned key) is refused with the reason, and nothing is done on it.
+/// Makes a connection to the server of the PC of a saved environment, by the name of the environment (`formation_remote::connect`: it starts the server on the PC when nobody answers, and places it again when its version is not the app's). A PC whose server the owner has not allowed (no pinned key) is refused with the reason, and nothing is done on it. With `wait` false (the screen's reads) a start or a placement runs in the background and the answer says so, instead of waiting for it.
 fn pc_connect(
     config: &Path,
     app_version: &str,
+    wait: bool,
 ) -> impl AsyncFn(&str) -> Result<Client, String> + use<> {
     let (config, app_version) = (config.to_owned(), app_version.to_owned());
     async move |environment: &str| {
-        formation_remote::connect(&config, environment, &app_version).await
+        formation_remote::connect(&config, environment, &app_version, wait).await
     }
 }
 
-/// Runs `work` over a connection that `open` makes to the server of `environment`'s PC, and gives up after `PC_RECORD_WAIT`.
+/// Runs `work` over a connection that `open` makes to the server of `environment`'s PC, and gives up after `limit`.
 fn on_pc<T>(
     environment: &str,
     open: &impl AsyncFn(&str) -> Result<Client, String>,
+    limit: Duration,
     work: impl AsyncFnOnce(&mut Client) -> Result<T, String>,
 ) -> Result<T, String> {
     tokio::runtime::Handle::current().block_on(async {
-        tokio::time::timeout(PC_RECORD_WAIT, async {
+        tokio::time::timeout(limit, async {
             let mut client = open(environment).await?;
             work(&mut client).await
         })
@@ -2688,9 +2726,10 @@ fn records_of(items: &[String], answer: Vec<RemoteChildren>) -> Vec<Result<Vec<C
 fn pull_env_from_pc(
     environment: &str,
     open: &impl AsyncFn(&str) -> Result<Client, String>,
+    limit: Duration,
     items: &[String],
 ) -> Vec<Result<Vec<Child>, String>> {
-    on_pc(environment, open, async |client| {
+    on_pc(environment, open, limit, async |client| {
         client
             .children_read(items)
             .await
@@ -2705,7 +2744,7 @@ fn pull_from_pc(
     open: &impl AsyncFn(&str) -> Result<Client, String>,
     formation: &str,
 ) -> Result<Vec<Child>, String> {
-    pull_env_from_pc(environment, open, &[formation.to_owned()])
+    pull_env_from_pc(environment, open, PC_RECORD_WAIT, &[formation.to_owned()])
         .into_iter()
         .next()
         .unwrap_or_else(|| Err("サーバーが記録を答えませんでした".to_owned()))
@@ -2718,7 +2757,7 @@ fn drop_from_pc(
     formation: &str,
     removed: &[String],
 ) -> Result<(), String> {
-    on_pc(environment, open, async |client| {
+    on_pc(environment, open, PC_RECORD_WAIT, async |client| {
         client.children_drop(formation, removed).await.map(|_| ())
     })
 }
@@ -3198,7 +3237,7 @@ fn read_metas(config: &Path, names: &[String]) -> Vec<(String, Meta)> {
         .collect()
 }
 
-/// The reads of a PC's records by the screen's commands. `formation_children` and `formation_list` are called at the same moment, and both read the records of the formations of an environment over one connection: the calls made at the same time for the same environment and the same formations run once and take the same answer (`orca::Flights`), as `screen_read` does. It waits `PC_RECORD_WAIT`, because the connection may have to start the server of that PC.
+/// The reads of a PC's records by the screen's commands. `formation_children` and `formation_list` are called at the same moment, and both read the records of the formations of an environment over one connection: the calls made at the same time for the same environment and the same formations run once and take the same answer (`orca::Flights`), as `screen_read` does. It waits `SAVED_PS_TIMEOUT`, and `open` is made with no wait for a start (`pc_connect`), so a PC that is being started or placed again answers with that reason at once.
 fn screen_pull_env(
     environment: &str,
     items: &[String],
@@ -3209,7 +3248,7 @@ fn screen_pull_env(
     PULLING
         .get_or_init(orca::Flights::default)
         .run((environment.to_owned(), items.to_vec()), || {
-            pull_env_from_pc(environment, open, items)
+            pull_env_from_pc(environment, open, SAVED_PS_TIMEOUT, items)
         })
 }
 
@@ -3225,7 +3264,9 @@ fn children_view(
         let items = pc_groups(&metas).remove(environment).unwrap_or_default();
         match items.iter().position(|name| name == formation) {
             Some(at) => screen_pull_env(environment, &items, open).swap_remove(at),
-            None => pull_from_pc(environment, open, formation),
+            None => screen_pull_env(environment, &[formation.to_owned()], open)
+                .pop()
+                .unwrap_or_else(|| Err("サーバーが記録を答えませんでした".to_owned())),
         }
     };
     let children = record_children(
@@ -3245,7 +3286,7 @@ pub async fn formation_children(
 ) -> Result<Vec<FormationChild>, String> {
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
-    orca::blocking(move || children_view(&dir, &name, &pc_connect(&dir, &version))).await?
+    orca::blocking(move || children_view(&dir, &name, &pc_connect(&dir, &version, false))).await?
 }
 
 // ---- the list and the creation of formations ----
@@ -3977,7 +4018,7 @@ pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, Stri
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
     orca::blocking(move || {
-        let open = pc_connect(&dir, &version);
+        let open = pc_connect(&dir, &version, false);
         list_with(&dir, &screen_read, &|environment, items| {
             screen_pull_env(environment, items, &open)
         })
@@ -4028,7 +4069,7 @@ pub async fn formation_delete(
     let version = app.package_info().version.to_string();
     let sessions = sessions.inner().clone();
     orca::blocking(move || {
-        with_pc_access(&pc_connect(&dir, &version), |access| {
+        with_pc_access(&pc_connect(&dir, &version, true), |access| {
             delete_formation(
                 &dir,
                 &name,
@@ -4060,7 +4101,7 @@ pub async fn formation_close_child(
             name: name.clone(),
             path: path.unwrap_or_default(),
         }];
-        with_pc_access(&pc_connect(&dir, &version), |access| {
+        with_pc_access(&pc_connect(&dir, &version, true), |access| {
             close_child_formation(
                 &dir,
                 &formation,
@@ -4299,7 +4340,7 @@ mod tests {
         std::fs::write(old.join("api").join(CHILDREN_FILE), "record").unwrap();
         std::fs::write(old.join("api/.claude/settings.json"), "{}").unwrap();
         migrate_folder(&config).unwrap();
-        assert!(!old.exists());
+        assert!(!old.is_dir() || old.is_symlink());
         assert_eq!(
             std::fs::read_to_string(dir(&config, "api").join(CHILDREN_FILE)).unwrap(),
             "record"
@@ -4309,6 +4350,53 @@ mod tests {
         migrate_folder(&config).unwrap();
         assert_eq!(formation_names(&config, None), ["api"]);
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_old_name_stays_as_a_link_to_the_new_folder_so_that_an_old_orchestrator_reaches_it() {
+        let config = temp_dir("folder-link");
+        let old = config.join(OLD_FOLDER);
+        std::fs::create_dir_all(old.join("api")).unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(old.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&old).unwrap(), Path::new(FOLDER));
+        // What an old `tsunagiai-mcp` writes through the old path is in the new folder.
+        std::fs::write(old.join("api").join(CHILDREN_FILE), "from the old one").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir(&config, "api").join(CHILDREN_FILE)).unwrap(),
+            "from the old one"
+        );
+        // The link is neither moved nor made again by the next runs, and the folders it names are only the new one.
+        migrate_folder(&config).unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(old.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(formation_names(&config, None), ["api"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_is_broken_or_goes_elsewhere_is_not_moved() {
+        let config = temp_dir("folder-broken-link");
+        std::fs::create_dir_all(&config).unwrap();
+        let old = config.join(OLD_FOLDER);
+        // Broken: it names a folder that is not there.
+        std::os::unix::fs::symlink(FOLDER, &old).unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(old.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(root(&config).symlink_metadata().is_err());
+        std::fs::remove_file(&old).unwrap();
+        // A link to a folder somewhere else is the owner's, and is not made the folder of the formations.
+        let elsewhere = temp_dir("folder-elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &old).unwrap();
+        migrate_folder(&config).unwrap();
+        assert!(old.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&old).unwrap(), elsewhere);
+        assert!(root(&config).symlink_metadata().is_err());
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
     }
 
     #[test]
@@ -4404,6 +4492,39 @@ mod tests {
         assert!(read_children(&config, LEGACY_FORMATION).is_empty());
         assert!(update(&config, LEGACY_FORMATION, Ok).is_err());
         assert!(root(&config).join(CHILDREN_FILE).exists());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_change_waits_for_another_process_that_holds_the_record_and_keeps_both_changes() {
+        let config = temp_dir("record-flock");
+        write_children(&config, "alpha", &[planned("a", "x")]).unwrap();
+        // Another process (`tsunagiai-mcp`, or the server's `children.drop`) holds the lock of the record: here the lock is taken by hand, which `RECORD` of this process does not know.
+        let other = lock_record(&config, "alpha").unwrap();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let (config, done) = (config.clone(), done.clone());
+            std::thread::spawn(move || {
+                let kept = update(&config, "alpha", |old| {
+                    with_planned(old, &[wanted("c", "x")])
+                });
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+                kept
+            })
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !done.load(std::sync::atomic::Ordering::SeqCst),
+            "the change must wait for the lock"
+        );
+        // The other process changes the record meanwhile, and lets go.
+        write_children(&config, "alpha", &[planned("a", "x"), planned("b", "x")]).unwrap();
+        drop(other);
+        let kept = writer.join().unwrap().unwrap();
+        // The change read the record after the other one wrote it: both changes are there.
+        assert_eq!(names(&kept), ["a", "b", "c"]);
+        assert_eq!(names(&read_children(&config, "alpha")), ["a", "b", "c"]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -10264,7 +10385,7 @@ mod tests {
     async fn a_pc_that_the_owner_has_not_allowed_is_refused_with_a_reason_that_asks_for_it() {
         let config = temp_dir("pc-not-allowed");
         std::fs::create_dir_all(&config).unwrap();
-        let open = pc_connect(&config, "1.2.3");
+        let open = pc_connect(&config, "1.2.3", true);
         let (read, dropped) = blocking(move || {
             (
                 pull_from_pc("mac-studio", &open, "api-work"),
@@ -10302,7 +10423,7 @@ mod tests {
         let list = blocking(move || {
             let cli = Pc::with(Vec::new());
             list_with(&mac, &|args, _| cli.read(args), &|environment, items| {
-                pull_env_from_pc(environment, &open, items)
+                pull_env_from_pc(environment, &open, PC_RECORD_WAIT, items)
             })
         })
         .await
