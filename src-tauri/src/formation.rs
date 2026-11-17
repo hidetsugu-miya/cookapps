@@ -32,6 +32,10 @@ const LEGACY_FILES: [&str; 3] = ["CLAUDE.md", "mcp.json", "start.sh"];
 pub const LOCAL: &str = "local";
 /// How this Mac is named to the owner in the list of environments.
 const LOCAL_LABEL: &str = "この Mac";
+/// Where Orca makes the worktrees of a repository, as the repository's `worktreeBasePath`: a folder in the repository itself (A-37). Orca adds the repository's folder name and the child's name under it.
+const WORKTREE_BASE: &str = ".claude/worktrees";
+/// The line of `.git/info/exclude` that keeps that folder out of the repository's `git status`.
+const EXCLUDE_LINE: &str = "/.claude/worktrees/";
 const NAME_LIMIT: usize = 40;
 const PROMPT_LIMIT: usize = 20_000;
 /// How long Claude Code may take to start and wait for its first input (`--timeout-ms`), and how long the run of that command may take with Orca's own margin.
@@ -53,6 +57,8 @@ const STEP_IDLE: &str = "claude の立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
+const STEP_WORKTREE_BASE: &str = "worktree の場所の設定";
+const STEP_EXCLUDE: &str = "git の追跡外の設定";
 const STEP_LISTED: &str = "worktree の一覧の読み取り";
 /// The kinds a child's branch starts with: `{kind}/{ticket}`.
 const BRANCH_KINDS: [&str; 4] = ["feature", "fix", "chore", "refactor"];
@@ -510,6 +516,8 @@ struct Repo {
     id: String,
     name: String,
     path: String,
+    /// `worktreeBasePath` of the repository: where Orca makes its worktrees; empty when it has none (Orca's own workspace folder is used).
+    worktree_base_path: String,
 }
 
 /// The repositories of `orca repo list` (its `result`): the ones with an id and a display name. A folder (`kind` `folder`) is no repository: it takes no worktree.
@@ -524,6 +532,9 @@ fn repos_of(result: &Value) -> Vec<Repo> {
                 id: orca::text_of(r, "id")?.to_owned(),
                 name: orca::text_of(r, "displayName")?.to_owned(),
                 path: orca::text_of(r, "path").unwrap_or_default().to_owned(),
+                worktree_base_path: orca::text_of(r, "worktreeBasePath")
+                    .unwrap_or_default()
+                    .to_owned(),
             })
         })
         .collect()
@@ -599,6 +610,146 @@ fn resolve_repo<'a>(repos: &'a [Repo], wanted: &str) -> Result<&'a Repo, String>
             Err("その名前の repo が orca repo list に複数あります。path で指定してください".into())
         }
     }
+}
+
+// ---- where the worktrees are made ----
+
+/// Whether the repository's worktree base is `.claude/worktrees` already: the relative form, or the absolute path of that folder in the repository (which puts the worktrees in the same folder, so it is left as the owner set it). A base that is empty or anything else is not.
+fn worktree_base_is_set(current: &str, repo_path: &str) -> bool {
+    let current = current.trim().trim_end_matches('/');
+    current == WORKTREE_BASE
+        || (!repo_path.is_empty()
+            && current == format!("{}/{WORKTREE_BASE}", repo_path.trim_end_matches('/')))
+}
+
+/// Whether the worktree Orca made is under `{repository}/.claude/worktrees/` and not that folder itself, with no `.` or `..` in its path. A repository whose own path is not known cannot be compared, and is taken as it is.
+fn check_worktree_place(path: &str, repo_path: &str) -> Result<(), String> {
+    if repo_path.is_empty() {
+        return Ok(());
+    }
+    let base = Path::new(repo_path).join(WORKTREE_BASE);
+    let made = Path::new(path);
+    // `Path::components` drops a `.` between two parts, so the text is read part by part.
+    let plain = path.split('/').all(|part| part != "." && part != "..");
+    if plain && made.starts_with(&base) && made != base {
+        return Ok(());
+    }
+    Err(format!(
+        "Orca が作った worktree「{path}」は、リポジトリの {} の下にありません",
+        base.display()
+    ))
+}
+
+/// What to append to the content of `.git/info/exclude` so that `.claude/worktrees/` is not shown by `git status`; `None` when a line of it names that folder already (with or without the leading or the trailing slash). The line goes on a line of its own whether the file ends with a line break or not.
+fn exclude_addition(contents: &str) -> Option<String> {
+    let named = contents.lines().map(str::trim).any(|line| {
+        matches!(
+            line,
+            "/.claude/worktrees/"
+                | "/.claude/worktrees"
+                | ".claude/worktrees/"
+                | ".claude/worktrees"
+        )
+    });
+    if named {
+        return None;
+    }
+    let lead = if contents.is_empty() || contents.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    Some(format!("{lead}{EXCLUDE_LINE}\n"))
+}
+
+/// Appends `exclude_addition` to `{common_dir}/info/exclude`, making the file and its folder when they are missing; says whether it wrote.
+fn append_exclude(common_dir: &Path) -> Result<bool, String> {
+    let file = common_dir.join("info").join("exclude");
+    let old = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{} を読めません: {e}", file.display())),
+    };
+    let Some(addition) = exclude_addition(&old) else {
+        return Ok(false);
+    };
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        std::fs::create_dir_all(common_dir.join("info"))?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file)?
+            .write_all(addition.as_bytes())
+    };
+    write().map_err(|e| format!("{} に書けません: {e}", file.display()))?;
+    Ok(true)
+}
+
+/// Keeps `.claude/worktrees/` of a repository of this Mac out of its `git status`: in `info/exclude` of the repository's common git folder (the repository's own `.gitignore` is not touched, and a linked worktree or a `.git` that is a file leads to the same folder).
+fn ensure_excluded(repo_path: &str) -> Result<bool, String> {
+    let printed = git(&git_common_dir_args(repo_path))?;
+    let common = PathBuf::from(printed.trim());
+    let common = if common.is_absolute() {
+        common
+    } else {
+        Path::new(repo_path).join(common)
+    };
+    append_exclude(&common)
+}
+
+/// Sets the worktree base of `repo` to `.claude/worktrees` when it is not so yet (`write` runs the CLI); says whether it did.
+fn settle_worktree_base(
+    repo: &Repo,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<bool, String> {
+    if worktree_base_is_set(&repo.worktree_base_path, &repo.path) {
+        return Ok(false);
+    }
+    write(&worktree_base_args(&repo.id, environment)).map(|_| true)
+}
+
+/// Makes a repository ready for a child's worktree: its worktree base is `.claude/worktrees`, and on this Mac that folder is kept out of the repository's `git status`. Nothing else of Orca's settings is changed.
+fn prepare_repo(
+    repo: &Repo,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<(), Refusal> {
+    if environment == LOCAL && !repo.path.is_empty() {
+        ensure_excluded(&repo.path).map_err(|e| Refusal::failed(STEP_EXCLUDE, e))?;
+    }
+    settle_worktree_base(repo, environment, write)
+        .map_err(|e| Refusal::failed(STEP_WORKTREE_BASE, e))?;
+    Ok(())
+}
+
+/// Sets the worktree base of each repository of `projects` (`formation_create`): the repositories of each environment are read once. A project whose repository the environment does not list is skipped, because `check_projects` has checked it against the same list a moment before.
+fn settle_projects(
+    projects: &[FormationProject],
+    read: &dyn Fn(&str) -> Result<Vec<Repo>, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<(), String> {
+    let mut lists: HashMap<&str, Vec<Repo>> = HashMap::new();
+    for project in projects {
+        let environment = project.environment.as_str();
+        if !lists.contains_key(environment) {
+            lists.insert(
+                environment,
+                read(environment).map_err(|e| format!("「{STEP_REPOS}」に失敗しました: {e}"))?,
+            );
+        }
+        let Ok(repo) = resolve_repo(&lists[environment], &project.repo) else {
+            continue;
+        };
+        settle_worktree_base(repo, environment, write).map_err(|e| {
+            format!(
+                "「{STEP_WORKTREE_BASE}」に失敗しました（{}）: {e}",
+                repo.name
+            )
+        })?;
+    }
+    Ok(())
 }
 
 // ---- what Orca and git answer ----
@@ -704,6 +855,20 @@ fn repo_list_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["repo", "list", "--json"]), environment)
 }
 
+/// Sets the repository's `worktreeBasePath` to `.claude/worktrees` (the setup of a repository has the repository's id). The relative path is joined to the repository's folder by Orca.
+fn worktree_base_args(repo_id: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "project".into(),
+            "setup-update".into(),
+            format!("--setup={repo_id}"),
+            format!("--worktree-base-path={WORKTREE_BASE}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
 fn terminal_list_args(path: &str, environment: &str) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "list", "--worktree"]);
     args.extend([format!("path:{path}"), "--json".into()]);
@@ -775,6 +940,19 @@ fn git_status_args(path: &str) -> Vec<String> {
         "status".into(),
         "--porcelain".into(),
     ]
+}
+
+/// The repository's common git folder (`.git` of its main folder, whichever worktree `path` is), as an absolute path.
+fn git_common_dir_args(path: &str) -> Vec<String> {
+    [
+        "-C",
+        path,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 fn git_origin_head_args(path: &str) -> Vec<String> {
@@ -1151,6 +1329,7 @@ pub fn launch(
     let environment = environment.as_str();
     let list = repos(environment)?;
     let repo = chosen_repo(&list, environment, repo)?;
+    prepare_repo(repo, environment, &|args| orca::write(args))?;
     let base = start_of(
         branch,
         on_origin(environment, &repo.path, branch),
@@ -1166,7 +1345,9 @@ pub fn launch(
     .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
     let path =
         orca::created_worktree_path_of(&made).map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
-    if let Err(message) = check_created_branch(branch, &created_branch_of(&made)) {
+    if let Err(message) = check_created_branch(branch, &created_branch_of(&made))
+        .and_then(|()| check_worktree_place(&path, &repo.path))
+    {
         return Err(unwanted_worktree(&path, environment, message));
     }
     let branch = branch.to_owned();
@@ -1220,7 +1401,7 @@ pub fn launch(
     }))
 }
 
-/// A worktree that was just made on a branch other than the one asked for: it holds nothing, so it is removed again with its branch, and the refusal says so; one that cannot be removed is left, and named.
+/// A worktree that was just made on a branch other than the one asked for, or outside the repository's `.claude/worktrees/`: it holds nothing, so it is removed again with its branch, and the refusal says so; one that cannot be removed is left, and named.
 fn unwanted_worktree(path: &str, environment: &str, message: String) -> Refusal {
     close_shells(path, environment);
     let refusal = Refusal {
@@ -2131,6 +2312,26 @@ fn create_with(
     })
 }
 
+/// `create_with`, and then the worktree base of each repository of the projects is set (`settle_projects`), so that the children of this formation are made under their repositories. A setting that fails takes the formation back (its folder is deleted), so that the owner sees the failure and nothing half-made is left.
+fn create_and_settle(
+    config: &Path,
+    name: &str,
+    projects: &[FormationProject],
+    view: &EnvironmentsView,
+    created_at: u64,
+    read: &dyn Fn(&str) -> Result<Vec<Repo>, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<FormationEntry, String> {
+    let entry = create_with(config, name, projects, view, created_at)?;
+    if let Err(e) = settle_projects(&entry.projects, read, write) {
+        let _ = std::fs::remove_dir_all(dir(config, name));
+        return Err(format!(
+            "フォーメーション「{name}」は作らず、取り消しました。{e}"
+        ));
+    }
+    Ok(entry)
+}
+
 /// What the screen says of a refusal: its sentence and, when a step of Orca or git failed, the first line of what it printed (which is data, shown as text).
 fn refusal_text(refusal: &Refusal) -> String {
     let output = refusal
@@ -2252,19 +2453,27 @@ pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, Stri
     orca::blocking(move || list_with(&dir, &screen_read)).await?
 }
 
-/// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
+/// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), sets the worktree base of each repository to `.claude/worktrees` (`settle_projects`), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
 #[tauri::command]
 pub async fn formation_create(
     app: tauri::AppHandle,
     name: String,
     projects: Vec<FormationProject>,
 ) -> Result<FormationEntry, String> {
-    let dir = config_dir(&app)?;
+    let config = config_dir(&app)?;
     orca::blocking(move || {
         // A name that is wrong is refused before Orca is read.
         check_name(&name)?;
         let view = environments_view(read_saved_environments(), &read_repos);
-        create_with(&dir, &name, &projects, &view, now_ms())
+        create_and_settle(
+            &config,
+            &name,
+            &projects,
+            &view,
+            now_ms(),
+            &read_repos,
+            &|args| orca::write(args),
+        )
     })
     .await?
 }
@@ -3956,6 +4165,7 @@ mod tests {
                     id: format!("id-{n}"),
                     name: (*n).into(),
                     path: format!("/w/{n}"),
+                    worktree_base_path: String::new(),
                 })
                 .collect()
         };
@@ -4761,6 +4971,7 @@ mod tests {
                 id: environment.into(),
                 name: environment.into(),
                 path: format!("/w/{environment}"),
+                worktree_base_path: String::new(),
             }])
         };
         let results = read_each_repos(&["local", "b", "a"], &read);
@@ -5639,5 +5850,428 @@ mod tests {
             "「git での確認」に失敗しました: fatal: not a git repository"
         );
         assert_eq!(refusal_text(&Refusal::from("だめ".to_owned())), "だめ");
+    }
+
+    // ---- the worktrees are made under the repository's `.claude/worktrees` (#842) ----
+
+    fn repo_with_base(base: &str) -> Repo {
+        Repo {
+            id: "repo-1".into(),
+            name: "api".into(),
+            path: "/w/api".into(),
+            worktree_base_path: base.into(),
+        }
+    }
+
+    #[test]
+    fn the_worktree_base_is_set_when_it_is_empty_or_somewhere_else() {
+        for current in [
+            ".claude/worktrees",
+            ".claude/worktrees/",
+            " .claude/worktrees ",
+            "/w/api/.claude/worktrees",
+            "/w/api/.claude/worktrees/",
+        ] {
+            assert!(worktree_base_is_set(current, "/w/api"), "{current:?}");
+        }
+        for current in [
+            "",
+            "/home/me/orca/workspaces",
+            "/w/other/.claude/worktrees",
+            ".claude/worktrees-old",
+            ".claude",
+            "/w/api/.claude/worktrees2",
+        ] {
+            assert!(!worktree_base_is_set(current, "/w/api"), "{current:?}");
+        }
+        // The absolute form is compared only when the repository's path is known.
+        assert!(!worktree_base_is_set("/.claude/worktrees", ""));
+        assert!(worktree_base_is_set(".claude/worktrees", ""));
+    }
+
+    #[test]
+    fn the_worktree_base_is_set_with_the_repository_id_and_in_its_environment() {
+        assert_eq!(
+            worktree_base_args("repo-1", LOCAL),
+            [
+                "project",
+                "setup-update",
+                "--setup=repo-1",
+                "--worktree-base-path=.claude/worktrees",
+                "--json",
+                "--environment=local",
+            ]
+        );
+        assert_eq!(
+            worktree_base_args("repo-2", "mac-studio").last().unwrap(),
+            "--environment=mac-studio"
+        );
+    }
+
+    #[test]
+    fn the_repository_list_carries_its_worktree_base() {
+        let list = repos_of(&json!({"repos": [
+            {"id": "a", "displayName": "a", "path": "/w/a", "worktreeBasePath": "/w/a/.claude/worktrees"},
+            {"id": "b", "displayName": "b", "path": "/w/b"},
+        ]}));
+        assert_eq!(list[0].worktree_base_path, "/w/a/.claude/worktrees");
+        assert_eq!(list[1].worktree_base_path, "");
+    }
+
+    #[test]
+    fn a_made_worktree_must_be_under_the_repositorys_worktree_folder() {
+        for path in [
+            "/w/api/.claude/worktrees/api/a",
+            "/w/api/.claude/worktrees/a",
+        ] {
+            assert!(check_worktree_place(path, "/w/api").is_ok(), "{path}");
+        }
+        for path in [
+            // Orca's own workspace folder, the repository itself, the folder itself, and look-alikes.
+            "/home/me/orca/workspaces/api/a",
+            "/w/api",
+            "/w/api/.claude/worktrees",
+            "/w/api/.claude/worktrees/",
+            "/w/api/.claude/worktrees-x/a",
+            "/w/api/.claude",
+            "/w/api/src/a",
+            "/w/api/.claude/worktrees/../../a",
+            "/w/api/.claude/worktrees/./a",
+            "/w/other/.claude/worktrees/a",
+        ] {
+            let err = check_worktree_place(path, "/w/api").unwrap_err();
+            assert!(
+                err.contains(path) && err.contains("/w/api/.claude/worktrees"),
+                "{err}"
+            );
+        }
+        // A repository with no path in the list cannot be compared.
+        assert!(check_worktree_place("/anywhere/a", "").is_ok());
+    }
+
+    #[test]
+    fn the_exclude_line_is_added_unless_the_folder_is_named_already() {
+        assert_eq!(
+            exclude_addition("").as_deref(),
+            Some("/.claude/worktrees/\n")
+        );
+        assert_eq!(
+            exclude_addition("*.log\n").as_deref(),
+            Some("/.claude/worktrees/\n")
+        );
+        // A file whose last line has no line break gets one first, so the line is not joined to it.
+        assert_eq!(
+            exclude_addition("*.log").as_deref(),
+            Some("\n/.claude/worktrees/\n")
+        );
+        for named in [
+            "/.claude/worktrees/\n",
+            "*.log\n/.claude/worktrees",
+            ".claude/worktrees/\r\n",
+            "  .claude/worktrees  \n",
+        ] {
+            assert_eq!(exclude_addition(named), None, "{named:?}");
+        }
+        for other in [
+            "# /.claude/worktrees/\n",
+            "/.claude/worktrees-old/\n",
+            "!/.claude/worktrees/\n",
+            "/.claude/\n",
+        ] {
+            assert!(exclude_addition(other).is_some(), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_exclude_file_is_made_appended_to_and_never_written_twice() {
+        let common = temp_dir("exclude");
+        std::fs::create_dir_all(&common).unwrap();
+        let file = common.join("info").join("exclude");
+        // No `info` folder yet: it is made with the file.
+        assert!(append_exclude(&common).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "/.claude/worktrees/\n"
+        );
+        assert!(!append_exclude(&common).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "/.claude/worktrees/\n"
+        );
+        // What the owner wrote stays, with no line break at its end too.
+        std::fs::write(&file, "*.log").unwrap();
+        assert!(append_exclude(&common).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "*.log\n/.claude/worktrees/\n"
+        );
+        // A file that cannot be read stops it (here, a folder).
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(append_exclude(&common).is_err());
+        std::fs::remove_dir_all(&common).unwrap();
+        assert_eq!(
+            git_common_dir_args("/w/api"),
+            [
+                "-C",
+                "/w/api",
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_worktree_base_is_written_only_when_it_is_not_set() {
+        let orca = Calls::new();
+        let set = settle_worktree_base(&repo_with_base(".claude/worktrees"), LOCAL, &|a| {
+            orca.run(a)
+        });
+        assert_eq!(set, Ok(false));
+        let set = settle_worktree_base(&repo_with_base("/w/api/.claude/worktrees"), LOCAL, &|a| {
+            orca.run(a)
+        });
+        assert_eq!(set, Ok(false));
+        assert!(orca.0.borrow().is_empty());
+        for current in ["", "/home/me/orca/workspaces"] {
+            let set =
+                settle_worktree_base(&repo_with_base(current), "mac-studio", &|a| orca.run(a));
+            assert_eq!(set, Ok(true));
+        }
+        let calls = orca.0.borrow();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], worktree_base_args("repo-1", "mac-studio"));
+        // A failure of Orca is the message, and the launch stops before the worktree.
+        let failed = settle_worktree_base(&repo_with_base(""), LOCAL, &|_| Err("だめ".to_owned()));
+        assert_eq!(failed, Err("だめ".to_owned()));
+        let refusal = prepare_repo(&repo_with_base(""), "mac-studio", &|_| {
+            Err("だめ".to_owned())
+        })
+        .unwrap_err();
+        assert_eq!(refusal.step, Some(STEP_WORKTREE_BASE));
+    }
+
+    #[test]
+    fn the_projects_of_a_formation_get_the_worktree_base_once_for_each_environments_list() {
+        let reads = std::cell::RefCell::new(Vec::new());
+        let read = |environment: &str| {
+            reads.borrow_mut().push(environment.to_owned());
+            Ok(vec![
+                repo_with_base(""),
+                Repo {
+                    id: "repo-2".into(),
+                    name: "web".into(),
+                    path: "/w/web".into(),
+                    worktree_base_path: ".claude/worktrees".into(),
+                },
+            ])
+        };
+        let orca = Calls::new();
+        settle_projects(
+            &[
+                project(LOCAL, "api"),
+                project(LOCAL, "web"),
+                project("mac-studio", "api"),
+                // A repository the list lacks was checked before; it is skipped here.
+                project(LOCAL, "gone"),
+            ],
+            &read,
+            &|a| orca.run(a),
+        )
+        .unwrap();
+        assert_eq!(*reads.borrow(), ["local", "mac-studio"]);
+        assert_eq!(
+            *orca.0.borrow(),
+            [
+                worktree_base_args("repo-1", LOCAL),
+                worktree_base_args("repo-1", "mac-studio"),
+            ]
+        );
+        let err = settle_projects(
+            &[project(LOCAL, "api")],
+            &|_| Err("no orca".to_owned()),
+            &|a| orca.run(a),
+        )
+        .unwrap_err();
+        assert!(err.contains("no orca"), "{err}");
+    }
+
+    #[test]
+    fn a_formation_whose_projects_cannot_be_set_up_is_not_made() {
+        let config = temp_dir("create-settle");
+        let read = |_: &str| Ok(vec![repo_with_base("")]);
+        let view = view_of(vec![EnvironmentView {
+            environment: LOCAL.into(),
+            id: None,
+            ok: true,
+            repos: Some(vec![RepoView {
+                name: "api".into(),
+                path: "/w/api".into(),
+            }]),
+            error: None,
+            label: None,
+        }]);
+        let orca = Calls::new();
+        let made = create_and_settle(
+            &config,
+            "alpha",
+            &[project(LOCAL, "api")],
+            &view,
+            1,
+            &read,
+            &|a| orca.run(a),
+        )
+        .unwrap();
+        assert_eq!(made.name, "alpha");
+        assert_eq!(*orca.0.borrow(), [worktree_base_args("repo-1", LOCAL)]);
+        assert!(dir(&config, "alpha").is_dir());
+        // Orca refuses the setting: the folder of the formation is taken back, and the name is free again.
+        let err = create_and_settle(
+            &config,
+            "beta",
+            &[project(LOCAL, "api")],
+            &view,
+            1,
+            &read,
+            &|_| Err("setup が見つかりません".to_owned()),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("beta") && err.contains("setup が見つかりません"),
+            "{err}"
+        );
+        assert!(!dir(&config, "beta").exists());
+        assert!(create_with(&config, "beta", &[], &view, 2).is_ok());
+        // A name that is refused makes nothing and sets nothing.
+        let before = orca.0.borrow().len();
+        assert!(create_and_settle(
+            &config,
+            "alpha",
+            &[project(LOCAL, "api")],
+            &view,
+            1,
+            &read,
+            &|a| orca.run(a)
+        )
+        .is_err());
+        assert_eq!(orca.0.borrow().len(), before);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_worktree_under_the_repository_is_closed_as_any_other_and_a_folder_there_is_not_removed() {
+        const REPO: &str = "/srv/repo";
+        const CHILD: &str = "/srv/repo/.claude/worktrees/repo/a";
+        let config = temp_dir("close-under-repo");
+        let ps = |child_listed: bool, truncated: bool| {
+            let mut worktrees = vec![json!({"path": REPO, "isMainWorktree": true, "agents": []})];
+            if child_listed {
+                worktrees.push(json!({"path": CHILD, "agents": [{"paneKey": "tab-a:leaf"}]}));
+            }
+            json!({"worktrees": worktrees, "truncated": truncated})
+        };
+        let close = |recorded_path: &str, ps: Value, force: bool| {
+            recorded(&config, recorded_path, "term_a", "me/a");
+            let mut children = read_children(&config, F);
+            children[1].environment = "mac-studio".into();
+            write_children(&config, F, &children).unwrap();
+            let saved = Saved::new(Ok(ps));
+            let orca = Calls::new();
+            let done = close_with(
+                &config,
+                F,
+                "a",
+                force,
+                &|args| saved.read(args),
+                &|args| orca.run(args),
+                &|_, _| Ok(git_answers(json!([]), 0)),
+            );
+            let writes = orca.0.borrow().clone();
+            (done, writes)
+        };
+        let removes = |writes: &[Vec<String>]| {
+            writes
+                .iter()
+                .any(|w| w[..2] == ["worktree".to_owned(), "rm".to_owned()])
+        };
+        // The worktree Orca lists under the repository is removed, forced or not.
+        for force in [false, true] {
+            let (done, writes) = close(CHILD, ps(true, false), force);
+            assert!(done.is_ok(), "{force}");
+            assert!(writes.contains(&worktree_rm_args(CHILD, "mac-studio", force)));
+            assert_eq!(names(&read_children(&config, F)), ["p"]);
+        }
+        // The repository's own folder is refused whatever is recorded and forced; so is a folder under it that Orca does not list, when the list is cut.
+        for path in [REPO, "/srv/repo/.claude/worktrees/repo", "/srv/repo/src"] {
+            for force in [false, true] {
+                let (done, writes) = close(path, ps(true, true), force);
+                assert!(done.is_err(), "{path} {force}");
+                assert!(!removes(&writes), "{path} {force}");
+                assert_eq!(names(&read_children(&config, F)), ["p", "a"], "{path}");
+                write_children(&config, F, &[planned("p", "x")]).unwrap();
+            }
+        }
+        // With the list read whole, a folder it lacks is a worktree that is gone: only its entry is dropped, and nothing is removed.
+        for path in ["/srv/repo/.claude/worktrees/repo", "/srv/repo/src"] {
+            let (done, writes) = close(path, ps(true, false), true);
+            assert_eq!(done.unwrap()["worktreeGone"], true, "{path}");
+            assert!(!removes(&writes), "{path}");
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_repository_and_its_linked_worktree_share_one_exclude_file_that_hides_the_folder() {
+        let root = temp_dir("exclude-git");
+        let repo = root.join("repo");
+        let linked = root.join("linked");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |dir: &Path, args: &[&str]| {
+            let mut all = vec!["-C".to_owned(), dir.to_string_lossy().into_owned()];
+            all.extend(args.iter().map(|a| (*a).to_owned()));
+            git(&all).unwrap()
+        };
+        run(&repo, &["init", "-q"]);
+        run(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "first",
+            ],
+        );
+        run(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "other",
+                &linked.to_string_lossy(),
+            ],
+        );
+        std::fs::create_dir_all(repo.join(".claude/worktrees/repo/a")).unwrap();
+        std::fs::write(repo.join(".claude/worktrees/repo/a/file"), "x").unwrap();
+        assert!(run(&repo, &["status", "--porcelain"]).contains(".claude/"));
+        // Asked through the linked worktree, the line goes to the repository's own `.git/info/exclude`.
+        assert!(ensure_excluded(&linked.to_string_lossy()).unwrap());
+        assert!(!ensure_excluded(&repo.to_string_lossy()).unwrap());
+        assert!(std::fs::read_to_string(repo.join(".git/info/exclude"))
+            .unwrap()
+            .lines()
+            .any(|line| line == EXCLUDE_LINE));
+        assert_eq!(run(&repo, &["status", "--porcelain"]), "");
+        // The repository's own `.gitignore` is not made.
+        assert!(!repo.join(".gitignore").exists());
+        assert!(ensure_excluded(&root.to_string_lossy()).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
