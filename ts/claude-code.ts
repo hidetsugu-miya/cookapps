@@ -7,7 +7,7 @@
 import type { SkillScreen } from "./bindings/SkillScreen";
 import { hideTerminals, isShowing, releaseTerminal, showTerminals, whenStarted } from "./orca-terminal.js";
 
-// The name of the formation the screen shows: the first one, until the screen lists more (A-37).
+// The name of the first formation, which exists before any is created and is the one the screen shows at each start (A-37).
 export const FORMATION_NAME = "formation";
 
 // The id of the pane of the orchestrator of the formation `name`: Rust takes a pane of this id for that formation's orchestrator, and names its session and its folder by `name`.

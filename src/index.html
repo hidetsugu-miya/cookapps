@@ -675,10 +675,19 @@
         </div>
       </aside>
     </section>
-    <section id="formation" hidden>
+    <section id="formation" class="split-main" hidden>
+      <aside id="formation-list" aria-label="フォーメーション">
+        <header id="formation-list-head" data-tauri-drag-region="deep">
+          <h1>フォーメーション</h1>
+        </header>
+        <p id="formation-list-error" class="pending fail" role="alert" hidden></p>
+        <div id="formation-list-feed"></div>
+      </aside>
+      <div id="formation-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="一覧の幅" aria-valuemin="20" aria-valuemax="50" aria-valuenow="25" tabindex="0"><span></span></div>
       <section id="formation-orchestrator" aria-label="司令塔">
         <header id="formation-head" data-tauri-drag-region="deep">
           <h1>司令塔</h1>
+          <span id="formation-head-name"></span>
           <button id="formation-restart" class="icon-btn" type="button" aria-label="司令塔を再起動"></button>
         </header>
         <div id="formation-term"></div>

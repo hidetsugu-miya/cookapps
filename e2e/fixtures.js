@@ -134,6 +134,8 @@ const answers = {
   claude_code_close: null,
   // A-37: no children yet.
   formation_children: [],
+  // A-37: the first formation alone, with no project and no child.
+  formation_list: { formations: [{ name: "formation", projects: [], createdAt: null, counts: { planned: 0, waiting: 0, working: 0, done: 0 } }], readError: null },
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).
