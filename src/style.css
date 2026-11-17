@@ -1443,6 +1443,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-peek-icon { flex: none; display: inline-flex; }
 #orca-peek-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
 #orca-peek-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+#orca-peek-open { flex: none; height: 28px; }
 #orca-peek-head .icon-btn { flex: none; width: 28px; height: 28px; }
 #orca-peek-head .icon-btn svg { width: 16px; height: 16px; }
 #orca-peek-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }

@@ -16,6 +16,14 @@ const rightClick = (repo: string) =>
     return event.defaultPrevented;
   }, claudeTab(repo));
 
+// The page's own right click on the project row of `repo`; says whether the page cancelled the default menu.
+const rightClickProject = (repo: string) =>
+  browser.execute((key) => {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    document.querySelector(`#orca-feed .orca-project[data-key="${key}"]`)!.dispatchEvent(event);
+    return event.defaultPrevented;
+  }, `proj_${repo}`);
+
 // Opens the project of `repo` in the list (its sessions under it) without selecting it.
 async function openList(repo: string) {
   if ((await arrow(repo).getAttribute("aria-expanded")) !== "true") await arrow(repo).click();
@@ -49,8 +57,10 @@ describe("orca: peek at a session in a modal (A-40)", () => {
     expect((await $("#orca-peek-title").getCSSProperty("text-overflow")).value).toBe("ellipsis");
     await expect($("#orca-peek-env")).not.toBeDisplayed();
     await expect($("#orca-peek-close")).toHaveAttribute("aria-label", "閉じる");
+    await expect($("#orca-peek-open")).toHaveText("開く");
+    expect(await $("#orca-peek-open").getAttribute("class")).toContain("text-btn");
     // The order of the head, and the cross at its right end.
-    const order = await browser.execute(() => ["#orca-peek-icon", "#orca-peek-project", "#orca-peek-title", "#orca-peek-close"].map((s) => document.querySelector(s)!.getBoundingClientRect().left));
+    const order = await browser.execute(() => ["#orca-peek-icon", "#orca-peek-project", "#orca-peek-title", "#orca-peek-open", "#orca-peek-close"].map((s) => document.querySelector(s)!.getBoundingClientRect().left));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     // No tab strip: the terminal alone under the head.
     expect(await browser.execute(() => document.querySelectorAll('#orca-peek [role="tab"], #orca-peek .orca-tabs').length)).toBe(0);
@@ -175,5 +185,66 @@ describe("orca: peek at a session in a modal (A-40)", () => {
     await mock("orca_terminal_read", ["$"]);
     await browser.pause(600);
     expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle !== "term_example-api")).toBe(true);
+  });
+
+  it("opens the modal for the first session of a project with a right click on its row, and gives the focus back to the row at close", async () => {
+    await openOrca();
+    await mock("orca_terminal_read", ["$ claude", "> Fix the parser"]);
+    await expect($("#orca-peek")).not.toBeDisplayed();
+    expect(await rightClickProject("example-api")).toBe(true);
+    await expect($("#orca-peek")).toBeDisplayed();
+    await expect($("#orca-peek-project")).toHaveText("example-api");
+    await expect($("#orca-peek-title")).toHaveText("Fix the parser");
+    expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_example-api" });
+    await browser.waitUntil(async () => (await peekText()).includes("Fix the parser"), { timeoutMsg: "the screen of the session never showed in the modal" });
+    // Nothing is selected by the right click.
+    await expect(project("example-api")).toHaveAttribute("aria-pressed", "false");
+    await expect(selectedTab()).not.toExist();
+    await browser.keys(["Escape"]);
+    await expect($("#orca-peek")).not.toBeDisplayed();
+    expect(await browser.execute(() => (document.activeElement as HTMLElement).dataset.key)).toBe("proj_example-api");
+  });
+
+  it("opens nothing on the selected project, on a project with no session and on a project whose first session has no terminal, and cancels the default menu for each", async () => {
+    const rows = [orcaRow("example-app", "feat/a", "Write the docs"), orcaRow("example-api", "main", "Fix the parser", { group: "waiting", handle: null }), orcaRow("example-web", "dev", "Update the page", { handle: null, paneKey: null })];
+    await openOrca(orcaOverview(rows, worktrees()));
+    await mock("orca_terminal_read", ["$"]);
+    await project("example-app").click();
+    await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+    expect(await rightClickProject("example-app")).toBe(true);
+    expect(await rightClickProject("example-web")).toBe(true);
+    expect(await rightClickProject("example-api")).toBe(true);
+    await browser.pause(300);
+    await expect($("#orca-peek")).not.toBeDisplayed();
+    expect(await browser.execute(() => document.querySelectorAll("#orca-peek-term .orca-term-box").length)).toBe(0);
+  });
+
+  it("closes the modal with the open button and selects the project and the session, with the terminal in the work pane", async () => {
+    await openOrca();
+    await mock("orca_terminal_read", ["$ claude", "> Fix the parser"]);
+    await openList("example-api");
+    await rightClick("example-api");
+    await expect($("#orca-peek")).toBeDisplayed();
+    await expect(project("example-api")).toHaveAttribute("aria-pressed", "false");
+    await $("#orca-peek-open").click();
+    await expect($("#orca-peek")).not.toBeDisplayed();
+    await expect(project("example-api")).toHaveAttribute("aria-pressed", "true");
+    await expect(sessionOf("example-api")).toHaveAttribute("aria-pressed", "true");
+    await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
+    // The terminal is the work pane's now, and the modal holds none.
+    await expect($(".orca-term")).toBeDisplayed();
+    expect(await browser.execute(() => document.querySelectorAll("#orca-peek-term .orca-term-box").length)).toBe(0);
+    await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Fix the parser"), { timeoutMsg: "the screen of the session never showed in the work pane" });
+  });
+
+  it("selects the project and its first session with the open button of a modal opened from the project row", async () => {
+    await openOrca();
+    await mock("orca_terminal_read", ["$"]);
+    await rightClickProject("example-lib");
+    await expect($("#orca-peek")).toBeDisplayed();
+    await $("#orca-peek-open").click();
+    await expect($("#orca-peek")).not.toBeDisplayed();
+    await expect(project("example-lib")).toHaveAttribute("aria-pressed", "true");
+    await expect(selectedTab()).toHaveText(expect.stringContaining("Opened the pull request."));
   });
 });

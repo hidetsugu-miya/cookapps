@@ -1,6 +1,6 @@
 // The modal that shows the terminal of one session of the Orca list (A-40): a right click on a session row of a project that is not selected opens it in the middle of the screen, over a dimmed screen, and the terminal takes the keyboard.
 // The terminal is shown through `showTerminals` with an owner of its own, so the work pane stays as it was: this module never touches it. A terminal is shown in one place at a time, so the Orca screen does not open it for the selected project (orca.ts).
-// What the modal shows is given by orca.ts at each drawing (`drawPeek`), and it closes when orca.ts gives none (the session left the list, its project was selected, or the screen is no longer shown). Esc and the ✕ close it, and closing forgets the terminal, which stops its stream or its reads.
+// What the modal shows is given by orca.ts at each drawing (`drawPeek`), and it closes when orca.ts gives none (the session left the list, its project was selected, or the screen is no longer shown). Esc and the ✕ close it, and closing forgets the terminal, which stops its stream or its reads. 「開く」 closes it and has orca.ts select the session's project and the session, as a click on its row in the list does.
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import { $, composing } from "./dom.js";
 import { isShowing, releaseTerminal, showTerminals, type TermSource } from "./orca-terminal.js";
@@ -17,7 +17,7 @@ export interface PeekView {
   source: TermSource;
 }
 
-// The session the modal was opened for (`project` is the key of the project, `tab` the id of the session's tab), and the `data-key` of the row it was opened from, which has the focus again when the modal closes.
+// The session the modal was opened for (`project` is the key of the project, `tab` the id of the session's tab), and the `data-key` of the row it was opened from (a session row or a project row), which has the focus again when the modal closes.
 let target: { project: string; tab: string; opener: string } | null = null;
 // The handle of the terminal shown, to forget at close.
 let held: string | null = null;
@@ -74,10 +74,17 @@ export function closePeek() {
   document.querySelector<HTMLElement>(`#orca-feed [data-key="${CSS.escape(opener)}"]`)?.focus({ preventScroll: true });
 }
 
-// `statusIcon` is the Orca screen's own icon of a status.
-export function initPeek(statusIcon: (status: OrcaStatus, label: string) => HTMLElement) {
+// `statusIcon` is the Orca screen's own icon of a status, and `select` makes the project and the session the selected ones (what a click on the session row does).
+export function initPeek(statusIcon: (status: OrcaStatus, label: string) => HTMLElement, select: (project: string, tab: string) => void) {
   icon = statusIcon;
   $("orca-peek-close").onclick = closePeek;
+  $("orca-peek-open").onclick = () => {
+    if (target === null) return;
+    const { project, tab } = target;
+    // Closed first, so that the terminal is the work pane's once the session is selected.
+    closePeek();
+    select(project, tab);
+  };
   // Before the terminal sees the key: Esc is the modal's, so it is not sent to the session. An Escape that cancels IME conversion is the field's.
   document.addEventListener(
     "keydown",

@@ -364,6 +364,14 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   if (environment !== null) row.append(environmentChip(environment));
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // The first session of the project (A-40). A selected project's terminal is in the work pane, and a project with no session, or a session with no terminal, has none to show.
+    const first = tabs[0];
+    if (key === projectKey || first === undefined || first.handle === null) return;
+    openPeek(key, first.id, key);
+    syncPeek();
+  };
   wrap.append(row);
   // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
   if (!tabs.length) return wrap;
@@ -1315,7 +1323,7 @@ function initSearch() {
 
 export function initOrca() {
   initOrcaTerminal(showError);
-  initPeek(statusIcon);
+  initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, ruby: (target, project, path) => void ensureServer({ target, project, path }) });
