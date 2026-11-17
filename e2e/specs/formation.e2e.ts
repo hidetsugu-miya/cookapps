@@ -1208,6 +1208,13 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await browser.execute(() => document.querySelectorAll(".formation-new-repo:not([hidden])").length)).toBe(4);
   });
 
+  it("shows no heading for an environment with no repository, and keeps the heading of one that could not be read", async () => {
+    await ask({ formation_environments: formationEnvironments([], { "dev-server": ["wonder-api"], "empty-server": [] }, { "down-server": "届きません" }) });
+    expect(await textsOf(".formation-new-env")).toEqual(["dev-server", "down-server"]);
+    expect(await textsOf(".formation-new-note")).toEqual(["届きません"]);
+    expect(await repos()).toEqual(["wonder-api"]);
+  });
+
   it("makes the formation with the name typed and the projects checked, in the order of the lists, and selects it so that its orchestrator starts", async () => {
     await ask();
     const create = await mock("formation_create", formationEntry("mail-api", { minutes: 0, repos: ["wonder-knowledge", "wonder-api"] }));
