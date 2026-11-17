@@ -516,7 +516,12 @@ fn reason(error: CallError) -> String {
 }
 
 /// The entries of `dir`, from `files.readDir` alone. `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and every entry is marked so. Otherwise no entry is marked, and `orca_files_ignored` is asked after it.
-async fn list(rpc: &mut impl Rpc, path: &str, dir: &str, ignored: bool) -> Result<OrcaDir, String> {
+pub(crate) async fn list(
+    rpc: &mut impl Rpc,
+    path: &str,
+    dir: &str,
+    ignored: bool,
+) -> Result<OrcaDir, String> {
     let answer = rpc
         .call(
             "files.readDir",
@@ -610,7 +615,11 @@ pub(crate) fn editor_text(
     })
 }
 
-async fn read(rpc: &mut impl Rpc, path: &str, relative: &str) -> Result<OrcaFileText, String> {
+pub(crate) async fn read(
+    rpc: &mut impl Rpc,
+    path: &str,
+    relative: &str,
+) -> Result<OrcaFileText, String> {
     let answer = rpc
         .call(
             "files.read",
@@ -1310,7 +1319,7 @@ fn check_repo(repo: &str) -> Result<(), String> {
 }
 
 /// The text of a search: at most `MAX_QUERY` bytes and no control character (blank is allowed and finds the first branches).
-fn check_query(query: &str) -> Result<(), String> {
+pub(crate) fn check_query(query: &str) -> Result<(), String> {
     if query.len() > MAX_QUERY || query.chars().any(char::is_control) {
         Err("検索する文字が正しくありません".into())
     } else {
