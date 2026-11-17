@@ -1233,6 +1233,11 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }
 .orca-file[data-open="true"] { background: var(--soft); color: var(--accent); }
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
+/* A-39: a change from HEAD gives the name and the icon its color, after the open row's rule and before the selected row's, which stays white. */
+.orca-file[data-change="changed"], .orca-file[data-change="changed"] .orca-file-ic { color: var(--warn); }
+.orca-file[data-change="new"], .orca-file[data-change="new"] .orca-file-ic { color: var(--diff-ins-mark); }
+.orca-file-git { flex: none; margin-left: auto; padding-left: 8px; font-size: calc(11px * var(--fs)); }
+.orca-file[data-kind="dir"] .orca-file-git { width: 6px; height: 6px; box-sizing: border-box; margin-right: 2px; padding: 0; border-radius: 50%; background: currentColor; }
 .orca-file[data-selected="true"] { background: var(--accent); color: var(--on-accent); }
 .orca-file[data-selected="true"] .orca-file-ic { color: var(--on-accent); }
 .orca-file-new { display: flex; align-items: center; gap: 4px; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); }
