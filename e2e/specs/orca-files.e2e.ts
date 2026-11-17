@@ -4,6 +4,7 @@ import type { OrcaCommit } from "../../ts/bindings/OrcaCommit";
 import type { OrcaCommitFile } from "../../ts/bindings/OrcaCommitFile";
 import type { OrcaCommitFiles } from "../../ts/bindings/OrcaCommitFiles";
 import type { OrcaCommitList } from "../../ts/bindings/OrcaCommitList";
+import type { OrcaDeleted } from "../../ts/bindings/OrcaDeleted";
 import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
@@ -1586,11 +1587,14 @@ describe("orca: files and editor (A-18)", () => {
     await expect($('.pop[role="alertdialog"]')).toBeDisplayed();
   }
   const pressDelete = () => $('.pop[role="alertdialog"] .text-btn.danger').click();
+  // What `orca_files_delete` answers: the entries that are gone ([path, is a folder]), and the message of the one that failed.
+  const answered = (gone: [string, boolean][], error: string | null = null): OrcaDeleted => ({ deleted: gone.map(([relative, folder]) => ({ relative, folder })), error });
+  const entry = (relative: string, folder = false) => ({ relative, folder });
 
   it("asks before deleting a file, with its name, a red 「削除」 and 「キャンセル」 that has the keys, and calls nothing until 「削除」 is pressed", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
-    const del = await mock("orca_file_delete", null);
+    const del = await mock("orca_files_delete", answered([]));
     await askDelete("a.rs");
     await expect($(".menu")).not.toExist();
     await expect($('.pop[role="alertdialog"] p')).toHaveText("a.rs を完全に削除します。元に戻せません。");
@@ -1603,7 +1607,7 @@ describe("orca: files and editor (A-18)", () => {
   it("calls nothing on 「キャンセル」, on Escape and on a press elsewhere", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
-    const del = await mock("orca_file_delete", null);
+    const del = await mock("orca_files_delete", answered([]));
     await askDelete("a.rs");
     await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
     await expect($('.pop[role="alertdialog"]')).not.toExist();
@@ -1630,12 +1634,12 @@ describe("orca: files and editor (A-18)", () => {
     await openA();
     await expect($(".orca-edit-area")).toBeDisplayed();
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
-    const del = await mock("orca_file_delete", null);
+    const del = await mock("orca_files_delete", answered([["a.rs", false]]));
     const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["b.log", false]]));
     const write = await mock("orca_file_write", saved("sig-2"));
     await askDelete("a.rs");
     await pressDelete();
-    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", relative: "a.rs", folder: false, environment: null }]);
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("a.rs")], environment: null }]);
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await waitForCount("#orca-files-tree .orca-file", 3);
     expect(await names()).toEqual(["src", "target", "b.log"]);
@@ -1658,12 +1662,12 @@ describe("orca: files and editor (A-18)", () => {
     await doublePress("a.rs");
     await browser.waitUntil(async () => (await tabTitles()).length === 3, { timeoutMsg: "the second file never opened" });
     expect(await tabTitles()).toEqual(["Write the docs", "main.rs", "a.rs"]);
-    const del = await mock("orca_file_delete", null);
+    const del = await mock("orca_files_delete", answered([["src", true]]));
     const list = await mock("orca_files_list", dirOf("", [["target", true], ["a.rs", false], ["b.log", false]]));
     await askDelete("src");
     await expect($('.pop[role="alertdialog"] p')).toHaveText("src を完全に削除します。元に戻せません。");
     await pressDelete();
-    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", relative: "src", folder: true, environment: null }]);
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("src", true)], environment: null }]);
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await waitForCount("#orca-files-tree .orca-file", 3);
     expect(await names()).toEqual(["target", "a.rs", "b.log"]);
@@ -1674,7 +1678,7 @@ describe("orca: files and editor (A-18)", () => {
   it("shows the message of a failed delete and changes nothing: the tree and the tab stay", async () => {
     await openFiles();
     await openA();
-    const del = await mock("orca_file_delete", rejects("Orca がエラーを返しました（forbidden）"));
+    const del = await mock("orca_files_delete", answered([], "Orca がエラーを返しました（forbidden）"));
     const list = await mock("orca_files_list", dirOf("", []));
     await askDelete("a.rs");
     await pressDelete();
@@ -1684,6 +1688,241 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf(list)).toEqual([]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+  });
+
+  // A-18: the selection. A press on a row selects it (⌘ adds it or takes it off, Shift selects from the row pressed before), the selected rows are drawn in the accent color, and the delete takes all of them.
+  // A press as the page gets it, with ⌘ or Shift held (the WebDriver click holds none).
+  const press = (path: string, keys: { metaKey?: boolean; shiftKey?: boolean } = {}) =>
+    browser.execute(
+      (p, held, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`.orca-file[data-path="${p}"]`)!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...held }));
+      },
+      path,
+      keys,
+      onceId(),
+    );
+  const selectedPaths = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>('.orca-file[data-selected="true"]')].map((e) => e.dataset.path));
+  // The color a CSS variable draws as (the variable --accent as a `color`, which is how the computed style reads it).
+  const colorOf = (variable: string) =>
+    browser.execute((name) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${name})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    }, variable);
+  const look = (path: string) =>
+    browser.execute((p) => {
+      const node = document.querySelector(`.orca-file[data-path="${p}"]`)!;
+      return { background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, icon: getComputedStyle(node.querySelector(".orca-file-ic")!).color };
+    }, path);
+  const menuTexts = () => textsOf('.menu[role="menu"] button');
+  const itemColors = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>('.menu[role="menu"] button')].map((b) => getComputedStyle(b).color));
+
+  it("selects a file on a single press and draws it in the accent color with white text, and the rows that are not selected are not", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await selectedPaths()).toEqual([]);
+    const [accent, onAccent] = [await colorOf("--accent"), await colorOf("--on-accent")];
+    await row("a.rs").click();
+    expect(await selectedPaths()).toEqual(["a.rs"]);
+    expect(await look("a.rs")).toEqual({ background: accent, color: onAccent, icon: onAccent });
+    expect((await look("b.log")).background).not.toBe(accent);
+    // A press on another row moves the selection, and nothing is read or opened by a single press.
+    await row("b.log").click();
+    expect(await selectedPaths()).toEqual(["b.log"]);
+    await expect($(".orca-edit-area")).not.toExist();
+  });
+
+  it("adds a row to the selection and takes it off with ⌘, and selects from the row pressed before to this one with Shift", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await row("a.rs").click();
+    await press("b.log", { metaKey: true });
+    expect(await selectedPaths()).toEqual(["a.rs", "b.log"]);
+    await press("a.rs", { metaKey: true });
+    expect(await selectedPaths()).toEqual(["b.log"]);
+    // ⌘ on a folder selects it without opening it.
+    await press("src", { metaKey: true });
+    expect(await selectedPaths()).toEqual(["src", "b.log"]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "false");
+    // Shift counts from the row pressed last without Shift: here the folder, down to b.log.
+    await press("b.log", { shiftKey: true });
+    expect(await selectedPaths()).toEqual(["src", "target", "a.rs", "b.log"]);
+    await press("target", { shiftKey: true });
+    expect(await selectedPaths()).toEqual(["src", "target"]);
+    // A press with neither key selects that row alone.
+    await row("a.rs").click();
+    expect(await selectedPaths()).toEqual(["a.rs"]);
+  });
+
+  it("selects a folder on a press and opens it as before, but only selects it with ⌘ or Shift", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await selectedPaths()).toEqual(["src"]);
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    // A range can run through the rows of an open folder.
+    await press("target", { shiftKey: true });
+    expect(await selectedPaths()).toEqual(["src", "src/lib", "src/main.rs", "target"]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    // Closing the folder leaves the rows under it out of the selection.
+    await row("src").click();
+    await expect(row("src")).toHaveAttribute("aria-expanded", "false");
+    expect(await selectedPaths()).toEqual(["src"]);
+  });
+
+  it("opens a file on a double press as before, whatever is selected", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await row("b.log").click();
+    await openA();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+  });
+
+  it("selects a row on the right button when it is not selected, and keeps the selection when it is; several selected rows have the red 「n 件を削除」 alone in the menu", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await row("a.rs").click();
+    await press("b.log", { metaKey: true });
+    expect(await rightClickRow("b.log")).toBe(true);
+    expect(await menuTexts()).toEqual(["2 件を削除"]);
+    expect(await selectedPaths()).toEqual(["a.rs", "b.log"]);
+    expect(await itemColors()).toEqual([await colorOf("--danger")]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    // A row that is not selected takes the selection from the others, and its menu is the usual one.
+    expect(await rightClickRow("target")).toBe(true);
+    expect(await selectedPaths()).toEqual(["target"]);
+    expect(await menuTexts()).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
+  });
+
+  it("asks once for the rows that are selected with their count, calls nothing until 「削除」, and sends them all in one call", async () => {
+    await openFiles();
+    await openA();
+    const del = await mock("orca_files_delete", answered([["a.rs", false], ["b.log", false]]));
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true]]));
+    await row("a.rs").click();
+    await press("b.log", { metaKey: true });
+    expect(await rightClickRow("b.log")).toBe(true);
+    await pickItem("2 件を削除");
+    await expect($(".menu")).not.toExist();
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("2 件を完全に削除します。元に戻せません。");
+    expect(await confirmButtons()).toEqual(["削除", "キャンセル"]);
+    expect(await browser.execute(() => document.activeElement?.textContent)).toBe("キャンセル");
+    // 「キャンセル」 deletes nothing and keeps the selection.
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(del)).toEqual([]);
+    expect(await selectedPaths()).toEqual(["a.rs", "b.log"]);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("2 件を削除");
+    await pressDelete();
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("a.rs"), entry("b.log")], environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    expect(await names()).toEqual(["src", "target"]);
+    expect(await selectedPaths()).toEqual([]);
+    // The tab of a deleted file closes, and nothing is said.
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("asks to delete the selected rows on the Delete key, and on the key that is called delete on a Mac, with the name of the row when it is one and the count when there are more", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const del = await mock("orca_files_delete", answered([["a.rs", false]]));
+    await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["b.log", false]]));
+    // Nothing selected: the key does nothing.
+    await browser.keys("Delete");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await row("a.rs").click();
+    await browser.keys("Delete");
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("a.rs を完全に削除します。元に戻せません。");
+    await browser.keys("Escape");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await press("b.log", { metaKey: true });
+    await browser.keys("Backspace");
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("2 件を完全に削除します。元に戻せません。");
+    await browser.pause(200);
+    expect(await callsOf(del)).toEqual([]);
+    await pressDelete();
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("a.rs"), entry("b.log")], environment: null }]);
+  });
+
+  it("does not ask on the Delete key while a field of the tree has the keys", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await row("a.rs").click();
+    await rightClickEmpty();
+    await pickItem("新規ファイル");
+    await waitForCount(".orca-file-new", 1);
+    await browser.keys("Delete");
+    await browser.keys("Backspace");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+  });
+
+  it("sends a folder and the rows under it that are selected together, and draws what the answer says is gone: the folder alone", async () => {
+    await openFiles();
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const del = await mock("orca_files_delete", answered([["src", true]]));
+    const list = await mock("orca_files_list", dirOf("", [["target", true], ["a.rs", false], ["b.log", false]]));
+    await press("src/main.rs", { metaKey: true });
+    expect(await selectedPaths()).toEqual(["src", "src/main.rs"]);
+    await browser.keys("Delete");
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("2 件を完全に削除します。元に戻せません。");
+    await pressDelete();
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("src", true), entry("src/main.rs")], environment: null }]);
+    // The folders the gone entries were in: the root, once.
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    expect(await names()).toEqual(["target", "a.rs", "b.log"]);
+    expect(await selectedPaths()).toEqual([]);
+  });
+
+  it("reads each folder the deleted rows were in once, side by side, and shows the message of the entry that failed", async () => {
+    await openFiles();
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const del = await mock("orca_files_delete", answered([["src/main.rs", false], ["a.rs", false]], "Orca がエラーを返しました（forbidden）"));
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true]]));
+    // The press that opened the folder selected it: ⌘ takes it off.
+    await press("src", { metaKey: true });
+    await press("src/main.rs", { metaKey: true });
+    await press("a.rs", { metaKey: true });
+    await press("b.log", { metaKey: true });
+    expect(await selectedPaths()).toEqual(["src/main.rs", "a.rs", "b.log"]);
+    await browser.keys("Delete");
+    await pressDelete();
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("src/main.rs"), entry("a.rs"), entry("b.log")], environment: null }]);
+    await expect($("#error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    const asked = (await waitForCalls(list, 2)) as { dir: string }[];
+    expect(asked.map((c) => c.dir).sort()).toEqual(["", "src"]);
+  });
+
+  it("shows the message of a delete that Rust refused, and changes nothing: the selection and the tree stay", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const del = await mock("orca_files_delete", rejects("ファイルの場所が正しくありません"));
+    const list = await mock("orca_files_list", dirOf("", []));
+    await row("a.rs").click();
+    await press("b.log", { metaKey: true });
+    await browser.keys("Delete");
+    await pressDelete();
+    await waitForCalls(del);
+    await expect($("#error")).toHaveText("ファイルの場所が正しくありません");
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    expect(await selectedPaths()).toEqual(["a.rs", "b.log"]);
   });
 
   // A-18: the move. 「移動・名前の変更」 turns the row into a field with its path from the worktree, and a row is dragged onto a folder or onto the empty part of the tree; Rust moves it.

@@ -1,11 +1,13 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the definition of a name of the editor (A-34, orca-definition.ts, with the language server under it, orca-lsp.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the definition has none of.
+import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
+import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, composing, tag } from "./dom.js";
-import { confirmDelete } from "./hint.js";
+import { confirmDelete, confirmDeleteMany } from "./hint.js";
 import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DEFINITION_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
@@ -41,6 +43,9 @@ let context: FilesContext | null = null;
 let generation = 0;
 const listings = new Map<string, Listing>();
 const expanded = new Set<string>();
+// The rows that are selected (A-18), by path from the worktree, with whether each is a folder, in the order they were selected; and the row a Shift press counts from (the last one pressed without Shift). A row that is not drawn any more (its folder closed, or it is gone) leaves the selection, so what is deleted is what is drawn selected.
+const selected = new Map<string, boolean>();
+let anchor: string | null = null;
 // What the pane draws now; it is drawn again only when this changes.
 let drawn = "";
 let version = 0;
@@ -78,8 +83,8 @@ let branchSwitched: () => void = () => {};
 let branchMoved: () => void = () => {};
 // The branch the app itself just switched the worktree to: the tree and the history were read for it then, so the list that shows it starts no second read.
 let switchedTo: string | null = null;
-// Told that the file `relative` (with `folder`, the folder and everything under it) is gone, so the tabs of the editor that hold it close.
-let gone: (here: FilesContext, relative: string, folder: boolean) => void = () => {};
+// Told that the entries `deleted` (each a file, or with `folder` the folder and everything under it) are gone, so the tabs of the editor that hold them close, and the screen is drawn once.
+let gone: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void = () => {};
 // Told that `relative` is about to be moved: the editor holds the saves of the files it takes along, and the function it answers is called when the move is over, with the new place or with null when it failed.
 let hold: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> = async () => () => {};
 // The heading as it is drawn (the label and the branch), so that the branch button stays while the list under it is open.
@@ -532,24 +537,82 @@ async function download(here: FilesContext, relative: string) {
 // Opens the HTML file in the default browser of this PC (A-31): Rust serves the worktree and hands the address to the system, so nothing is said when it works (the browser comes to the front).
 const openInBrowser = (here: FilesContext, relative: string) => invoke("orca_file_open_in_browser", { path: here.path, relative, environment: here.target }).catch(showError);
 
-// Deletes the file or folder for good (Orca's `files.delete`, which skips the Trash) once the confirmation has been answered. It is gone from the editor and the tree after: a folder's reads are dropped, and the folder it was in is read again. A worktree that is not the tree's any more only closes the tabs.
-async function remove(here: FilesContext, relative: string, folder: boolean) {
+// Deletes the files and folders for good (Orca's `files.delete`, which skips the Trash) once the confirmation has been answered. What is gone leaves the editor and the tree: a folder's reads are dropped, and the folders they were in are read again, side by side. Where one entry fails Rust stops there, so what was deleted before it is drawn as gone and the message is shown. A worktree that is not the tree's any more only closes the tabs.
+async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
   const mine = generation;
+  let answer: OrcaDeleted;
   try {
-    await invoke("orca_file_delete", { path: here.path, relative, folder, environment: here.target });
+    answer = await invoke("orca_files_delete", { path: here.path, entries, environment: here.target });
   } catch (e) {
     if (mine === generation) showError(e);
     return;
   }
-  gone(here, relative, folder);
+  // The message comes first: closing a tab may show another worktree's tree, which is a new tree.
+  if (mine === generation && answer.error !== null) showError(answer.error);
+  gone(here, answer.deleted);
   if (mine !== generation) return;
-  const under = (path: string) => path === relative || path.startsWith(`${relative}/`);
-  if (folder) {
+  for (const { relative, folder } of answer.deleted) {
+    if (!folder) continue;
+    const under = (path: string) => path === relative || path.startsWith(`${relative}/`);
     for (const path of [...listings.keys()]) if (under(path)) listings.delete(path);
     for (const path of [...expanded]) if (under(path)) expanded.delete(path);
     if (creating !== null && under(creating.dir)) creating = null;
   }
-  await readDir(parentOf(relative));
+  const queue = [...new Set(answer.deleted.map((d) => parentOf(d.relative)))].filter((dir) => dir === "" || listings.has(dir));
+  const worker = async () => {
+    for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
+      if (mine !== generation) return;
+      await readDir(dir);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+}
+
+// The rows drawn now, in the order of the tree.
+const drawnRows = () => [...$("orca-files-tree").querySelectorAll<HTMLElement>(".orca-file")].map((e) => ({ path: e.dataset.path ?? "", folder: e.dataset.kind === "dir" }));
+
+// Marks the drawn rows of the selection.
+function paintSelection() {
+  for (const node of $("orca-files-tree").querySelectorAll<HTMLElement>(".orca-file")) node.dataset.selected = String(selected.has(node.dataset.path ?? ""));
+}
+
+// Selects by a press on a row (A-18): ⌘ adds the row or takes it off, Shift selects the rows from the anchor to this one (when the anchor is still drawn), and a press with neither selects this row alone. A Shift press keeps the anchor.
+function select(entry: OrcaFileEntry, e: MouseEvent) {
+  const rows = drawnRows();
+  const from = anchor === null ? -1 : rows.findIndex((r) => r.path === anchor);
+  const to = rows.findIndex((r) => r.path === entry.path);
+  if (e.shiftKey && from !== -1 && to !== -1) {
+    selected.clear();
+    for (const r of rows.slice(Math.min(from, to), Math.max(from, to) + 1)) selected.set(r.path, r.folder);
+  } else if (e.metaKey || e.ctrlKey) {
+    if (!selected.delete(entry.path)) selected.set(entry.path, entry.isDirectory);
+    anchor = entry.path;
+  } else {
+    selected.clear();
+    selected.set(entry.path, entry.isDirectory);
+    anchor = entry.path;
+  }
+  paintSelection();
+}
+
+// Asks before the selected rows are deleted, in the popup under `anchor`: by the name of the row when it is one, by the count when there are more (A-18).
+function askDelete(anchor: Element) {
+  const here = context;
+  const entries = [...selected].map(([relative, folder]) => ({ relative, folder }));
+  if (here === null || entries.length === 0) return;
+  const done = () => void remove(here, entries);
+  if (entries.length === 1) confirmDelete(anchor, entries[0].relative.slice(entries[0].relative.lastIndexOf("/") + 1), done);
+  else confirmDeleteMany(anchor, entries.length, done);
+}
+
+// The Delete key (and the key that is called delete on a Mac keyboard) on the tree asks to delete the selected rows, under the row that was pressed last. A field of the tree takes its own keys.
+function deleteKey(e: KeyboardEvent) {
+  if ((e.key !== "Delete" && e.key !== "Backspace") || e.target instanceof HTMLInputElement || composing(e) || selected.size === 0) return;
+  const path = anchor !== null && selected.has(anchor) ? anchor : [...selected.keys()][0];
+  const name = $("orca-files-tree").querySelector(`.orca-file[data-path="${CSS.escape(path)}"] .orca-file-name`);
+  if (name === null) return;
+  e.preventDefault();
+  askDelete(name);
 }
 
 const menuItem = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
@@ -562,7 +625,9 @@ function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
   const copy = (label: string, text: string, done: string) => menuItem(label, COPY_PATH_SVG, () => void copyText(text, done));
-  const del = { ...menuItem("削除", DELETE_SVG, () => confirmDelete(anchor, relative.slice(relative.lastIndexOf("/") + 1), () => void remove(here, relative, isDirectory))), danger: true };
+  const del = { ...menuItem(selected.size > 1 ? `${selected.size} 件を削除` : "削除", DELETE_SVG, () => askDelete(anchor)), danger: true };
+  // Several rows are selected: the menu is the delete of them, since the other items are of one row.
+  if (selected.size > 1) return openMenu(anchor, [del]);
   const rename = { ...menuItem("移動・名前の変更", MOVE_SVG, () => startRename(relative, isDirectory)), divider: true };
   const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
   if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, rename, del]);
@@ -586,9 +651,23 @@ function row(entry: OrcaFileEntry, depth: number) {
   if (entry.isDirectory && dropDir === entry.path) button.dataset.drop = "true";
   button.onpointerdown = (e) => startDrag(e, entry);
   const name = tag("span", "orca-file-name", entry.name);
+  button.dataset.selected = String(selected.has(entry.path));
   button.oncontextmenu = (e) => {
     e.preventDefault();
+    // The right button on a row that is not selected selects it alone, as on one that is selected it keeps the selection.
+    if (!selected.has(entry.path)) {
+      selected.clear();
+      selected.set(entry.path, entry.isDirectory);
+      anchor = entry.path;
+      paintSelection();
+    }
     openRowMenu(name, entry.path, entry.isDirectory);
+  };
+  // A press selects the row, and a press with neither ⌘ nor Shift on a folder opens or closes it too. The row takes the keys (WKWebView does not focus a button on a press), so the Delete key reaches the tree.
+  button.onclick = (e) => {
+    button.focus({ preventScroll: true });
+    select(entry, e);
+    if (entry.isDirectory && !e.metaKey && !e.ctrlKey && !e.shiftKey) toggleDir(entry.path);
   };
   const mark = tag("span", "orca-file-mark");
   if (entry.isDirectory) {
@@ -596,11 +675,10 @@ function row(entry: OrcaFileEntry, depth: number) {
     button.setAttribute("aria-expanded", String(open));
     mark.innerHTML = CHEVRON_SVG;
     button.append(mark, icon(FOLDER_SVG));
-    button.onclick = () => toggleDir(entry.path);
   } else {
     button.dataset.open = String(opened.has(entry.path));
     button.append(mark, icon(FILE_SVG));
-    // A file opens on a double press (or Enter), so a single press can only select it.
+    // A file opens on a double press (or Enter), so a single press only selects it.
     button.ondblclick = () => openFile(entry.path);
     button.onkeydown = (e) => {
       if (e.key === "Enter") openFile(entry.path);
@@ -692,6 +770,9 @@ function draw() {
   tree.replaceChildren(...(context === null ? [] : rows("", 0)));
   redrawing = false;
   tree.scrollTop = top;
+  const present = new Set(drawnRows().map((r) => r.path));
+  for (const path of [...selected.keys()]) if (!present.has(path)) selected.delete(path);
+  if (anchor !== null && !present.has(anchor)) anchor = null;
   if (focused) tree.querySelector<HTMLElement>(`[data-path="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   if (typing) focusField(false, typing);
 }
@@ -709,6 +790,8 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     expanded.clear();
     creating = null;
     renaming = null;
+    selected.clear();
+    anchor = null;
     version++;
     // A list of branches is of the worktree that was shown.
     closeBranchDialog();
@@ -725,7 +808,7 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; definition: { inside: (relative: string, line: number, character: number) => void; outside: (path: string, line: number, character: number) => void }; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, relative: string, folder: boolean) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; definition: { inside: (relative: string, line: number, character: number) => void; outside: (path: string, line: number, character: number) => void }; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
@@ -735,6 +818,7 @@ export function initOrcaFiles(on: { open: (relative: string) => void; definition
   initHistory({ open: on.commitDiff });
   initDefinition(on.definition);
   $("orca-files-tree").oncontextmenu = openRootMenu;
+  $("orca-files-tree").onkeydown = deleteKey;
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
   $("orca-files-toggle").onclick = on.toggle;
   $("orca-files-mode-files").innerHTML = FILE_SVG;

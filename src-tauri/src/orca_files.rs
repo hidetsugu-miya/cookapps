@@ -12,14 +12,14 @@
 //! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`, on the history that the token of the first answer pins) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
 //! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
 //! A new file or folder is made in a folder of the tree (`orca_file_create`, `files.createFile` and `files.createDir`): Rust checks that the name is one name, and a name that is taken is refused (`files.createFile` never overwrites). They were read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
-//! A file, or a folder with what is in it, is deleted for good (`orca_file_delete`, `files.delete`, which skips the Trash and makes a path that is not there no error): Rust refuses the root of the worktree and a path that is not inside it. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
+//! Files and folders are deleted for good, several at once (`orca_files_delete`, `files.delete` for each, which skips the Trash and makes a path that is not there no error): Rust refuses the root of the worktree and a path that is not inside it, drops an entry that is under a folder that is deleted too, and stops at the first that fails. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! A file or a folder is moved or renamed inside the worktree (`orca_file_move`, `files.rename`, which does not overwrite: a target that is there is refused): Rust refuses the root, a path that is not inside the worktree, a target that is the source and a target inside the source. `files.rename` makes no folder, so when it answers `ENOENT` and the source is there (`files.stat`) the missing folders of the target are made one by one (`files.createDir`, which makes one level) and the rename is tried once more. A change of the case of the name alone goes through a temporary name in the same folder (two `files.rename`), because a disk that ignores case would have Orca refuse the target as taken. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! The scratchpad of A-29 is a file in `.orca/scratchpad` of a worktree (`orca_scratchpad_create`): the same `files.createFile`, and a name that is taken is answered as the existing file, not as a failure.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB). The same read (`fetch_into`) gives the bytes to the preview server of A-31 (`orca_preview.rs`), through a `Sink`.
 
 use std::{
     cmp::Ordering,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
@@ -72,6 +72,8 @@ pub(crate) const BAD_NAME: &str = "名前が正しくありません";
 pub(crate) const NAME_TAKEN: &str = "同じ名前があります";
 pub(crate) const NOT_CREATED: &str = "作成できませんでした";
 pub(crate) const NOT_DELETED: &str = "削除できませんでした";
+/// The message for a delete of nothing.
+const NOTHING_TO_DELETE: &str = "削除するものがありません";
 pub(crate) const NOT_MOVED: &str = "移動できませんでした";
 pub(crate) const SAME_PLACE: &str = "移動先が元の場所と同じです";
 const INTO_ITSELF: &str = "フォルダーを自分の中には移動できません";
@@ -124,6 +126,24 @@ pub struct OrcaFileEntry {
 pub struct OrcaDir {
     pub entries: Vec<OrcaFileEntry>,
     pub total: u32,
+}
+
+/// A file, or a folder with what is in it (`folder`), that the file pane deletes (A-18): `relative` is its path from the worktree. It comes from the page, and what is deleted is what `delete_plan` makes of the list.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaDeleteEntry {
+    pub relative: String,
+    pub folder: bool,
+}
+
+/// What a delete of several entries did (A-18): the entries that are gone, in the order they were deleted, and the message of the one that failed (the delete stops there, so the entries after it are untouched).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaDeleted {
+    pub deleted: Vec<OrcaDeleteEntry>,
+    pub error: Option<String>,
 }
 
 /// The text of a file for the editor, with LF line ends (`crlf` says the file has CRLF, which the write brings back), and the signature of the text as the disk holds it.
@@ -820,6 +840,66 @@ async fn delete(
         return Err(NOT_DELETED.into());
     }
     Ok(())
+}
+
+/// What a delete of `entries` deletes: every path is checked as `delete` takes it (never empty, none outside the worktree, no `\`), a path named twice is one (a folder if either says so), and an entry under a folder that is deleted too is dropped, because the folder takes it along. The order of the rest is the order given. A list with nothing in it is refused.
+fn delete_plan(entries: &[OrcaDeleteEntry]) -> Result<Vec<OrcaDeleteEntry>, String> {
+    if entries.is_empty() {
+        return Err(NOTHING_TO_DELETE.into());
+    }
+    for entry in entries {
+        check_written(&entry.relative, false)?;
+    }
+    let folders: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.folder)
+        .map(|entry| entry.relative.as_str())
+        .collect();
+    let mut plan: Vec<OrcaDeleteEntry> = Vec::new();
+    let mut at: HashMap<&str, usize> = HashMap::new();
+    for entry in entries {
+        // The folders above the path are its prefixes that end before a `/`.
+        let inside = entry
+            .relative
+            .match_indices('/')
+            .any(|(end, _)| folders.contains(&entry.relative[..end]));
+        if inside {
+            continue;
+        }
+        match at.get(entry.relative.as_str()) {
+            Some(&index) => plan[index].folder |= entry.folder,
+            None => {
+                at.insert(entry.relative.as_str(), plan.len());
+                plan.push(entry.clone());
+            }
+        }
+    }
+    Ok(plan)
+}
+
+/// Deletes the entries of `plan` one after another and stops at the first that fails: the answer holds the ones that are gone and that failure's message, so the page draws what changed and says why the rest did not.
+async fn delete_all(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    plan: &[OrcaDeleteEntry],
+) -> OrcaDeleted {
+    let mut deleted = Vec::new();
+    for entry in plan {
+        match delete(rpc, path, host_id, &entry.relative, entry.folder).await {
+            Ok(()) => deleted.push(entry.clone()),
+            Err(error) => {
+                return OrcaDeleted {
+                    deleted,
+                    error: Some(error),
+                }
+            }
+        }
+    }
+    OrcaDeleted {
+        deleted,
+        error: None,
+    }
 }
 
 // ---- the move ----
@@ -2111,19 +2191,18 @@ pub async fn orca_scratchpad_create(
     create_scratchpad(&mut connection, &path, &host_id, &name).await
 }
 
-/// Deletes the file or, with `folder`, the folder with its contents, `relative` in the worktree at `path` (A-18), for good: Orca's `files.delete` skips the Trash. The root of the worktree (an empty `relative`) and a path that is not inside it are refused. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call.
+/// Deletes the files and folders `entries` (a folder with its contents) in the worktree at `path` (A-18), for good: Orca's `files.delete` skips the Trash. What is deleted is `delete_plan` of the list: an entry under a folder that is in the list too goes with the folder, and the root of the worktree and a path that is not inside it are refused before anything is asked. It deletes one after another and stops at the first that fails, and answers what is gone and that failure's message. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call.
 #[tauri::command]
-pub async fn orca_file_delete(
+pub async fn orca_files_delete(
     path: String,
-    relative: String,
-    folder: bool,
+    entries: Vec<OrcaDeleteEntry>,
     environment: Option<String>,
-) -> Result<(), String> {
-    check_written(&relative, false)?;
+) -> Result<OrcaDeleted, String> {
+    let plan = delete_plan(&entries)?;
     let host_id = host_of(&path, environment.as_deref()).await?;
     let asked = async {
         let mut connection = Connection::open(environment.clone()).await?;
-        delete(&mut connection, &path, &host_id, &relative, folder).await
+        Ok(delete_all(&mut connection, &path, &host_id, &plan).await)
     };
     let deleted = asked.await;
     forget_worktree_host(&path, environment.as_deref());
@@ -4121,6 +4200,158 @@ mod tests {
                 .await
                 .unwrap_err(),
             "削除できませんでした"
+        );
+    }
+
+    fn doomed(relative: &str, folder: bool) -> OrcaDeleteEntry {
+        OrcaDeleteEntry {
+            relative: relative.into(),
+            folder,
+        }
+    }
+
+    #[test]
+    fn a_delete_of_a_folder_and_what_is_in_it_deletes_the_folder_alone() {
+        let plan = delete_plan(&[
+            doomed("src/lib/a.rs", false),
+            doomed("src", true),
+            doomed("src/lib", true),
+            doomed("docs/a.md", false),
+        ])
+        .unwrap();
+        assert_eq!(plan, vec![doomed("src", true), doomed("docs/a.md", false)]);
+    }
+
+    #[test]
+    fn a_name_that_only_starts_like_a_folder_is_not_inside_it() {
+        let plan = delete_plan(&[
+            doomed("src", true),
+            doomed("src2", true),
+            doomed("src.rs", false),
+            doomed("src/a.rs", false),
+        ])
+        .unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                doomed("src", true),
+                doomed("src2", true),
+                doomed("src.rs", false)
+            ]
+        );
+        // A file is not a folder, so what is under its name is kept (it cannot be there, and Orca is the one to say so).
+        let plan = delete_plan(&[doomed("a", false), doomed("a/b", false)]).unwrap();
+        assert_eq!(plan, vec![doomed("a", false), doomed("a/b", false)]);
+    }
+
+    #[test]
+    fn a_path_named_twice_is_deleted_once_as_a_folder_if_either_says_so() {
+        let plan = delete_plan(&[
+            doomed("a.rs", false),
+            doomed("src", false),
+            doomed("a.rs", false),
+            doomed("src", true),
+        ])
+        .unwrap();
+        assert_eq!(plan, vec![doomed("a.rs", false), doomed("src", true)]);
+    }
+
+    #[test]
+    fn a_folder_named_later_or_twice_still_takes_what_is_under_it_at_any_depth() {
+        let plan = delete_plan(&[
+            doomed("src/lib/deep/a.rs", false),
+            doomed("src", false),
+            doomed("x", false),
+            doomed("src", true),
+        ])
+        .unwrap();
+        assert_eq!(plan, vec![doomed("src", true), doomed("x", false)]);
+    }
+
+    #[test]
+    fn the_order_given_is_the_order_of_the_plan() {
+        let plan =
+            delete_plan(&[doomed("z", false), doomed("b", true), doomed("m/x", false)]).unwrap();
+        assert_eq!(
+            plan,
+            vec![doomed("z", false), doomed("b", true), doomed("m/x", false)]
+        );
+    }
+
+    #[test]
+    fn nothing_and_a_bad_path_anywhere_in_the_list_are_refused_before_any_call() {
+        assert_eq!(delete_plan(&[]).unwrap_err(), "削除するものがありません");
+        for bad in ["", "..", "../a", "/a", "a//b", "a\\b", "a\nb"] {
+            assert!(
+                delete_plan(&[doomed("ok.rs", false), doomed(bad, false)]).is_err(),
+                "{bad:?}"
+            );
+            assert!(delete_plan(&[doomed(bad, true), doomed("ok.rs", false)]).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn several_entries_are_deleted_one_after_another_in_the_order_of_the_plan() {
+        let mut orca = script(vec![
+            Ok(json!({"ok": true})),
+            Ok(json!({"ok": true})),
+            Ok(json!({"ok": true})),
+        ]);
+        let plan = [
+            doomed("src", true),
+            doomed("a.rs", false),
+            doomed("b/c", false),
+        ];
+        let answer = delete_all(&mut orca, "/work/a", "local", &plan).await;
+        assert_eq!(
+            answer,
+            OrcaDeleted {
+                deleted: plan.to_vec(),
+                error: None
+            }
+        );
+        let params = |relative: &str, recursive: bool| {
+            (
+                "files.delete".to_owned(),
+                json!({"worktree": "path:/work/a", "expectedExecutionHostId": "local", "relativePath": relative, "recursive": recursive}),
+            )
+        };
+        assert_eq!(
+            orca.calls,
+            vec![
+                params("src", true),
+                params("a.rs", false),
+                params("b/c", false)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_entry_stops_the_delete_and_the_answer_holds_what_is_gone_and_why() {
+        let mut orca = script(vec![Ok(json!({"ok": true})), denied()]);
+        let plan = [
+            doomed("a.rs", false),
+            doomed("b.rs", false),
+            doomed("c.rs", false),
+        ];
+        let answer = delete_all(&mut orca, "/work/a", "local", &plan).await;
+        assert_eq!(
+            answer,
+            OrcaDeleted {
+                deleted: vec![doomed("a.rs", false)],
+                error: Some("Orca がエラーを返しました（forbidden）".into())
+            }
+        );
+        // The third was never asked.
+        assert_eq!(orca.calls.len(), 2);
+        let mut orca = script(vec![Ok(json!({"ok": false}))]);
+        let answer = delete_all(&mut orca, "/work/a", "local", &plan).await;
+        assert_eq!(
+            answer,
+            OrcaDeleted {
+                deleted: vec![],
+                error: Some("削除できませんでした".into())
+            }
         );
     }
 

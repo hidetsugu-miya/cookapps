@@ -1340,10 +1340,10 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await browser.execute(() => document.querySelectorAll(".formation-new-repo:not([hidden])").length)).toBe(4);
   });
 
-  it("shows no heading for an environment with no repository, and keeps the heading of one that could not be read", async () => {
+  it("shows no heading for an environment with no repository, and none for one that could not be read", async () => {
     await ask({ formation_environments: formationEnvironments([], { "dev-server": ["wonder-api"], "empty-server": [] }, { "down-server": "届きません" }) });
-    expect(await textsOf(".formation-new-env:not([hidden])")).toEqual(["dev-server", "down-server"]);
-    expect(await textsOf(".formation-new-note")).toEqual(["届きません"]);
+    expect(await textsOf(".formation-new-env:not([hidden])")).toEqual(["dev-server"]);
+    expect(await count(".formation-new-note")).toBe(0);
     expect(await repos()).toEqual(["wonder-api"]);
   });
 
@@ -1459,11 +1459,22 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await pressedRows()).toEqual(["formation"]);
   });
 
-  it("says why an environment could not be read, with no box under it, and why the list of the saved ones could not", async () => {
-    await ask({ formation_environments: formationEnvironments(["tsunagiai"], {}, { "dev-server": "届きません" }, "環境の一覧を読めません") });
-    expect(await textsOf(".formation-new-env")).toEqual(["この Mac", "dev-server"]);
-    expect(await textsOf(".formation-new-note")).toEqual(["環境の一覧を読めません", "届きません"]);
+  it("shows nothing of an environment that could not be read, nor of the list of the saved ones that could not, and lets the repositories that were read be chosen", async () => {
+    await ask({ formation_environments: formationEnvironments(["tsunagiai"], {}, { "dev-server": "Orca is not running" }, "Orca is not running") });
+    expect(await textsOf(".formation-new-env")).toEqual(["この Mac"]);
+    expect(await count(".formation-new-pop p:not(.formation-new-env)")).toBe(0);
     expect(await repos()).toEqual(["tsunagiai"]);
+    await pick(0);
+    expect(await checked()).toEqual([true]);
+  });
+
+  it("opens with an empty list when no repository could be read, and can still be made", async () => {
+    await openList({ formation_environments: formationEnvironments([], {}, { "dev-server": "Orca is not running" }, "Orca is not running") });
+    await pressNew();
+    await expect(dialog()).toBeDisplayed();
+    await expect(makeButton()).toBeEnabled();
+    expect(await count(".formation-new-pop p:not([hidden])")).toBe(0);
+    expect(await repos()).toEqual([]);
   });
 
   it("closes with the words of the failure when the environments cannot be read", async () => {
