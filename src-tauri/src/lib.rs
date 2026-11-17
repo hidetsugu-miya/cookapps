@@ -369,6 +369,7 @@ pub fn run() {
             orca_panes::orca_panes,
             orca_files::orca_files_list,
             orca_files::orca_files_ignored,
+            orca_files::orca_files_changes,
             orca_files::orca_file_read,
             orca_files::orca_file_write,
             orca_files::orca_file_create,
