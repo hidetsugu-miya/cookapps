@@ -1987,6 +1987,20 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
   });
 
+  it("does not carry the off restart button of a start on its way over to a formation of this Mac", async () => {
+    await openList({ formation_list: remote(), ...SHOWN }, null);
+    const start = await mock("formation_orchestrator", holds);
+    await row("studio-work").click();
+    await waitForCalls(start);
+    await expect($("#formation-restart")).toBeDisabled();
+    await row("formation").click();
+    await waitForStarts(1);
+    await expect($("#formation-restart")).toBeEnabled();
+    await pressRestart();
+    await waitForStarts(2);
+    await release(start, terminal());
+  });
+
   it("restarts the terminal through Rust, and shows the new one in place of the old", async () => {
     await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
     await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));

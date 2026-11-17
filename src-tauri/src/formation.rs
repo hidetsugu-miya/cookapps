@@ -3003,11 +3003,13 @@ fn through_record<T>(
         access.read,
         access.pull,
     )?;
-    let own: Vec<Child> = read_record(config, formation)?
-        .into_iter()
+    let kept_here = read_record(config, formation)?;
+    let own: Vec<Child> = kept_here
+        .iter()
         .filter(|c| !on_pc.iter().any(|p| p.name == c.name))
+        .cloned()
         .collect();
-    let scratch = Scratch::make(config, formation, &with_own(on_pc.clone(), own.clone()))?;
+    let scratch = Scratch::make(config, formation, &with_own(on_pc.clone(), own))?;
     let done = work(&scratch.config);
     let after = read_record(&scratch.config, formation)?;
     let closed = |of: &[Child]| -> Vec<String> {
@@ -3016,7 +3018,8 @@ fn through_record<T>(
             .map(|c| c.name.clone())
             .collect()
     };
-    let (closed_on_pc, closed_own) = (closed(&on_pc), closed(&own));
+    // A name in both records is closed from both, so that this Mac's old record does not keep it.
+    let (closed_on_pc, closed_own) = (closed(&on_pc), closed(&kept_here));
     let dropped_from_pc = if closed_on_pc.is_empty() {
         Ok(())
     } else {
@@ -3420,10 +3423,21 @@ fn list_with(config: &Path, read: &Read<'_>, pull: &PullEnv<'_>) -> Result<Forma
     migrate_legacy(config)?;
     let metas = read_metas(config, &formation_names(config, None));
     let groups = pc_groups(&metas);
+    // The reads of the PCs block on the runtime that `list_with` runs in (`on_pc`), and a thread of the scope has none of its own.
+    let runtime = tokio::runtime::Handle::try_current().ok();
     let pulled: Vec<(&String, PulledRecords)> = std::thread::scope(|scope| {
         let runs: Vec<_> = groups
             .iter()
-            .map(|(environment, items)| (environment, scope.spawn(|| pull(environment, items))))
+            .map(|(environment, items)| {
+                let runtime = runtime.as_ref();
+                (
+                    environment,
+                    scope.spawn(move || {
+                        let _inside = runtime.map(tokio::runtime::Handle::enter);
+                        pull(environment, items)
+                    }),
+                )
+            })
             .collect();
         runs.into_iter()
             .map(|(environment, run)| {
@@ -10460,6 +10474,27 @@ mod tests {
     }
 
     #[test]
+    fn a_child_closed_that_both_records_name_leaves_both_records() {
+        let config = temp_dir("through-record-both");
+        remote_formation(&config, "api-work");
+        write_children(
+            &config,
+            "api-work",
+            &[planned("a", "api"), planned("c", "api")],
+        )
+        .unwrap();
+        let pc = Pc::with(vec![on_pc("a"), on_pc("b")]);
+        let access = access!(pc);
+        through_record(&config, "api-work", &access, |scratch| {
+            update(scratch, "api-work", |old| Ok(without(old, "a")))
+        })
+        .unwrap();
+        assert_eq!(names(&pc.record.lock().unwrap()), ["b"]);
+        assert_eq!(names(&read_record(&config, "api-work").unwrap()), ["c"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn a_work_that_changes_nothing_writes_nothing_and_a_failed_one_still_takes_out_what_it_closed()
     {
         let config = temp_dir("through-record-fails");
@@ -10726,6 +10761,35 @@ mod tests {
         assert!(!kept.closed);
         assert_eq!(kept.changed.len(), 1);
         assert_eq!(names(&flow.pc.record.lock().unwrap()), ["b"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_reads_the_records_of_the_pcs_with_the_runtime_of_the_blocking_thread_it_runs_on() {
+        let config = temp_dir("list-pc-runtime");
+        remote_formation(&config, "api-work");
+        let dir = config.clone();
+        let list = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                tokio::task::spawn_blocking(move || {
+                    list_with(&dir, &|_, _| Err("not read".into()), &|_, items| {
+                        // The real read of a PC (`on_pc`) blocks on the runtime it is called in.
+                        tokio::runtime::Handle::current().block_on(async {});
+                        items
+                            .iter()
+                            .map(|_| Ok(vec![planned("a", "api")]))
+                            .collect()
+                    })
+                })
+                .await
+                .unwrap()
+            })
+            .unwrap();
+        assert_eq!(list.read_error, None);
+        assert_eq!(list.formations[0].counts.planned, 1);
         std::fs::remove_dir_all(&config).unwrap();
     }
 

@@ -28,6 +28,8 @@ const LOCAL = "local";
 // The orchestrators of the formations of a saved environment, by the name of the formation: the terminal once Rust has made it (in memory only; Rust finds the recorded one again), the starts on their way, and the words of the ones that failed.
 const terminals = new Map<string, FormationOrchestrator>();
 const starting = new Set<string>();
+// The panes of the orchestrators of this Mac whose restart is on its way.
+const restarting = new Set<string>();
 const failures = new Map<string, string>();
 
 let mode: DevMode = "orca";
@@ -57,11 +59,12 @@ function showPane() {
   if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, kind: "formation" }, OWNER);
 }
 
-// The restart button is off while the orchestrator of the shown formation of a saved environment is starting, because a restart pressed then would be dropped (one start at a time for a formation, and a first start can take long).
+// The restart button is off while the orchestrator of the shown formation is starting, because a restart pressed then would be dropped or would end the process of the one before it (one start at a time for a formation, and a first start can take long). It is set from the shown formation each time, so that the state of another formation does not stay on it.
 function syncRestart() {
   const name = currentFormation();
-  if (name === null || formationEnvironment(name) === LOCAL) return;
-  $<HTMLButtonElement>("formation-restart").disabled = starting.has(name);
+  if (name === null) return;
+  $<HTMLButtonElement>("formation-restart").disabled =
+    formationEnvironment(name) === LOCAL ? restarting.has(formationPaneId(name)) : starting.has(name);
 }
 
 // Shows the terminal of the orchestrator of a formation of a saved environment, and starts it when it has none and no failure is on the screen (a failure is tried again by the restart button, or by pressing the formation again).
@@ -128,22 +131,21 @@ export function initFormation() {
   button.onclick = () => {
     const id = pane();
     if (id === null) return;
-    button.disabled = true;
     const name = currentFormation()!;
     if (formationEnvironment(name) !== LOCAL) {
       const got = terminals.get(name);
       if (got) releaseTerminal(got.handle, OWNER);
       terminals.delete(name);
-      void startRemote(name, true).then(() => {
-        button.disabled = false;
-        syncRestart();
-      });
+      void startRemote(name, true);
       return;
     }
+    restarting.add(id);
+    syncRestart();
     closeClaudeCode(id, OWNER);
     showClaudeCode($("formation-term"), { id, kind: "formation" }, OWNER);
     void claudeCodeStarted(id).then(() => {
-      button.disabled = false;
+      restarting.delete(id);
+      syncRestart();
     });
   };
 }
