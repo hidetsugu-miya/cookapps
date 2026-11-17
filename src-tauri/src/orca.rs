@@ -13,6 +13,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::{AppHandle, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -2184,6 +2186,33 @@ pub async fn orca_handoff(
 #[tauri::command]
 pub async fn orca_project_add(path: String, environment: Option<String>) -> Result<(), String> {
     blocking(move || add_project(&path, environment.as_deref())).await?
+}
+
+/// Adds a folder of this machine to Orca as a project (A-38): the owner picks it in the folder dialog that Rust opens (the page gives no place), and it is added as `orca_project_add` adds one with no environment. `false` when the dialog was cancelled, and nothing is added.
+#[tauri::command]
+pub async fn orca_project_add_here(app: AppHandle, window: WebviewWindow) -> Result<bool, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .pick_folder(move |picked| {
+            let _ = sender.send(picked);
+        });
+    let Some(picked) = receiver
+        .await
+        .map_err(|_| "フォルダを選べません".to_owned())?
+    else {
+        return Ok(false);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|_| "フォルダの場所が正しくありません".to_owned())?;
+    let path = path
+        .to_str()
+        .ok_or("フォルダの場所が正しくありません")?
+        .to_owned();
+    blocking(move || add_project(&path, None)).await??;
+    Ok(true)
 }
 
 /// Closes the tab of the Orca terminal `handle` (a Claude session or a plain terminal).

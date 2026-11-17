@@ -28,6 +28,7 @@ import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import type { DefinitionQuery } from "./orca-definition.js";
+import { openAddProject } from "./orca-add.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, showEditors } from "./orca-editor.js";
 import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
@@ -1313,6 +1314,8 @@ export function initOrca() {
   toggle.id = "orca-list-toggle";
   drawListToggle(toggle, listOpen);
   $("orca-header").prepend(toggle);
+  const add = $("orca-add");
+  add.onclick = () => openAddProject(add, view?.environments ?? [], () => void load("full", true));
   initPaneTree($("orca-panes"), {
     plus: (anchor, pane) => {
       focusPane(pane);

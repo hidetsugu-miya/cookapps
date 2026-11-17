@@ -444,13 +444,13 @@ describe("orca", () => {
     expect(box.header).toBe(44);
     expect(box.tabs).toBe(44);
     expect(box.tabsTop).toBe(box.headerTop);
-    expect(box.buttons).toEqual([28]);
-    // No label, no 「新規」 and no reload button: the button of the list (A-23) is the only one.
+    expect(box.buttons).toEqual([28, 28]);
+    // No label, no 「新規」 and no reload button: the button of the list (A-23) and the one that adds a project (A-38) are the only ones.
     expect(await count("#orca-heading")).toBe(0);
     expect(await count("#orca-new")).toBe(0);
     expect(await count("#orca-refresh")).toBe(0);
     const order = await browser.execute(() => [...document.querySelectorAll("#orca-header button")].map((b) => b.id));
-    expect(order).toEqual(["orca-list-toggle"]);
+    expect(order).toEqual(["orca-list-toggle", "orca-add"]);
     // The plus is in the tab bar, after the strip of tabs (the button that opens the list is before the strip, and hidden while the list is open); it is a menu button, and waits for a project.
     await expect($(".orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
     await expect($(".orca-plus")).toHaveAttribute("aria-haspopup", "menu");
@@ -3582,5 +3582,141 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     await showAgain();
     await waitForCount("#orca-feed .orca-project", 2);
     expect(await count("#orca-feed .orca-env")).toBe(0);
+  });
+});
+
+// A-38: the button of the list's header that adds a project. Rust opens the folder dialog and adds the folder (`orca_project_add_here`, unit tests); here the screen is checked: the button, the popup and its select, what it asks of Rust, and the list read again.
+describe("orca: add a project (A-38)", () => {
+  const HERE = "orca_project_add_here";
+  const add = () => $("#orca-add");
+  const pop = () => $('.orca-add-pop[role="dialog"]');
+  const pick = () => $(".orca-add-pop .orca-add-pick");
+  // The page's own press of the button (the driver's click focuses the button after the page's handler ran, which no real press does).
+  async function press() {
+    await browser.execute(
+      (id) => {
+        if (window.__e2e_once__(id)) document.getElementById("orca-add")!.click();
+      },
+      onceId(),
+    );
+    await expect(pop()).toBeDisplayed();
+  }
+  // Chooses the place `label` in the select, as a user does.
+  const choosePlace = (label: string) =>
+    browser.execute(
+      (id, text) => {
+        if (!window.__e2e_once__(id)) return;
+        const select = document.querySelector<HTMLSelectElement>(".orca-add-pop select")!;
+        select.selectedIndex = [...select.options].findIndex((o) => o.textContent === text);
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      onceId(),
+      label,
+    );
+  // The list the screen reads again after a folder was added: one more project than the sample.
+  const withNew = () => orcaOverview(sample(), [...worktrees(), orcaWorktree("example-new", "main")]);
+
+  it("has the button in the header after the button of the list, with a label, and opens the popup under it", async () => {
+    await openOrca();
+    await expect(add()).toHaveAttribute("aria-label", "プロジェクトを追加");
+    await expect(add()).toHaveAttribute("aria-haspopup", "dialog");
+    expect(await count("#orca-add svg")).toBe(1);
+    expect(await count("#orca-header #orca-add")).toBe(1);
+    await expect(pop()).not.toExist();
+    await press();
+    await expect(pop()).toHaveAttribute("aria-label", "プロジェクトを追加");
+    await expect(add()).toHaveAttribute("aria-expanded", "true");
+    const where = await browser.execute(() => {
+      const p = document.querySelector(".orca-add-pop")!.getBoundingClientRect();
+      const b = document.getElementById("orca-add")!.getBoundingClientRect();
+      return { belowButton: p.top >= b.bottom, inside: p.right <= innerWidth && p.left >= 0 };
+    });
+    expect(where).toEqual({ belowButton: true, inside: true });
+    // The select and the folder button are all it has, and nothing is asked of Rust yet.
+    expect(await count(".orca-add-pop select")).toBe(1);
+    expect(await textsOf(".orca-add-pop button")).toEqual(["フォルダを選ぶ…"]);
+    expect(await count(".orca-add-pop [placeholder]")).toBe(0);
+    expect(await callsOf(HERE)).toEqual([]);
+  });
+
+  it("lists this Mac first, then the saved environments, and starts on this Mac", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await press();
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac", "Studio", "Lab"]);
+    await expect($(".orca-add-pop select")).toHaveAttribute("aria-label", "場所");
+    expect(await browser.execute(() => document.querySelector<HTMLSelectElement>(".orca-add-pop select")!.selectedIndex)).toBe(0);
+  });
+
+  it("has only this Mac when no environment is saved", async () => {
+    await openOrca();
+    await press();
+    expect(await textsOf(".orca-add-pop select option")).toEqual(["この Mac"]);
+  });
+
+  it("asks Rust to pick and add a folder of this Mac, and reads the list again", async () => {
+    await openOrca();
+    await waitForCount("#orca-feed .orca-project", 4);
+    const here = await mock(HERE, true);
+    const read = await mock("orca_overview", withNew());
+    await press();
+    await pick().click();
+    // The page gives no path and no environment: Rust opens the dialog.
+    expect(await waitForCalls(here)).toEqual([null]);
+    expect(await callsOf(here)).toHaveLength(1);
+    await expect(pop()).not.toExist();
+    expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
+    await waitForCount("#orca-feed .orca-project", 5);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("reads nothing again when the folder dialog is cancelled", async () => {
+    await openOrca();
+    const here = await mock(HERE, false);
+    const read = await mock("orca_overview", withNew());
+    await press();
+    await pick().click();
+    await waitForCalls(here);
+    await expect(pop()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the failure of the add in the error line and does not read the list again", async () => {
+    await openOrca();
+    await waitForCount("#orca-feed .orca-project", 4);
+    const here = await mock(HERE, rejects("Orca が時間内に応答しませんでした"));
+    const read = await mock("orca_overview", withNew());
+    await press();
+    await pick().click();
+    await waitForCalls(here);
+    await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+  });
+
+  it("closes the popup for a saved environment and asks Rust for no folder", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    const here = await mock(HERE, true);
+    const added = await mock("orca_project_add", null);
+    await press();
+    await choosePlace("Studio");
+    await pick().click();
+    await expect(pop()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(here)).toEqual([]);
+    expect(await callsOf(added)).toEqual([]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("closes on Escape and adds nothing", async () => {
+    await openOrca();
+    const here = await mock(HERE, true);
+    await press();
+    await browser.keys("Escape");
+    await expect(pop()).not.toExist();
+    expect(await callsOf(here)).toEqual([]);
   });
 });

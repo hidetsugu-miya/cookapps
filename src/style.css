@@ -1449,6 +1449,12 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .formation-new-actions .text-btn:hover { background: var(--soft); }
 .formation-new-actions .text-btn.primary, .formation-new-actions .text-btn.primary:hover { border-color: var(--accent); background: var(--accent); }
 .formation-new-actions .text-btn:disabled { opacity: .4; cursor: default; }
+.orca-add-pop { width: 260px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 8px; gap: 8px; }
+.orca-add-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.orca-add-field > span { flex: none; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.orca-add-pop select { flex: 1; min-width: 0; box-sizing: border-box; height: 28px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); font: inherit; color: inherit; }
+.orca-add-pop select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.orca-add-pick svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail has it on the right of the screen (40% at first, a third to a half; the divider of ts/split.ts); the Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */

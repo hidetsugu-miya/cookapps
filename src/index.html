@@ -606,7 +606,11 @@
     </section>
     <section id="orca" class="split-main" hidden>
       <aside id="orca-list" aria-label="プロジェクト">
-        <header id="orca-header" data-tauri-drag-region></header>
+        <header id="orca-header" data-tauri-drag-region>
+          <button id="orca-add" class="icon-btn" type="button" aria-label="プロジェクトを追加" aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M12 10v6M9 13h6"/></svg>
+          </button>
+        </header>
         <div id="orca-search" role="search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
           <input id="orca-search-input" type="text" autocomplete="off" spellcheck="false" aria-label="プロジェクトを検索" placeholder="検索">

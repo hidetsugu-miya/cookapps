@@ -313,6 +313,10 @@ export interface Commands {
   orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
   // A-9: starts a session in a worktree with the instruction the owner wrote (`instruction`), the text of each file attached to it (`files`, A-10), the summary of the content (`summary`, empty without the content) and, when `context` is not null, the content quoted as data after them. Never run twice.
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; files: string[]; summary: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
+  // A-38: adds the folder `path` to Orca as a project (`environment` null: a folder of this Mac, else the name of a saved environment and a folder on that server). Never run twice. A failure carries the message.
+  orca_project_add: { args: { path: string; environment: string | null }; result: null };
+  // A-38: Rust opens the folder dialog of this Mac (the page gives no place and has no dialog permission), and adds the folder picked as `orca_project_add` adds one of this machine. `false` when the dialog was cancelled (nothing was added). Never run twice. A failure carries the message.
+  orca_project_add_here: { args: undefined; result: boolean };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. On `terminal_handle_stale` it closes once more without `--tab`, and a failure of that is an error.
