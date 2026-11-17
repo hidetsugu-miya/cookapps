@@ -53,8 +53,8 @@ export async function readList() {
   } finally {
     reading = false;
   }
-  // The shown formation left the list: its flow is read no more, and the first formation is shown.
-  if (read && formations.length > 0 && !formations.some((f) => f.name === current)) choose(formations[0].name);
+  // The shown formation left the list: its flow is read no more, and the first formation, `formation`, is shown.
+  if (read && formations.length > 0 && !formations.some((f) => f.name === current)) choose(FORMATION_NAME);
   draw();
 }
 
@@ -87,8 +87,8 @@ async function remove(name: string) {
   // A read that began before the deletion still lists it: its answer is dropped.
   made++;
   formations = formations.filter((f) => f.name !== name);
-  // The shown formation is deleted: another one (the first, which is always there) is shown, and the read of the flow of the deleted one stops.
-  if (current === name && formations.length > 0) choose(formations[0].name);
+  // The shown formation is deleted: the first formation, `formation`, which is always there, is shown, and the read of the flow of the deleted one stops.
+  if (current === name) choose(FORMATION_NAME);
   onRemoved(name);
   draw();
   void readList();

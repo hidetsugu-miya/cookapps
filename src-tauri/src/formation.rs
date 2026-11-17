@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, PoisonError},
+    sync::{Mutex, OnceLock, PoisonError},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -197,6 +197,7 @@ fn write_children(config: &Path, formation: &str, children: &[Child]) -> Result<
 }
 
 /// The record is read, changed and written while this is held: the tools may run side by side, and two of them must not overwrite each other (one lock for every formation, which is more than needed and costs nothing).
+/// It is a lock of this process: the tools of `tsunagiai-mcp` run in another one and are not held by it, so what keeps them from the deletion of a formation is that the deletion ends the orchestrator, and with it the tools, before anything else (`delete_with`).
 static RECORD: Mutex<()> = Mutex::new(());
 
 fn update(
@@ -205,6 +206,12 @@ fn update(
     change: impl FnOnce(Vec<Child>) -> Result<Vec<Child>, String>,
 ) -> Result<Vec<Child>, String> {
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    // The folder is made by the creation and by the start of the orchestrator, never by a change of the record: a formation that was deleted while a tool of its orchestrator was at work must not get its folder back (`write_atomic` would make it).
+    if !dir(config, formation).is_dir() {
+        return Err(format!(
+            "フォーメーション「{formation}」はありません（削除されました）"
+        ));
+    }
     let children = change(read_record(config, formation)?)?;
     write_children(config, formation, &children)?;
     Ok(children)
@@ -1684,11 +1691,20 @@ fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<Formati
     }
 }
 
+/// The reads of Orca by the screen's commands. `formation_children` and `formation_list` are called at the same moment by the flow pane (A-37), and both ask for the same `orca worktree ps` of each environment: one run answers both, so Orca is asked once for each period.
+/// The calls made at the same time for the same arguments run once and take the same answer (`orca::Flights`); a run that has ended is not kept, so the next call runs again.
+fn screen_read(args: &[String], timeout: Duration) -> Result<Value, String> {
+    static READING: OnceLock<orca::Flights<Vec<String>, Result<Value, String>>> = OnceLock::new();
+    READING
+        .get_or_init(orca::Flights::default)
+        .run(args.to_vec(), || {
+            orca::call(args, timeout).map_err(orca::message_of)
+        })
+}
+
 fn children_view(config: &Path, formation: &str) -> Result<Vec<FormationChild>, String> {
     check_name(formation)?;
-    children_view_with(&read_children(config, formation), &|args, timeout| {
-        orca::call(args, timeout).map_err(orca::message_of)
-    })
+    children_view_with(&read_children(config, formation), &screen_read)
 }
 
 /// The children of the formation `name` for the screen (A-37), read from `formation/{name}/children.json` and `orca worktree ps` of the environment of each child.
@@ -1948,8 +1964,9 @@ fn refusal_text(refusal: &Refusal) -> String {
     }
 }
 
-/// Deletes the formation `formation` (A-37): every child in its record is closed as `close` does, in the order of the record (a child with a change, an untracked file or a commit no remote has keeps its worktree, and a planned one is dropped from the record), and the first one that is refused stops the deletion with its reason: the formation stays, and the children closed before it stay closed.
-/// When every child is closed, `stop_orchestrator` ends the process of its orchestrator, and its folder `formation/{formation}/` is deleted. A child that the orchestrator added while the others were being closed is found by a last read of the record, under its lock, and stops the deletion too: the folder is deleted only when the record is empty.
+/// Deletes the formation `formation` (A-37). First `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted.
+/// Then every child in its record is closed as `close` does, in the order of the record (a child with a change, an untracked file or a commit no remote has keeps its worktree, and a planned one is dropped from the record), and the first one that is refused stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
+/// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formation/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 /// The first formation exists before any is made (it is in the list at every start), so it is not deleted.
 fn delete_with(
     config: &Path,
@@ -1969,16 +1986,18 @@ fn delete_with(
     if !dir(config, formation).is_dir() {
         return Err(format!("フォーメーション「{formation}」はありません"));
     }
-    for child in read_record(config, formation)? {
+    // A record that cannot be read stops the deletion before the process is touched.
+    let children = read_record(config, formation)?;
+    stop_orchestrator();
+    for child in children {
         close_with(config, formation, &child.name, read, write, git_of).map_err(|refusal| {
             format!(
-                "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです）。{}",
+                "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです。司令塔のプロセスは終えています）。{}",
                 child.name,
                 refusal_text(&refusal)
             )
         })?;
     }
-    stop_orchestrator();
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     if !read_record(config, formation)?.is_empty() {
         return Err(format!(
@@ -2000,12 +2019,7 @@ pub async fn formation_environments() -> Result<EnvironmentsView, String> {
 #[tauri::command]
 pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, String> {
     let dir = config_dir(&app)?;
-    orca::blocking(move || {
-        list_with(&dir, &|args, timeout| {
-            orca::call(args, timeout).map_err(orca::message_of)
-        })
-    })
-    .await?
+    orca::blocking(move || list_with(&dir, &screen_read)).await?
 }
 
 /// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
@@ -2520,6 +2534,7 @@ mod tests {
     #[test]
     fn an_update_writes_what_the_change_returns_and_keeps_the_file_when_it_refuses() {
         let config = temp_dir("update");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         update(&config, F, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
         update(&config, F, |old| with_launched(old, launched("a", "x"))).unwrap();
         assert_eq!(read_children(&config, F), vec![launched("a", "x")]);
@@ -2993,6 +3008,7 @@ mod tests {
     #[test]
     fn a_broken_record_is_not_written_over_by_a_change() {
         let config = temp_dir("update-broken");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
         // No file: the change starts from none.
         update(&config, F, |old| with_planned(old, &[wanted("a", "x")])).unwrap();
         for text in ["", "not json", "[1]", r#"{"children": "x"}"#] {
@@ -4771,7 +4787,7 @@ mod tests {
     }
 
     #[test]
-    fn when_every_child_is_closed_the_orchestrator_ends_and_the_folder_goes() {
+    fn the_orchestrator_ends_first_and_when_every_child_is_closed_the_folder_goes() {
         let config = temp_dir("delete-all");
         formation_of_children(
             &config,
@@ -4788,9 +4804,9 @@ mod tests {
             &|args| orca.run(args),
             &no_remote_git,
             &|| {
-                // The orchestrator ends after the children are closed and before the folder goes.
+                // The orchestrator ends first, while the folder and the record are still whole.
                 assert!(dir(&config, "alpha").is_dir());
-                assert!(read_children(&config, "alpha").is_empty());
+                assert_eq!(read_children(&config, "alpha").len(), 3);
                 stopped.set(stopped.get() + 1);
             },
         )
@@ -4830,7 +4846,9 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
         assert!(err.contains("何も消していません"), "{err}");
-        assert!(!stopped.get());
+        // The orchestrator was ended before the children were closed, and the refusal says so.
+        assert!(stopped.get());
+        assert!(err.contains("司令塔のプロセスは終えています"), "{err}");
         assert!(orca.0.borrow().is_empty());
         assert!(dir(&config, "alpha").is_dir());
         // The child closed before it stays closed, and the ones after it are not touched.
@@ -4862,18 +4880,42 @@ mod tests {
     fn a_child_added_while_the_others_were_closed_keeps_the_folder() {
         let config = temp_dir("delete-added");
         formation_of_children(&config, "alpha", &[gone_child("a")]);
+        let added = std::cell::Cell::new(false);
         let err = delete_with(
             &config,
             "alpha",
-            &|_| Ok(json!({})),
+            // A tool of the orchestrator that is still at work launches a child while the first one is closed.
+            &|_| {
+                if !added.replace(true) {
+                    write_children(&config, "alpha", &[gone_child("a"), planned("late", "x")])
+                        .unwrap();
+                }
+                Ok(json!({}))
+            },
             &|_| Ok(json!({})),
             &no_remote_git,
-            // The orchestrator launches a child before its process is gone.
-            &|| write_children(&config, "alpha", &[planned("late", "x")]).unwrap(),
+            &|| {},
         )
         .unwrap_err();
         assert!(err.contains("司令塔が子を足しました"), "{err}");
         assert_eq!(names(&read_children(&config, "alpha")), ["late"]);
+        assert!(dir(&config, "alpha").is_dir());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_change_of_the_record_does_not_bring_back_a_folder_that_was_deleted() {
+        let config = temp_dir("update-gone");
+        std::fs::create_dir_all(root(&config)).unwrap();
+        let err = update(&config, "alpha", Ok).unwrap_err();
+        assert!(err.contains("はありません"), "{err}");
+        assert!(!dir(&config, "alpha").exists());
+        formation_of_children(&config, "alpha", &[]);
+        update(&config, "alpha", |old| {
+            with_planned(old, &[wanted("p", "x")])
+        })
+        .unwrap();
+        assert_eq!(names(&read_children(&config, "alpha")), ["p"]);
         std::fs::remove_dir_all(&config).unwrap();
     }
 

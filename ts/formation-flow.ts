@@ -50,20 +50,25 @@ async function read() {
   const counting = watching === "count";
   try {
     if (counting) {
-      // A read that fails keeps the last count.
+      // A read that fails keeps the last count, and so does an answer that says Orca could not be read (its counts take every launched child as working).
       const answer = await invoke("formation_list");
-      counted = answer.formations.reduce((sum, f) => sum + f.counts.waiting, 0);
+      if (answer.readError === null) counted = answer.formations.reduce((sum, f) => sum + f.counts.waiting, 0);
     } else {
       const got = await invoke("formation_children", { name: currentFormation() });
-      if (mine !== epoch) return;
-      children = got;
-      failure = null;
+      if (mine === epoch) {
+        children = got;
+        failure = null;
+      }
     }
   } catch (e) {
-    if (mine !== epoch) return;
-    if (!counting) failure = String(e);
+    if (mine === epoch && !counting) failure = String(e);
   } finally {
-    if (mine === epoch) reading = false;
+    reading = false;
+  }
+  // The formation changed while this read ran: its answer is dropped, and the new formation is read now (one read at a time, so a repeated switch never runs the reads side by side).
+  if (!counting && mine !== epoch) {
+    if (watching === "flow") void read();
+    return;
   }
   draw();
 }
@@ -81,7 +86,6 @@ function watch(next: "flow" | "count", ms: number) {
 // Another formation is selected: what the pane shows of the last one is dropped (the children, the selection, the terminals of their sessions), and the children of the new one are read at once.
 export function switchFormation() {
   epoch++;
-  reading = false;
   children = [];
   failure = null;
   terms = [];

@@ -1786,7 +1786,7 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> Flights<K, V> {
     }
 
     /// The answer of `run`, or of the run for `key` that was on its way when this was called. A run that panicked answers nothing, and a call that waited for it runs its own.
-    fn run(&self, key: K, run: impl FnOnce() -> V) -> V {
+    pub(crate) fn run(&self, key: K, run: impl FnOnce() -> V) -> V {
         let slot = Arc::new(Mutex::new(None));
         // The slot is locked before the others can see it, so they wait until the run has answered.
         let mut answer = slot.lock().unwrap_or_else(PoisonError::into_inner);

@@ -22,7 +22,9 @@ export function setDevMode(next: DevMode) {
 }
 
 // Shows the terminal of the orchestrator of the formation that is shown, and hides the one of another (its process goes on). The process starts with the first show of a formation, and a show of a running one starts nothing (A-36).
+// Nothing is shown while the mode or the screen is left: a selection or a deletion that ends then (it was on its way when the owner left) must not take the hidden pane.
 function showPane() {
+  if (mode !== "formation" || $("formation").hidden) return;
   $("formation-head-name").textContent = currentFormation();
   const host = $("formation-term");
   if (!isClaudeCodeShowing(host, pane(), OWNER)) showClaudeCode(host, { id: pane(), kind: "formation" }, OWNER);

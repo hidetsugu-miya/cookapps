@@ -626,13 +626,14 @@ impl ClaudeCode {
     }
 
     /// Ends the process of the orchestrator of the formation `name` (the pane `formation:{name}`), whichever start made it: the formation is deleted (A-37), so no pane is left to close it with its number.
+    /// It returns only when the process group has ended or has been sent the KILL (the grace of `stop_groups` is waited for on this thread, unlike `close`), because the folder of the formation is deleted after it: a tool that the orchestrator started must not write into the folder after that.
     pub fn close_formation(&self, name: &str) {
         let session = self
             .inner
             .lock()
             .remove(format!("{FORMATION_ID_PREFIX}{name}").as_str());
         if let Some(session) = session {
-            stop_later(session.pgid, session.ended.clone());
+            stop_groups(&[(session.pgid, session.ended.clone())], GRACE);
         }
     }
 

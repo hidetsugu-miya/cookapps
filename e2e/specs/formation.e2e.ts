@@ -1,4 +1,5 @@
 import { boot, callsOf, count, formationChild, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, textsOf, timers, waitForCalls } from "../support";
+import type { FormationList } from "../../ts/bindings/FormationList";
 
 // A-37: the development screen's orchestration mode. The orchestrator's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
 const FOOTER_MODES = "#footer-modes";
@@ -244,7 +245,7 @@ const mixed = () => [
 describe("orchestration mode: the flow pane", () => {
   it("heads the pane with the counts and starts the tree with the orchestrator's card", async () => {
     await openFlow(mixed());
-    await expect($("#formation-flow h2")).toHaveText("流れ");
+    await expect($("#formation-flow-head h2")).toHaveText("流れ");
     await browser.waitUntil(async () => (await $("#formation-flow-count").getText()) === "子 3 · 予定 2");
     expect(await textsOf("#formation-flow-root .formation-card-name")).toEqual(["formation"]);
     expect(await textsOf("#formation-flow-root .formation-card-role")).toEqual(["司令塔"]);
@@ -799,10 +800,14 @@ const listed = () =>
     formationEntry("mail-summary", { minutes: 90, repos: ["tsunagiai"], counts: { planned: 0, waiting: 1, working: 0, done: 2 } }),
   ]);
 
+// The list with a formation, `api-work`, whose name sorts before the first formation's: the first formation is selected when the shown one goes, not the first row.
+const listedFirst = () => formationList([formationEntry("api-work", { minutes: 3 }), ...listed().formations]);
+
 async function openList(extra: Record<string, unknown> = {}) {
   await boot({ inbox: inbox(), formation_list: listed(), ...timers({ formationFlow: READ }), ...extra });
   await openFormation();
-  await browser.waitUntil(async () => (await rowNames()).length === 3);
+  const rows = ((extra.formation_list as FormationList | undefined) ?? listed()).formations.length;
+  await browser.waitUntil(async () => (await rowNames()).length === rows);
 }
 
 describe("orchestration mode: the list of the formations", () => {
@@ -895,13 +900,15 @@ describe("orchestration mode: the list of the formations", () => {
     // The cards, the session and the pane go at once, before the read of the new formation answers.
     await expect($("#formation-flow")).not.toBeDisplayed();
     expect(await cardNames()).toEqual([]);
+    // The new formation is read when the read of the last one has ended, not beside it: Orca is not asked twice at once.
+    await browser.pause(READ * 2);
+    expect(await callsOf("formation_children")).toHaveLength(1);
+    // The answer of the read of the first formation is dropped, and the new formation is read at once.
+    await release("formation_children", mixed());
     await browser.waitUntil(async () => {
       const calls = await callsOf("formation_children");
       return calls.length === 2 && (calls[1] as { name: string }).name === "won-2485";
     });
-    // The answer of the read of the first formation is dropped.
-    await release("formation_children", mixed());
-    await browser.pause(READ);
     expect(await cardNames()).toEqual([]);
     await expect($("#formation-flow")).not.toBeDisplayed();
     // The read of the new formation is answered, and its children are drawn.
@@ -911,11 +918,11 @@ describe("orchestration mode: the list of the formations", () => {
   });
 
   it("shows the first formation when the one that is shown leaves the list, and reads its children", async () => {
-    await openList();
+    await openList({ formation_list: listedFirst() });
     await row("mail-summary").click();
     await waitForStarts(2);
-    await mock("formation_list", formationList([formationEntry("formation")]));
-    await browser.waitUntil(async () => (await rowNames()).join() === "formation");
+    await mock("formation_list", formationList([formationEntry("api-work", { minutes: 3 }), formationEntry("formation")]));
+    await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation");
     expect(await pressedRows()).toEqual(["formation"]);
     expect(await headName()).toBe("formation");
     await mock("formation_children", []);
@@ -1038,6 +1045,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
   it("makes it on Enter in the name field, with no project when none is checked", async () => {
     await ask();
     const create = await mock("formation_create", formationEntry("solo", { minutes: 0 }));
+    await mock("formation_list", formationList([...listed().formations, formationEntry("solo", { minutes: 0 })]));
     await browser.keys("solo");
     await browser.keys("Enter");
     expect(await waitForCalls(create)).toEqual([{ name: "solo", projects: [] }]);
@@ -1209,17 +1217,17 @@ describe("orchestration mode: delete a formation", () => {
   });
 
   it("shows the first formation and stops reading the deleted one's children when the shown one is deleted", async () => {
-    await openList();
+    await openList({ formation_list: listedFirst() });
     await row("won-2485").click();
     await waitForStarts(2);
     await waitForCalls("formation_children", 2);
     const del = await mock("formation_delete", null);
-    await mock("formation_list", without("won-2485"));
+    await mock("formation_list", formationList(listedFirst().formations.filter((f) => f.name !== "won-2485")));
     await mock("formation_children", []);
     await ask("won-2485");
     await yes().click();
     await waitForCalls(del);
-    await browser.waitUntil(async () => (await rowNames()).join() === "formation,mail-summary");
+    await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation,mail-summary");
     expect(await pressedRows()).toEqual(["formation"]);
     expect(await headName()).toBe("formation");
     // The terminal of the deleted formation's orchestrator is dropped, and the first formation's goes on without a new start.
@@ -1312,6 +1320,12 @@ describe("orchestration mode: the count on the footer's icon", () => {
     await mock("formation_list", rejects("一覧を読めません"));
     await waitForCalls("formation_list", 2);
     await expect(badge()).toHaveText("2");
+    // Orca could not be read: the answer lists the formations with every launched child working, which is no count of the waiting ones.
+    await mock("formation_list", formationList(waitingList(0).formations, "Orca に届きません"));
+    await waitForCalls("formation_list", 2);
+    await expect(badge()).toHaveText("2");
+    await mock("formation_list", waitingList(1));
+    await expect(badge()).toHaveText("1");
   });
 
   it("shows no number in the orchestration mode, and shares its read with the flow", async () => {
