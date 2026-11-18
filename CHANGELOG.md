@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.84.3
+
+A-34: a project can have several language servers (#958). Each server has a name, the languages it takes, how it starts, and whether it starts by itself, and a definition is asked of the server that takes the language of the file. A project with nothing saved has ruby-lsp, which takes Ruby, as before. The settings saved by an older version are read as that ruby-lsp.
+
+A-34: the 言語サーバー part of the file pane (the button that was 「定義」) shows a card for each server, with the plus that adds one (#961). The fields show what the app decided, marked 「自動」, instead of an empty field. The ssh Host of a saved environment is chosen from the Host names of `~/.ssh/config` (#959).
+
+A-34: Command and the right button on a name open the definitions in a tab 「定義」, in a pane split under the editor (#962). Each place shows its path, its line, and three lines before and after it, and 「開く」 opens it in the editor's pane. The next question replaces what the tab shows. While Command is held, a name that has a definition is underlined (#963).
+
+A-1, A-34: Claude can read and write the language servers of a project with the new tools `lsp_settings`, `lsp_server_save`, `lsp_server_delete` and `lsp_repo_ssh_host_set` of `tsunagiai-mcp` (#960). A write asks you each time, and the file pane follows the change while it is shown.
+
 ## v0.84.2
 
 A-37: the launched teammates of a formation are under its row in the list of the development screen (#946). A formation with teammates has an arrow at the left of its row, which folds and opens them (they are open at first), and the number of its launched teammates at the right end of the row; a planned teammate is not counted. Each teammate's row has the status icon of a session, its name, and under it 「{project} ・ {branch}」. Pressing the row selects the formation and that teammate's tab. The formations of a saved environment are shown the same way.
