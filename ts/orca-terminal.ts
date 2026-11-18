@@ -699,6 +699,13 @@ export function releaseTerminal(id: string, owner: string) {
   dropTerminal(id);
 }
 
+// Gives the terminal of the handle `id` that the pane `owner` showed back to the Orca screen, hidden, and hides what `owner` waits to show. The keys not sent yet stay (A-12): the screen forgets the terminal when its session leaves Orca's list (`pruneTerminals`).
+export function giveBackTerminal(id: string, owner: string) {
+  hideTerminals(owner);
+  const instance = instances.get(id);
+  if (instance && instance.owner === owner) instance.owner = ORCA_SCREEN;
+}
+
 // What a failed send of typed keys does (the screen shows the message).
 export function initOrcaTerminal(report: (e: unknown) => void) {
   onError = report;

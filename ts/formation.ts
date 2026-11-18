@@ -115,8 +115,8 @@ export function showFormation() {
 // The button is off until the new start has answered, because two starts of the pane's id at once could end each other's process.
 export function initFormation() {
   initSplit($("formation"), $("formation-split"), { side: "left", min: 0.15, max: 0.35, initial: 0.18, property: "--list-w" });
-  // The divider between the orchestrator and the right pane (shown with the pane, formation-flow.ts).
-  initSplit($("formation"), $("formation-flow-split"), { side: "right", min: 0.2, max: 0.5, initial: 0.35, property: "--flow-w" });
+  // The divider between the orchestrator and the right pane (shown with the pane, formation-flow.ts). It starts at half of what the list leaves ((1 - 0.18) / 2), as the two panes were of equal width before the divider.
+  initSplit($("formation"), $("formation-flow-split"), { side: "right", min: 0.2, max: 0.5, initial: 0.41, property: "--flow-w" });
   // Another formation is selected in the list: its flow is read in place of the last one's, and its orchestrator is shown in the middle.
   initFormationList(
     (name) => {

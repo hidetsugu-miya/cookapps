@@ -1038,8 +1038,8 @@ button.status:hover { filter: brightness(.95); }
 #formation-head-name { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 #formation-restart { flex: none; margin-left: auto; }
 #formation-term-error { flex: none; margin: 8px; overflow-wrap: anywhere; }
-/* The right pane, "チームメイト", is as wide as the divider before it puts it (`--flow-w`, 20% to 50% of the screen, 35% at first). The orchestrator takes the rest. */
-#formation-flow { flex: none; width: clamp(20%, var(--flow-w, 35%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; background: var(--bar); }
+/* The right pane, "チームメイト", is as wide as the divider before it puts it (`--flow-w`, 20% to 50% of the screen, 41% at first, half of what the list leaves at its first width). The orchestrator takes the rest. */
+#formation-flow { flex: none; width: clamp(20%, var(--flow-w, 41%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; background: var(--bar); }
 #formation-flow-split { flex: none; }
 /* Closed: a strip of 40px stays at the right end, with the button that opens the pane and a mark for each child. */
 #formation-strip { flex: none; width: 40px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; border-left: 1px solid var(--line); background: var(--bar); }
@@ -1445,8 +1445,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
-/* A-40: the modal of the terminal of one session, in the middle of the dimmed screen of .scrim with a margin on the four sides, in the frame of #account-popup. */
-#orca-peek { align-items: center; justify-content: center; box-sizing: border-box; padding: 32px; }
+/* A-40: the modal of the terminal of one session, in the middle of a dimmed screen (as .scrim, but not that class: it is always in the document, and the screens count .scrim for an open pane) with a margin on the four sides, in the frame of #account-popup. */
+#orca-peek { position: fixed; inset: 0; z-index: 15; display: flex; background: rgba(0, 0, 0, .25); align-items: center; justify-content: center; box-sizing: border-box; padding: 32px; }
 #orca-peek-box { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
 #orca-peek-head { flex: none; display: flex; align-items: center; gap: 10px; box-sizing: border-box; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); }
 #orca-peek-icon { flex: none; display: inline-flex; }

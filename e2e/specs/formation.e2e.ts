@@ -512,7 +512,7 @@ describe("orchestration mode: the panes beside the list", () => {
     expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
   });
 
-  it("shows the right pane when a child, a planned one too, is recorded, with a divider before it, 35% of the screen wide", async () => {
+  it("shows the right pane when a child, a planned one too, is recorded, with a divider before it, 41% of the screen wide (half of what the list leaves)", async () => {
     await openFlow([]);
     await waitForCalls("formation_children", 1);
     await expect($("#formation-flow")).not.toBeDisplayed();
@@ -522,12 +522,12 @@ describe("orchestration mode: the panes beside the list", () => {
     expect(Math.abs(orchestrator.right - divider.left)).toBeLessThan(1);
     expect(Math.abs(divider.right - flow.left)).toBeLessThan(1);
     expect(Math.abs(flow.right - screen.right)).toBeLessThan(1);
-    expect((flow.right - flow.left) / (screen.right - screen.left)).toBeCloseTo(0.35, 2);
+    expect((flow.right - flow.left) / (screen.right - screen.left)).toBeCloseTo(0.41, 2);
     // The screen has the list, its divider, the orchestrator, the divider before the right pane, the pane and the strip (not shown while the pane is open), and no column of tabs beside them.
     expect(await browser.execute(() => [...document.getElementById("formation")!.children].map((e) => e.id))).toEqual(["formation-list", "formation-split", "formation-orchestrator", "formation-flow-split", "formation-flow", "formation-strip"]);
   });
 
-  it("has a divider before the right pane that starts at 35% of the screen and moves with the arrow keys, within 20% and 50%", async () => {
+  it("has a divider before the right pane that starts at 41% of the screen and moves with the arrow keys, within 20% and 50%", async () => {
     await openFlow([formationChild("api-update", "planned")]);
     await expect($("#formation-flow")).toBeDisplayed();
     const share = () => browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("formation")!.getBoundingClientRect().width);
@@ -536,13 +536,13 @@ describe("orchestration mode: the panes beside the list", () => {
     await expect(split).toHaveAttribute("aria-label", "チームメイトの幅");
     await expect(split).toHaveAttribute("aria-valuemin", "20");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
-    await expect(split).toHaveAttribute("aria-valuenow", "35");
-    expect(await share()).toBeCloseTo(0.35, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "41");
+    expect(await share()).toBeCloseTo(0.41, 2);
     expect(await browser.execute(() => document.getElementById("formation-flow-split")!.classList.contains("split-bar"))).toBe(true);
     // The arrow that points away from the pane's edge widens it.
     await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("formation-flow-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowLeft");
-    await expect(split).toHaveAttribute("aria-valuenow", "37");
-    expect(await share()).toBeCloseTo(0.37, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "43");
+    expect(await share()).toBeCloseTo(0.43, 2);
     // The list's divider is not moved by it.
     await expect($("#formation-split")).toHaveAttribute("aria-valuenow", "18");
   });
@@ -766,15 +766,15 @@ describe("orchestration mode: close and open the right pane", () => {
   it("keeps the width that the divider gave when the pane is closed and opened, and stays closed when the mode is left and shown again", async () => {
     await openSession(mixed());
     await browser.execute((id) => window.__e2e_once__(id) && document.getElementById("formation-flow-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true })), onceId());
-    await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "37");
+    await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "43");
     await close();
     await $("#footer-mode-orca").click();
     await $("#footer-mode-formation").click();
     await expect($("#formation-strip")).toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     await reopen();
-    await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "37");
-    expect(await browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("formation")!.getBoundingClientRect().width)).toBeCloseTo(0.37, 2);
+    await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "43");
+    expect(await browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("formation")!.getBoundingClientRect().width)).toBeCloseTo(0.43, 2);
   });
 
   it("shows no strip while no child is recorded, and the pane stays closed when the children come again", async () => {
@@ -2302,7 +2302,13 @@ describe("the count on the footer's Orca button", () => {
     expect(await fades("footer-mode-orca")).toBe(true);
     await mock("orca_overview", orca([orcaRow("example-app", "main", "first", { group: "done" })]));
     await browser.waitUntil(async () => !(await marked("footer-mode-orca")));
+    // A session that finished and was not seen still waits for a check (a notice, A-8), until the screen shows it.
+    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件）");
+    await expect(badge()).toHaveText("1");
+    await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
+    await $('#orca-feed .orca-session[data-session="claude:tab_example-app:leaf_1"]').click();
     await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca");
+    await expect(badge()).not.toBeDisplayed();
   });
 
   it("makes the icon fade with no number while a Claude works and nothing waits", async () => {

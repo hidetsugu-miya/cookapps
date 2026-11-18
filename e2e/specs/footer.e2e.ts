@@ -1,4 +1,4 @@
-import { account, boot, callsOf, claudeReady, holds, inbox, mock, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace } from "../support";
+import { account, boot, callsOf, claudeReady, holds, inbox, mock, onceId, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace } from "../support";
 
 // `unread` unread messages of the Slack list, each in a channel of its own.
 const heap = (unread: number) => Array.from({ length: unread }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` }));
@@ -56,11 +56,13 @@ describe("footer", () => {
     await waitForText("#footer-bell .footer-count", "5");
     await $("#nav-orca").click();
     for (const id of ["footer-bell", "footer-mode-orca"]) {
-      await $(`#${id}`).moveTo();
+      // The window has no pointer to put over the control (`:hover` is not met), so the mouseover that the tooltip listens for is dispatched, once.
+      await browser.execute((i, once) => window.__e2e_once__(once) && document.getElementById(i)!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })), id, onceId());
       await expect($(".tooltip")).toBeDisplayed();
       const where = await browser.execute((i) => ({ tip: document.querySelector(".tooltip")!.getBoundingClientRect().bottom, target: document.getElementById(i)!.getBoundingClientRect().top }), id);
       expect(where.tip).toBeLessThanOrEqual(where.target);
-      await $("#content h1, #content header").moveTo();
+      await browser.execute((i, once) => window.__e2e_once__(once) && document.getElementById(i)!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })), id, onceId());
+      await expect($(".tooltip")).not.toBeDisplayed();
     }
   });
 

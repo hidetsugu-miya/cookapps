@@ -363,7 +363,7 @@ function sessionNode(t: Tab, key: string) {
   row.oncontextmenu = (e) => {
     e.preventDefault();
     // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
-    if (key === projectKey || t.handle === null) return;
+    if (key === projectKey || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
     openPeek(key, t.id, `tab:${t.id}`);
     syncPeek();
   };
@@ -387,7 +387,8 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   row.oncontextmenu = (e) => {
     e.preventDefault();
     // The first session of the project (A-40). A selected project's terminal is in the work pane, and a project with no session, or a session with no terminal, has none to show.
-    const first = tabs[0];
+    // Read at the press: the row is not drawn again when its first session changes.
+    const first = tabsOf(key).filter((x) => !isDocument(x))[0];
     if (key === projectKey || first === undefined || first.handle === null) return;
     openPeek(key, first.id, key);
     syncPeek();

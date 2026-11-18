@@ -86,6 +86,12 @@ interface EditorFile {
   // The band under the line of the caret, in the box of the text and under its layer (hidden unless the text area has the focus and no range is selected), and the band under the paragraph of the caret of the rich view, in the box of the rich view and under its text.
   band: HTMLElement;
   richBand: HTMLElement;
+  // What the band of the source keeps: the line it is under (`bandLine`, counted only when the caret or the text is not the one of `bandCaret` and `bandText`), the height of a line and the padding above the text (`bandMetrics`, null: read again at the next place), and the frame in which the band of the rich view is put (null: none waits).
+  bandLine: number;
+  bandCaret: number;
+  bandText: string;
+  bandMetrics: { height: number; top: number } | null;
+  richFrame: number | null;
   // The numbers of the lines, one text node ("1\n2\n…") that grows and shrinks at its end with the line count (`lines`), in the box at the left of the text that follows the vertical scroll.
   nums: Text;
   numbers: HTMLElement;
@@ -189,7 +195,19 @@ function repaint(f: EditorFile, text: string) {
 function followScroll(f: EditorFile) {
   f.code.style.transform = `translate(${-f.area.scrollLeft}px, ${-f.area.scrollTop}px)`;
   f.numbers.style.transform = `translateY(${-f.area.scrollTop}px)`;
-  placeBand(f);
+  // The scroll moves neither the caret nor the focus: the band keeps its line and follows the scroll.
+  if (!f.band.hidden) moveBand(f);
+}
+
+// Puts the band at its line (`bandLine`), under the vertical scroll of the textarea. The height of a line and the padding are read once (`bandMetrics`).
+function moveBand(f: EditorFile) {
+  if (f.bandMetrics === null) {
+    const style = getComputedStyle(f.area);
+    f.bandMetrics = { height: Number.parseFloat(style.lineHeight) || 20, top: Number.parseFloat(style.paddingTop) || 0 };
+  }
+  const { height, top } = f.bandMetrics;
+  f.band.style.height = `${height}px`;
+  f.band.style.transform = `translateY(${top + f.bandLine * height - f.area.scrollTop}px)`;
 }
 
 // Puts the band of the source under the line of the caret: its place follows the vertical scroll of the textarea, and it is as wide as the box of the text. It is hidden when the text area has not the focus, while a range is selected (the color of the selection shows) and while the source is not shown.
@@ -201,21 +219,32 @@ function placeBand(f: EditorFile) {
     return;
   }
   const text = area.value;
-  let line = 0;
-  for (let i = text.indexOf("\n"); i !== -1 && i < caret; i = text.indexOf("\n", i + 1)) line++;
-  const style = getComputedStyle(area);
-  const height = Number.parseFloat(style.lineHeight) || 20;
-  f.band.style.height = `${height}px`;
-  f.band.style.transform = `translateY(${(Number.parseFloat(style.paddingTop) || 0) + line * height - area.scrollTop}px)`;
-  f.band.dataset.line = String(line);
+  if (caret !== f.bandCaret || text !== f.bandText) {
+    let line = 0;
+    for (let i = text.indexOf("\n"); i !== -1 && i < caret; i = text.indexOf("\n", i + 1)) line++;
+    f.bandLine = line;
+    f.bandCaret = caret;
+    f.bandText = text;
+    f.band.dataset.line = String(line);
+  }
+  moveBand(f);
   f.band.hidden = false;
 }
 
 // The blocks of the rich view that take the band: a paragraph (also that of a list item), a heading, a code block and a table cell.
 const RICH_BLOCKS = "p, h1, h2, h3, h4, h5, h6, pre, th, td";
 
-// Puts the band of the rich view under the block the caret is in, as wide as the editor. It is hidden when the editor has not the focus and while a range is selected.
+// Puts the band of the rich view at the next frame, once for the calls that come before it (a key and the change of the selection that it makes ask for it together).
 function placeRichBand(f: EditorFile) {
+  if (f.richFrame !== null) return;
+  f.richFrame = requestAnimationFrame(() => {
+    f.richFrame = null;
+    putRichBand(f);
+  });
+}
+
+// Puts the band of the rich view under the block the caret is in, as wide as the editor. It is hidden when the editor has not the focus and while a range is selected.
+function putRichBand(f: EditorFile) {
   const pm = f.rich.querySelector<HTMLElement>(".ProseMirror");
   const selection = getSelection();
   const node = selection?.anchorNode ?? null;
@@ -235,10 +264,11 @@ function placeRichBand(f: EditorFile) {
   f.richBand.hidden = false;
 }
 
-// The selection of the page changed, or the focus moved: every file in the page puts its bands again (each hides its own unless the caret is in it).
+// The selection of the page changed, or the focus moved: the file that holds the focus, and a file whose band is shown (it hides it unless the caret is in it), put their bands again; a file with both bands hidden and no focus has nothing to change.
 function placeBands() {
+  const active = document.activeElement;
   for (const f of files.values()) {
-    if (!f.el.isConnected) continue;
+    if (!f.el.isConnected || !(f.el.contains(active) || !f.band.hidden || !f.richBand.hidden)) continue;
     placeBand(f);
     placeRichBand(f);
   }
@@ -671,7 +701,7 @@ function create(id: string, target: string | null, project: string, path: string
   richBand.hidden = true;
   rich.append(richBand);
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandText: "", bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => {
     typed(f);
     placeBand(f);
@@ -685,7 +715,10 @@ function create(id: string, target: string | null, project: string, path: string
   area.onkeyup = bandNow;
   area.onmouseup = bandNow;
   area.onselect = bandNow;
-  area.onfocus = bandNow;
+  area.onfocus = () => {
+    f.bandMetrics = null;
+    placeBand(f);
+  };
   area.onblur = bandNow;
   rich.addEventListener("focusin", () => placeRichBand(f));
   rich.addEventListener("focusout", () => placeRichBand(f));
@@ -821,6 +854,7 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
       f.wantFocus = false;
       f.area.focus({ preventScroll: true });
     }
+    f.bandMetrics = null;
     placeBand(f);
     flushJump(f);
     if (back && fresh) void reread(f);

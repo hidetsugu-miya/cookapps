@@ -169,25 +169,55 @@ async function markIgnored(here: FilesContext, mine: number, dir: string, read: 
   drawSoon();
 }
 
-// Takes the marks of the entries of `read`, the folder `dir` as it was listed, from `orca_files_changes` (A-39): an entry the answer does not name loses its mark. It is asked after the folder is drawn, and an answer that fails leaves the marks as they are. Only the last question of a folder is answered, and an answer that comes after the tree became another worktree's, or the folder was dropped, is dropped. Nothing is drawn when the marks are the ones shown.
-async function markChanges(here: FilesContext, mine: number, dir: string, read: OrcaDir) {
-  const token = (asked.get(dir) ?? 0) + 1;
-  asked.set(dir, token);
+// A folder as it was listed, whose marks of differences are to be asked.
+interface Listed {
+  dir: string;
+  read: OrcaDir;
+}
+
+// How many paths one question of `orca_files_changes` takes at most (the limit of a list in Rust).
+const CHANGES_LIMIT = 5000;
+
+// Takes the marks of the entries of the folders `listed`, each as it was listed, from `orca_files_changes` (A-39): an entry the answer does not name loses its mark. The folders of one read go in one question (one `git.status` of the worktree, not one for each folder), and in several only when their entries pass CHANGES_LIMIT. It is asked after the folders are drawn, and an answer that fails leaves the marks as they are. Only the last question of a folder is answered, and an answer that comes after the tree became another worktree's, or the folder was dropped, is dropped. Nothing is drawn when the marks are the ones shown.
+async function markChanges(here: FilesContext, mine: number, listed: Listed[]) {
+  const tokens = new Map<string, number>();
+  for (const { dir } of listed) {
+    const token = (asked.get(dir) ?? 0) + 1;
+    asked.set(dir, token);
+    tokens.set(dir, token);
+  }
+  const groups: Listed[][] = [];
+  let size = 0;
+  for (const l of listed) {
+    if (groups.length === 0 || size + l.read.entries.length > CHANGES_LIMIT) {
+      groups.push([]);
+      size = 0;
+    }
+    groups[groups.length - 1].push(l);
+    size += l.read.entries.length;
+  }
+  await Promise.all(groups.map((group) => markGroup(here, mine, group, tokens)));
+}
+
+async function markGroup(here: FilesContext, mine: number, group: Listed[], tokens: Map<string, number>) {
   let answer: OrcaGitChange[];
   try {
-    answer = await invoke("orca_files_changes", { path: here.path, paths: read.entries.map((e) => e.path), environment: here.target });
+    answer = await invoke("orca_files_changes", { path: here.path, paths: group.flatMap((l) => l.read.entries.map((e) => e.path)), environment: here.target });
   } catch {
     return;
   }
-  if (mine !== generation || asked.get(dir) !== token || !listings.has(dir)) return;
+  if (mine !== generation) return;
   const now = new Map(answer.map((c) => [c.path, c.mark]));
   let moved = false;
-  for (const e of read.entries) {
-    const mark = now.get(e.path);
-    if (changes.get(e.path) === mark) continue;
-    moved = true;
-    if (mark === undefined) changes.delete(e.path);
-    else changes.set(e.path, mark);
+  for (const { dir, read } of group) {
+    if (asked.get(dir) !== tokens.get(dir) || !listings.has(dir)) continue;
+    for (const e of read.entries) {
+      const mark = now.get(e.path);
+      if (changes.get(e.path) === mark) continue;
+      moved = true;
+      if (mark === undefined) changes.delete(e.path);
+      else changes.set(e.path, mark);
+    }
   }
   if (!moved) return;
   version++;
@@ -197,8 +227,8 @@ async function markChanges(here: FilesContext, mine: number, dir: string, read: 
 // The entries of the folder `dir` of the worktree.
 const listDir = (here: FilesContext, dir: string, ignored: boolean): Promise<OrcaDir> => invoke("orca_files_list", { path: here.path, dir, ignored, environment: here.target });
 
-// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before. With `clock` (the clock alone) a read that finds the entries held asks no ignore marks.
-async function readDir(dir: string, quiet = false, clock = false) {
+// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before. With `clock` (the clock alone) a read that finds the entries held asks no ignore marks. With `pending` (the read of a reload) the folder is put there to have its marks of differences asked with the others, once; without it they are asked for this folder alone.
+async function readDir(dir: string, quiet = false, clock = false, pending?: Listed[]) {
   const here = context;
   if (here === null) return;
   const mine = generation;
@@ -233,8 +263,9 @@ async function readDir(dir: string, quiet = false, clock = false) {
     drawSoon();
   }
   if (inherited || next.dir === null || next.error !== null || next.dir.entries.length === 0) return;
-  // The differences from HEAD can change with no change of the entries (a file is edited), so the clock asks for them too.
-  void markChanges(here, mine, dir, next.dir);
+  // The differences from HEAD can change with no change of the entries (a file is edited), so the clock asks for them too, for all the folders in one question.
+  if (pending) pending.push({ dir, read: next.dir });
+  else void markChanges(here, mine, [{ dir, read: next.dir }]);
   // The clock does not ask git again for the ignore marks of a folder that holds what it held: they are asked for at the next read that is not the clock's.
   if (!(same && clock)) void markIgnored(here, mine, dir, next.dir);
 }
@@ -249,14 +280,17 @@ async function reload(quiet = false, clock = false) {
   const mine = generation;
   const queue = [...expanded];
   for (const dir of [...listings.keys()]) if (dir !== "" && !queue.includes(dir)) listings.delete(dir);
-  await readDir("", quiet, clock);
+  const pending: Listed[] = [];
+  await readDir("", quiet, clock, pending);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir, quiet, clock);
+      await readDir(dir, quiet, clock, pending);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+  // The differences from HEAD of every folder that was read are asked once, so that a read of many open folders runs one `git.status`.
+  if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
 // Reads again what the pane shows, when the window gets the focus back: the files (the root, then the open folders) or the history (from the start). It does nothing while the pane is hidden or has no worktree, and while a read of the same kind is on its way, so a failed read is tried again at the next return.

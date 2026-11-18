@@ -560,7 +560,7 @@ describe("orca: files and editor (A-18)", () => {
       const r = range.getBoundingClientRect();
       return { top: r.top, bottom: r.bottom };
     }, index);
-  // Gives the text area the focus and puts the selection `start` to `end` in it (the window of the E2E build has no focus, so a click does not focus it); the keys that follow are real.
+  // Gives the text area the focus and puts the selection `start` to `end` in it. The window of the E2E build has no focus, so a click does not focus the text area and a key that moves the caret (the arrows, End) does not move it: the caret is moved by the script, as the rich view's is.
   const caretAt = (start: number, end = start) =>
     browser.execute(
       (a, b) => {
@@ -578,7 +578,8 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
     await caretAt(0);
-    await browser.keys("ArrowDown");
+    await bandOn("0");
+    await caretAt(6);
     await bandOn("1");
     const b = await band();
     const letter = await glyph(6);
@@ -589,10 +590,10 @@ describe("orca: files and editor (A-18)", () => {
     expect(b.width).toBeCloseTo(b.textWidth, 0);
     expect(b.background).not.toBe("rgba(0, 0, 0, 0)");
     expect(b.beforeLayer).toBe(true);
-    await browser.keys("ArrowDown");
+    await caretAt(11);
     await bandOn("2");
     expect((await band()).top).toBeGreaterThan(b.top);
-    await browser.keys("ArrowUp");
+    await caretAt(6);
     await bandOn("1");
     expect((await band()).top).toBe(b.top);
   });
@@ -600,12 +601,11 @@ describe("orca: files and editor (A-18)", () => {
   it("does not draw the band over a selected range, and takes it off when the text area loses the focus (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
-    await caretAt(0);
-    await browser.keys("ArrowDown");
+    await caretAt(6);
     await bandOn("1");
-    await browser.keys(["Shift", "ArrowRight"]);
+    await caretAt(6, 7);
     await bandHidden();
-    await browser.keys("ArrowLeft");
+    await caretAt(6);
     await bandOn("1");
     await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-area")!.blur());
     await bandHidden();
@@ -614,8 +614,7 @@ describe("orca: files and editor (A-18)", () => {
   it("moves the band with the scroll of the textarea (A-18)", async () => {
     await openFiles();
     await openA("x\n".repeat(200));
-    await caretAt(0);
-    await browser.keys(["ArrowDown", "ArrowDown", "ArrowDown"]);
+    await caretAt(6);
     await bandOn("3");
     const before = (await band()).top;
     await browser.execute(() => {
@@ -1094,6 +1093,20 @@ describe("orca: files and editor (A-18)", () => {
       { path: "/work/example-app", dir: "", ignored: false, environment: null },
       { path: "/work/example-app", dir: "src", ignored: false, environment: null },
     ]);
+  });
+
+  it("asks for the differences of the root and of the open folders in one call when the tree is read again (A-39)", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["gen.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const marks = await mock("orca_files_changes", [change("src/gen.rs", "new")]);
+    await focusBack();
+    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log", "src/lib", "src/gen.rs"], environment: null }]);
+    await browser.waitUntil(async () => (await gitLook("src/gen.rs")).change === "new", { timeoutMsg: "the change mark never came" });
+    await browser.pause(300);
+    expect(await callsOf(marks)).toHaveLength(1);
   });
 
   it("reads nothing at the return of the focus while the file pane is hidden or the history is shown, and not a second time while a read is on its way", async () => {
