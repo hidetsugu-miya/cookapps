@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.84.2
+
+A-37: the launched teammates of a formation are under its row in the list of the development screen (#946). A formation with teammates has an arrow at the left of its row, which folds and opens them (they are open at first), and the number of its launched teammates at the right end of the row; a planned teammate is not counted. Each teammate's row has the status icon of a session, its name, and under it 「{project} ・ {branch}」. Pressing the row selects the formation and that teammate's tab. The formations of a saved environment are shown the same way.
+
+A-8, A-9, A-16, A-37: a teammate is seen only under its formation (#947). The sessions of a teammate are no longer under its project in the list, nor tabs of the work pane, and the number of a project counts only the sessions it shows. The worktree that tsunagiai made for a teammate is no longer offered by the plus of the work pane nor by 「Orca に渡す」. A teammate that works in a folder that was already there hides only its own session: the folder and your sessions in it stay. The count on the 開発 button, the notices and the working mark still count the teammates.
+
+A-37: the leader of a formation of a saved environment replaces the shell of its Orca terminal, so when its Claude Code ends, the terminal ends too, with no launch sentence or prompt left in it (#943). The next time the formation is shown, a new leader starts in a new terminal. Where `tsunagiai-mcp` is not placed, the words stay with a shell opened under them.
+
+A-37: narrowing the projects in the dialog that makes a formation scrolls the list to its top, so the rows that match are seen (#942). An error of a formation operation (the creation, the read of the environments, the consent) goes at the start of the next one: 「作成」 pressed again, the dialog opened again, or 「同意する」 pressed again (#944).
+
 ## v0.84.1
 
 A-35: the unread count of the bell in the footer is a badge on the top right of the bell, with the size, the color and the shape of the counts on the green icon column, instead of a number beside it (#938).
