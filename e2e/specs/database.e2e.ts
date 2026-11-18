@@ -3,6 +3,8 @@ import { orcaOverview as placedOverview, streamList as placedStream, studio } fr
 import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
+// The read of the list at an interval (#866) put so far off that a spec that counts the reads of the list meets none of it.
+const still = timers({ databaseProfiles: 600000 });
 const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port \"$TSUNAGIAI_PORT\"", dbHost: "db.internal.example.com", passwordSaved: true });
 
 // The app with `profiles` saved, and the database screen open.
@@ -45,7 +47,7 @@ const fillDirect = async () => {
 
 describe("database", () => {
   it("has a button with a drawn icon and no text, last before the bottom group, that opens the two-part screen and reads the connections", async () => {
-    await openDatabase();
+    await openDatabase([direct, tunnel], still);
     const nav = $("#nav-database");
     await expect(nav).toHaveAttribute("aria-label", "データベース");
     await expect(nav).toHaveAttribute("aria-current", "page");
@@ -102,7 +104,7 @@ describe("database", () => {
   });
 
   it("makes a press on a connection pressed, and the work pane stays empty", async () => {
-    await openDatabase();
+    await openDatabase([direct, tunnel], still);
     await $('#database-side-feed [data-key="p2"]').click();
     await expect($('#database-side-feed [data-key="p2"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('#database-side-feed [data-key="p1"]')).toHaveAttribute("aria-pressed", "false");
@@ -547,35 +549,93 @@ describe("database: edit pane, the Claude tab and reload", () => {
     await expect(field("script")).toHaveValue("exec typed-by-hand");
   });
 
-  it("stops reading when the connection is gone from the list, and keeps the pane as it is", async () => {
+  it("keeps the pane as it is when the connection is gone from the list", async () => {
     await openDatabase([direct, tunnel], fast);
     await pickFromMenu("p1", 1);
     await field("username").setValue("typed");
     const read = await mock("database_profiles", [tunnel]);
     await waitForCalls(read);
+    await waitForCount("#database-side-feed .database-item", 1);
     await browser.pause(400);
-    const calls = (await callsOf(read)).length;
-    await browser.pause(900);
-    expect((await callsOf(read)).length).toBe(calls);
     await expect($("#database-form")).toBeDisplayed();
     await expect(field("name")).toHaveValue("Example direct");
     await expect(field("username")).toHaveValue("typed");
   });
+});
 
-  it("stops reading when the edit pane is closed, and reads nothing for a new connection", async () => {
+describe("database: the list is read while the screen is shown", () => {
+  const fast = timers({ databaseProfiles: 250 });
+  const added = databaseProfile("p3", "Example added by Claude Code");
+
+  it("draws a connection that was saved elsewhere with no edit pane open, with the same command as every read of the list", async () => {
+    await openDatabase([direct, tunnel], fast);
+    const read = await mock("database_profiles", [direct, tunnel, added]);
+    await waitForCount("#database-side-feed .database-item", 3);
+    expect(await names()).toEqual(["Example direct", "Example tunnel", "Example added by Claude Code"]);
+    const calls = await callsOf(read);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls.every((c) => c === null)).toBe(true);
+  });
+
+  it("draws it with the edit pane of a new connection open, and leaves what was typed there", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await pressAdd();
+    await field("name").setValue("Typed by hand");
+    await mock("database_profiles", [direct, tunnel, added]);
+    await waitForCount("#database-side-feed .database-item", 3);
+    await expect($("#database-form")).toBeDisplayed();
+    await expect(field("name")).toHaveValue("Typed by hand");
+  });
+
+  it("keeps the focus and the open tree of a row when the list changes, and draws nothing when it does not", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await mock("database_connect", ["shop"]);
+    await $('#database-side-feed [data-key="p1"]').click();
+    await expect($('#database-side-feed [data-key="p1"]')).toHaveAttribute("aria-expanded", "true");
+    await browser.execute(() => {
+      const row = document.querySelector('#database-side-feed [data-key="p1"]') as HTMLElement & { __seen?: boolean };
+      row.__seen = true;
+      row.focus();
+    });
+    const read = await mock("database_profiles", [direct, tunnel]);
+    await waitForCalls(read, 3);
+    const same = await browser.execute(() => (document.querySelector('#database-side-feed [data-key="p1"]') as HTMLElement & { __seen?: boolean }).__seen === true);
+    expect(same).toBe(true);
+    await mock("database_profiles", [direct, tunnel, added]);
+    await waitForCount("#database-side-feed .database-item", 3);
+    expect(await browser.execute(() => (document.activeElement as HTMLElement | null)?.dataset.key)).toBe("p1");
+    await expect($('#database-side-feed [data-key="p1"]')).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("is one read at a time, with the edit pane's own read and the screen's together", async () => {
     await openDatabase([direct, tunnel], fast);
     await pickFromMenu("p1", 1);
+    const read = await mock("database_profiles", holds);
+    await waitForCalls(read);
+    await browser.pause(900);
+    expect(await callsOf(read)).toHaveLength(1);
+    await release(read, [direct, tunnel, added]);
+    await waitForCount("#database-side-feed .database-item", 3);
+  });
+
+  it("stops reading when the screen is left, and reads again when it is shown", async () => {
+    await openDatabase([direct, tunnel], fast);
+    await $("#nav-mail").click();
+    await browser.pause(600);
     const read = await mock("database_profiles", [direct, tunnel]);
+    await browser.pause(900);
+    expect(await callsOf(read)).toEqual([]);
+    await $("#nav-database").click();
+    await waitForCalls(read);
+    await waitForCalls(read, 3);
+  });
+
+  it("keeps the list and shows no error when a read at an interval fails", async () => {
+    await openDatabase([direct, tunnel], fast);
+    const read = await mock("database_profiles", rejects("接続の一覧を読めません"));
     await waitForCalls(read, 2);
-    await $("#database-form").$("button=キャンセル").click();
-    await browser.pause(400);
-    const calls = (await callsOf(read)).length;
-    await browser.pause(900);
-    expect((await callsOf(read)).length).toBe(calls);
-    await $("#database-add").click();
-    await expect($("#database-form")).toBeDisplayed();
-    await browser.pause(900);
-    expect((await callsOf(read)).length).toBe(calls);
+    expect(await names()).toEqual(["Example direct", "Example tunnel"]);
+    await expect($("#error")).not.toBeDisplayed();
   });
 });
 
@@ -643,7 +703,7 @@ describe("database: test the connection", () => {
   });
 
   it("sends the fields as typed and the typed password, shows the version as a status, and saves nothing and keeps the edit pane", async () => {
-    await openDatabase([direct]);
+    await openDatabase([direct], still);
     const test = await mock("database_test", "8.0.36");
     const save = await mock("database_profile_save", databaseProfile("p3", "x"));
     await $("#database-add").click();
@@ -2152,7 +2212,7 @@ describe("database: terminal pane", () => {
   });
 
   it("opens the pane at the right of the work pane with the divider between them, and closes it with a second press, reading no connection", async () => {
-    await openDatabase();
+    await openDatabase([direct, tunnel], still);
     const before = await callsOf("database_profiles");
     await toggle().click();
     await expect(toggle()).toHaveAttribute("aria-pressed", "true");

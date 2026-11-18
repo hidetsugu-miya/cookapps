@@ -88,7 +88,7 @@ declare global {
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 
-// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the edit pane of the database screen does (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) and `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s).
+// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the database screen does while it is shown, and its edit pane (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) and `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s).
 // A wait for a period to pass is that period times 1.2. Put it in the fixtures of `boot`: `boot({ ...timers({ orcaMirror: 250 }) })`.
 export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number; lspSettings?: number }) => ({ e2e_timers: periods });
 

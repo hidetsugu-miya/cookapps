@@ -9,6 +9,7 @@ import { openDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
 import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
+import { periodMs } from "./e2e-timers.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -66,6 +67,11 @@ const connections = new Map<string, ConnectionState>();
 const closing = new Set<string>();
 // The newest read: an older one that ends later is dropped.
 let loadSeq = 0;
+// How often the list is read while the screen is shown (#866): `tsunagiai-mcp` saves a connection in its own process and tells the app nothing (D-8).
+const WATCH_MS = 2000;
+let watcher: number | null = null;
+// The quiet read that is on its way: a quiet read asked meanwhile (the screen's clock and the edit pane's) is this one.
+let quietRead: Promise<DatabaseProfileView[] | null> | null = null;
 
 const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
 const emptySql: SqlState = { view: 0, text: "", loading: false, error: null, data: null };
@@ -139,17 +145,26 @@ const draw = () => {
   drawDatabaseWork(workState(), workActions);
 };
 
-// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the edit pane's, at an interval) shows no error.
-async function load(quiet = false): Promise<DatabaseProfileView[] | null> {
+// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the clock's and the edit pane's, at an interval) shows no error, draws nothing when the list is the one drawn, and is one read at a time.
+function load(quiet = false): Promise<DatabaseProfileView[] | null> {
+  if (!quiet) return read(false);
+  quietRead ??= read(true).finally(() => {
+    quietRead = null;
+  });
+  return quietRead;
+}
+
+async function read(quiet: boolean): Promise<DatabaseProfileView[] | null> {
   const seq = ++loadSeq;
   try {
     const list = await invoke("database_profiles");
     if (seq !== loadSeq) return null;
+    const same = JSON.stringify(list) === JSON.stringify(profiles);
     profiles = list;
     // A connection that is gone from the list has nothing open any more (Rust closed it with the delete).
     for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
     if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
-    draw();
+    if (!quiet || !same) draw();
     return list;
   } catch (e) {
     if (seq === loadSeq && !quiet) showError(e);
@@ -429,10 +444,24 @@ const actions: SideActions = {
   remove,
 };
 
+// Reads the list at an interval while the screen is shown, with or without an edit pane (#866). It stops at the first tick after the screen is left, and `showDatabase` starts it again; nothing is read while the window is hidden.
+function startWatch() {
+  if (watcher !== null) return;
+  watcher = window.setInterval(() => {
+    if ($("database").hidden) {
+      if (watcher !== null) clearInterval(watcher);
+      watcher = null;
+    } else if (!document.hidden) {
+      void load(true);
+    }
+  }, periodMs("databaseProfiles", WATCH_MS));
+}
+
 export function showDatabase() {
   show("database");
   draw();
   load();
+  startWatch();
 }
 
 export function initDatabase() {
