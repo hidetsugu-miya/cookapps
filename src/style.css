@@ -1522,6 +1522,9 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-mode svg { width: calc(14px * var(--fs)); height: calc(14px * var(--fs)); }
 .orca-edit-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 /* A-26: the rich view of a Markdown file. Milkdown draws ProseMirror content here (read only for a file that cannot be edited in it); there is no theme, so the elements get their looks below. */
+/* A-42: the preview of an HTML file, a frame as big as the body; the page is drawn on white, whatever the theme of the app. */
+.orca-edit-preview { position: relative; flex: 1; min-height: 0; background: #fff; }
+.orca-edit-preview iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 .orca-edit-rich { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--surface); }
 .orca-edit-rich .ProseMirror { position: relative; z-index: 1; box-sizing: border-box; min-height: 100%; max-width: 860px; margin: 0 auto; padding: 16px 24px 48px; outline: none; white-space: pre-wrap; word-wrap: break-word; font-family: var(--ff-base); line-height: 1.7; user-select: text; -webkit-user-select: text; }
 /* A-26: the band of the paragraph of the caret, in the box of the rich view and under the text of the editor; the script sets its box. */

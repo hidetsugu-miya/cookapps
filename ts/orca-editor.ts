@@ -8,8 +8,9 @@
 // The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
+// An HTML file (its name ends with `.html`, whatever the case) has the source and the preview (the eye) in its heading, and opens in the preview (A-42): a frame that shows the address `orca_file_preview_url` gives (A-31), after the typing that waits is saved. While the preview is shown a button of the heading makes the frame again, which reads the file again; nothing else does.
 import { tag } from "./dom.js";
-import { CODE_SVG, EDIT_SVG, LOCK_SVG } from "./icons.js";
+import { CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import type { DefinitionQuery } from "./orca-definition.js";
 import { highlightReady, loadHighlight, loadMilkdown } from "./vendor-load.js";
@@ -27,6 +28,9 @@ const SAVE_LABELS: Record<Save, string> = {
   "not-utf8": "ディスクのファイルが UTF-8 ではなくなっています",
   error: "保存できません",
 };
+
+// The views of a file: the rich view of a Markdown file (A-26), the source, and the preview of an HTML file (A-42).
+type Mode = "rich" | "source" | "preview";
 
 interface EditorFile {
   id: string;
@@ -76,10 +80,16 @@ interface EditorFile {
   // A Markdown file: the buttons of the heading (`modes`, hidden for another file), the view that is shown (`mode`; "rich" is the start), the box of the text and numbers (`body`), the box of the rich view (`rich`) with the Milkdown editor in it (`view`, null: none), and the count that tells a drawing of the rich view that waits for the library that it is out of date.
   // The edit of the rich view: `richBase` is the text of the textarea when the view was drawn and `richBefore` what the editor exported then (the edit is put into `richBase` from them, so the text of the textarea is always the base with the whole edit in it); `richPending`: the document changed and the textarea does not hold it yet, `richTimer` waits to put it there, `richSync` is the put on its way. `richFirst`: the view was not drawn yet (a file that cannot be edited in it opens in the source).
   markdown: boolean;
-  mode: "rich" | "source";
+  mode: Mode;
   modes: HTMLElement;
   sourceButton: HTMLButtonElement;
   richButton: HTMLButtonElement;
+  // An HTML file (A-42; decided by its name, so it is known before the file is read): the preview button and the button that makes the frame again (shown only while the preview is). `preview` is the box of the frame, and `previewTurn` the count that tells a drawing of the frame that waits (for the save and for the address) that it is out of date.
+  html: boolean;
+  previewButton: HTMLButtonElement;
+  reloadButton: HTMLButtonElement;
+  preview: HTMLElement;
+  previewTurn: number;
   body: HTMLElement;
   rich: HTMLElement;
   view: MilkdownView | null;
@@ -477,15 +487,53 @@ async function drawRich(f: EditorFile) {
   }
 }
 
-// Shows the source or the rich view of a Markdown file (a file of another language has only its text).
-function setMode(f: EditorFile, mode: "rich" | "source") {
+// Takes the frame out of the preview, which stops its load, and drops a drawing of the frame that waits.
+function clearPreview(f: EditorFile) {
+  f.previewTurn++;
+  f.preview.replaceChildren();
+}
+
+// Shows the page of an HTML file in a new frame (A-42): the typing that waits is saved first, so the page the server sends is the text of the editor. The frame it replaces stays until the new one is put in (a reload). The address goes only into `src` of the frame: it is not kept anywhere else. A failure is a card, and the source is shown. A drawing that is out of date when the save or the address comes (the preview was left, the file closed, another drawing began) is dropped.
+async function drawPreview(f: EditorFile) {
+  const turn = ++f.previewTurn;
+  try {
+    await flush(f);
+    if (turn !== f.previewTurn) return;
+    // A save that did not go through keeps the editor on the source (the heading says why), so the owner sees the text that is not on the disk, not a preview of the old file.
+    if (f.save === "error" || f.blocked) {
+      setMode(f, "source");
+      return;
+    }
+    const address = await invoke("orca_file_preview_url", { path: f.path, relative: f.relative, environment: f.target });
+    if (turn !== f.previewTurn) return;
+    const frame = tag("iframe");
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
+    frame.src = address;
+    f.preview.replaceChildren(frame);
+  } catch (e) {
+    if (turn !== f.previewTurn) return;
+    setMode(f, "source");
+    fail(e);
+  }
+}
+
+// Shows the source, the rich view of a Markdown file or the preview of an HTML file (a file of another language has only its text).
+function setMode(f: EditorFile, mode: Mode) {
   f.mode = mode;
   const rich = f.markdown && mode === "rich";
-  f.modes.hidden = !f.markdown;
-  f.sourceButton.setAttribute("aria-pressed", String(!rich));
+  const preview = f.html && mode === "preview";
+  f.modes.hidden = !f.markdown && !f.html;
+  f.richButton.hidden = !f.markdown;
+  f.previewButton.hidden = !f.html;
+  f.reloadButton.hidden = !preview;
+  f.sourceButton.setAttribute("aria-pressed", String(!rich && !preview));
   f.richButton.setAttribute("aria-pressed", String(rich));
-  f.body.hidden = rich;
+  f.previewButton.setAttribute("aria-pressed", String(preview));
+  f.body.hidden = rich || preview;
   f.rich.hidden = !rich;
+  f.preview.hidden = !preview;
+  if (preview) void drawPreview(f);
+  else clearPreview(f);
   if (rich) void drawRich(f);
   else {
     clearRich(f);
@@ -808,9 +856,18 @@ function create(id: string, target: string | null, project: string, path: string
   richButton.type = "button";
   richButton.setAttribute("aria-label", "リッチ");
   richButton.innerHTML = EDIT_SVG;
+  const previewButton = tag("button", "icon-btn orca-edit-mode");
+  previewButton.type = "button";
+  previewButton.setAttribute("aria-label", "プレビュー");
+  previewButton.innerHTML = EYE_SVG;
+  const reloadButton = tag("button", "icon-btn orca-edit-mode");
+  reloadButton.type = "button";
+  reloadButton.setAttribute("aria-label", "再読み込み");
+  reloadButton.innerHTML = RELOAD_SVG;
+  reloadButton.hidden = true;
   const modes = tag("span", "orca-edit-modes");
   modes.hidden = true;
-  modes.append(sourceButton, richButton);
+  modes.append(sourceButton, richButton, previewButton, reloadButton);
   const where = tag("span", "orca-edit-path", relative);
   // A file outside the worktree is read only: a lock before its path, and `gem` (for a Ruby file, once it is read) where the state of a save is.
   if (outside) {
@@ -852,8 +909,11 @@ function create(id: string, target: string | null, project: string, path: string
   const richBand = tag("div", "orca-edit-rich-band");
   richBand.hidden = true;
   rich.append(richBand);
-  el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
+  const preview = tag("div", "orca-edit-preview");
+  preview.hidden = true;
+  el.append(head, note, body, rich, preview);
+  const html = !outside && /\.html$/i.test(nameOf(relative));
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
   area.oninput = () => {
     f.edits++;
     hideLink(f);
@@ -910,6 +970,12 @@ function create(id: string, target: string | null, project: string, path: string
   richButton.onclick = () => {
     if (f.mode !== "rich") setMode(f, "rich");
   };
+  previewButton.onclick = () => {
+    if (f.mode !== "preview") setMode(f, "preview");
+  };
+  reloadButton.onclick = () => {
+    if (f.mode === "preview") void drawPreview(f);
+  };
   // The wheel over the numbers scrolls the text, as it does over the text: by pixels, by lines (the line height of the text) or by pages (the height of the textarea), as the event counts.
   gutter.onwheel = (e) => {
     const unit = e.deltaMode === 1 ? Number.parseFloat(getComputedStyle(area).lineHeight) : e.deltaMode === 2 ? area.clientHeight : 1;
@@ -956,6 +1022,7 @@ export async function closeFile(id: string) {
   clearTimer(f);
   cancelPaint(f);
   clearRich(f);
+  clearPreview(f);
   f.el.remove();
   files.delete(id);
   return true;
@@ -969,6 +1036,7 @@ export function discardFiles(target: string | null, project: string, path: strin
     clearTimer(f);
     cancelPaint(f);
     clearRich(f);
+    clearPreview(f);
     f.el.remove();
     files.delete(f.id);
   }
