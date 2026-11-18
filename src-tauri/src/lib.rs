@@ -47,6 +47,7 @@ mod slack_mrkdwn;
 pub mod ssh;
 pub mod todoist;
 pub mod update;
+pub mod yomiyasu_gate;
 
 use std::{sync::Mutex, time::Duration};
 

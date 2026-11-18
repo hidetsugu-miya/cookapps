@@ -24,6 +24,7 @@ use crate::{
     formation_server::Client,
     orca,
     orca_files::check_relative,
+    yomiyasu_gate::{self, Gate},
 };
 
 /// `formations/{name}/pages.json`: the decision page that each child waits on.
@@ -1815,22 +1816,26 @@ pub fn build(value: &Value, allowed: &Allowed) -> Result<DecisionPage, Vec<Viola
     Ok(page)
 }
 
-/// Reads the page file `given` of a child that works in `worktree` and checks it (`Allowed::check_page_file`, then `build`).
-pub fn load(
-    given: &str,
-    worktree: &str,
-    allowed: &Allowed,
-) -> Result<DecisionPage, Vec<Violation>> {
+/// Reads the page file `given` of a child that works in `worktree` as JSON (`Allowed::check_page_file`).
+fn read_value(given: &str, worktree: &str, allowed: &Allowed) -> Result<Value, Vec<Violation>> {
     let file = allowed.check_page_file(given, worktree).map_err(alone)?;
     let bytes = read_bounded(&file, PAGE_FILE_LIMIT).map_err(alone)?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
+    serde_json::from_slice(&bytes).map_err(|e| {
         alone(format!(
             "JSON として読めません（{} 行 {} 列）",
             e.line(),
             e.column()
         ))
-    })?;
-    build(&value, allowed)
+    })
+}
+
+/// Reads the page file `given` of a child that works in `worktree` and checks it (`read_value`, then `build`).
+pub fn load(
+    given: &str,
+    worktree: &str,
+    allowed: &Allowed,
+) -> Result<DecisionPage, Vec<Violation>> {
+    build(&read_value(given, worktree, allowed)?, allowed)
 }
 
 // ---- the record: pages.json ----
@@ -1959,7 +1964,16 @@ fn violations_refusal(violations: &[Violation]) -> Refusal {
     .with("violations", serde_json::to_value(violations).unwrap_or_default())
 }
 
-/// `formation_page`: the page file `path` of the launched child `child`, checked against `allowed` and recorded as the page the child waits on. A page with a violation is refused, with all of them, and nothing is recorded.
+/// The refusal of a page whose Japanese is not in a yomiyasu final text (the gate, `yomiyasu_gate.rs`): nothing is recorded, and the lines are the answer, so that the orchestrator can have them polished together with the rest of the page.
+fn unpolished_refusal(lines: &[String]) -> Refusal {
+    Refusal::from(format!(
+        "判断ページの日本語 {} 行が、yomiyasu の最終稿の記録にありません。何も記録していません。ページの日本語を、この行も含めて 1 回の yomiyasu で推敲させ、もう一度 formation_page を呼んでください",
+        lines.len()
+    ))
+    .with("unpolished", lines)
+}
+
+/// `formation_page`: the page file `path` of the launched child `child`, checked against `allowed` and the yomiyasu `gate`, and recorded as the page the child waits on. A page with a violation is refused, with all of them, and so is a page with a line that no final text of yomiyasu holds; nothing is recorded.
 fn record_with(
     config: &Path,
     formation: &str,
@@ -1967,6 +1981,7 @@ fn record_with(
     path: &str,
     allowed: &Allowed,
     at: u64,
+    gate: &Gate,
 ) -> Result<Value, Refusal> {
     formation::check_name(child)?;
     let record = formation::read_record(config, formation)?;
@@ -1980,7 +1995,12 @@ fn record_with(
             "「{child}」はまだ起動していません。起動した子のページだけ受けます"
         )));
     };
-    let page = load(path, &launch.path, allowed).map_err(|v| violations_refusal(&v))?;
+    let value = read_value(path, &launch.path, allowed).map_err(|v| violations_refusal(&v))?;
+    let page = build(&value, allowed).map_err(|v| violations_refusal(&v))?;
+    let unpolished = gate.unpolished(&yomiyasu_gate::page_texts(&value));
+    if !unpolished.is_empty() {
+        return Err(unpolished_refusal(&unpolished));
+    }
     put_page(
         config,
         formation,
@@ -2016,6 +2036,7 @@ pub fn record(config: &Path, formation: &str, child: &str, path: &str) -> Result
         path,
         &allowed,
         formation::now_ms(),
+        &Gate::here(),
     )
 }
 
@@ -2839,12 +2860,39 @@ mod tests {
             ],
         );
         let first = page_file(&repo, "page-01", "最初のページ");
-        let answer = record_with(&config, "api-work", "one", &first, &repo.allowed(), 500).unwrap();
+        let answer = record_with(
+            &config,
+            "api-work",
+            "one",
+            &first,
+            &repo.allowed(),
+            500,
+            &Gate::off(),
+        )
+        .unwrap();
         assert_eq!(answer["title"], "最初のページ");
         assert_eq!(answer["pageKind"], "open-questions");
         let second = page_file(&repo, "page-02", "次のページ");
-        record_with(&config, "api-work", "one", &second, &repo.allowed(), 600).unwrap();
-        record_with(&config, "api-work", "two", &first, &repo.allowed(), 700).unwrap();
+        record_with(
+            &config,
+            "api-work",
+            "one",
+            &second,
+            &repo.allowed(),
+            600,
+            &Gate::off(),
+        )
+        .unwrap();
+        record_with(
+            &config,
+            "api-work",
+            "two",
+            &first,
+            &repo.allowed(),
+            700,
+            &Gate::off(),
+        )
+        .unwrap();
         let pages = read_pages(&config, "api-work");
         assert_eq!(pages.len(), 2);
         let one = pages.iter().find(|p| p.child == "one").unwrap();
@@ -2883,6 +2931,7 @@ mod tests {
             &path.to_string_lossy(),
             &repo.allowed(),
             1,
+            &Gate::off(),
         )
         .unwrap_err();
         let answer: Value = serde_json::from_str(&formation::answer(Err(refusal))).unwrap();
@@ -2901,6 +2950,82 @@ mod tests {
             .exists());
     }
 
+    /// A yomiyasu record under `state` whose final text is `body`.
+    fn yomiyasu_record(state: &Path, body: &str) {
+        let hex = format!("{:064x}", 7);
+        let run = state.join("runs/r1");
+        fs::create_dir_all(&run).unwrap();
+        fs::create_dir_all(state.join("inputs")).unwrap();
+        fs::write(
+            run.join("attempt-1.json"),
+            json!({
+                "format": "yomiyasu-check-record", "format_version": 1,
+                "inputs": {"final": {"snapshot": format!("inputs/{hex}.bin")}},
+                "result": {"status": "executed"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(state.join("inputs").join(format!("{hex}.bin")), body).unwrap();
+    }
+
+    #[test]
+    fn a_page_with_a_line_that_yomiyasu_did_not_polish_is_refused_and_not_recorded() {
+        let repo = repo("record-gate");
+        let config = temp_dir("record-gate-config");
+        let state = temp_dir("record-gate-state");
+        formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
+        let path = page_file(&repo, "page-01", "磨いていない題");
+        // The record holds every line of the page but its title.
+        let mut value = open_questions(&repo);
+        value["title"] = json!("磨いていない題");
+        let mut texts = yomiyasu_gate::page_texts(&value);
+        texts.retain(|t| t != "磨いていない題");
+        yomiyasu_record(&state, &texts.join("\n"));
+        let gate = Gate::new(state.clone(), std::time::SystemTime::now());
+        let refusal =
+            record_with(&config, "api-work", "one", &path, &repo.allowed(), 1, &gate).unwrap_err();
+        let answer: Value = serde_json::from_str(&formation::answer(Err(refusal))).unwrap();
+        assert_eq!(answer["ok"], false);
+        assert_eq!(answer["data"]["unpolished"], json!(["磨いていない題"]));
+        assert!(read_pages(&config, "api-work").is_empty());
+        // The title is polished in the next run of yomiyasu: the page is recorded.
+        yomiyasu_record(&state, &format!("{}\n磨いていない題", texts.join("\n")));
+        let done = record_with(&config, "api-work", "one", &path, &repo.allowed(), 2, &gate);
+        assert_eq!(done.unwrap()["title"], "磨いていない題");
+        assert_eq!(read_pages(&config, "api-work").len(), 1);
+    }
+
+    #[test]
+    fn the_gate_runs_after_the_input_check_so_a_violation_is_answered_first() {
+        let repo = repo("record-gate-order");
+        let config = temp_dir("record-gate-order-config");
+        let state = temp_dir("record-gate-order-state");
+        formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
+        let mut value = open_questions(&repo);
+        value["extra"] = json!("余分");
+        write(
+            &repo.dir,
+            ".feature-dev/current/records/bad.json",
+            &value.to_string(),
+        );
+        let path = repo.dir.join(".feature-dev/current/records/bad.json");
+        let gate = Gate::new(state, std::time::SystemTime::now());
+        let refusal = record_with(
+            &config,
+            "api-work",
+            "one",
+            &path.to_string_lossy(),
+            &repo.allowed(),
+            1,
+            &gate,
+        )
+        .unwrap_err();
+        let answer: Value = serde_json::from_str(&formation::answer(Err(refusal))).unwrap();
+        assert!(answer["data"]["violations"].is_array());
+        assert!(answer["data"]["unpolished"].is_null());
+    }
+
     #[test]
     fn a_child_that_is_not_launched_or_not_in_the_record_gets_no_page() {
         let repo = repo("record-child");
@@ -2910,8 +3035,16 @@ mod tests {
         formation_folder(&config, "api-work", &[planned]);
         let path = page_file(&repo, "page-01", "t");
         for name in ["planned", "stranger", "../x"] {
-            let refusal =
-                record_with(&config, "api-work", name, &path, &repo.allowed(), 1).unwrap_err();
+            let refusal = record_with(
+                &config,
+                "api-work",
+                name,
+                &path,
+                &repo.allowed(),
+                1,
+                &Gate::off(),
+            )
+            .unwrap_err();
             assert!(!formation::refusal_text(&refusal).is_empty(), "{name}");
         }
         assert!(read_pages(&config, "api-work").is_empty());
@@ -2942,6 +3075,7 @@ mod tests {
             &path.to_string_lossy(),
             &repo.allowed(),
             1,
+            &Gate::off(),
         )
         .unwrap_err();
         assert!(formation::refusal_text(&refusal).contains("違反"));
@@ -2954,7 +3088,16 @@ mod tests {
         formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
         fs::write(formation::dir(&config, "api-work").join(PAGES_FILE), "{").unwrap();
         let path = page_file(&repo, "page-01", "t");
-        assert!(record_with(&config, "api-work", "one", &path, &repo.allowed(), 1).is_err());
+        assert!(record_with(
+            &config,
+            "api-work",
+            "one",
+            &path,
+            &repo.allowed(),
+            1,
+            &Gate::off()
+        )
+        .is_err());
         let text =
             fs::read_to_string(formation::dir(&config, "api-work").join(PAGES_FILE)).unwrap();
         assert_eq!(text, "{");
@@ -3058,7 +3201,16 @@ mod tests {
         let path = repo.dir.join(".feature-dev/current/records/page-01.json");
         let given = path.to_string_lossy().into_owned();
         assert!(read_with(&config, "api-work", "one", &repo.allowed()).is_err());
-        record_with(&config, "api-work", "one", &given, &repo.allowed(), 500).unwrap();
+        record_with(
+            &config,
+            "api-work",
+            "one",
+            &given,
+            &repo.allowed(),
+            500,
+            &Gate::off(),
+        )
+        .unwrap();
         let page = read_with(&config, "api-work", "one", &repo.allowed()).unwrap();
         let Evidence::Excerpt { lines, .. } = &page.questions[0].evidence[0] else {
             panic!("an excerpt");
