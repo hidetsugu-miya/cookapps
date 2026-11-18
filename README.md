@@ -99,7 +99,7 @@ Apple の公証を受けていないので、ブラウザでダウンロード�
 | OS | macOS（Apple Silicon） |
 | メール | Gmail のみ。返信は書式つきで、新規作成はテキストで送れます。添付と下書きの保存はできません |
 | Claude の機能 | [Claude Code](docs/claude-integration.md) と [Orca](docs/orca.md) が必要です。なくても、メール、カレンダー、Todo、Slack は使えます |
-| 連携 | Google Calendar（閲覧のみ）、Todoist、Slack、MySQL（閲覧のみ。ポートフォワードなどを開く事前スクリプトも使えます） |
+| 連携 | Google Calendar（閲覧のみ）、Todoist、Slack、MySQL（閲覧と SQL の実行。ポートフォワードなどを開く事前スクリプトも使えます） |
 
 ## ドキュメント
 

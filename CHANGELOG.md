@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.86.0
+
+D-9: the work pane of the database screen has a strip of tabs under its header (#970). The first tab, 「オブジェクト」, is always there and shows the tables of the database pressed last, as the tab 「テーブル」 did. Pressing a table in the tree or in the table list opens it in a tab of its own, or selects its tab when it is open, and each tab keeps the records, the structure and the tab of the table (レコード, 構造 or SQL) that was selected. A tab closes with its close button, and the tabs of a connection or a database close when the connection is disconnected or the tree of the database is closed. The tabs are kept in memory only.
+
+D-2, D-6: a connection of the database screen is no longer read only, and the SQL tab runs a statement that writes, such as INSERT, UPDATE or DELETE (#862). It is committed at once, with no question asked, and with the rights of the connection's user. The footer of a statement that changed rows says how many, as 「3 行を変更 / 12 ms」. When a statement is stopped for its time after it was sent, the error says that a write may already be committed on the server. The records and the structure of a table are still only read.
+
+S-23: on the 「Slack に貼る」 screen, a request to Claude that would post two or more things to do posts nothing at once (#906). A frame under Claude's reply shows the destination and the head of the text of the first one, and asks for each one after it 「N をどこに送りますか」, with 「{N-1} のスレッドに投稿」 and 「{channel} に投稿」. When each one has a choice, the cards take it and are posted from the top down. When a card, the original message or the draft changes before the press, nothing is posted and the frame says 「行うことが変わったため投稿できません」. One thing to do is posted at once, as before.
+
+A-25: the branch list in the heading of the Orca file pane has a section 「worktree」 at its top, with the git worktrees of the project, those that Orca hides included, such as the ones that `git worktree add` made under `.claude/worktrees/` (#972). A row shows the folder and its branch, 「git」 when Orca's list lacks it, and a check mark for the one the pane shows. Pressing one shows that worktree in the file pane, with its own heading, branches, history and files, until another tab or project is selected. A worktree on an SSH host is left out.
+
+A-31: no change in what the app shows yet, as groundwork for an HTML preview in the editor: the app can give the screen the address of an HTML file of a worktree on its preview server, and the window lets a frame load a page from that server (#978).
+
 ## v0.85.0
 
 S-27: the 「Slack に貼る」 screen has two modes, and a switch 「Claude / 手動」 at the right of its header chooses one (#904). It always opens in Claude mode. Claude mode shows the conversation with Claude wide, and the things to do in a narrow column on its right, with the number, the destination and the head of the text of each; the divider between them sets the width of the column, from a fifth to a half of the screen. Manual mode shows the original message and the cards, with 「投稿」, over the whole width. A switch changes nothing of the draft.
