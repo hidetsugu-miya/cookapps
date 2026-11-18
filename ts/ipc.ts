@@ -14,6 +14,7 @@ import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
+import type { DecisionPage } from "./bindings/DecisionPage";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
@@ -359,6 +360,8 @@ export interface Commands {
   claude_code_close: { args: { id: string; launch: number }; result: null };
   // A-37: the children of the formation `name`, in the order of `formations/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
+  // A-41: the decision page that waits on the child `child` of the formation `name` (the child's `pendingPage` is set), checked again and with its evidence resolved now: a formation of a saved environment has its PC's server do it. A failure carries the message: the violations of the page, one on each line, or why it could not be read.
+  formation_page_read: { args: { name: string; child: string }; result: DecisionPage };
   // A-37: the environments (this Mac first, then the saved ones) with the repositories of each, read from Orca; an environment that could not be read has `ok` false and its `error`, and the others are read.
   formation_environments: { args: undefined; result: EnvironmentsView };
   // A-37: the terminal of the orchestrator of the formation `name`, which belongs to a saved environment (its `environment` in `formation_list` is not `local`): the one `formation.json` records while that Orca lists it, else a new one that Rust makes in the first project's repository there, waits for and gives the projects as its first instruction. `restart` closes the recorded one first. A failure carries the message the pane shows.
