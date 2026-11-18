@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; .claude/skills/release/SKILL.md for the release).
+"""Orders the open issues of tsunagiai, and tells a run what to start and what waits for the release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; .claude/skills/release/SKILL.md for the release).
 
 Usage:
   plan-release.py snapshot
@@ -511,7 +511,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
 def release_facts(issues, release_pr, last_tag):
     """The figures a run needs to prepare the Release PR.
     `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
-    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; the run tells the owner at once.
+    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; a session tells the owner at once; the night run merges the Release PR itself.
     `minor`: a change adds a requirement ID (.claude/skills/release/SKILL.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
     changes = release_changes(issues)
     labels = (release_pr or {}).get("labels", [])
@@ -547,7 +547,7 @@ def changelog_version(text):
 
 def newest_release(merged_prs, read_version):
     """-> {"tag", "commit", "pr"} of the newest merged Release PR, with the tag of the version it wrote, or None.
-    `merged_prs`: [{"number", "mergedAt", "mergeCommit": {"oid"}}] of the merged Release PRs (merged by the owner's account). `read_version(oid)`: the version of the first heading of CHANGELOG.md at that commit.
+    `merged_prs`: [{"number", "mergedAt", "mergeCommit": {"oid"}}] of the owner's merged Release PRs. `read_version(oid)`: the version of the first heading of CHANGELOG.md at that commit.
     The tag goes on the merge commit of the Release PR, not on origin/main, which may have moved on (versioning.md)."""
     if not merged_prs:
         return None
