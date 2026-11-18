@@ -3085,7 +3085,7 @@ pub struct FormationChild {
     pub reply: Option<String>,
     /// The tool it uses now; `None` for a done child, because Orca keeps the last tool name after the turn ended.
     pub tool_name: Option<String>,
-    /// The terminal that runs it, to open its tab; `None` when the child is planned or has left `orca worktree ps` (no tab is drawn).
+    /// The terminal that runs it, to open its tab; `None` when the child is planned or has left `orca worktree ps`, or for a Codex child `orca terminal list` (no tab is drawn).
     pub handle: Option<String>,
     /// The Orca the child runs in: `local` (this Mac) or the name of a saved environment, as the record holds it (a launched child's is the name `orca environment list` gives, also when the record has its id). The screen reads and types into the terminal in that Orca.
     pub environment: String,
@@ -3123,9 +3123,9 @@ fn agent_of<'a>(ps: &'a Value, pane_key: &str) -> Option<&'a Value> {
         })
 }
 
-/// One child of the record as the screen draws it, joined by its `paneKey` to the agents of `ps` (`orca worktree ps` of its environment, its `result`). A planned child is planned; a launched one that `ps` does not list any more is done, with no handle.
-/// `ps` is `None` when the Orca of its environment could not be read: the child is then working, with its handle and nothing else known, because a child is not taken for finished unless Orca says so.
-fn child_row(child: &Child, environment: &str, ps: Option<&Value>) -> FormationChild {
+/// One child of the record as the screen draws it. A Claude Code child is joined by its `paneKey` to the agents of `read` (`orca worktree ps` of its environment, its `result`); a launched one that `ps` does not list any more is done, with no handle. A Codex child is joined by its handle to `read` as `orca terminal list` of its environment gives it (`children_read_args`): Orca's `ps` has no row for it (measured, 2026-11-18), so its terminal is working while it is listed and done, with no handle, when it is not (A-41); it has no waiting state.
+/// A planned child is planned. `read` is `None` when the Orca of its environment could not be read: the child is then working, with its handle and nothing else known, because a child is not taken for finished unless Orca says so.
+fn child_row(child: &Child, environment: &str, read: Option<&Value>) -> FormationChild {
     let mut row = FormationChild {
         name: child.name.clone(),
         repo: child.repo.clone(),
@@ -3144,11 +3144,20 @@ fn child_row(child: &Child, environment: &str, ps: Option<&Value>) -> FormationC
     };
     row.branch = launch.branch.clone();
     row.handle = Some(launch.handle.clone());
-    let Some(ps) = ps else {
+    let Some(read) = read else {
         row.state = FormationState::Working;
         return row;
     };
-    let Some(agent) = agent_of(ps, &launch.pane_key) else {
+    if child.agent == FormationAgent::Codex {
+        if is_listed_terminal(read, &launch.handle) {
+            row.state = FormationState::Working;
+        } else {
+            row.state = FormationState::Done;
+            row.handle = None;
+        }
+        return row;
+    }
+    let Some(agent) = agent_of(read, &launch.pane_key) else {
         row.state = FormationState::Done;
         row.handle = None;
         return row;
@@ -3180,8 +3189,16 @@ fn joined(run: std::thread::ScopedJoinHandle<'_, Result<Value, String>>) -> Resu
         .unwrap_or_else(|_| Err("Orca の読み取りが止まりました".into()))
 }
 
-/// The list of `formation_children`. Each environment that a launched child is in is asked once for `orca worktree ps` (side by side), and only its own children are joined to the answer; a record of planned children alone, or of none, needs no Orca, and a record of this Mac's children alone does not read `orca environment list`.
-/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI. That list is read at the same time as this Mac's `orca worktree ps`, and each saved environment's `ps` waits `SAVED_PS_TIMEOUT` at most.
+/// What the state of a child is read from in `environment`: `orca worktree ps` for a Claude Code child, and `orca terminal list` for a Codex child, which `ps` has no row for (A-41, `child_row`).
+fn children_read_args(agent: FormationAgent, environment: &str) -> Vec<String> {
+    match agent {
+        FormationAgent::Claude => orca::ps_args(Some(environment)),
+        FormationAgent::Codex => all_terminals_args(environment),
+    }
+}
+
+/// The list of `formation_children`. Each environment that a launched child is in is asked once for what its children's states are read from (`children_read_args`: `orca worktree ps` when it has a Claude Code child, `orca terminal list` when it has a Codex child, side by side), and only its own children are joined to the answer; a record of planned children alone, or of none, needs no Orca, and a record of this Mac's children alone does not read `orca environment list`.
+/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI. That list is read at the same time as this Mac's reads, and each saved environment's read waits `SAVED_PS_TIMEOUT` at most.
 /// An environment that cannot be read (also one whose value is refused) leaves its children working with their terminals, and the others are drawn from what was read. When no launched child could be read, the read fails with the first reason, so that the screen keeps its last list and says why.
 fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<FormationChild>, String> {
     let launched_in = |local: bool| {
@@ -3189,11 +3206,26 @@ fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<Formati
             .iter()
             .any(|child| child.launch.is_some() && (child.environment == LOCAL) == local)
     };
+    let local_agents: Vec<FormationAgent> = [FormationAgent::Claude, FormationAgent::Codex]
+        .into_iter()
+        .filter(|agent| {
+            children.iter().any(|child| {
+                child.launch.is_some() && child.environment == LOCAL && child.agent == *agent
+            })
+        })
+        .collect();
     let (named, reads) = std::thread::scope(|scope| {
         let start =
             |args: Vec<String>, timeout: Duration| scope.spawn(move || read(&args, timeout));
-        let local =
-            launched_in(true).then(|| start(orca::ps_args(Some(LOCAL)), orca::READ_TIMEOUT));
+        let local: Vec<_> = local_agents
+            .iter()
+            .map(|agent| {
+                (
+                    *agent,
+                    start(children_read_args(*agent, LOCAL), orca::READ_TIMEOUT),
+                )
+            })
+            .collect();
         let list = launched_in(false).then(|| start(environment_list_args(), orca::READ_TIMEOUT));
         let saved: Option<Result<Vec<Environment>, String>> = list.map(|run| {
             joined(run)
@@ -3215,26 +3247,31 @@ fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<Formati
                 })
             })
             .collect();
-        let mut wanted: Vec<&str> = Vec::new();
-        for name in named.iter().flatten().flatten() {
-            if name.as_str() != LOCAL && !wanted.contains(&name.as_str()) {
-                wanted.push(name);
+        let mut wanted: Vec<(&str, FormationAgent)> = Vec::new();
+        for (child, name) in children.iter().zip(&named) {
+            if let Some(Ok(name)) = name {
+                let key = (name.as_str(), child.agent);
+                if name.as_str() != LOCAL && !wanted.contains(&key) {
+                    wanted.push(key);
+                }
             }
         }
         let others: Vec<_> = wanted
             .iter()
-            .map(|name| {
+            .map(|(name, agent)| {
                 (
-                    (*name).to_owned(),
-                    start(orca::ps_args(Some(name)), SAVED_PS_TIMEOUT),
+                    ((*name).to_owned(), *agent),
+                    start(children_read_args(*agent, name), SAVED_PS_TIMEOUT),
                 )
             })
             .collect();
-        let mut reads: Vec<(String, Result<Value, String>)> = Vec::new();
-        if let Some(run) = local {
-            reads.push((LOCAL.to_owned(), joined(run)));
-        }
-        reads.extend(others.into_iter().map(|(name, run)| (name, joined(run))));
+        let mut reads: Vec<((String, FormationAgent), Result<Value, String>)> = Vec::new();
+        reads.extend(
+            local
+                .into_iter()
+                .map(|(agent, run)| ((LOCAL.to_owned(), agent), joined(run))),
+        );
+        reads.extend(others.into_iter().map(|(key, run)| (key, joined(run))));
         (named, reads)
     });
     let mut first_failure: Option<String> = None;
@@ -3251,7 +3288,7 @@ fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<Formati
             let listing = name.as_ref().map_err(Clone::clone).and_then(|name| {
                 reads
                     .iter()
-                    .find(|(read_name, _)| read_name == name)
+                    .find(|((read_name, agent), _)| read_name == name && *agent == child.agent)
                     .map_or_else(
                         || Err("Orca を読めませんでした".to_owned()),
                         |(_, result)| {
@@ -6364,23 +6401,49 @@ mod tests {
         agent
     }
 
-    #[test]
-    fn a_codex_child_takes_its_state_from_its_agent_row_as_a_claude_child_does() {
-        let mut codex = launched("c", "r1");
+    fn terminals_of(handles: &[&str]) -> Value {
+        json!({"terminals": handles.iter().map(|h| json!({"handle": h, "orphaned": false})).collect::<Vec<_>>()})
+    }
+
+    fn codex_child(name: &str) -> Child {
+        let mut codex = launched(name, "r1");
         codex.agent = FormationAgent::Codex;
-        codex.launch.as_mut().unwrap().pane_key = "tab:c".into();
-        for (state, expected) in [
-            ("working", FormationState::Working),
-            ("waiting", FormationState::Waiting),
-            ("done", FormationState::Done),
+        codex
+    }
+
+    #[test]
+    fn a_codex_child_is_working_while_its_terminal_is_listed_and_done_when_it_is_not() {
+        let codex = codex_child("c");
+        // `orca worktree ps` has no row for it, and its terminal is listed: working, with its tab.
+        let rows = rows_of(std::slice::from_ref(&codex), &terminals_of(&["term_c"]));
+        assert_eq!(rows[0].state, FormationState::Working);
+        assert_eq!(rows[0].agent, FormationAgent::Codex);
+        assert_eq!(rows[0].handle.as_deref(), Some("term_c"));
+        // The terminal is not in the list, or has lost its tab: done, with no tab.
+        for list in [
+            terminals_of(&["term_other"]),
+            terminals_of(&[]),
+            json!({"terminals": [{"handle": "term_c", "orphaned": true}]}),
         ] {
-            let mut row = agent("tab:c", state, None);
-            row["agentType"] = json!("codex");
-            let rows = rows_of(std::slice::from_ref(&codex), &ps_of(vec![row]));
-            assert_eq!(rows[0].state, expected, "{state}");
-            assert_eq!(rows[0].agent, FormationAgent::Codex);
-            assert_eq!(rows[0].handle.as_deref(), Some("term_c"));
+            let rows = rows_of(std::slice::from_ref(&codex), &list);
+            assert_eq!(rows[0].state, FormationState::Done, "{list}");
+            assert_eq!(rows[0].handle, None, "{list}");
         }
+        // A list that could not be read leaves it working, as for a Claude Code child.
+        let row = child_row(&codex, LOCAL, None);
+        assert_eq!(row.state, FormationState::Working);
+        assert_eq!(row.handle.as_deref(), Some("term_c"));
+    }
+
+    #[test]
+    fn a_codex_child_ignores_the_agent_rows_of_ps_and_never_waits() {
+        let codex = codex_child("c");
+        let mut waiting = agent("tab-c:leaf", "waiting", Some("blocked"));
+        waiting["agentType"] = json!("codex");
+        // Whatever the list given holds, a Codex child is read from the terminal list alone.
+        let rows = rows_of(std::slice::from_ref(&codex), &ps_of(vec![waiting]));
+        assert_eq!(rows[0].state, FormationState::Done);
+        assert_eq!(rows[0].handle, None);
     }
 
     #[test]
