@@ -1,7 +1,7 @@
 // The dialog that makes a formation (A-37): a name and the projects of the formation, the repositories of this Mac and of the saved environments (`formation_environments`). Rust checks the name and the projects and makes the formation (`formation_create`); this module draws the fields and tells the caller the formation that was made.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationProject } from "./bindings/FormationProject";
-import { composing, partMatcher, tag } from "./dom.js";
+import { $, composing, partMatcher, tag } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
@@ -46,12 +46,17 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
     for (const p of projects) p.row.hidden = re !== null && !re.test(p.project.repo);
     for (const s of sections) s.head.hidden = s.rows.every((r) => r.hidden);
   };
-  filter.oninput = narrow;
+  // Each change of the text shows the list from its top, so that the rows that match are seen from the first (#942).
+  filter.oninput = () => {
+    narrow();
+    list.scrollTop = 0;
+  };
 
   let busy = false;
   const submit = async () => {
     const wanted = name.value;
     if (busy || make.disabled || wanted === "") return;
+    $("error").hidden = true;
     busy = true;
     make.disabled = true;
     try {
@@ -84,6 +89,7 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
   showMenu(anchor, pop);
   name.focus();
 
+  $("error").hidden = true;
   void invoke("formation_environments").then(
     (view) => {
       if (!pop.isConnected) return;

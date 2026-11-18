@@ -1,17 +1,23 @@
-// The formations under their heading at the top of the list of the development screen (A-37): a row for each formation, with its name alone (`formation_list`).
+// The formations under their heading at the top of the list of the development screen (A-37): a row for each formation, with its name and the number of its launched children (`formation_list`), and under it, while it is open, a row for each of those children.
 // The formation of the selected row is the one the middle pane (its leader) and the right pane (its flow) show; with no row selected (at each start, after a project or a session is selected, and after the selected one is deleted) neither pane is shown. The list is read on the clock of formation-flow.ts, so it is read while the development screen is shown.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationKeptChild } from "./bindings/FormationKeptChild";
+import type { FormationListChild } from "./bindings/FormationListChild";
 import type { FormationShown } from "./bindings/FormationShown";
 import type { FormationState } from "./bindings/FormationState";
+import type { OrcaStatus } from "./bindings/OrcaStatus";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
 import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
-import { DELETE_SVG, FOLDER_SVG, FORMATION_NEW_SVG } from "./icons.js";
+import { CHEVRON_SVG, DELETE_SVG, FOLDER_SVG, FORMATION_NEW_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { type MenuItem, openMenu } from "./menu.js";
+import { redrawOrca, statusIcon } from "./orca.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
+
+// A child's state as the status icon of a session draws it (the same icons as the sessions under a project); a planned child is not listed, so it has none.
+const STATUS_OF: Record<FormationState, OrcaStatus> = { working: "working", waiting: "question", done: "done", planned: "idle" };
 
 // The environment of this Mac in `FormationEntry.environment`.
 const LOCAL = "local";
@@ -29,7 +35,17 @@ export const formationEnvironment = (name: string) => formations.find((f) => f.n
 // The last read; a read that failed keeps it and says why in `failure`.
 let formations: FormationEntry[] = [];
 let failure: string | null = null;
-let reading = false;
+let inflight: Promise<void> | null = null;
+// When the last read that worked ended (epoch milliseconds; 0: none yet).
+let readAt = 0;
+// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac. The sessions of the projects and the choices of a worktree leave them out (A-8, A-9, A-16).
+let childPlaces = new Set<string>();
+// The terminals of the children that work in a folder that was there (`created` false): that folder is the owner's too, so only these sessions leave the projects, `{environment}\nhandle\n{handle}` and `{environment}\npane\n{paneKey}`.
+let childSessions = new Set<string>();
+// Whether a read of the list has ended, with an answer or a failure: before it, the Orca list does not know which work is a child's.
+let settled = false;
+// How long a read stays fresh for the choices of a worktree; it is the period of the Orca list while the screen is shown.
+const FRESH_MS = 10_000;
 // Counts the formations made by this screen: a read that began before one was made does not know it, and its answer is dropped.
 let made = 0;
 // What the list shows now; it is drawn again only when the key changes.
@@ -38,17 +54,64 @@ let listKey = "";
 let onChange: (name: string | null) => void = () => {};
 // Told the name of a formation that was deleted, so that the terminal of its orchestrator is dropped.
 let onRemoved: (name: string) => void = () => {};
+// Told the name of the child whose row was pressed, after its formation was selected: the tab of that child is shown.
+let onChild: (name: string) => void = () => {};
+// The formations whose children are folded away (in memory only); a formation shows its children until its arrow is pressed.
+const folded = new Set<string>();
 // The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
 const deleting = new Set<string>();
 let deleteFailure: string | null = null;
 // What a deletion that worked told that is no failure: the branches that Orca kept for the commits no remote has.
 let deleteNotice: string | null = null;
 
-// Reads the formations now. One call at a time; a hidden window reads nothing.
-export async function readList() {
-  if (reading || document.hidden) return;
-  reading = true;
+const placeKey = (environment: string | null | undefined, path: string) => `${environment ?? LOCAL}\n${path}`;
+
+// Whether the worktree at `path` on the PC `environment` (null or none: this Mac; else the saved environment's name) is one that tsunagiai made for a launched child, by the last read (A-37).
+export const isChildWorktree = (path: string, environment: string | null | undefined) => childPlaces.has(placeKey(environment, path));
+
+// Whether a row or a terminal of the Orca list is a launched child's session, by the last read: it is in a worktree made for a child, or it is the terminal of a child that works in a folder that was there (A-8, A-37).
+export const isChildSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }) =>
+  isChildWorktree(item.path, item.environment) ||
+  (item.handle != null && childSessions.has(placeKey(item.environment, `handle\n${item.handle}`))) ||
+  (item.paneKey != null && childSessions.has(placeKey(item.environment, `pane\n${item.paneKey}`)));
+
+// Whether a read of the list has ended: the Orca list takes work as the owner's only after it.
+export const childrenKnown = () => settled;
+
+const differs = (a: Set<string>, b: Set<string>) => a.size !== b.size || [...a].some((k) => !b.has(k));
+
+// Holds the worktrees and the sessions of the children of `formations`; the screens that leave them out are drawn again when they changed.
+function holdChildren() {
+  const children = formations.flatMap((f) => f.children);
+  const next = new Set(children.filter((c) => c.created).map((c) => placeKey(c.environment, c.path)));
+  const nextSessions = new Set(children.filter((c) => !c.created).flatMap((c) => [placeKey(c.environment, `handle\n${c.handle}`), placeKey(c.environment, `pane\n${c.paneKey}`)]));
+  const changed = differs(next, childPlaces) || differs(nextSessions, childSessions);
+  childPlaces = next;
+  childSessions = nextSessions;
+  if (changed) redrawOrca();
+}
+
+// Whether the last read is recent enough for a choice of a worktree to leave the children out of it.
+export const childrenFresh = () => Date.now() - readAt < FRESH_MS;
+
+// Reads the list for a choice of a worktree that leaves the children out: the first time the choice waits for the read to end, and after that it is made at once with the children held, while the list is read again behind it when it is not recent.
+export async function readForChoice() {
+  if (!settled) await readList();
+  else if (!childrenFresh()) void readList();
+}
+
+// Reads the formations now. One call at a time (a call while one is on its way waits for it); a hidden window reads nothing.
+export function readList(): Promise<void> {
+  if (document.hidden) return Promise.resolve();
+  inflight ??= load().finally(() => {
+    inflight = null;
+  });
+  return inflight;
+}
+
+async function load() {
   let read = false;
+  let failed = false;
   const before = made;
   try {
     const answer = await invoke("formation_list");
@@ -56,11 +119,17 @@ export async function readList() {
       formations = answer.formations;
       failure = answer.readError;
       read = true;
+      readAt = Date.now();
+      holdChildren();
     }
   } catch (e) {
     failure = String(e);
-  } finally {
-    reading = false;
+    failed = true;
+  }
+  // The first end of a read, whatever it answered: the Orca list is drawn again, because it took no work as the owner's before.
+  if ((read || failed) && !settled) {
+    settled = true;
+    redrawOrca();
   }
   // The shown formation left the list: its flow is read no more, and none is shown.
   if (read && current !== null && !formations.some((f) => f.name === current)) choose(null);
@@ -73,6 +142,7 @@ function added(entry: FormationEntry) {
   deleteFailure = null;
   deleteNotice = null;
   formations = [...formations.filter((f) => f.name !== entry.name), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  holdChildren();
   choose(entry.name);
   void readList();
 }
@@ -107,6 +177,7 @@ async function remove(name: string, force: boolean, shown: FormationShown[]) {
   // A read that began before the deletion still lists it: its answer is dropped.
   made++;
   formations = formations.filter((f) => f.name !== name);
+  holdChildren();
   // The shown formation is deleted: none is shown, and the read of the flow of the deleted one stops.
   if (current === name) choose(null);
   onRemoved(name);
@@ -154,7 +225,59 @@ function row(f: FormationEntry): HTMLButtonElement {
     node.dataset.waiting = "true";
     node.append(span("formation-row-waiting", WAITING_LABEL));
   }
+  // The number of the launched children; none is drawn for a formation that has none.
+  if (f.children.length > 0) {
+    const count = span("formation-row-count", String(f.children.length));
+    count.setAttribute("aria-label", `起動しているチームメイト ${f.children.length} 人`);
+    node.append(count);
+  }
   return node;
+}
+
+// A child of a formation: its state, its name and, under it, the project and the branch of its worktree. Pressing it selects the formation and shows the child's tab.
+function childRow(f: FormationEntry, c: FormationListChild): HTMLButtonElement {
+  const node = tag("button", "formation-child");
+  node.type = "button";
+  node.dataset.childOf = f.name;
+  node.dataset.child = c.name;
+  node.dataset.state = c.state;
+  const text = tag("span", "formation-child-text");
+  const where = c.branch === "" ? c.repo : `${c.repo} ・ ${c.branch}`;
+  text.append(span("formation-child-name", c.name), span("formation-child-where", where));
+  node.append(statusIcon(STATUS_OF[c.state], STATE_LABELS[c.state]), text);
+  node.onclick = () => {
+    deleteFailure = null;
+    deleteNotice = null;
+    choose(f.name);
+    onChild(c.name);
+    draw();
+  };
+  return node;
+}
+
+// A formation with its children: a formation that has some has the arrow at the left of its row (the one of a project, A-8), and its children under it while it is open.
+function item(f: FormationEntry): HTMLDivElement {
+  const wrap = tag("div", "formation-item");
+  wrap.append(row(f));
+  if (f.children.length === 0) return wrap;
+  const open = !folded.has(f.name);
+  const arrow = tag("button", "icon-btn orca-arrow");
+  arrow.type = "button";
+  arrow.dataset.arrow = f.name;
+  arrow.setAttribute("aria-expanded", String(open));
+  arrow.setAttribute("aria-label", open ? "チームメイトを閉じる" : "チームメイトを開く");
+  arrow.innerHTML = CHEVRON_SVG;
+  arrow.onclick = () => {
+    if (!folded.delete(f.name)) folded.add(f.name);
+    draw();
+  };
+  wrap.append(arrow);
+  if (open) {
+    const list = tag("div", "formation-children");
+    list.append(...f.children.map((c) => childRow(f, c)));
+    wrap.append(list);
+  }
+  return wrap;
 }
 
 // The mark of the leader's tab in the middle pane: the same state as the row of the shown formation.
@@ -164,26 +287,37 @@ function drawLeaderMark() {
   $("formation-tab-leader-mark").hidden = !waiting;
 }
 
+// The selector of the control of the list that has the focus, to give it the focus again after a redraw: a formation's row, a child's row or an arrow.
+function focusedControl(feed: HTMLElement): string | undefined {
+  const el = feed.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null;
+  const { formation, childOf, child, arrow } = el?.dataset ?? {};
+  if (arrow) return `[data-arrow="${CSS.escape(arrow)}"]`;
+  if (childOf && child) return `[data-child-of="${CSS.escape(childOf)}"][data-child="${CSS.escape(child)}"]`;
+  if (formation) return `[data-formation="${CSS.escape(formation)}"]`;
+  return undefined;
+}
+
 function draw() {
   drawLeaderMark();
   const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
-  const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects, f.waiting])]);
+  const key = JSON.stringify([current, [...deleting], [...folded], formations.map((f) => [f.name, f.projects, f.waiting, f.children.map((c) => [c.name, c.repo, c.branch, c.state])])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.
   const feed = $("formation-list-feed");
   const top = feed.scrollTop;
-  const focused = feed.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.formation : undefined;
-  feed.replaceChildren(...formations.map(row));
+  const focused = focusedControl(feed);
+  feed.replaceChildren(...formations.map(item));
   feed.scrollTop = top;
-  if (focused) feed.querySelector<HTMLElement>(`[data-formation="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  if (focused) feed.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
 }
 
-export function initFormationList(changed: (name: string | null) => void, removed: (name: string) => void) {
+export function initFormationList(changed: (name: string | null) => void, removed: (name: string) => void, child: (name: string) => void) {
   onChange = changed;
   onRemoved = removed;
+  onChild = child;
   const plus = $<HTMLButtonElement>("formation-new");
   plus.innerHTML = FORMATION_NEW_SVG;
   plus.onclick = () => openFormationDialog(plus, added);

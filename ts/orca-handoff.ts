@@ -16,6 +16,7 @@ import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
 import { hideTerminals, isShowing, releaseTerminal, showTerminals, type TermSource } from "./orca-terminal.js";
+import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, streamsEnvironment, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
@@ -291,6 +292,8 @@ export class HandoffPane {
     if (!force && this.destReading !== 0) return;
     const seq = ++this.readSeq;
     this.lastRead = Date.now();
+    // The children of the formations are left out of the worktrees offered (A-9): their list is read beside when it is not recent, and only while the form is shown, because a session shows no worktree to choose.
+    if (this.mode() === "form" && !childrenFresh()) void readList();
     const overview = await this.read(force);
     if (seq !== this.readSeq || !this.open) return;
     this.overview = overview;
@@ -467,7 +470,9 @@ export class HandoffPane {
     chip.type = "button";
     chip.setAttribute("aria-label", "worktree");
     chip.setAttribute("aria-haspopup", "menu");
-    chip.onclick = () => {
+    chip.onclick = async () => {
+      // The first time, the list of the formations is waited for; after that the menu opens at once with the children held, and the list is read again behind it.
+      await readForChoice();
       const form = this.form();
       const picked = this.pickedWorktree();
       openMenu(
@@ -692,9 +697,9 @@ export class HandoffPane {
     box.replaceChildren(...(text ? [row] : []));
   }
 
-  // The worktrees of the project chosen, its own folder (`isMain`) first.
+  // The worktrees of the project chosen, its own folder (`isMain`) first. Those of the formations' children are not among them (A-9, A-37).
   private projectWorktrees() {
-    const all = chosenProject === null ? [] : (this.overview?.worktrees ?? []).filter((w) => w.projectKey === chosenProject);
+    const all = chosenProject === null ? [] : (this.overview?.worktrees ?? []).filter((w) => w.projectKey === chosenProject && !isChildWorktree(w.path, w.environment ?? this.destination()));
     return [...all.filter((w) => w.isMain), ...all.filter((w) => !w.isMain)];
   }
 

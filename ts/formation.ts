@@ -4,7 +4,7 @@ import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
 import { claudeCodeStarted, closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
-import { hideSession, isLeaderTab, onTabChange, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
+import { hideSession, isLeaderTab, onTabChange, showChild, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
 import { currentFormation, formationEnvironment, initFormationList } from "./formation-list.js";
 import { RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -24,6 +24,8 @@ const LOCAL = "local";
 // The orchestrators of the formations of a saved environment, by the name of the formation: the terminal once Rust has made it (in memory only; Rust finds the recorded one again), the starts on their way, and the words of the ones that failed.
 const terminals = new Map<string, FormationOrchestrator>();
 const starting = new Set<string>();
+// The formations of a saved environment whose orchestrator's terminal has ended (it left its Orca's list: Claude Code ended and the terminal went with it). The last screen stays drawn; the handle is dropped at the next show of the formation, which asks Rust again (it makes a new terminal when none is listed).
+const ended = new Set<string>();
 // The panes of the orchestrators of this Mac whose restart is on its way.
 const restarting = new Set<string>();
 const failures = new Map<string, string>();
@@ -64,6 +66,7 @@ function syncRestart() {
 
 // Shows the terminal of the orchestrator of a formation of a saved environment, and starts it when it has none and no failure is on the screen (a failure is tried again by the restart button, or by pressing the formation again).
 function showRemote(name: string, host: HTMLElement, failure: string | null) {
+  if (ended.delete(name)) dropRemote(name);
   const got = terminals.get(name);
   if (!got) {
     hideClaudeCode(OWNER);
@@ -72,8 +75,20 @@ function showRemote(name: string, host: HTMLElement, failure: string | null) {
   }
   host.classList.add("claude-code-pane");
   const kind = streamsEnvironment(got.environment) ? "stream" : "mirror";
-  const placement = { id: got.handle, source: { kind, handle: got.handle, path: "", environment: got.environment } as const, host };
+  const placement = { id: got.handle, source: { kind, handle: got.handle, path: "", environment: got.environment, onGone: () => gone(name, got.handle) } as const, host };
   if (!isShowing(placement, OWNER)) showTerminals([placement], got.handle, OWNER);
+}
+
+// The screen forgets the terminal of the orchestrator of `name`.
+function dropRemote(name: string) {
+  const got = terminals.get(name);
+  if (got) releaseTerminal(got.handle, OWNER);
+  terminals.delete(name);
+}
+
+// The terminal `handle` of `name` left the list of its Orca. The terminal stays as it was drawn; the next show of the formation drops it and asks Rust for the leader again. A terminal that this screen no longer holds for `name` (the restart made another) is not the leader's end.
+function gone(name: string, handle: string) {
+  if (terminals.get(name)?.handle === handle) ended.add(name);
 }
 
 // Asks Rust for the terminal of the orchestrator of `name` (one start at a time for a formation), and shows it when that formation is still the one shown. `restart` ends the one it has.
@@ -135,12 +150,13 @@ export function initFormation() {
     // A formation was deleted: Rust has ended its orchestrator's process, so its terminal is dropped. The release hides the shown terminal of this owner too, so the shown formation's is shown again.
     (name) => {
       closeClaudeCode(formationPaneId(name), OWNER);
-      const got = terminals.get(name);
-      if (got) releaseTerminal(got.handle, OWNER);
-      terminals.delete(name);
+      dropRemote(name);
+      ended.delete(name);
       failures.delete(name);
       showPane();
     },
+    // The row of a child in the list was pressed, after its formation was selected: the child's tab is shown.
+    showChild,
   );
   $("formation-restart").innerHTML = RELOAD_SVG;
   const button = $<HTMLButtonElement>("formation-restart");
@@ -149,9 +165,8 @@ export function initFormation() {
     if (id === null) return;
     const name = currentFormation()!;
     if (formationEnvironment(name) !== LOCAL) {
-      const got = terminals.get(name);
-      if (got) releaseTerminal(got.handle, OWNER);
-      terminals.delete(name);
+      dropRemote(name);
+      ended.delete(name);
       void startRemote(name, true);
       return;
     }

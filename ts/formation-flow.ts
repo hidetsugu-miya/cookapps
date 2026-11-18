@@ -35,6 +35,8 @@ let selected: string | null = null;
 let follow = false;
 // The child whose decision page the middle pane shows in place of a terminal (null: a terminal does). The selected tab stays as it was under it, and is shown again when the page closes.
 let pageChild: string | null = null;
+// The child whose row in the list of the formations was pressed (A-37): its tab is selected by the next read that lists it with a terminal, and a read that does not drops it.
+let wanted: string | null = null;
 // The pages that were read, by the child: the mark's time they were read for, and their element in `#formation-page` (null while the read is on its way, and after a read that failed, which says why in `error`). A page is read only while its tab is shown.
 interface PageState {
   atMs: number;
@@ -71,6 +73,7 @@ async function read() {
   if (watching !== "flow" || reading) return;
   reading = true;
   const mine = epoch;
+  let picked = false;
   try {
     const name = currentFormation();
     // No formation is selected: there is no child to read.
@@ -78,6 +81,7 @@ async function read() {
     if (mine === epoch) {
       children = got;
       failure = null;
+      picked = takeWanted();
     }
   } catch (e) {
     if (mine === epoch) failure = String(e);
@@ -90,6 +94,28 @@ async function read() {
     return;
   }
   draw();
+  // The terminal of the child that the list asked for takes the keyboard, as a press on its tab does.
+  if (picked) showSelected(true);
+}
+
+// Selects the child that the list asked for when `children` has it with a terminal, and forgets the request either way: a read that does not list it, or lists it with no terminal (a done child whose terminal is gone), leaves the selection as it is. Returns whether it selected one.
+function takeWanted(): boolean {
+  const name = wanted;
+  wanted = null;
+  if (name === null || !children.some((c) => c.name === name && c.handle !== null)) return false;
+  selected = name;
+  pageChild = null;
+  follow = false;
+  return true;
+}
+
+// A child's row of the list of the formations was pressed, after its formation was selected: its tab is shown, at once when the children of that formation are read already, else with the read that lists them.
+export function showChild(name: string) {
+  wanted = name;
+  if (watching !== "flow" || children.length === 0) return;
+  const picked = takeWanted();
+  draw();
+  if (picked) showSelected(true);
 }
 
 // Reads now and then by the clock, for `next`; one clock at a time, so the two ways never read together.
@@ -112,6 +138,7 @@ export function switchFormation() {
   selected = null;
   follow = false;
   pageChild = null;
+  wanted = null;
   pages.clear();
   $("formation-page").replaceChildren();
   shownLeader = undefined;

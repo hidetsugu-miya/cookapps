@@ -1144,7 +1144,7 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
     on(args, environment)
 }
 
-/// The shell sentence that starts an orchestrator on its PC: the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
+/// The shell sentence that starts an orchestrator on its PC: it begins with `exec`, so the `sh` takes the place of the login shell it is typed into and the terminal ends with the process that runs in it (a sentence typed without it leaves the login shell, and the terminal, listed after Claude Code has ended; measured on Orca, #943). In it the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and opens a shell in its place (`exec "${SHELL:-/bin/sh}"`), so the terminal stays and the owner can read the words (an `exit` would close the terminal with them). The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
 fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<String, String> {
     check_name(name)?;
     local_first_prompt(repos)?;
@@ -1160,7 +1160,7 @@ fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<Stri
         .map(|repo| format!(" --project {}", crate::claude_code::sh_quote(repo)))
         .collect();
     Ok(format!(
-        "sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exit 1; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
+        "exec sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exec \"${{SHELL:-/bin/sh}}\"; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
     ))
 }
 
@@ -3561,6 +3561,51 @@ fn counts_of(rows: &[FormationChild]) -> ChildCounts {
     counts
 }
 
+/// One launched child of a formation as the list draws it under the formation's row (A-37): where it stands, the project it works in and its worktree. `path` and `environment` tell which worktree of which PC is a child's (when `created`), and `handle` and `pane_key` which sessions are, so that the sessions of the projects can leave them out.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationListChild {
+    pub name: String,
+    pub repo: String,
+    /// The branch of its worktree.
+    pub branch: String,
+    /// Where its worktree is, on its PC.
+    pub path: String,
+    /// The Orca the child runs in, as `FormationChild::environment` has it.
+    pub environment: String,
+    pub state: FormationState,
+    /// Whether tsunagiai made its worktree (`Launch::created`). A child that works in a folder that was there (`false`) is seen by its terminal and not by its folder, which is the owner's too.
+    pub created: bool,
+    /// The terminal that runs the child (`Launch::handle`), as the record has it also after Orca lists it no more.
+    pub handle: String,
+    /// The `paneKey` of its agent in `orca worktree ps` (`Launch::pane_key`).
+    pub pane_key: String,
+}
+
+/// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed.
+fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationListChild> {
+    records
+        .iter()
+        .zip(rows)
+        .filter_map(|(child, row)| {
+            let launch = child.launch.as_ref()?;
+            Some(FormationListChild {
+                name: row.name.clone(),
+                repo: row.repo.clone(),
+                branch: launch.branch.clone(),
+                path: launch.path.clone(),
+                environment: row.environment.clone(),
+                state: row.state,
+                created: launch.created,
+                handle: launch.handle.clone(),
+                pane_key: launch.pane_key.clone(),
+            })
+        })
+        .collect()
+}
+
 /// One formation as the list draws it.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -3575,6 +3620,8 @@ pub struct FormationEntry {
     #[cfg_attr(test, ts(type = "number | null"))]
     pub created_at: Option<u64>,
     pub counts: ChildCounts,
+    /// The children that were launched, in the order of the record (`listed_children`): a planned child is not in it. The list draws them under the formation's row, and the number of them is the number it shows.
+    pub children: Vec<FormationListChild>,
     /// Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`list_core` with the titles); the list of `list_with` and the answer of `formation_create` have `false`.
     pub waiting: bool,
 }
@@ -3725,6 +3772,7 @@ fn list_core(
             projects: meta.projects,
             created_at: meta.created_at,
             counts: counts_of(own),
+            children: listed_children(children, own),
             waiting,
         });
     }
@@ -3933,6 +3981,7 @@ fn create_with(
         projects: meta.projects,
         created_at: meta.created_at,
         counts: ChildCounts::default(),
+        children: Vec::new(),
         waiting: false,
     })
 }
@@ -4190,8 +4239,8 @@ fn terminal_is_gone(
     }
 }
 
-/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again (the shell it was typed into stays alive when Claude Code ends); one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
-/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails.
+/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again; one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
+/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails. When Claude Code ends, the terminal ends with it (`orchestrator_command` replaces the login shell), so it leaves that list and the next ask makes a new one (#943).
 /// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
 fn start_orchestrator_with(
     config: &Path,
@@ -8652,6 +8701,51 @@ mod tests {
             ]
         );
         assert_eq!(list.formations[0].projects, [project(LOCAL, "api")]);
+        // Only the launched children are listed, each with where its worktree is and how it stands; the number of them is what the counts say without the planned ones.
+        let children =
+            |f: &FormationEntry| -> Vec<(String, String, String, String, String, FormationState)> {
+                f.children
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.name.clone(),
+                            c.repo.clone(),
+                            c.branch.clone(),
+                            c.path.clone(),
+                            c.environment.clone(),
+                            c.state,
+                        )
+                    })
+                    .collect()
+            };
+        let own = |name: &str, repo: &str, environment: &str, state| {
+            (
+                name.to_owned(),
+                repo.to_owned(),
+                format!("user/{name}"),
+                format!("/work/{name}"),
+                environment.to_owned(),
+                state,
+            )
+        };
+        assert_eq!(
+            children(&list.formations[0]),
+            [
+                own("a", "web", LOCAL, FormationState::Working),
+                own("b", "api", "mac-studio", FormationState::Waiting),
+            ]
+        );
+        assert_eq!(
+            children(&list.formations[1]),
+            [
+                own("c", "web", LOCAL, FormationState::Done),
+                own("d", "api", "mac-studio", FormationState::Working),
+            ]
+        );
+        for f in &list.formations {
+            let c = f.counts;
+            assert_eq!(f.children.len() as u32, c.waiting + c.working + c.done);
+        }
         // One read of each environment's ps for the two formations together.
         assert_eq!(
             fake.reads_of_ps(),
@@ -8689,6 +8783,27 @@ mod tests {
             }
         );
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_listed_child_tells_whether_its_folder_was_made_and_which_terminal_is_its() {
+        let mut kept = launched("k", "x");
+        kept.launch.as_mut().unwrap().created = false;
+        let made = launched("m", "x");
+        let records = [planned("p", "x"), kept, made];
+        let rows = rows_of(&records, &ps_of(Vec::new()));
+        let listed = listed_children(&records, &rows);
+        // A planned child has no worktree: it is not listed.
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "k");
+        assert!(!listed[0].created);
+        assert_eq!(listed[0].handle, "term_k");
+        assert_eq!(listed[0].pane_key, "tab-k:leaf");
+        assert!(listed[1].created);
+        // The record's handle stays when Orca lists the terminal no more (the child is done): the session is still the child's.
+        assert_eq!(rows[2].handle, None);
+        assert_eq!(listed[1].handle, "term_m");
+        assert_eq!(listed[1].pane_key, "tab-m:leaf");
     }
 
     #[test]
@@ -10206,16 +10321,22 @@ mod tests {
         let command = orchestrator_command("api-work", &[], HOST).unwrap();
         assert_eq!(
             command,
-            "sh -c 'm=\"$HOME/Library/Application Support/jp.mysis.tsunagiai/remote/tsunagiai-mcp\"; [ -x \"$m\" ] || { echo \"tsunagiai-mcp が置かれていません\" >&2; exit 1; }; \"$m\" --serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\" --formation-start api-work \"$@\"' sh"
+            "exec sh -c 'm=\"$HOME/Library/Application Support/jp.mysis.tsunagiai/remote/tsunagiai-mcp\"; [ -x \"$m\" ] || { echo \"tsunagiai-mcp が置かれていません\" >&2; exec \"${SHELL:-/bin/sh}\"; }; \"$m\" --serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\" --formation-start api-work \"$@\"' sh"
         );
+        // The login shell the sentence is typed into is replaced, so the terminal ends with the process that runs in it (#943): the sentence begins with `exec`, and the script never `exit`s (that would close the terminal with the words of the missing program unread; there it opens a shell instead).
+        assert!(command.starts_with("exec sh -c '"));
+        assert!(!command.contains("exit"));
+        assert!(command.contains(
+            "{ echo \"tsunagiai-mcp が置かれていません\" >&2; exec \"${SHELL:-/bin/sh}\"; }"
+        ));
         // The program of the app and the cargo and PATH places of #877 are not looked at any more.
         for old in ["/Applications/", ".cargo/bin", "command -v"] {
             assert!(!command.contains(old), "{old}");
         }
         // The server is started first, and a failure of it does not stop the orchestrator.
         let at = |needle: &str| command.find(needle).unwrap();
-        assert!(at("--serve --bind") < at("exec "));
-        assert!(command.contains("--serve --bind 10.0.0.2 >/dev/null 2>&1; exec"));
+        assert!(at("--serve --bind") < at("; exec \"$m\""));
+        assert!(command.contains("--serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\""));
         assert!(command.contains(MCP_NOT_PLACED));
         // One line, and one quoted word for `sh -c`: nothing inside ends the quote.
         assert!(!command.contains('\n'));

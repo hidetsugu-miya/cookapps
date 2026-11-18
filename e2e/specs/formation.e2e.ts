@@ -1,4 +1,5 @@
-import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+import { pickItem } from "../orca-support";
 
 import type { FormationList } from "../../ts/bindings/FormationList";
 
@@ -1602,6 +1603,34 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await browser.execute(() => document.querySelectorAll(".formation-new-repo:not([hidden])").length)).toBe(4);
   });
 
+  it("scrolls the list to its top when the filter is typed in or emptied, so that the rows that match are seen from the first (#942)", async () => {
+    const many = Array.from({ length: 40 }, (_, i) => `repo-${String(i).padStart(2, "0")}`);
+    await ask({ formation_environments: formationEnvironments([...many, "tsunagiai"]) });
+    const scrollTop = () => browser.execute(() => document.querySelector<HTMLElement>(".formation-new-list")!.scrollTop);
+    const scrollDown = () =>
+      browser.execute(() => {
+        const l = document.querySelector<HTMLElement>(".formation-new-list")!;
+        l.scrollTop = l.scrollHeight;
+      });
+    await scrollDown();
+    expect(await scrollTop()).toBeGreaterThan(0);
+    await filterField().setValue("tsuna");
+    expect(await scrollTop()).toBe(0);
+    // The row that matches is inside the box of the list.
+    expect(
+      await browser.execute(() => {
+        const [l, r] = [document.querySelector(".formation-new-list")!.getBoundingClientRect(), document.querySelector<HTMLElement>(".formation-new-repo:not([hidden])")!.getBoundingClientRect()];
+        return r.top >= l.top && r.bottom <= l.bottom;
+      }),
+    ).toBe(true);
+    // Emptied, the list is at its top too.
+    await filterField().setValue("");
+    await scrollDown();
+    expect(await scrollTop()).toBeGreaterThan(0);
+    await filterField().setValue("repo-1");
+    expect(await scrollTop()).toBe(0);
+  });
+
   it("shows no heading for an environment with no repository, and none for one that could not be read", async () => {
     await ask({ formation_environments: formationEnvironments([], { "dev-server": ["wonder-api"], "empty-server": [] }, { "down-server": "届きません" }) });
     expect(await textsOf(".formation-new-env:not([hidden])")).toEqual(["dev-server"]);
@@ -1685,6 +1714,47 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     // The formation is not made, so none is selected in its place.
     expect(await pressedRows()).toEqual(["formation"]);
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
+  });
+
+  it("hides the words of a failed creation when the name is corrected and the formation is made", async () => {
+    await ask();
+    await mock("formation_create", rejects("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください"));
+    await browser.keys("Bad Name");
+    await pick(1);
+    await makeButton().click();
+    await expect($("#error")).toBeDisplayed();
+    const create = await mock("formation_create", formationEntry("bad-name", { minutes: 0 }));
+    await mock("formation_list", formationList([...listed().formations, formationEntry("bad-name", { minutes: 0 })]));
+    await nameField().setValue("bad-name");
+    await makeButton().click();
+    await waitForCalls(create);
+    await expect($("#error")).not.toBeDisplayed();
+    await expect(dialog()).not.toExist();
+    await browser.waitUntil(async () => (await pressedRows()).join() === "bad-name");
+  });
+
+  it("hides the words of a failed creation when the dialog is cancelled and opened again", async () => {
+    await ask();
+    await mock("formation_create", rejects("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください"));
+    await browser.keys("Bad Name");
+    await makeButton().click();
+    await expect($("#error")).toBeDisplayed();
+    await $(".formation-new-actions .text-btn:not(.primary)").click();
+    await expect(dialog()).not.toExist();
+    await pressNew();
+    await expect(dialog()).toBeDisplayed();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("hides the words of a failed read of the environments when the dialog is opened again", async () => {
+    await openList({ formation_environments: rejects("Orca に届きません") });
+    await pressNew();
+    await expect($("#error")).toHaveText("Orca に届きません");
+    await mock("formation_environments", ENVIRONMENTS());
+    await pressNew();
+    await expect(dialog()).toBeDisplayed();
+    await browser.waitUntil(async () => (await repos()).length > 0);
+    await expect($("#error")).not.toBeDisplayed();
   });
 
   it("shows the refusal of projects of two environments where the other failures show, and makes no formation", async () => {
@@ -1852,6 +1922,35 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await mock("formation_consent", formationConsent("dev-server"));
     await agreeButton().click();
     expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "dev-server", repo: "wonder-api" }] }]);
+  });
+
+  it("hides the words of a failed placement when the owner agrees again", async () => {
+    await ask({ formation_consents: [] });
+    await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
+    await mock("formation_consent", rejects("サーバーを置けませんでした: この PC は macOS（Apple Silicon）ではありません"));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await agreeButton().click();
+    await expect($("#error")).toBeDisplayed();
+    const consent = await mock("formation_consent", formationConsent("dev-server"));
+    await agreeButton().click();
+    await waitForCalls(consent);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("hides the words of a failed read of the consents when the formation is made again", async () => {
+    await ask();
+    await mock("formation_consents", rejects("同意を読めません"));
+    await browser.keys("mail-api");
+    await pick(3);
+    await makeButton().click();
+    await expect($("#error")).toHaveText("同意を読めません");
+    await expect(dialog()).toBeDisplayed();
+    await mock("formation_consents", []);
+    await makeButton().click();
+    await expect(consentDialog()).toBeDisplayed();
+    await expect($("#error")).not.toBeDisplayed();
   });
 
   it("does not ask for a consent when the projects are of two environments, and leaves the refusal to Rust", async () => {
@@ -2266,6 +2365,47 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await waitForCalls("orca_stream_terminal")).toMatchObject([{ handle: "term_orch" }]);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
     expect(await starts()).toBe(0);
+  });
+
+  // #943: Claude Code ends, the terminal ends with it (the sentence replaces the login shell) and leaves the list of its Orca. The screen reads no more, keeps the last screen, and asks Rust for the leader again when the formation is shown next.
+  it("stops reading a mirrored terminal that its Orca no longer lists, and asks for the leader again when the formation is pressed next", async () => {
+    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
+    const read = await mock("orca_terminal_read", rejects("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください"));
+    await waitForCalls(read, 1);
+    await browser.pause(MIRROR * 4);
+    expect(await callsOf(read)).toHaveLength(1);
+    expect(await orchestratorText()).toContain("リーダーです");
+    const asked = await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
+    await mock("orca_terminal_read", ["$ claude", "> 新しいリーダーです"]);
+    await row("formation").click();
+    await waitForStarts(1);
+    await row("studio-work").click();
+    expect(await waitForCalls(asked, 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダーです"), { timeoutMsg: "the new terminal of the leader never showed" });
+    expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
+  });
+
+  it("asks for the leader again when the stream of its terminal has ended, and not while it is still listed", async () => {
+    const overview = orcaOverview([], [], { target: "Studio", environments: ["Studio"] });
+    await openList({ formation_list: remote("Studio"), formation_orchestrator: terminal("Studio"), orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList([], []));
+    await row("studio-work").click();
+    await waitForCalls("orca_stream_terminal");
+    await sendTerm({ kind: "snapshot", data: "$ claude", cols: 80, rows: 24 });
+    // A terminal that is still listed is shown again with nothing asked.
+    await row("formation").click();
+    await waitForStarts(1);
+    await row("studio-work").click();
+    await browser.pause(300);
+    expect(await callsOf("formation_orchestrator")).toHaveLength(1);
+    await sendTerm({ kind: "ended", message: "このターミナルは一覧にありません" });
+    const asked = await mock("formation_orchestrator", { environment: "Studio", handle: "term_orch2" });
+    await row("formation").click();
+    await row("studio-work").click();
+    expect(await waitForCalls(asked, 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await browser.waitUntil(async () => (await callsOf("orca_stream_terminal")).some((c) => (c as { handle: string }).handle === "term_orch2"), { timeoutMsg: "the new terminal of the leader was never streamed" });
   });
 
   // The children of such a formation are in its PC's `children.json`, which Rust reads through Orca (#860): the screen asks by the name of the formation, as for this Mac's, and draws the answer, whose children are in that environment.
@@ -2841,5 +2981,227 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect($("#formation-page")).not.toBeDisplayed();
     expect(await count("#formation-page > *")).toBe(0);
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+// A-37: the launched children under the row of their formation in the list.
+const CHILD = (name: string) => `#formation-list-feed .formation-child[data-child="${name}"]`;
+const childRows = () => textsOf("#formation-list-feed .formation-child");
+const withChildren = () =>
+  formationList([
+    formationEntry("formation"),
+    formationEntry("won-2485", { minutes: 12, repos: ["wonder-api"], children: [listedChild("auth-api", "working", { repo: "wonder-api", branch: "child-auth" }), listedChild("add-tests", "waiting", { repo: "wonder-front", branch: "child-test" })], counts: { planned: 1, waiting: 1, working: 1, done: 0 } }),
+    formationEntry("mail-summary", { minutes: 90, children: [listedChild("old-one", "done", { repo: "tsunagiai", branch: "old" })], counts: { planned: 0, waiting: 0, working: 0, done: 1 } }),
+  ]);
+
+describe("orchestration mode: the children under a formation in the list", () => {
+  it("shows the number of launched teammates at the right of a formation's row, and none for a formation that has none", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["2", "1"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .formation-row-count`)].map((e) => e.getAttribute("aria-label")), ROWS)).toEqual(["起動しているチームメイト 2 人", "起動しているチームメイト 1 人"]);
+    expect(await count(`${ROWS}[data-formation="formation"] .formation-row-count`)).toBe(0);
+    // The count is at the right end of the row, after the name.
+    const place = await browser.execute((s) => {
+      const r = document.querySelector(`${s}[data-formation="won-2485"]`)!.getBoundingClientRect();
+      const n = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-count`)!.getBoundingClientRect();
+      const name = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-name`)!.getBoundingClientRect();
+      return { right: r.right - n.right < 16, beside: name.right <= n.left };
+    }, ROWS);
+    expect(place).toEqual({ right: true, beside: true });
+  });
+
+  it("draws a row for each launched child under its formation: the name, and under it the project and the branch of its worktree, with the icon of its state", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    expect(await childRows()).toEqual(["auth-api" + "wonder-api ・ child-auth", "add-tests" + "wonder-front ・ child-test", "old-one" + "tsunagiai ・ old"]);
+    expect(await textsOf(".formation-child .formation-child-name")).toEqual(["auth-api", "add-tests", "old-one"]);
+    expect(await textsOf(".formation-child .formation-child-where")).toEqual(["wonder-api ・ child-auth", "wonder-front ・ child-test", "tsunagiai ・ old"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".formation-child .orca-ic")].map((e) => [e.dataset.status, e.getAttribute("aria-label")]))).toEqual([
+      ["working", "作業中"],
+      ["question", "承認待ち"],
+      ["done", "完了"],
+    ]);
+    // A child is under its formation's row, below it and indented from its name.
+    const [parent, first, second] = [await rectOf(`${ROWS}[data-formation="won-2485"]`), await rectOf(CHILD("auth-api")), await rectOf(CHILD("add-tests"))];
+    expect(first.top).toBeGreaterThanOrEqual(parent.bottom - 1);
+    expect(second.top).toBeGreaterThanOrEqual(first.bottom - 1);
+    expect(first.left).toBeGreaterThan(parent.left);
+  });
+
+  it("folds the children away and opens them again with the arrow of the formation's row, and gives a formation with no child no arrow", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    const arrow = '#formation-list-feed .orca-arrow[data-arrow="won-2485"]';
+    expect(await count("#formation-list-feed .orca-arrow")).toBe(2);
+    await expect($(arrow)).toHaveAttribute("aria-expanded", "true");
+    await $(arrow).click();
+    await expect($(arrow)).toHaveAttribute("aria-expanded", "false");
+    expect(await childRows()).toEqual(["old-one" + "tsunagiai ・ old"]);
+    // The count stays while the children are folded, and the press of the arrow selects nothing.
+    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["2", "1"]);
+    expect(await pressedRows()).toEqual([]);
+    await $(arrow).click();
+    await expect($(arrow)).toHaveAttribute("aria-expanded", "true");
+    expect(await childRows()).toHaveLength(3);
+  });
+
+  it("keeps a folded formation folded when the list is read again", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    await $('#formation-list-feed .orca-arrow[data-arrow="won-2485"]').click();
+    await mock("formation_list", formationList([formationEntry("formation"), formationEntry("won-2485", { children: [listedChild("auth-api", "done", { repo: "wonder-api", branch: "child-auth" })] })]));
+    await browser.waitUntil(async () => (await textsOf(`${ROWS} .formation-row-count`)).join() === "1");
+    expect(await count(".formation-child")).toBe(0);
+  });
+
+  it("selects the formation and shows the child's tab when its row is pressed", async () => {
+    await openList({ formation_list: withChildren(), formation_children: [formationChild("auth-api", "working"), formationChild("add-tests", "waiting")] }, null);
+    await $(CHILD("add-tests")).click();
+    expect(await pressedRows()).toEqual(["won-2485"]);
+    await expect($("#formation")).toBeDisplayed();
+    await expect($('#formation-tabs-mates [data-child="add-tests"]')).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "false");
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    // Another child of the same formation: no new formation, and its tab is shown at once.
+    await $(CHILD("auth-api")).click();
+    await expect($('#formation-tabs-mates [data-child="auth-api"]')).toHaveAttribute("aria-selected", "true");
+    await expect($('#formation-tabs-mates [data-child="add-tests"]')).toHaveAttribute("aria-selected", "false");
+    expect(await pressedRows()).toEqual(["won-2485"]);
+  });
+
+  it("shows the child's tab of another formation than the shown one, after its children are read", async () => {
+    await openList({ formation_list: withChildren(), formation_children: [formationChild("old-one", "working")] });
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await $(CHILD("old-one")).click();
+    expect(await pressedRows()).toEqual(["mail-summary"]);
+    await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("selects the formation and leaves the leader's tab for a child that has no terminal", async () => {
+    await openList({ formation_list: withChildren(), formation_children: [formationChild("old-one", "done", { handle: null })] }, null);
+    await $(CHILD("old-one")).click();
+    expect(await pressedRows()).toEqual(["mail-summary"]);
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("lists the children of a formation of a saved environment as it lists those of this Mac", async () => {
+    const saved = formationList([formationEntry("remote-work", { environment: "dev-server", repos: [], children: [listedChild("r-child", "working", { repo: "wonder-api", branch: "r-branch", environment: "dev-server", path: "/srv/work/r-child" })] })]);
+    await openList({ formation_list: saved, formation_orchestrator: { environment: "dev-server", handle: "term_orch" }, formation_consents: [formationConsent("dev-server")], formation_children: [formationChild("r-child", "working", { environment: "dev-server" })] }, null);
+    expect(await childRows()).toEqual(["r-child" + "wonder-api ・ r-branch"]);
+    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["1"]);
+    await $(CHILD("r-child")).click();
+    expect(await pressedRows()).toEqual(["remote-work"]);
+    await expect($('#formation-tabs-mates [data-child="r-child"]')).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+// A-8, A-16, A-37 (#947): the worktree of a launched child is not under its project, and it is not offered where a session starts.
+describe("orchestration mode: the worktrees of the children are left out of the projects", () => {
+  const CHILD_PATH = "/work/child-a";
+  const MAIN_PATH = "/work/api";
+  const OTHER_PATH = "/work/api-other";
+  // The project `api`: its own session, a session and a plain terminal in the worktree of a child, and its worktrees (its own folder, the child's, and one that the owner made, which is no child's).
+  const ownRow = (extra: Record<string, unknown> = {}) => orcaRow("api", "main", "Own session", { path: MAIN_PATH, handle: "term_own", paneKey: "tab_own:leaf_1", ...extra });
+  const childRow = (extra: Record<string, unknown> = {}) => orcaRow("api", "child-a", "Child session", { path: CHILD_PATH, handle: "term_child", paneKey: "tab_child:leaf_1", ...extra });
+  const childTerminal = () => orcaTerminal("api", "zsh", { path: CHILD_PATH, handle: "term_child_sh", branch: "child-a" });
+  const trees = () => [orcaWorktree("api", "main"), orcaWorktree("api", "child-a", { path: CHILD_PATH }), orcaWorktree("api", "other", { path: OTHER_PATH })];
+  const overview = (rows = [ownRow(), childRow()], worktrees = trees()) => orcaOverview(rows, worktrees, { terminals: [childTerminal()] });
+  const withChild = () => formationList([formationEntry("formation", { children: [listedChild("child-a", "working", { repo: "api", branch: "child-a", path: CHILD_PATH })], counts: { planned: 0, waiting: 0, working: 1, done: 0 } })]);
+  const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
+  const number = () => textsOf(`${PROJECT} .orca-n`);
+  const arrow = () => $('#orca-feed [data-key="arrow:proj_api"]');
+
+  // `ready`: the pill of the count is the sign that the list was read, and a formation with no child has none, so a spec of such a list names its own sign.
+  async function openScreen(extra: Record<string, unknown> = {}, ready = async () => (await count(".formation-row-count")) === 1) {
+    await boot({ inbox: inbox(), orca_overview: overview(), formation_list: withChild(), ...timers({ orcaClock: READ }), ...extra });
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
+    await expect($(`${ROWS}[data-formation="formation"]`)).toBeDisplayed();
+    await browser.waitUntil(ready);
+  }
+  // The page's own press of the plus of the work pane (the driver's click takes the focus to the button after the handler).
+  async function pressPlus() {
+    await $(PROJECT).click();
+    await expect($(PROJECT)).toHaveAttribute("aria-pressed", "true");
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>(".orca-plus")!.click(), onceId());
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+  }
+
+  it("draws no row of a child's worktree under its project, neither its Claude session nor its plain terminal, and counts the sessions that are drawn", async () => {
+    await openScreen();
+    expect(await sessionTitles()).toEqual(["Own session"]);
+    expect(await number()).toEqual(["1"]);
+    expect(await count(`#orca-feed [data-session="claude:tab_child:leaf_1"], #orca-feed [data-session="orca:term_child_sh"]`)).toBe(0);
+  });
+
+  it("draws every session of the project when no child of the record is in its worktrees", async () => {
+    await openScreen({ formation_list: formationList([formationEntry("formation")]) }, async () => (await sessionTitles()).length === 3);
+    expect(await sessionTitles()).toEqual(["Own session", "Child session", "zsh"]);
+    expect(await number()).toEqual(["3"]);
+    // A child whose worktree is not the path of any row leaves every session as it is, and so does the same path on another PC.
+    await mock("formation_list", formationList([formationEntry("formation", { children: [listedChild("c", "working", { path: "/work/elsewhere" }), listedChild("d", "working", { path: CHILD_PATH, environment: "dev-server" })] })]));
+    await browser.waitUntil(async () => (await count(".formation-row-count")) === 1);
+    expect(await sessionTitles()).toEqual(["Own session", "Child session", "zsh"]);
+  });
+
+  it("puts the sessions back under the project when the child leaves the record", async () => {
+    await openScreen();
+    expect(await sessionTitles()).toEqual(["Own session"]);
+    await mock("formation_list", formationList([formationEntry("formation")]));
+    await browser.waitUntil(async () => (await sessionTitles()).length === 3, { timeout: 15_000 });
+    expect(await number()).toEqual(["3"]);
+  });
+
+  it("keeps the folder of a child that works in a folder that was there, and the owner's session in it, and leaves only the child's own sessions out", async () => {
+    // The child works in the project's own folder (`created` false): its Claude row and its terminal leave the project, and the owner's session in the same folder stays.
+    const inFolder = (name: string, handle: string, paneKey: string) => listedChild(name, "working", { repo: "api", branch: "main", path: MAIN_PATH, created: false, handle, paneKey });
+    const kept = formationList([formationEntry("formation", { children: [inFolder("child-a", "term_child", "tab_child:leaf_1"), inFolder("codex-a", "term_codex", "tab_codex:leaf_1")], counts: { planned: 0, waiting: 0, working: 2, done: 0 } })]);
+    const inOwnFolder = orcaOverview([ownRow(), childRow({ path: MAIN_PATH, branch: "main" })], [orcaWorktree("api", "main"), orcaWorktree("api", "other", { path: OTHER_PATH })], { terminals: [orcaTerminal("api", "zsh", { path: MAIN_PATH, handle: "term_own_sh" }), orcaTerminal("api", "codex", { path: MAIN_PATH, handle: "term_codex" })] });
+    await openScreen({ orca_overview: inOwnFolder, formation_list: kept });
+    await browser.waitUntil(async () => (await sessionTitles()).length === 2);
+    expect(await sessionTitles()).toEqual(["Own session", "zsh"]);
+    expect(await number()).toEqual(["2"]);
+    // The work pane has the owner's tabs only, and the folder stays among the worktrees of the plus.
+    await mock("orca_start", { paneKey: null, handle: null });
+    await pressPlus();
+    await expect($('[data-tab="claude:tab_own:leaf_1"]')).toExist();
+    expect(await count('[data-tab="claude:tab_child:leaf_1"], [data-tab="orca:term_codex"]')).toBe(0);
+    await pickItem("Claude を起動");
+    await expect($(".orca-dest-pop")).toBeDisplayed();
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-dest-pop button[data-path]")].map((b) => b.dataset.path))).toEqual([MAIN_PATH, OTHER_PATH]);
+  });
+
+  it("leaves the project closed, with no arrow, when only a child works in it", async () => {
+    // Its own session is done and the child's works: the project is not opened for the child's work, and a project with nothing but a child's sessions has no arrow.
+    await openScreen({ orca_overview: overview([ownRow({ group: "done" }), childRow()]) });
+    await expect(arrow()).toHaveAttribute("aria-expanded", "false");
+    expect(await count("#orca-feed .orca-session")).toBe(0);
+    await openScreen({ orca_overview: overview([childRow()], trees()) });
+    expect(await count('#orca-feed [data-key^="arrow:"]')).toBe(0);
+    expect(await number()).toEqual([]);
+  });
+
+  it("still counts a child's session in the sidebar button, which marks the work and the wait", async () => {
+    await openScreen({ orca_overview: overview([ownRow(), childRow({ group: "waiting" })]) });
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（確認待ち 1 件、作業中 1 件）");
+    await expect($("#nav-orca .nav-count")).toHaveText("1");
+    expect(await sessionTitles()).toEqual(["Own session"]);
+  });
+
+  it("offers no child's worktree in the dialog of the plus, and offers the others of the project", async () => {
+    await openScreen();
+    await mock("orca_start", { paneKey: null, handle: null });
+    await pressPlus();
+    await pickItem("Claude を起動");
+    await expect($(".orca-dest-pop")).toBeDisplayed();
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-dest-pop button[data-path]")].map((b) => b.dataset.path))).toEqual([MAIN_PATH, OTHER_PATH]);
+    expect(await callsOf("orca_start")).toEqual([]);
+  });
+
+  it("starts at once in the one worktree that is left when the project has a child's besides its own folder", async () => {
+    await openScreen({ orca_overview: overview([ownRow(), childRow()], [orcaWorktree("api", "main"), orcaWorktree("api", "child-a", { path: CHILD_PATH })]) });
+    const start = await mock("orca_start", { paneKey: null, handle: null });
+    await pressPlus();
+    await pickItem("Claude を起動");
+    expect(await waitForCalls(start)).toEqual([{ path: MAIN_PATH, environment: null }]);
+    await expect($(".orca-dest-pop")).not.toExist();
   });
 });

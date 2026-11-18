@@ -24,6 +24,7 @@ import type { FormationChild } from "../ts/bindings/FormationChild";
 import type { FormationConsent } from "../ts/bindings/FormationConsent";
 import type { FormationEntry } from "../ts/bindings/FormationEntry";
 import type { FormationList } from "../ts/bindings/FormationList";
+import type { FormationListChild } from "../ts/bindings/FormationListChild";
 import type { FormationState } from "../ts/bindings/FormationState";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
@@ -808,6 +809,9 @@ export const decisionCard = (number: string, extra: Partial<Card> = {}): Card =>
   ...extra,
 });
 
+// A launched child of a formation as `formation_list` lists it (A-37): its project (`repo`), the branch and the worktree it has under `/work/`, which tsunagiai made (`created`), and its terminal and agent (`handle`, `paneKey`, as the Orca rows of `orcaRow` name them).
+export const listedChild = (name: string, state: Exclude<FormationState, "planned">, extra: Partial<FormationListChild> = {}): FormationListChild => ({ name, repo: "example-api", branch: `formation/${name}`, path: `/work/${name}`, environment: "local", state, created: true, handle: `term_${name}`, paneKey: `tab_${name}:leaf_1`, ...extra });
+
 // A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca; `extra` gives those of a saved environment, with its `environment`), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state; `waiting: true` in `extra` is a leader that waits for input (#915).
 export const formationEntry = (name: string, extra: Partial<FormationEntry> & { minutes?: number; repos?: string[] } = {}): FormationEntry => {
   const { minutes, repos = [], ...rest } = extra;
@@ -817,6 +821,7 @@ export const formationEntry = (name: string, extra: Partial<FormationEntry> & { 
     environment: "local",
     createdAt: minutes === undefined ? null : Date.now() - minutes * 60_000 - 5_000,
     counts: { planned: 0, waiting: 0, working: 0, done: 0 },
+    children: [],
     waiting: false,
     ...rest,
   };
