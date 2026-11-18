@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -167,7 +167,7 @@ describe("calendar: calendar panel", () => {
     const setShown = await mock("set_calendar_shown", rejects("保存できません"));
     await choiceBox("Work").click();
     await waitForCalls(setShown);
-    await waitForText("#error", "保存できません");
+    await waitForText(CARD, "保存できません");
     await expect(choiceBox("Work")).toBeSelected();
     await expect($("#cal-allday .cal-chip")).toHaveText("Holiday");
   });

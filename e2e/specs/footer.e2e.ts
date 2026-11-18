@@ -1,4 +1,4 @@
-import { account, boot, callsOf, claudeReady, holds, inbox, mock, onceId, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace } from "../support";
+import { account, boot, callsOf, claudeReady, holds, inbox, mock, onceId, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace, CARD } from "../support";
 
 // `unread` unread messages of the Slack list, each in a channel of its own.
 const heap = (unread: number) => Array.from({ length: unread }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` }));
@@ -314,7 +314,7 @@ describe("footer", () => {
         await mock("trash", rejects("失敗しました"));
         await pressed(0, "ゴミ箱へ移動");
         await waitForCalls("trash");
-        await expect($("#error")).toHaveText(expect.stringContaining("失敗しました"));
+        await expect($(CARD)).toHaveText(expect.stringContaining("失敗しました"));
         await waitForCount("#unread-pane-list li", 4);
         expect((await lines())[0]).toBe(mailLine("Mail newest"));
         await expect($("#unread-pane-title")).toHaveText("未読 4");
@@ -340,7 +340,7 @@ describe("footer", () => {
         await mock("slack_mark_read", rejects("失敗しました"));
         const fresh = await mock("slack_timeline", timeline([slackA(), slackB()]));
         await pressed(1, "既読にする");
-        await expect($("#error")).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
+        await expect($(CARD)).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
         expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
         await waitForCount("#unread-pane-list li", 4);
         await expect($("#unread-pane-title")).toHaveText("未読 4");

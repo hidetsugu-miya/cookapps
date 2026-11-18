@@ -311,7 +311,7 @@ pub fn is_language(name: &str) -> bool {
         || table.extensions.values().any(|language| language == name)
 }
 
-/// Every language that `is_language` accepts (`plaintext` too), each once, sorted: the choices of the language of a language server (A-34).
+/// Every language that `is_language` accepts (`plaintext` too), each once, sorted: the languages that the cards of the language servers know how to draw (A-34).
 pub fn languages() -> Vec<String> {
     let table = associations();
     let mut found: Vec<String> = [
@@ -328,12 +328,6 @@ pub fn languages() -> Vec<String> {
     found.sort();
     found.dedup();
     found
-}
-
-/// The languages of A-21 that a language server may take (A-34): the choices of the card of a server.
-#[tauri::command]
-pub fn orca_languages() -> Vec<String> {
-    languages()
 }
 
 /// The extensions (with their dot, sorted) that give a file the language `language`, read back from the tables of `detect_language`: those of `EXT_TO_LANGUAGE`, then Monaco's that the first does not decide. A name that is not made of letters, digits and `._+-` is left out, so that an extension is safe in a `find -name`. A language that only file names or a `#!` line give has none.

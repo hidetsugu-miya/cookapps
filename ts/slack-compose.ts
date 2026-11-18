@@ -19,7 +19,7 @@ import { currentScreen, setScreen, showComposeScreen, showThreadScreen } from ".
 import { initSplit } from "./split.js";
 import { type OpenThread, opened } from "./thread.js";
 import { toast } from "./toast.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // What is being written: kept in memory only, for one mail at a time (the key is its thread and its latest message).
 // Opening the screen for another mail starts a new one; leaving the screen or the mail keeps it.
@@ -398,7 +398,6 @@ async function newDraft(key: string, current: OpenThread, stale: () => boolean) 
 let openSeq = 0;
 
 async function openCompose() {
-  $("error").hidden = true;
   const current = opened.current!;
   const seq = ++openSeq;
   // While a command is awaited the user can press again, open another mail or leave the thread: only the latest call, still on the same open thread, goes on.
@@ -408,7 +407,7 @@ async function openCompose() {
     loaded = await invoke("slack_load");
   } catch (e) {
     if (stale()) return;
-    return showError(e);
+    return showFailure("slack-compose", e);
   }
   if (stale()) return;
   if (!loaded.workspaces.length)
@@ -422,7 +421,7 @@ async function openCompose() {
       await newDraft(key, current, stale);
     } catch (e) {
       if (stale()) return;
-      return showError(e);
+      return showFailure("slack-compose", e);
     }
     if (stale()) return;
   }

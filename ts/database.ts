@@ -5,15 +5,17 @@ import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
-import { openDatabaseForm } from "./database-form.js";
+import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
 import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
+import { periodMs } from "./e2e-timers.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { initSplit } from "./split.js";
-import { show, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { show } from "./view.js";
 
 interface DatabaseState {
   expanded: boolean;
@@ -66,6 +68,11 @@ const connections = new Map<string, ConnectionState>();
 const closing = new Set<string>();
 // The newest read: an older one that ends later is dropped.
 let loadSeq = 0;
+// How often the list is read while the screen is shown (#866): `tsunagiai-mcp` saves a connection in its own process and tells the app nothing (D-8).
+const WATCH_MS = 2000;
+let watcher: number | null = null;
+// The quiet read that is on its way: a quiet read asked meanwhile is this one.
+let quietRead: Promise<DatabaseProfileView[] | null> | null = null;
 
 const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
 const emptySql: SqlState = { view: 0, text: "", loading: false, error: null, data: null };
@@ -139,20 +146,30 @@ const draw = () => {
   drawDatabaseWork(workState(), workActions);
 };
 
-// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the edit pane's, at an interval) shows no error.
-async function load(quiet = false): Promise<DatabaseProfileView[] | null> {
+// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the clock's, at an interval) shows no error, draws nothing when the list is the one drawn, and is one read at a time.
+function load(quiet = false): Promise<DatabaseProfileView[] | null> {
+  if (!quiet) return read(false);
+  quietRead ??= read(true).finally(() => {
+    quietRead = null;
+  });
+  return quietRead;
+}
+
+async function read(quiet: boolean): Promise<DatabaseProfileView[] | null> {
   const seq = ++loadSeq;
   try {
     const list = await invoke("database_profiles");
     if (seq !== loadSeq) return null;
+    const same = JSON.stringify(list) === JSON.stringify(profiles);
     profiles = list;
     // A connection that is gone from the list has nothing open any more (Rust closed it with the delete).
     for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
     if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
-    draw();
+    if (!quiet || !same) draw();
+    if (!same) syncDatabaseForm(list);
     return list;
   } catch (e) {
-    if (seq === loadSeq && !quiet) showError(e);
+    if (seq === loadSeq && !quiet) logError("database", e);
     return null;
   }
 }
@@ -186,8 +203,8 @@ async function save(profile: DatabaseProfile, password: string) {
   if (profile.id !== "") await dropClosed();
   await load();
   if (failure === null) return;
-  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and the error is shown on the screen.
-  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showError(failure);
+  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and a failure card shows the error.
+  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showFailure("database", failure);
   throw failure;
 }
 
@@ -199,7 +216,7 @@ async function remove(profile: DatabaseProfileView, anchor: Element) {
     try {
       await invoke("database_profile_delete", { id: profile.id });
     } catch (e) {
-      showError(e);
+      showFailure("database", e);
     }
     await dropClosed();
     await load();
@@ -218,7 +235,7 @@ async function openConnection(profile: DatabaseProfileView) {
     const names = await invoke("database_connect", { id: profile.id });
     // The connection was deleted while it opened: Rust holds a session that no row shows.
     if (!profiles.some((p) => p.id === profile.id)) {
-      invoke("database_disconnect", { id: profile.id }).catch(showError);
+      invoke("database_disconnect", { id: profile.id }).catch((e) => logError("database", e));
       return;
     }
     if (connections.get(profile.id) !== c) return;
@@ -413,7 +430,7 @@ const actions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
-  edit: (profile) => openDatabaseForm(profile, save, test, () => load(true)),
+  edit: (profile) => openDatabaseForm(profile, save, test),
   disconnect: async (profile) => {
     connections.delete(profile.id);
     if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
@@ -422,23 +439,37 @@ const actions: SideActions = {
     try {
       await invoke("database_disconnect", { id: profile.id });
     } catch (e) {
-      showError(e);
+      showFailure("database", e);
     }
     closing.delete(profile.id);
   },
   remove,
 };
 
+// Reads the list at an interval while the screen is shown, with or without an edit pane (#866). It stops at the first tick after the screen is left, and `showDatabase` starts it again; nothing is read while the window is hidden.
+function startWatch() {
+  if (watcher !== null) return;
+  watcher = window.setInterval(() => {
+    if ($("database").hidden) {
+      if (watcher !== null) clearInterval(watcher);
+      watcher = null;
+    } else if (!document.hidden) {
+      void load(true);
+    }
+  }, periodMs("databaseProfiles", WATCH_MS));
+}
+
 export function showDatabase() {
   show("database");
   draw();
   load();
+  startWatch();
 }
 
 export function initDatabase() {
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
-  add.onclick = () => openDatabaseForm(null, save, test, () => load(true));
+  add.onclick = () => openDatabaseForm(null, save, test);
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
   initDatabaseTerminal();
 }

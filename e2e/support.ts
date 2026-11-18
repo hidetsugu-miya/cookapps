@@ -88,7 +88,7 @@ declare global {
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 
-// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the edit pane of the database screen does (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) and `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s).
+// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the database screen does while it is shown, and its edit pane (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) and `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s).
 // A wait for a period to pass is that period times 1.2. Put it in the fixtures of `boot`: `boot({ ...timers({ orcaMirror: 250 }) })`.
 export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number; lspSettings?: number }) => ({ e2e_timers: periods });
 
@@ -179,6 +179,19 @@ export const textsOf = (selector: string) =>
 
 export const waitForText = (selector: string, text: string) =>
   browser.waitUntil(async () => (await textsOf(selector)).some((t) => t.includes(text)), { timeoutMsg: `${selector} never showed "${text}"` });
+
+// The failure cards at the bottom right (A-28, ts/error-card.ts): `CARD` matches the text of every card (the newest first: `$$(CARD)[0]`, as `$(CARD)` holds only while one card is drawn), and `CARDS` matches every card.
+export const CARD = "#error-cards .error-card-text";
+export const CARDS = "#error-cards .error-card";
+
+// What the app wrote to its log (the arguments of `log_write`: `{ level, source, message }`), in the order written. A failure of a sync or a read is only here; a failure of something the user did is a card and a line here.
+export const logged = async () => (await callsOf("log_write")) as { level: string; source: string; message: string }[];
+
+// Waits until a line of the log holds `text`, and returns the line.
+export async function waitForLog(text: string) {
+  await browser.waitUntil(async () => (await logged()).some((l) => l.message.includes(text)), { timeoutMsg: `the log never got "${text}"` });
+  return (await logged()).find((l) => l.message.includes(text))!;
+}
 
 export const waitForCount = (selector: string, n: number) =>
   browser.waitUntil(async () => (await count(selector)) === n, { timeoutMsg: `expected ${n} of ${selector}` });

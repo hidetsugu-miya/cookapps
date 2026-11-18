@@ -1,6 +1,6 @@
-//! A-34: the language server processes that stay, one for each worktree (the place of its project and its path) and server name, their state, and the questions to them.
+//! A-34: the language server processes that stay, one for each worktree (the place of its project and its path) and language, their state, and the questions to them.
 //!
-//! A server has the name of its entry in the settings of its repository (`lsp::LspServerSettings`), and every command is given it. A server is started by `lsp_start` (or replaced by `lsp_restart`) and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
+//! A server is the one of a language of its repository (`lsp::LspServerSettings`), and every command is given that language as the server's key. A server is started by `lsp_start` (or replaced by `lsp_restart`) and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
 //! The state is `indexing` from the start to the end of the progress the server shows (`protocol::Progress`), `running` after it, and `stopped` with a reason when the process is gone. A service of compose whose container does not run is told as `containerDown`, so that the screen can offer to start it; starting the container is not done here. Each change of the state is told by the event `lsp-status` (`LspStatusEvent`, with the server's name), and `lsp_status` answers the state as it is.
 //! A server is stopped by `shutdown` and `exit`, and then by closing its standard input, which ends the server, through `docker compose exec` and `ssh` as well; a process that is still there after a moment is killed.
 //! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which files of its languages changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered (but for the one file that the question of the underline keeps open, until another file is asked about by it or the files change on the disk).
@@ -32,7 +32,7 @@ use tokio::{
 use ts_rs::TS;
 
 use super::{
-    check_server, check_worktree, plan_for,
+    check_language, check_worktree, languages_taken, plan_for,
     protocol::{
         answer_request, classify, encode, error_response, initialize_params, locations,
         notification, read_frame, request, response, server_path, uri_of, Frame, Incoming,
@@ -168,7 +168,7 @@ pub struct LspStatusEvent {
 // ---- the state from the end of a process ----
 
 /// Whether the standard error of `docker compose exec` says that the container of the service does not run (`service "app" is not running` of compose v2, `No container found` of the older ones, and the daemon's `... is not running`). Only its last line is read: that is where `docker compose exec` says it, and a server that ended for another reason may have said it earlier.
-fn container_down(stderr: &str) -> bool {
+pub(crate) fn container_down(stderr: &str) -> bool {
     let last = stderr
         .lines()
         .rev()
@@ -675,7 +675,7 @@ fn plan(
     let Planned {
         route,
         launch,
-        languages,
+        language,
     } = plan_for(dir, environment, project, worktree, server, run_on)?;
     let command = launch.command.ok_or_else(|| named(server, NO_WAY))?;
     let mount = launch.mount.unwrap_or_else(|| worktree.to_owned());
@@ -691,7 +691,7 @@ fn plan(
             route,
             method: launch.method,
             service: launch.service,
-            extensions: extensions_of(&languages),
+            extensions: extensions_of(&languages_taken(&language)),
         },
     ))
 }
@@ -722,7 +722,7 @@ async fn run_server(mut ctx: Ctx, dir: PathBuf, key: Key, project: String) {
 
 // ---- the servers ----
 
-/// A server is known by the place of its project (`None`: this machine, else the name of the saved environment), its worktree and its name in the settings of its repository.
+/// A server is known by the place of its project (`None`: this machine, else the name of the saved environment), its worktree and its language (the language of its entry in the settings of its repository).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
     environment: Option<String>,
@@ -809,7 +809,7 @@ impl Server {
     }
 }
 
-/// The servers of the app, one for each worktree and server name (managed state).
+/// The servers of the app, one for each worktree and language (managed state).
 #[derive(Default)]
 pub struct LspServers {
     inner: tokio::sync::Mutex<HashMap<Key, Arc<Server>>>,
@@ -1111,7 +1111,7 @@ pub async fn lsp_start(
     worktree: String,
     server: String,
 ) -> Result<LspStatus, String> {
-    check_server(&server)?;
+    check_language(&server)?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
@@ -1134,7 +1134,7 @@ pub async fn lsp_restart(
     worktree: String,
     server: String,
 ) -> Result<LspStatus, String> {
-    check_server(&server)?;
+    check_language(&server)?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;

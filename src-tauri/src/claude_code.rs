@@ -826,6 +826,14 @@ fn check_size(viewport: OrcaViewport) -> Result<(u16, u16), String> {
     Err("ターミナルの大きさが正しくありません".to_owned())
 }
 
+/// The first instruction that a screen gives a pane (A-36, #976): none, or the text as `formation::check_prompt` lets it through (1 to 20,000 characters, hidden and control characters taken out, no NUL), the refusal in Japanese.
+fn pane_prompt(prompt: Option<String>) -> Result<Option<String>, String> {
+    prompt
+        .as_deref()
+        .map(crate::formation::check_prompt)
+        .transpose()
+}
+
 /// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and the projects saved with its formation (`formation.json`) as its first instruction.
 fn prepare(
     config: &Path,
@@ -833,6 +841,7 @@ fn prepare(
     formation: Option<&str>,
     builtin_tools: bool,
     skill: Option<ClaudeCodeSkill>,
+    prompt: Option<String>,
     (cols, rows): (u16, u16),
 ) -> Result<(Spec, Option<CallPlugin>), String> {
     let mcp = checked_mcp_binary(exe)?;
@@ -853,7 +862,7 @@ fn prepare(
         (
             write_files(config, &claude, &mcp, builtin_tools)?,
             claude_code_dir(config),
-            None,
+            prompt,
         )
     };
     let spec = Spec {
@@ -868,8 +877,9 @@ fn prepare(
 }
 
 /// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
-/// and `skill` is a saved skill that it is given. A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
+/// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976: passed as `claude [prompt]` after a `--`, as the orchestrator's is; the orchestrator takes none from the screen). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn claude_code_start(
     app: AppHandle,
     sessions: State<'_, ClaudeCode>,
@@ -877,15 +887,25 @@ pub async fn claude_code_start(
     viewport: OrcaViewport,
     builtin_tools: bool,
     skill: Option<ClaudeCodeSkill>,
+    prompt: Option<String>,
     channel: Channel<ClaudeCodeEvent>,
 ) -> Result<u64, String> {
     check_id(&id)?;
     let size = check_size(viewport)?;
+    let prompt = pane_prompt(prompt)?;
     let config = crate::auth::config_dir(&app)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sessions = sessions.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let (spec, plugin) = prepare(&config, &exe, formation_of(&id), builtin_tools, skill, size)?;
+        let (spec, plugin) = prepare(
+            &config,
+            &exe,
+            formation_of(&id),
+            builtin_tools,
+            skill,
+            prompt,
+            size,
+        )?;
         sessions.start(
             &id,
             &spec,
@@ -1108,6 +1128,30 @@ mod tests {
                 prompt
             ]
         );
+    }
+
+    #[test]
+    fn a_pane_without_a_first_instruction_gets_none_and_one_with_it_gets_it_checked() {
+        assert_eq!(pane_prompt(None), Ok(None));
+        assert_eq!(
+            pane_prompt(Some("> 環境: local\n調べてください\n".to_owned())),
+            Ok(Some("> 環境: local\n調べてください\n".to_owned()))
+        );
+        // What hides or controls in a terminal is taken out before it is an argument.
+        assert_eq!(
+            pane_prompt(Some("a\u{200b}b\u{1b}c\u{85}d".to_owned())),
+            Ok(Some("abcd".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_first_instruction_that_is_empty_too_long_or_holds_nul_is_refused_in_japanese() {
+        for bad in [String::new(), " \n".to_owned(), "a\0b".to_owned()] {
+            assert!(pane_prompt(Some(bad.clone())).is_err(), "{bad:?}");
+        }
+        assert!(pane_prompt(Some("あ".repeat(20_000))).is_ok());
+        let err = pane_prompt(Some("あ".repeat(20_001))).unwrap_err();
+        assert!(err.contains("20000"), "{err}");
     }
 
     #[test]

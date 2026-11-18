@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, composerLayout, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS } from "../support";
+import { attachment, boot, callsOf, claudeReady, composerLayout, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -941,7 +941,7 @@ describe("slack list", () => {
     await waitForCount("#slack-feed .feed-row", 3);
     await mock("slack_watch", rejects("読めません"));
     await (await itemOf("second")).$(".feed-watch").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("読めません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("読めません"));
     await waitForCount("#slack-feed .feed-row", 3);
     expect(await layout()).toEqual(["未読", "unread:second", "unread:first", "unread:other"]);
   });
@@ -1520,7 +1520,7 @@ describe("slack list", () => {
     const fresh = await mock("slack_timeline", timeline(messages));
     await (await readButton("dev")).click();
     await waitForCalls(mark);
-    await expect($("#error")).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
     expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
     await browser.waitUntil(async () => (await layout()).join() === ["未読", "unread:second", "unread:first", "unread:other"].join());
     await expect($("#slack-thread")).not.toBeDisplayed();
@@ -1535,7 +1535,7 @@ describe("slack list", () => {
     const fresh = await mock("slack_timeline", timeline([message]));
     await (await readButton("dev")).click();
     await waitForCalls(seen);
-    await expect($("#error")).toHaveText(expect.stringContaining("既読にできませんでした"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("既読にできませんでした"));
     expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
     expect(await callsOf(mark)).toEqual([]);
     await waitForCount("#slack-feed .feed-row", 1);
@@ -1748,7 +1748,7 @@ describe("slack list: the side menu (S-19)", () => {
       await mock("slack_set_side_folded", rejects("保存できません"));
       await pressHeading("T2");
       await waitForCalls("slack_set_side_folded");
-      await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("保存できません"));
       expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:true"]);
     });
 
@@ -1841,7 +1841,7 @@ describe("slack list: the side menu (S-19)", () => {
     await mock("slack_hide_channel", rejects("保存できません"));
     await browser.execute(() => document.querySelector("#slack-side .slack-side-item")!.classList.add("keep"));
     await $('#slack-side button[aria-label="#dev を一覧に出さない"]').click();
-    await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("保存できません"));
     await browser.waitUntil(async () => (await sideLayout()).includes("unread:hash:dev 3"));
     await waitForCount("#slack-feed .feed-row", 3);
   });
@@ -1961,7 +1961,7 @@ describe("slack list: the history of a channel (S-20)", () => {
       await mock("slack_mark_read", rejects("失敗しました"));
       await pressChannel();
       await waitForCalls(history);
-      await expect($("#error")).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
       await expect($("#slack-channel")).toBeDisplayed();
     });
   });

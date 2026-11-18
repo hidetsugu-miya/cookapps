@@ -1,6 +1,4 @@
-import {
-  account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText,
-} from "../support";
+import { account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText, CARDS, CARD, waitForLog } from "../support";
 import type { HeldThread } from "../../ts/bindings/HeldThread";
 import type { ThreadRefresh } from "../../ts/bindings/ThreadRefresh";
 
@@ -406,7 +404,7 @@ describe("thread held from an earlier open", () => {
     await release(refresh, answer(true, null));
     expect(await waitForCalls(setRead)).toEqual([{ account, id: "t1", read: true }]);
     expect(await markedMessages()).toBe(1);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("draws the thread again when Gmail's answer differs", async () => {
@@ -423,7 +421,7 @@ describe("thread held from an earlier open", () => {
     for (const id of headerButtons) await expect($(id)).toBeEnabled();
   });
 
-  it("keeps the held copy and shows the error when Gmail cannot be asked", async () => {
+  it("keeps the held copy and writes the error to the log, with no card, when Gmail cannot be asked", async () => {
     await mock("thread_held", held("Hello from Alice"));
     const refresh = await mock("thread_refresh", holds);
     await rowOf("unread-threads", "First unread").$(".subject").click();
@@ -431,7 +429,8 @@ describe("thread held from an earlier open", () => {
     await expect($("#messages .plain")).toHaveText("Hello from Alice");
     await markMessage();
     await release(refresh, rejects("Gmail に届きません"));
-    await expect($("#error")).toHaveText("Gmail に届きません");
+    await waitForLog("Gmail に届きません");
+    await expect($(CARDS)).not.toExist();
     expect(await markedMessages()).toBe(1);
     expect(await count("#messages .msg-fail")).toBe(0);
     for (const id of headerButtons) await expect($(id)).toBeEnabled();
@@ -479,7 +478,7 @@ describe("thread held from an earlier open", () => {
     await expect($("#threads")).toBeDisplayed();
     await release(refresh, rejects("Gmail に届きません"));
     await browser.pause(300);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await expect($("#threads")).toBeDisplayed();
   });
 });
@@ -906,7 +905,7 @@ describe("thread reply field", () => {
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("bcc")).toEqual([]);
     await expect($("#mail-reply-bcc-row")).not.toBeDisplayed();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("cannot be sent twice while the mail goes out", async () => {
@@ -963,7 +962,7 @@ describe("thread reply field", () => {
     await $("#mail-reply-open").click();
     await browser.waitUntil(milkdownRead);
     await browser.waitUntil(async () => (await editable()) === "true");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("does not read the thread again, nor draw it, when the thread was left while the reply went out", async () => {
@@ -978,7 +977,7 @@ describe("thread reply field", () => {
     await browser.pause(300);
     expect(await callsOf(open_)).toHaveLength(1);
     await expect($("#mail-reply")).not.toBeDisplayed();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("keeps what was written on the same thread opened again while the reply went out, and does not read the thread again", async () => {
@@ -999,7 +998,7 @@ describe("thread reply field", () => {
     await fieldIs("Again");
     expect(await chips("cc")).toEqual(["dan@example.com"]);
     await expect($("#mail-reply-send")).toBeEnabled();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("shows the address in the chip of a Reply-To that is not the sender's, as Rust labels it", async () => {
@@ -1016,7 +1015,7 @@ describe("thread reply field", () => {
     await $("#mail-reply-cc-input").setValue("x");
     await write("Thanks");
     await $("#mail-reply-send").click();
-    await expect($("#error")).toHaveText("宛先の形式が正しくありません: x");
+    await expect($(CARD)).toHaveText("宛先の形式が正しくありません: x");
     await fieldIs("Thanks");
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("cc")).toEqual(["x"]);

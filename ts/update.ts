@@ -10,7 +10,7 @@ import { $, tag } from "./dom.js";
 import { hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 const CHECK_EVERY_MS = 5 * 60 * 1000;
 
@@ -111,7 +111,7 @@ async function setMode(next: UpdateMode) {
   try {
     await invoke("set_update_mode", { mode: next });
   } catch (e) {
-    return showError(e);
+    return showFailure("update", e);
   }
   mode = next;
   render();
@@ -128,7 +128,7 @@ async function applyUpdate() {
     if (!update.installed) await invoke("install_update");
     await invoke("restart_app");
   } catch (e) {
-    showError(e);
+    showFailure("update", e);
   }
   applying = false;
   render();
@@ -160,7 +160,7 @@ export function initUpdate() {
     try {
       [info, mode] = await Promise.all([invoke("app_info"), invoke("update_mode")]);
     } catch (e) {
-      return showError(e);
+      return logError("update", e);
     }
     render();
     await check();

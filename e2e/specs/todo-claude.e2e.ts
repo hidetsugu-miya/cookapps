@@ -1,5 +1,5 @@
 import type { TodoChatReply } from "../../ts/bindings/TodoChatReply";
-import { boot, callsOf, claudeLoggedOut, composerLayout, claudeReady, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo } from "../support";
+import { boot, callsOf, claudeLoggedOut, composerLayout, claudeReady, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, CARDS } from "../support";
 
 // The Claude pane of the Todo screen (T-7).
 const pane = "#todo-claude";
@@ -256,8 +256,8 @@ describe("todo Claude pane", () => {
     expect(await names()).toEqual(["請求書を直す"]);
     await expect($(`${card(1)} .chat-task-add`)).toBeEnabled();
     expect(await count(`${log} .chat-task-done`)).toBe(0);
-    // The error line of the screen is not used.
-    await expect($("#error")).not.toBeDisplayed();
+    // No failure card is used for it.
+    await expect($(CARDS)).not.toExist();
     await mock("todoist_add_task", true);
     await $(`${card(1)} .chat-task-add`).click();
     await waitForText(`${log} .chat-task-done`, "✓ 請求書を直す を追加しました");

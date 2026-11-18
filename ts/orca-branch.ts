@@ -7,7 +7,7 @@ import { BRANCH_SVG, CHECK_SVG, CLOUD_SVG, DOWN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { toast } from "./toast.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // The worktree whose branch is switched: `repo` is the key of its project (the remote branches belong to the repository), `branch` the one it is on.
 export interface BranchContext {
@@ -23,7 +23,7 @@ const SEARCH_MS = 250;
 // How many remote branches show while the filter is empty; the button under them opens the rest (A-25). Rust puts the ones picked last first in the answer to an empty text (`orca_branch_used`), so these are the first of the answer as it comes.
 const REMOTE_FIRST = 5;
 
-// Switches the worktree. A refusal is shown as the error; a switch that worked with a warning says so; the list of the screen is read again after a switch (`switched` is told the branch the worktree is on now).
+// Switches the worktree. A refusal is shown as a failure card; a switch that worked with a warning says so; the list of the screen is read again after a switch (`switched` is told the branch the worktree is on now).
 async function switchTo(here: BranchContext, kind: "local" | "remote", name: string, switched: (branch: string) => void) {
   let branch: string;
   try {
@@ -31,7 +31,7 @@ async function switchTo(here: BranchContext, kind: "local" | "remote", name: str
     if (done.warning !== null) toast(`${done.branch} に切り替えました: ${done.warning}`);
     branch = done.branch;
   } catch (e) {
-    showError(e);
+    showFailure("orca-branch", e);
     return;
   }
   switched(branch);

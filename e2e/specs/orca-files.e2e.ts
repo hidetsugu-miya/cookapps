@@ -16,26 +16,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import {
-  callsOf,
-  copiedTexts,
-  count,
-  fontSettings,
-  holds,
-  mock,
-  onceId,
-  orcaRow,
-  orcaTerminal,
-  orcaWorktree,
-  rejects,
-  release,
-  sendStream,
-  stubClipboard,
-  textsOf,
-  timers,
-  waitForCalls,
-  waitForCount,
-} from "../support";
+import { callsOf, copiedTexts, count, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
 import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -44,9 +25,9 @@ describe("orca: files and editor (A-18)", () => {
   const zsh = "orca:term_example-app_zsh";
   const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
   const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
-  // The entries of the folder `dir`: [name, is a folder, ignored by git]. Rust lists a folder with no entry marked unless the folder itself is ignored (the third is then true); the marks of the others come from `orca_files_ignored`.
-  const dirOf = (dir: string, entries: [string, boolean, boolean?][]): OrcaDir => ({
-    entries: entries.map(([name, isDirectory, ignored = false]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored })),
+  // The entries of the folder `dir`: [name, is a folder, ignored by git, the icon Rust names for the file]. Rust lists a folder with no entry marked unless the folder itself is ignored (the third is then true); the marks of the others come from `orca_files_ignored`.
+  const dirOf = (dir: string, entries: [string, boolean, boolean?, string?][]): OrcaDir => ({
+    entries: entries.map(([name, isDirectory, ignored = false, icon = null]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored, icon })),
     total: entries.length,
   });
   const root = () =>
@@ -971,7 +952,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await count(".orca-file[data-change]")).toBe(0);
     expect(await count(".orca-file-git")).toBe(0);
     expect(await count("#orca-files-tree .orca-file-note")).toBe(0);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("keeps the change marks through a read again until git answers, replaces them with the answer, and keeps them when git cannot answer (A-39)", async () => {
@@ -1044,6 +1025,23 @@ describe("orca: files and editor (A-18)", () => {
     await release("orca_files_changes", [change("target", "changed")]);
     await browser.pause(300);
     expect((await gitLook("target")).change).toBeNull();
+  });
+
+  // A-18: the icon of a file is the one Rust names (`icon`): the SVG of JetBrains' that the app holds, as an image of its own origin; a file with no icon and a folder keep the line drawing.
+  it("draws the icon Rust names for a file as an image of the app's own, and the line drawing for a file with none and for a folder", async () => {
+    await openFiles({ orca_files_list: dirOf("", [["src", true], ["user.rb", false, false, "ruby"], ["notes.txt", false]]), orca_files_ignored: [] });
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    const looks = await browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#orca-files-tree .orca-file")].map((node) => {
+        const image = node.querySelector<HTMLImageElement>(".orca-file-ic img");
+        return { path: node.dataset.path, images: node.querySelectorAll(".orca-file-ic img").length, lines: node.querySelectorAll(".orca-file-ic svg").length, src: image?.getAttribute("src") ?? null, loaded: (image?.naturalWidth ?? 0) > 0, alt: image?.alt ?? null, draggable: image?.draggable ?? null };
+      }),
+    );
+    expect(looks).toEqual([
+      { path: "src", images: 0, lines: 1, src: null, loaded: false, alt: null, draggable: null },
+      { path: "user.rb", images: 1, lines: 0, src: "vendor/jetbrains-icons/ruby.svg", loaded: true, alt: "", draggable: false },
+      { path: "notes.txt", images: 0, lines: 1, src: null, loaded: false, alt: null, draggable: null },
+    ]);
   });
 
   it("reads a folder when it is pressed the first time, and draws it from what was read when it is opened again", async () => {
@@ -1586,7 +1584,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.pause(600);
     expect(await callsOf(write)).toHaveLength(1);
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\nab", { trim: false });
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("says when the file is gone or is no longer text", async () => {
@@ -1611,7 +1609,7 @@ describe("orca: files and editor (A-18)", () => {
     await openA();
     await mock("orca_file_write", rejects("Orca に接続できません"));
     await type("a");
-    await expect($("#error")).toHaveText("Orca に接続できません");
+    await expect($(CARD)).toHaveText("Orca に接続できません");
     await expect(stateText()).toHaveText("保存できません");
     expect(await dirtyMarks()).toBe(1);
     const again = await mock("orca_file_write", saved("sig-2"));
@@ -1648,7 +1646,7 @@ describe("orca: files and editor (A-18)", () => {
     await mock("orca_file_write", rejects("Orca に接続できません"));
     await type("a");
     await tabOf("file:1").$(".orca-tab-close").click();
-    await expect($("#error")).toHaveText("Orca に接続できません");
+    await expect($(CARD)).toHaveText("Orca に接続できません");
     await expect(tabOf("file:1")).toBeExisting();
     expect(await dirtyMarks()).toBe(1);
     await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
@@ -1809,7 +1807,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "src/new.rs", "target", "a.rs", "b.log"]);
     expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: "src/new.rs", environment: null }]);
     await expect($(".orca-edit-area")).toHaveValue("fn new() {}\n", { trim: false });
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("makes a folder for the name typed after the new folder item, reads the folder again and opens nothing", async () => {
@@ -1844,7 +1842,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-file-new", 0);
     await browser.pause(300);
     expect(await callsOf(create)).toEqual([]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("makes the file when the field loses the keys after a name was typed, and cancels when it loses them with none typed", async () => {
@@ -1873,7 +1871,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("main.rs");
     await browser.keys("Enter");
     await waitForCalls(create);
-    await expect($("#error")).toHaveText("同じ名前があります");
+    await expect($(CARD)).toHaveText("同じ名前があります");
     await waitForCount(".orca-file-new", 0);
     expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
     await browser.pause(300);
@@ -1996,7 +1994,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-edit-area")).not.toExist();
     expect(await tabTitles()).toEqual(["Write the docs"]);
     await expect($('.pop[role="alertdialog"]')).not.toExist();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     expect(await callsOf(write)).toEqual([]);
   });
 
@@ -2022,7 +2020,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 3);
     expect(await names()).toEqual(["target", "a.rs", "b.log"]);
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("shows the message of a failed delete and changes nothing: the tree and the tab stay", async () => {
@@ -2033,7 +2031,7 @@ describe("orca: files and editor (A-18)", () => {
     await askDelete("a.rs");
     await pressDelete();
     await waitForCalls(del);
-    await expect($("#error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（forbidden）");
     await browser.pause(300);
     expect(await callsOf(list)).toEqual([]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
@@ -2180,7 +2178,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await selectedPaths()).toEqual([]);
     // The tab of a deleted file closes, and nothing is said.
     expect(await tabTitles()).toEqual(["Write the docs"]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("asks to delete the selected rows on the Delete key, and on the key that is called delete on a Mac, with the name of the row when it is one and the count when there are more", async () => {
@@ -2253,7 +2251,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("Delete");
     await pressDelete();
     expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", entries: [entry("src/main.rs"), entry("a.rs"), entry("b.log")], environment: null }]);
-    await expect($("#error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（forbidden）");
     const asked = (await waitForCalls(list, 2)) as { dir: string }[];
     expect(asked.map((c) => c.dir).sort()).toEqual(["", "src"]);
   });
@@ -2268,7 +2266,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("Delete");
     await pressDelete();
     await waitForCalls(del);
-    await expect($("#error")).toHaveText("ファイルの場所が正しくありません");
+    await expect($(CARD)).toHaveText("ファイルの場所が正しくありません");
     await browser.pause(300);
     expect(await callsOf(list)).toEqual([]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
@@ -2358,7 +2356,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-file-new", 0);
     await browser.waitUntil(async () => (await names()).includes("renamed.rs"), { timeoutMsg: "the folder was never drawn again" });
     expect(await treeOrder()).toEqual(["src", "src/lib", "src/renamed.rs", "target", "a.rs", "b.log"]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await browser.pause(200);
     expect(await callsOf(list)).toHaveLength(1);
   });
@@ -2461,7 +2459,7 @@ describe("orca: files and editor (A-18)", () => {
     await setField("b.log");
     await browser.keys("Enter");
     await waitForCalls(move);
-    await expect($("#error")).toHaveText("同じ名前があります");
+    await expect($(CARD)).toHaveText("同じ名前があります");
     await waitForCount(".orca-file-new", 0);
     await browser.pause(300);
     expect(await callsOf(list)).toEqual([]);
@@ -2483,7 +2481,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect(row("src")).toHaveAttribute("aria-expanded", "false");
     await expect($(".orca-file-drag")).not.toExist();
     expect(await dropMark("src")).toBeNull();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("marks the folder under a dragged row, shows the name at the pointer, and opens a closed folder the pointer rests on", async () => {
@@ -2601,7 +2599,7 @@ describe("orca: files and editor (A-18)", () => {
     const move = await mock("orca_file_move", rejects("Orca がエラーを返しました（forbidden）"));
     await dragRow("src", "target");
     await waitForCalls(move);
-    await expect($("#error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（forbidden）");
     await expect($(".orca-edit-path")).toHaveText("src/main.rs");
     await mock("orca_file_move", null);
     await dragRow("src", "target");
@@ -2620,7 +2618,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
     await expect($(".toast")).toHaveText(expect.stringContaining("a.rs をダウンロードしました"));
     await expect($(".menu")).not.toExist();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("sends the path from the worktree of a file in an open folder", async () => {
@@ -2644,7 +2642,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCalls(download);
     await browser.pause(300);
     await expect($(".toast")).not.toBeDisplayed();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("shows the message of a download that failed, and no toast", async () => {
@@ -2654,7 +2652,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await rightClickRow("a.rs")).toBe(true);
     await pickItem("ダウンロード");
     await waitForCalls(download);
-    await expect($("#error")).toHaveText("この PC にファイルを書けません: Permission denied");
+    await expect($(CARD)).toHaveText("この PC にファイルを書けません: Permission denied");
     await expect($(".toast")).not.toBeDisplayed();
   });
 
@@ -2699,7 +2697,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".menu")).not.toExist();
     await browser.pause(300);
     await expect($(".toast")).not.toBeDisplayed();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("shows the message of an open in the browser that failed, and no toast (A-31)", async () => {
@@ -2709,7 +2707,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await rightClickRow("page.html")).toBe(true);
     await pickItem("ブラウザで開く");
     await waitForCalls(open);
-    await expect($("#error")).toHaveText("ブラウザで開けません");
+    await expect($(CARD)).toHaveText("ブラウザで開けません");
     await expect($(".toast")).not.toBeDisplayed();
   });
 
@@ -2768,7 +2766,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-diff .orca-edit-path")).toHaveText("a.rs");
     await expect($(".orca-diff-count")).toHaveText("変更 2 件");
     expect(await diffRows()).toBe(7);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("draws HEAD on the left, the working tree on the right and the numbers between, with a blank where a side has no line (A-24)", async () => {
@@ -2905,7 +2903,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-diff-count")).toHaveText("");
     await expect(diffButton("1 列で表示")).toBeDisabled();
     await expect(diffButton("次の変更")).toBeDisabled();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     // The reload button reads again, and draws the diff when it can.
     await mock("orca_file_diff", diffOfA());
     await diffButton("読み直す").click();
@@ -3148,7 +3146,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
     await expect(tabOf("file:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("makes the git branch the button when Orca's name of the worktree differs from it, and shows the new branch after a switch (A-25)", async () => {
@@ -3212,7 +3210,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-dest-pop")).not.toExist();
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
     await browser.pause(300);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     // The notice element is always in the page and only hidden when nothing is said.
     await expect($(".toast")).not.toBeDisplayed();
   });
@@ -3228,7 +3226,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-dest-pop")).not.toExist();
     await browser.pause(300);
     expect(await callsOf("orca_switch_branch")).toEqual([]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("says a switch that worked with a warning in a notice and reads again (A-25)", async () => {
@@ -3238,17 +3236,17 @@ describe("orca: files and editor (A-18)", () => {
     await branchPick("local", "feat/c").click();
     await expect($(".toast")).toHaveText(expect.stringContaining("feat/c に切り替えました: post-checkout hook failed"));
     await waitForCalls(overview);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
   });
 
-  it("shows Orca's refusal in the error, and reads nothing again (A-25)", async () => {
+  it("shows Orca's refusal on a card, and reads nothing again (A-25)", async () => {
     await openBranches({ orca_switch_branch: rejects("未コミットの変更があるため切り替えられません") });
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);
     const overview = await mock("orca_overview", onFeatC());
     const files = await mock("orca_files_list", root());
     await branchPick("local", "feat/c").click();
-    await expect($("#error")).toHaveText("未コミットの変更があるため切り替えられません");
+    await expect($(CARD)).toHaveText("未コミットの変更があるため切り替えられません");
     await expect($(".orca-dest-pop")).not.toExist();
     await browser.pause(300);
     expect(await callsOf(overview)).toEqual([]);
@@ -3337,7 +3335,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await textsOf("#orca-history-list .orca-commit-id")).toEqual(["0000003", "0000002", "0000001"]);
     expect(await textsOf("#orca-history-list .orca-commit-time")).toEqual(["2024/10/17", "2024/10/17", "2024/10/17"]);
     await expect($("#orca-history-files .orca-hfile")).not.toExist();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("reads the next commits at the end of the list with the number read so far as skip and the token of the first answer, and stops when there are no more (A-27)", async () => {
@@ -3486,7 +3484,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-diff .orca-diff-commit")).toHaveText("0000003");
     await expect($(".orca-diff-count")).toHaveText("変更 2 件");
     await waitForCount(".orca-diff-rows .odf-row", 7);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("selects the diff tab that is open for the same file of the same commit and reads it again, and opens another tab for another commit (A-27)", async () => {
@@ -3543,13 +3541,13 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-history-files .orca-hfile", 2);
     await pressTwice('#orca-history-files .orca-hfile[data-path="b.md"]');
     await expect($(".orca-diff .orca-empty")).toHaveText("バイナリのファイルの差分は表示できません");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("shows the reason of a list that cannot be read, and the next return of the focus reads it again from the start (A-27)", async () => {
     await openHistory({ orca_git_history: rejects("Git の履歴を読めません") });
     await expect($("#orca-history-list .orca-file-note.fail")).toHaveText("Git の履歴を読めません");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await browser.pause(300);
     expect(await callsOf("orca_git_history")).toHaveLength(1);
     await mock("orca_git_history", page(3, 1, false));
@@ -3674,7 +3672,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\nx", { trim: false });
     expect(await count("#orca-files-tree .orca-file-note.fail")).toBe(0);
     expect(await names()).toContain("new.rs");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("reads the diff shown and the history shown again by the clock: a diff that changed is drawn in place, the same commits are not drawn again, and a new commit comes to the top with the chosen commit kept (A-24, A-27)", async () => {
@@ -3688,7 +3686,7 @@ describe("orca: files and editor (A-18)", () => {
     const diff = await mock("orca_file_diff", many());
     await waitForCount(".orca-diff-rows .odf-row", 200);
     expect((await callsOf(diff))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     // The history: the same first commits keep the rows that were drawn.
     await paneMode("履歴").click();
     await waitForCount("#orca-history-list .orca-commit", 3);

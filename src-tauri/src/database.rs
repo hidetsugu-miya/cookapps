@@ -15,7 +15,11 @@ pub mod session;
 pub mod sql;
 pub mod structure;
 
-use std::{path::Path, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{LazyLock, Mutex, MutexGuard},
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -247,6 +251,70 @@ pub fn list(
     passwords: &impl PasswordStore,
 ) -> Result<Vec<DatabaseProfileView>, String> {
     load(dir)?.into_iter().map(|p| view(passwords, p)).collect()
+}
+
+/// Whether each connection has a saved password, remembered by its id for the login it was read for (#866: the screen reads the list every 2 seconds, and a read of the keychain for each connection each time is the cost).
+/// The saved password is the one for one login (`same_login`), and `tsunagiai-mcp` deletes it when a save moves the login, so a connection whose login differs from the remembered one is read again.
+/// The app's own save and delete set or forget the mark, so that a password they change is never taken from here.
+#[derive(Default)]
+pub struct SavedMarks(Mutex<HashMap<String, (Login, bool)>>);
+
+impl SavedMarks {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, (Login, bool)>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn of(&self, profile: &DatabaseProfile) -> Option<bool> {
+        self.lock()
+            .get(&profile.id)
+            .filter(|(login, _)| *login == Login::of(profile))
+            .map(|(_, saved)| *saved)
+    }
+
+    fn remember(&self, profile: &DatabaseProfile, saved: bool) {
+        self.lock()
+            .insert(profile.id.clone(), (Login::of(profile), saved));
+    }
+
+    fn forget(&self, id: &str) {
+        self.lock().remove(id);
+    }
+
+    /// Drops the marks of the connections that are gone from the list.
+    fn keep(&self, profiles: &[DatabaseProfile]) {
+        self.lock()
+            .retain(|id, _| profiles.iter().any(|p| p.id == *id));
+    }
+}
+
+/// The marks of the app's own list (`database_profiles`).
+static MARKS: LazyLock<SavedMarks> = LazyLock::new(SavedMarks::default);
+
+/// `list`, asking the keychain only for a connection that has no mark for its login.
+fn list_marked(
+    dir: &Path,
+    passwords: &impl PasswordStore,
+    marks: &SavedMarks,
+) -> Result<Vec<DatabaseProfileView>, String> {
+    let profiles = load(dir)?;
+    marks.keep(&profiles);
+    profiles
+        .into_iter()
+        .map(|profile| {
+            let password_saved = match marks.of(&profile) {
+                Some(saved) => saved,
+                None => {
+                    let saved = passwords.exists(&profile.id)?;
+                    marks.remember(&profile, saved);
+                    saved
+                }
+            };
+            Ok(DatabaseProfileView {
+                password_saved,
+                profile,
+            })
+        })
+        .collect()
 }
 
 /// Saves a connection (new with an empty id, else the one of that id) and, when `password` is not empty, its password.
@@ -498,9 +566,13 @@ async fn open_session(
 #[tauri::command]
 pub async fn database_profiles(app: AppHandle) -> Result<Vec<DatabaseProfileView>, String> {
     let dir = config_dir(&app)?;
-    tokio::task::spawn_blocking(move || list(&dir, &Keychain))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        // A save or a delete in between would leave a mark of the keychain as it was before it.
+        let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+        list_marked(&dir, &Keychain, &MARKS)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Saves a connection and answers it as saved. An empty `password` leaves the saved password as it is.
@@ -515,9 +587,15 @@ pub async fn database_profile_save(
 ) -> Result<DatabaseProfileView, String> {
     let dir = config_dir(&app)?;
     let id = profile.id.clone();
+    let before = id.clone();
     let saved = tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
-        save(&dir, &Keychain, profile, password)
+        let saved = save(&dir, &Keychain, profile, password);
+        match &saved {
+            Ok(view) => MARKS.remember(&view.profile, view.password_saved),
+            Err(_) => MARKS.forget(&before),
+        }
+        saved
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -575,7 +653,9 @@ pub async fn database_profile_delete(
     let again = id.clone();
     tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
-        delete(&dir, &Keychain, &id)
+        let deleted = delete(&dir, &Keychain, &id);
+        MARKS.forget(&id);
+        deleted
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -718,6 +798,8 @@ mod tests {
     struct Memory {
         passwords: Mutex<HashMap<String, String>>,
         refuse_set: bool,
+        /// How many times `exists` was asked.
+        asked: Mutex<usize>,
     }
 
     impl Memory {
@@ -728,6 +810,7 @@ mod tests {
 
     impl PasswordStore for Memory {
         fn exists(&self, id: &str) -> Result<bool, String> {
+            *self.asked.lock().unwrap() += 1;
             Ok(self.get(id).is_some())
         }
 
@@ -1649,6 +1732,40 @@ mod tests {
             expected
         );
         assert_eq!(sessions.ids(&scripts).await, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_marked_list_asks_the_keychain_once_for_each_connection_and_login() {
+        let (dir, passwords, saved) = saved_with_password("marks", direct("a"));
+        let marks = SavedMarks::default();
+        let asked = || *passwords.asked.lock().unwrap();
+        let base = asked();
+        let expected = DatabaseProfileView {
+            password_saved: true,
+            ..saved.clone()
+        };
+        for _ in 0..3 {
+            assert_eq!(
+                list_marked(&dir, &passwords, &marks).unwrap(),
+                vec![expected.clone()]
+            );
+        }
+        assert_eq!(asked() - base, 1);
+        // The password goes away with a save that moves the login (`tsunagiai-mcp`): the next read asks again and sees it.
+        let moved = DatabaseProfile {
+            db_port: 3307,
+            ..saved.profile.clone()
+        };
+        save_without_password(&dir, &passwords, moved).unwrap();
+        let after = list_marked(&dir, &passwords, &marks).unwrap();
+        assert!(!after[0].password_saved);
+        // The save asks once to answer, and the next read asks once again.
+        assert_eq!(asked() - base, 3);
+        // A connection that is gone from the file has no mark left.
+        delete(&dir, &passwords, &saved.profile.id).unwrap();
+        assert!(list_marked(&dir, &passwords, &marks).unwrap().is_empty());
+        assert!(marks.of(&saved.profile).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

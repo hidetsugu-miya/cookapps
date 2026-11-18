@@ -5,7 +5,7 @@ import { boot, callsOf, inbox, mock, rejects, sendClaudeCode, waitForCalls } fro
 const HOST = "claude-code-host";
 const OWNER = "e2e-claude-code";
 
-async function openHost(id = "pane-1", options: { builtinTools?: boolean; skill?: { name: string; screen: "slack-thread" } } = {}) {
+async function openHost(id = "pane-1", options: { builtinTools?: boolean; skill?: { name: string; screen: "slack-thread" }; prompt?: string } = {}) {
   await boot({ inbox: inbox() });
   await browser.execute((host) => {
     const el = document.createElement("div");
@@ -17,7 +17,7 @@ async function openHost(id = "pane-1", options: { builtinTools?: boolean; skill?
 }
 
 // Shows the pane's terminal in the host (the first show starts the process).
-const show = (id: string, options: { builtinTools?: boolean; skill?: { name: string; screen: "slack-thread" } } = {}) =>
+const show = (id: string, options: { builtinTools?: boolean; skill?: { name: string; screen: "slack-thread" }; prompt?: string } = {}) =>
   browser.execute(
     async (host, o, opts, owner) => {
       const path = "/js/claude-code.js";
@@ -62,6 +62,14 @@ describe("claude code pane", () => {
     await openHost("pane-2", { builtinTools: true, skill: { name: "reply", screen: "slack-thread" } });
     const [start] = await waitForCalls("claude_code_start");
     expect(start).toMatchObject({ id: "pane-2", builtinTools: true, skill: { name: "reply", screen: "slack-thread" } });
+  });
+
+  it("gives the start the first instruction of the pane, and none when the screen gives none", async () => {
+    await openHost("pane-3", { prompt: "> 環境: local\n調べてください\n" });
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "pane-3", prompt: "> 環境: local\n調べてください\n" });
+    await openHost("pane-4");
+    expect((await waitForCalls("claude_code_start"))[0]).toMatchObject({ id: "pane-4", prompt: null });
   });
 
   it("draws what the process prints, and the message of its end", async () => {

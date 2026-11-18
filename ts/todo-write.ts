@@ -1,9 +1,8 @@
 // Changing a task: the screen is changed first, then Todoist, and the reload brings back what Todoist has.
-import { $ } from "./dom.js";
 import { invoke, type Commands } from "./ipc.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { addLabelLocal, closedChain, dropProjectLocal, editingField, moveLocal, moveProjectLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
 let todoReloadTimer = 0;
@@ -34,16 +33,15 @@ const send = invoke as (command: Write, args: unknown) => Promise<boolean | null
 // A load sent before a change started or ended is dropped (todoSeq): it could hold the state from before the change.
 // A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
 // `redraw` false (a name saved on blur) keeps the screen: a redraw there would drop the click or focus move that ended the edit.
-// `fail` takes a failed call's error in place of the error line of the screen (the card of the Claude pane shows its own).
+// `fail` takes a failed call's error in place of the failure card (the card of the Claude pane shows its own).
 export async function todoCall<C extends Write>(
   command: C,
   args: Commands[C]["args"],
   control?: HTMLInputElement | HTMLButtonElement | null,
   apply?: () => void,
   redraw = true,
-  fail: (e: unknown) => void = showError,
+  fail: (e: unknown) => void = (e) => showFailure("todo-write", e),
 ) {
-  $("error").hidden = true;
   if (control) control.disabled = true;
   todoState.writes++;
   todoState.seq++;

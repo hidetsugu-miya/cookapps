@@ -6,7 +6,7 @@ import { invoke } from "./ipc.js";
 import { recipientRows } from "./mail-recipients.js";
 import { currentScreen, setScreen, showNewMailScreen } from "./nav.js";
 import { toast } from "./toast.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 const recipients = recipientRows("new-mail");
 // The sender of the mail being written.
@@ -77,7 +77,7 @@ async function send() {
     toast("送信しました");
     if (seq === openCount && currentScreen() === "new-mail") leave();
   } catch (e) {
-    showError(e);
+    showFailure("mail-compose", e);
   } finally {
     sending = false;
     syncSend();

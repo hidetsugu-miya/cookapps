@@ -3,44 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import {
-  boot,
-  callsOf,
-  chooseAppearance,
-  chooseOption,
-  chooseTheme,
-  copiedTexts,
-  count,
-  fire,
-  fontSettings,
-  ghosttyImport,
-  holds,
-  huge,
-  image,
-  inbox,
-  isoDate,
-  mock,
-  note,
-  onceId,
-  orcaRow,
-  orcaTerminal,
-  orcaWorktree,
-  PNG,
-  rejects,
-  release,
-  rowOf as threadRowOf,
-  sendStream,
-  sendTerm,
-  setClock,
-  setDark,
-  stubClipboard,
-  terminalThemes,
-  textsOf,
-  threadDetail,
-  timers,
-  waitForCalls,
-  waitForCount,
-} from "../support";
+import { boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -589,7 +552,7 @@ describe("orca", () => {
     const start = await mock("orca_start", rejects("Worktree not found"));
     await plus("example-app", CLAUDE);
     await waitForCalls(start);
-    await expect($("#error")).toHaveText("Worktree not found");
+    await expect($(CARD)).toHaveText("Worktree not found");
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
     await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
@@ -597,7 +560,9 @@ describe("orca", () => {
     await pressPlus();
     await pickItem(TERMINAL);
     await waitForCalls(create);
-    await expect($("#error")).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    // A text that differs makes a second card, put above the first.
+    await expect($$(CARD)[0]).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    expect(await textsOf(CARD)).toEqual(["起動先の worktree が見つかりません。一覧を読み直してください", "Worktree not found"]);
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
@@ -1475,8 +1440,8 @@ describe("orca: projects", () => {
     await waitForCalls(close);
     // The list is read again after the failure.
     await waitForCalls(overview);
-    await expect($("#error")).toBeDisplayed();
-    await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
+    await expect($(CARDS)).toBeDisplayed();
+    await expect($(CARD)).toHaveText("Orca が時間内に応答しませんでした");
     expect(await tabTitles()).toHaveLength(2);
     // The button works again.
     await expect(tabOf("orca:term_example-app_zsh").$(".orca-tab-close")).toBeEnabled();
@@ -1577,7 +1542,7 @@ describe("orca: projects", () => {
       await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
       await browser.keys(["l"]);
       await waitForCalls(input);
-      await expect($("#error")).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
+      await expect($(CARD)).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
     });
   });
 });
@@ -1674,7 +1639,7 @@ describe("orca: a saved environment's stream", () => {
     await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
     await browser.keys(["y"]);
     await waitForCalls(input);
-    await expect($("#error")).toHaveText("接続先につながっていません");
+    await expect($(CARD)).toHaveText("接続先につながっていません");
   });
 
   // The OSC 52 request of a program (the ESC ] 52 ; target ; base64 BEL), as Claude Code makes it for what its mouse selection covers.
@@ -1779,7 +1744,7 @@ describe("orca: a saved environment's stream", () => {
     await browser.waitUntil(async () => (await refusals()) > 0, { timeoutMsg: "the write was never tried" });
     await sendMark("done");
     expect(await refusals()).toBe(1);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     expect(await copyEvent()).toEqual({ data: { "text/plain": "held text" }, taken: true });
     expect(await copyEvent()).toEqual({ data: {}, taken: false });
   });
@@ -2277,7 +2242,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const attach = await mock("orca_attach_file", attachedNote("example-app"));
     const input = await mock("orca_terminal_input", null);
     await fire("drop", area, [huge]);
-    await expect($("#error")).toHaveText("ファイルは 20 MiB までです");
+    await expect($(CARD)).toHaveText("ファイルは 20 MiB までです");
     expect(await callsOf(attach)).toEqual([]);
     expect(await callsOf(input)).toEqual([]);
   });
@@ -2288,7 +2253,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const input = await mock("orca_terminal_input", null);
     await fire("paste", shown, [image()]);
     await waitForCalls(attach);
-    await expect($("#error")).toHaveText("SSH の接続先の worktree にはファイルを添付できません");
+    await expect($(CARD)).toHaveText("SSH の接続先の worktree にはファイルを添付できません");
     expect(await callsOf(input)).toEqual([]);
   });
 
@@ -2464,7 +2429,7 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     const open = await mock("orca_open_url", rejects("開けるのは http か https の URL だけです"));
     await clickOn("hosts", { metaKey: true });
     expect(await waitForCalls(open)).toEqual([{ url: "file:///etc/hosts" }]);
-    await expect($("#error")).toHaveText("開けるのは http か https の URL だけです");
+    await expect($(CARD)).toHaveText("開けるのは http か https の URL だけです");
   });
 });
 
@@ -2849,7 +2814,7 @@ describe("orca: split panes (A-17)", () => {
   it("keeps working with one pane of all the tabs when Rust cannot answer, and shows the message", async () => {
     await openOrca(overview(), { orca_panes: rejects("orca-panes.json を書けません"), orca_terminal_read: ["$"] });
     await project("example-app").click();
-    await expect($("#error")).toHaveText("orca-panes.json を書けません");
+    await expect($(CARD)).toHaveText("orca-panes.json を書けません");
     await waitForCount(".orca-pane", 1);
     expect(await paneTabs("p1")).toEqual(["Write the docs", "zsh", "bash"]);
   });
@@ -2905,7 +2870,7 @@ describe("orca: split panes (A-17)", () => {
       await openStudioSplit();
       await mock("orca_panes", rejects("orca-panes.json を書けません"));
       await sendStream(streamList(sample(), worktrees(), [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash"), orcaTerminal("example-app", "fish")]));
-      await expect($("#error")).toHaveText("orca-panes.json を書けません");
+      await expect($(CARD)).toHaveText("orca-panes.json を書けません");
       await waitForCount(".orca-pane", 1);
       expect(await paneTabs("p1")).toEqual(["Write the docs", "zsh", "bash", "fish"]);
     });
@@ -2936,7 +2901,10 @@ describe("orca: search the list (A-19)", () => {
   const bolds = () =>
     browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project")].map((r) => [r.querySelector(".orca-project-name")!.textContent, [...r.querySelectorAll("b")].map((b) => b.textContent)]));
   const cursorOn = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].filter((r) => r.dataset.cursor === "true").map((r) => r.dataset.key));
+  // The page's own press of the magnifier (the driver's click focuses a button after the page's handler ran, which takes the focus off the field it opened).
+  const openField = () => browser.execute(() => document.getElementById("orca-search-open")!.click());
   const search = async (text: string) => {
+    if (!(await input().isDisplayed())) await openField();
     await input().setValue(text);
     // The list is narrowed when every row it draws holds the text (in bold), however many rows that leaves; a blank text draws all of them, none in bold.
     const needle = text.trim().toLowerCase();
@@ -2958,18 +2926,47 @@ describe("orca: search the list (A-19)", () => {
   const cmdJ = (init: KeyboardEventInit = { metaKey: true }) =>
     browser.execute((i) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true, ...i })), init);
 
-  it("has a field between the header and the list, and the clear button only while something is typed", async () => {
+  const rectOf = (selector: string) =>
+    browser.execute((s: string) => {
+      const r = document.querySelector(s)!.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, right: r.right, left: r.left };
+    }, selector);
+
+  it("shows the magnifier at the right end of the heading's row and no field until it is pressed", async () => {
     await openOrca(overview());
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await expect($("#orca-projects-head .orca-list-head")).toHaveText("プロジェクト");
+    await expect($("#orca-search-open")).toBeDisplayed();
+    await expect($("#orca-search-open")).toHaveAttribute("aria-label", "検索");
+    const head = await rectOf("#orca-projects-head");
+    const button = await rectOf("#orca-search-open");
+    expect(button.right).toBeGreaterThan(head.right - 12);
+    expect(button.top).toBeGreaterThanOrEqual(head.top);
+    expect(button.bottom).toBeLessThanOrEqual(head.bottom);
+  });
+
+  it("turns the heading's row into the field when the magnifier is pressed, with the focus in it and the list not moved", async () => {
+    await openOrca(overview());
+    const before = { head: await rectOf("#orca-projects-head"), feed: await rectOf("#orca-feed") };
+    await openField();
     await expect($("#orca-search")).toBeDisplayed();
+    await expect($("#orca-projects-head")).not.toBeDisplayed();
+    await expect($("#orca-search-open")).not.toBeDisplayed();
+    expect(await focusedId()).toBe("orca-search-input");
     await expect(input()).toHaveAttribute("aria-label", "プロジェクトを検索");
     await expect(input()).toHaveAttribute("placeholder", "検索");
+    // The field is in the row of the heading, and the list stays where it was.
+    const field = await rectOf("#orca-search");
+    expect(field.top).toBeGreaterThanOrEqual(before.head.top - 1);
+    expect(field.bottom).toBeLessThanOrEqual(before.head.bottom + 1);
+    expect((await rectOf("#orca-feed")).top).toBe(before.feed.top);
+    expect(await names()).toEqual(ALL);
+  });
+
+  it("has the clear button only while something is typed", async () => {
+    await openOrca(overview());
+    await openField();
     await expect($("#orca-search-clear")).not.toBeDisplayed();
-    const place = await browser.execute(() => {
-      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      return { headerBottom: r("#orca-header").bottom, searchTop: r("#orca-search").top, searchBottom: r("#orca-search").bottom, feedTop: r("#orca-feed").top };
-    });
-    expect(place.searchTop).toBeGreaterThanOrEqual(place.headerBottom - 1);
-    expect(place.feedTop).toBeGreaterThanOrEqual(place.searchBottom - 1);
     await search("app");
     await expect($("#orca-search-clear")).toBeDisplayed();
     expect(await names()).toEqual(["example-app"]);
@@ -3055,7 +3052,7 @@ describe("orca: search the list (A-19)", () => {
 
   it("has no line while nothing is typed, and Down does nothing", async () => {
     await openOrca(overview());
-    await input().click();
+    await openField();
     await browser.keys("ArrowDown");
     expect(await cursorOn()).toEqual([]);
   });
@@ -3082,10 +3079,32 @@ describe("orca: search the list (A-19)", () => {
     await openOrca(overview());
     await search("app");
     await browser.keys("Escape");
-    await expect(input()).toHaveValue("");
     expect(await names()).toEqual(ALL);
     expect(await focusedId()).not.toBe("orca-search-input");
+    // The field is closed and the heading's row is back; the next opening shows no text.
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await expect($("#orca-projects-head")).toBeDisplayed();
+    await openField();
+    await expect(input()).toHaveValue("");
     await expect($("#orca-search-clear")).not.toBeDisplayed();
+  });
+
+  it("closes the field when the focus leaves it with no text, and keeps it open while text is left", async () => {
+    await openOrca(overview());
+    await openField();
+    await browser.execute(() => (document.activeElement as HTMLElement).blur());
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await expect($("#orca-projects-head")).toBeDisplayed();
+    await search("app");
+    await browser.execute(() => (document.activeElement as HTMLElement).blur());
+    await browser.pause(150);
+    await expect($("#orca-search")).toBeDisplayed();
+    await expect(input()).toHaveValue("app");
+    expect(await names()).toEqual(["example-app"]);
+    // Cleared by the button, the field keeps the focus and so stays open.
+    await browser.execute(() => document.getElementById("orca-search-clear")!.click());
+    await browser.pause(150);
+    await expect($("#orca-search")).toBeDisplayed();
   });
 
   it("clears the text with the clear button and keeps the focus in the field", async () => {
@@ -3108,12 +3127,22 @@ describe("orca: search the list (A-19)", () => {
     expect(await browser.execute(() => [(document.activeElement as HTMLInputElement).selectionStart, (document.activeElement as HTMLInputElement).selectionEnd])).toEqual([0, 3]);
   });
 
+  it("opens the closed field with Cmd+J and gives it the focus", async () => {
+    await openOrca(overview());
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await cmdJ();
+    await expect($("#orca-search")).toBeDisplayed();
+    await expect($("#orca-projects-head")).not.toBeDisplayed();
+    expect(await focusedId()).toBe("orca-search-input");
+  });
+
   it("opens a closed list (A-23) with Cmd+J before it takes the field", async () => {
     await openOrca(overview());
     await $("#orca-list-toggle").click();
     await expect($("#orca-list")).not.toBeDisplayed();
     await cmdJ();
     await expect($("#orca-list")).toBeDisplayed();
+    await expect($("#orca-search")).toBeDisplayed();
     expect(await focusedId()).toBe("orca-search-input");
   });
 
@@ -3209,7 +3238,7 @@ describe("orca: scratchpad (A-29)", () => {
     await expect($(".orca-edit-area")).toHaveValue("a note\n", { trim: false });
     await expect(pop()).not.toExist();
     await expect(selectedTab()).toHaveText(expect.stringContaining("notes.md"));
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("makes the file with the target the screen shows when the button 「作って開く」 is pressed", async () => {
@@ -3233,7 +3262,7 @@ describe("orca: scratchpad (A-29)", () => {
     expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: ".orca/scratchpad/memo.md", environment: null }]);
     await expect($(".orca-edit-area")).toHaveValue("old memo\n", { trim: false });
     await expect(pop()).not.toExist();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("closes on Escape, on 「やめる」 and on a press outside, and makes nothing", async () => {
@@ -3280,7 +3309,7 @@ describe("orca: scratchpad (A-29)", () => {
     await field().setValue("a/b.md");
     await browser.keys("Enter");
     await waitForCalls(create);
-    await expect($("#error")).toHaveText("名前が正しくありません");
+    await expect($(CARD)).toHaveText("名前が正しくありません");
     await expect(pop()).toBeDisplayed();
     await expect(field()).toHaveValue("a/b.md");
     await expect(primary()).toBeEnabled();
@@ -3305,7 +3334,7 @@ describe("orca: scratchpad (A-29)", () => {
   });
 
   it("reads again the folders of the file pane that hold the new file when the pane shows that worktree", async () => {
-    const entries = (...names: string[]): OrcaDir => ({ entries: names.map((name) => ({ name, path: name, isDirectory: true, ignored: false })), total: names.length });
+    const entries = (...names: string[]): OrcaDir => ({ entries: names.map((name) => ({ name, path: name, isDirectory: true, ignored: false, icon: null })), total: names.length });
     await openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: entries("src"), orca_files_ignored: [] });
     await pickProject("example-app");
     await filesToggle().click();
@@ -3701,7 +3730,7 @@ describe("orca: add a project (A-38)", () => {
     await expect(pop()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
     await waitForCount("#orca-feed .orca-project", 5);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("reads nothing again when the folder dialog is cancelled", async () => {
@@ -3715,10 +3744,10 @@ describe("orca: add a project (A-38)", () => {
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
     expect(await count("#orca-feed .orca-project")).toBe(4);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
-  it("shows the failure of the add in the error line and does not read the list again", async () => {
+  it("shows the failure of the add on a card and does not read the list again", async () => {
     await openOrca();
     await waitForCount("#orca-feed .orca-project", 4);
     const here = await mock(HERE, rejects("Orca が時間内に応答しませんでした"));
@@ -3726,7 +3755,7 @@ describe("orca: add a project (A-38)", () => {
     await press();
     await pick().click();
     await waitForCalls(here);
-    await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
+    await expect($(CARD)).toHaveText("Orca が時間内に応答しませんでした");
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
     expect(await count("#orca-feed .orca-project")).toBe(4);
@@ -3781,7 +3810,7 @@ describe("orca: add a project (A-38)", () => {
     await browser.pause(300);
     expect(await callsOf(here)).toEqual([]);
     expect(await callsOf(added)).toEqual([]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("goes into a folder on a press of its row, and back by up, the trail and home", async () => {
@@ -3926,7 +3955,7 @@ describe("orca: add a project (A-38)", () => {
     expect(await waitForCalls(added)).toEqual([{ path: "/home/dev/workspace", environment: "Studio" }]);
     await expect(dialog()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("adds the folder the keys are on, in place of the one shown", async () => {
@@ -3940,14 +3969,14 @@ describe("orca: add a project (A-38)", () => {
     await expect(dialog()).not.toExist();
   });
 
-  it("shows the failure of the add in the error line, and reads the list no more", async () => {
+  it("shows the failure of the add on a card, and reads the list no more", async () => {
     await openOnStudio();
     await openDialog();
     const added = await mock(ADD, rejects("そのフォルダは追加できません"));
     const read = await mock("orca_overview", orcaOverview(sample(), [...worktrees(), orcaWorktree("example-new", "main")], studio));
     await pickFolder().click();
     await waitForCalls(added);
-    await expect($("#error")).toHaveText("そのフォルダは追加できません");
+    await expect($(CARD)).toHaveText("そのフォルダは追加できません");
     await expect(dialog()).not.toExist();
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
@@ -3976,7 +4005,7 @@ describe("orca: add a project (A-38)", () => {
       expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-add");
     }
     expect(await callsOf(added)).toEqual([]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("closes on Escape and adds nothing", async () => {

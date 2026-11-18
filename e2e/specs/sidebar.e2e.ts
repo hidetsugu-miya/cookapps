@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, orcaOverview, orcaRow, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, orcaOverview, orcaRow, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace, CARD } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -129,7 +129,7 @@ describe("sidebar", () => {
     await waitForCalls(install);
     await expect($("#update-go")).toBeDisabled();
     await release(install, rejects("disk full"));
-    await expect($("#error")).toHaveText(expect.stringContaining("disk full"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("disk full"));
     await expect(popup()).toBeDisplayed();
     await expect($("#update-go")).toBeEnabled();
     expect(await callsOf(restart)).toEqual([]);

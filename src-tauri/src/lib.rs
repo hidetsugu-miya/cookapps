@@ -32,6 +32,7 @@ pub mod orca_diff;
 pub mod orca_e2ee;
 pub mod orca_files;
 pub mod orca_handoff;
+pub mod orca_icon;
 pub mod orca_language;
 pub mod orca_link;
 pub mod orca_panes;
@@ -395,7 +396,10 @@ pub fn run() {
             lsp::lsp_settings,
             lsp::lsp_settings_set,
             lsp::lsp_launches,
+            lsp::detect::lsp_detect,
+            lsp::detect::lsp_language_looks,
             lsp::lsp_server_for,
+            lsp::lsp_claude_request,
             lsp::server::lsp_start,
             lsp::server::lsp_stop,
             lsp::server::lsp_restart,
@@ -407,7 +411,6 @@ pub fn run() {
             lsp::view::lsp_word,
             lsp::view::lsp_places,
             ssh::ssh_hosts,
-            orca_language::orca_languages,
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,

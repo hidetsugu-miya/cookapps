@@ -11,7 +11,7 @@ import { invoke } from "./ipc.js";
 import { appsLink } from "./permission-pane.js";
 import { itemRow } from "./settings.js";
 import { getSlackWorkspaces, onSlackWorkspaces } from "./slack-workspaces.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // teamId -> the state Rust last told; a workspace not in it has no App-Level Token.
 const states = new Map<string, SocketState>();
@@ -42,11 +42,10 @@ function workspaceRow(w: Workspace) {
     unlink.setAttribute("data-hint", "");
     unlink.onclick = () =>
       confirmUnlink(unlink, `${w.team} のリアルタイム更新`, "App-Level Token をつなぎAIから削除します。Slack のアプリは残ります。", async () => {
-        $("error").hidden = true;
         try {
           adopt(await invoke("slack_app_token_remove", { teamId: w.teamId }));
         } catch (e) {
-          showError(e);
+          showFailure("slack-socket", e);
         }
       });
     actions.push(unlink);
@@ -86,11 +85,10 @@ export function initSlackSocket() {
     const token = input.value;
     // The token is never shown: the field is emptied as soon as it is read.
     input.value = "";
-    $("error").hidden = true;
     try {
       adopt(await invoke("slack_app_token_set", { teamId: $<HTMLSelectElement>("slack-socket-team").value, token }));
     } catch (err) {
-      showError(err);
+      showFailure("slack-socket", err);
     }
   };
   $("slack-socket-help").onclick = (e) =>
@@ -118,6 +116,6 @@ export function initSlackSocket() {
       for (const s of list) if (!states.has(s.teamId)) states.set(s.teamId, s.state);
       render();
     },
-    (e) => showError(e),
+    (e) => logError("slack-socket", e),
   );
 }

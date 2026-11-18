@@ -1,5 +1,5 @@
 // The Claude Code pane's shared part (A-36): a terminal in which tsunagiai runs Claude Code itself, in a pseudo terminal that Rust opens (`src-tauri/src/claude_code.rs`), drawn by the xterm.js of `ts/orca-terminal.ts` (the kind "pty").
-// No Orca is in between. Claude Code gets only the tools of `tsunagiai-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), and a saved skill when the screen gives one.
+// No Orca is in between. Claude Code gets only the tools of `tsunagiai-mcp` (the built-in tools are off unless a screen asks for them with `builtinTools`), a saved skill and a first instruction (`prompt`) when the screen gives them.
 // A screen that holds a pane gives it a host element and an `owner` (the name of the pane), shows it with `showClaudeCode` while it is in view, hides it with `hideClaudeCode` (the process goes on, and what it prints is drawn into the hidden terminal),
 // and ends it with `closeClaudeCode` when the pane is closed or the screen no longer needs it (the process and what it started are ended). A message of a failed start or of the end of the process is drawn in the terminal.
 // The orchestrator of A-37 is the pane `kind: "formation"`: Rust runs it in `formations/{name}/` of the config directory (the folder of its formation) (its own `CLAUDE.md`, the tools of `tsunagiai-mcp --formation {name}`, Claude Code's own tools on, and the projects saved with the formation as its first instruction, which Rust reads itself) when the id of the pane is `formationPaneId(name)`.
@@ -19,6 +19,8 @@ export interface ClaudeCodeOptions {
   builtinTools?: boolean;
   // A saved skill that Claude Code is given with `--plugin-dir` (A-32).
   skill?: { name: string; screen: SkillScreen } | null;
+  // The first instruction of Claude Code (1 to 20,000 characters, passed as `claude [prompt]`; a text that a screen built from data puts that data inside a quote). The orchestrator takes none from here.
+  prompt?: string | null;
   // Called when the process ends by itself with the exit code 0.
   onEnd?: () => void;
 }
@@ -27,7 +29,7 @@ export interface ClaudeCodeOptions {
 export function showClaudeCode(host: HTMLElement, options: ClaudeCodeOptions, owner: string) {
   host.classList.add("claude-code-pane");
   const id = options.id;
-  const pty = { builtinTools: options.kind === "formation" || (options.builtinTools ?? false), skill: options.skill ?? null, onEnd: options.onEnd };
+  const pty = { builtinTools: options.kind === "formation" || (options.builtinTools ?? false), skill: options.skill ?? null, prompt: options.prompt ?? null, onEnd: options.onEnd };
   showTerminals([{ id, source: { kind: "pty", handle: id, path: "", environment: null, pty }, host }], id, owner);
 }
 

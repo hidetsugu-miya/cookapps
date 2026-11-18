@@ -7,7 +7,7 @@ import type { Info } from "./bindings/Info";
 import { $, composing, tag } from "./dom.js";
 import { CHECK_SVG, CLOSE_SVG, COPY_SVG, LINES_SVG, MEET_SVG, PEOPLE_SVG, PIN_SVG } from "./icons.js";
 import { htmlText, linkify } from "./mail-text.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 const GAP = 8;
 
@@ -113,7 +113,7 @@ function meetBlock(url: string) {
       copy.innerHTML = CHECK_SVG;
       setTimeout(() => (copy.innerHTML = COPY_SVG), 2000);
     } catch (err) {
-      showError(err);
+      showFailure("calendar-detail", err);
     }
   };
   const line = tag("div", "cal-pop-url");

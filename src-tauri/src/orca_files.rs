@@ -40,6 +40,7 @@ use crate::{
     orca::{forget_worktree_host, worktree_host, worktree_host_cached},
     orca_attach::{worktree_params, Rpc},
     orca_diff::{diff_rows, lines_of, OrcaDiffChange, OrcaDiffRow},
+    orca_icon::file_icon,
     orca_language::{detect_language, highlight_name},
     orca_link::{CallError, Connection},
 };
@@ -108,7 +109,7 @@ const RECENT_PAIRS: usize = 50;
 
 // ---- what the screen gets ----
 
-/// An entry of a folder. `path` is relative to the worktree, and `ignored` is whether git ignores it (Orca draws such an entry faint and in italics).
+/// An entry of a folder. `path` is relative to the worktree, and `ignored` is whether git ignores it (Orca draws such an entry faint and in italics). `icon` is the name of the icon of a file of a kind that has one (`orca_icon.rs`), none for a folder and for a kind with none.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -118,6 +119,7 @@ pub struct OrcaFileEntry {
     pub path: String,
     pub is_directory: bool,
     pub ignored: bool,
+    pub icon: Option<&'static str>,
 }
 
 /// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, deleted, renamed or copied, `New` for one that is untracked or added. A folder is what its files are, and `Changed` when they are both.
@@ -487,11 +489,13 @@ pub(crate) fn parse_dir(result: &Value, dir: &str) -> Result<(Vec<OrcaFileEntry>
             let name = e["name"]
                 .as_str()
                 .filter(|n| !n.is_empty() && !n.contains(['/', '\0']) && *n != "." && *n != "..")?;
+            let is_directory = e["isDirectory"].as_bool().unwrap_or(false);
             Some(OrcaFileEntry {
                 name: name.to_owned(),
                 path: join(dir, name),
-                is_directory: e["isDirectory"].as_bool().unwrap_or(false),
+                is_directory,
                 ignored: false,
+                icon: if is_directory { None } else { file_icon(name) },
             })
         })
         .collect();
@@ -2451,6 +2455,7 @@ mod tests {
             path: name.into(),
             is_directory,
             ignored: false,
+            icon: None,
         }
     }
 
@@ -3004,6 +3009,19 @@ mod tests {
         assert_eq!(parse_dir(&short, "").unwrap().1, 2);
         assert!(parse_dir(&json!({"error": 1}), "").is_err());
         assert!(parse_dir(&json!("x"), "").is_err());
+    }
+
+    #[test]
+    fn a_file_has_the_icon_of_its_kind_and_a_folder_has_none() {
+        let page = json!({"entries": [
+            {"name": "user.rb", "isDirectory": false},
+            {"name": "Gemfile", "isDirectory": false},
+            {"name": "notes.txt", "isDirectory": false},
+            {"name": "spec.rb", "isDirectory": true},
+        ]});
+        let (entries, _) = parse_dir(&page, "").unwrap();
+        let icons: Vec<Option<&str>> = entries.iter().map(|e| e.icon).collect();
+        assert_eq!(icons, [Some("ruby"), Some("ruby"), None, None]);
     }
 
     #[tokio::test]

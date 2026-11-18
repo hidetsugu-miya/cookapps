@@ -96,7 +96,14 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn:disabled { opacity: .4; cursor: default; }
 #mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
 #mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
-#error { color: #b00020; padding: 8px 32px; margin: 0; white-space: pre-wrap; }
+/* A-28: the failures at the bottom right (ts/error-card.ts). The newest card is on top, and each stays until its × is pressed. The first child's auto margin puts the stack at the bottom while it fits, and lets it scroll from the newest card when it does not. They stand above the toast (--toast-bottom) and the footer. */
+#error-cards { position: fixed; right: 16px; bottom: calc(var(--toast-bottom, 24px) + 52px); z-index: 16; box-sizing: border-box; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 160px); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; pointer-events: none; }
+#error-cards > :first-child { margin-top: auto; }
+.error-card { flex: none; box-sizing: border-box; display: flex; align-items: flex-start; gap: 4px; padding: 10px 6px 10px 14px; border: 1px solid var(--chip-line); border-left: 4px solid var(--danger); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); pointer-events: auto; }
+.error-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.error-card-text { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.error-card .text-btn { height: 26px; font-size: calc(12px * var(--fs)); }
+.error-card-close { flex: none; width: 28px; height: 28px; }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
 #main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }
@@ -1209,8 +1216,13 @@ button.formation-card { cursor: pointer; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
 button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
-/* A-19: the search field under the header, level with the list: the icon, the field and (while something is typed) the button that clears it. The row the keys are on has a line in the accent color; the matched letters are bold. */
-#orca-search { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; margin: 8px 8px 0; padding: 0 4px 0 10px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: var(--muted); }
+/* A-19: the magnifier at the right end of the heading 「プロジェクト」; pressed, the row of the heading (`#orca-projects-head`) is the search field, of the same height: the icon, the field and (while something is typed) the button that clears it. The row the keys are on has a line in the accent color; the matched letters are bold. */
+#orca-projects { flex: none; }
+#orca-projects-head { display: flex; align-items: center; height: 36px; }
+#orca-projects-head .orca-list-head { flex: 1; min-width: 0; padding: 0 0 0 18px; }
+#orca-search-open { flex: none; width: 24px; height: 24px; margin-right: 8px; color: var(--muted); }
+#orca-search-open svg { width: 14px; height: 14px; }
+#orca-search { display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; margin: 2px 8px; padding: 0 4px 0 10px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: var(--muted); }
 #orca-search:focus-within { border-color: var(--accent); }
 #orca-search svg { flex: none; width: 14px; height: 14px; }
 #orca-search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; }
@@ -1338,6 +1350,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[aria-expanded="true"] .orca-file-mark svg { transform: rotate(90deg); }
 .orca-file-ic { flex: none; display: inline-flex; color: var(--muted); }
 .orca-file-ic svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.orca-file-ic img { width: 14px; height: 14px; pointer-events: none; }
 .orca-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .orca-file[data-ignored="true"] { opacity: .55; }
 .orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }
@@ -1408,42 +1421,44 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-lsp { flex: none; display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 10px 12px 12px; background: var(--bar); font-size: calc(12px * var(--fs)); }
 #orca-lsp-head { display: flex; align-items: center; gap: 8px; }
 #orca-lsp-title { font-weight: 600; }
-#orca-lsp-add { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--ink-soft); }
-#orca-lsp-add svg { width: 14px; height: 14px; }
-#orca-lsp-error, #orca-lsp-note { padding: 0; margin: 0; }
+#orca-lsp-ask { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--claude); }
+#orca-lsp-reload { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-lsp-ask svg, #orca-lsp-reload svg { width: 14px; height: 14px; }
+#orca-lsp-claude { display: flex; flex-direction: column; gap: 4px; }
+#orca-lsp-claude-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+#orca-lsp-claude-close { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-lsp-claude-close svg { width: 14px; height: 14px; }
+#orca-lsp-claude-term { display: flex; flex-direction: column; height: 360px; overflow: hidden; border-radius: 12px; }
+#orca-lsp-error, .orca-lsp-note { padding: 0; margin: 0; }
 #orca-lsp-cards { display: flex; flex-direction: column; gap: 8px; }
-.orca-lsp-card { box-sizing: border-box; padding: 6px 10px 8px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
-.orca-lsp-card[data-open="true"] { border-color: var(--accent); }
+.orca-lsp-card { display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; padding: 6px 10px 8px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
+.orca-lsp-card[data-kind="found"] { border-style: dashed; background: transparent; }
 .orca-lsp-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .orca-lsp-card-head .orca-lsp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.orca-lsp-state { margin-right: auto; color: var(--ink-soft); white-space: nowrap; }
+.orca-lsp-ic { flex: none; display: inline-flex; color: var(--muted); }
+.orca-lsp-ic svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.orca-lsp-ic img { width: 14px; height: 14px; pointer-events: none; }
+.orca-lsp-status { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.orca-lsp-state { color: var(--ink-soft); white-space: nowrap; }
 .orca-lsp-card-head .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
 .orca-lsp-card-head .icon-btn svg { width: 14px; height: 14px; }
-.orca-lsp-toggle svg { transition: transform .15s; }
-.orca-lsp-card[data-open="true"] .orca-lsp-toggle svg { transform: rotate(90deg); }
-.orca-lsp-summary { margin-top: 2px; padding-left: 13px; color: var(--muted); font-size: calc(11px * var(--fs)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-lsp-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.orca-lsp-summary { padding-left: 20px; color: var(--muted); font-size: calc(11px * var(--fs)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-lsp-body { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .orca-lsp-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--agent-idle); }
 .orca-lsp-dot[data-state="running"] { background: var(--agent-done); }
 .orca-lsp-dot[data-state="indexing"] { background: var(--agent-working); }
 .orca-lsp-dot[data-reason="failed"] { background: var(--agent-failed); }
 .orca-lsp-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px 8px; align-items: center; }
 .orca-lsp-row > label, .orca-lsp-row > span { color: var(--ink-soft); }
-.orca-lsp-chips, .orca-lsp-how, .orca-lsp-field { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.orca-lsp-field { flex-wrap: nowrap; }
-.orca-lsp-places { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 8px; align-items: center; color: var(--ink-soft); }
-.orca-lsp-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: calc(11px * var(--fs)); }
+.orca-lsp-field { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--ink-soft); font-size: calc(11px * var(--fs)); line-height: 18px; white-space: nowrap; }
-.orca-lsp-drop { flex: none; display: inline-flex; width: 14px; height: 14px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
-.orca-lsp-drop svg { width: 12px; height: 12px; }
-.orca-lsp-add-language { width: 22px; height: 22px; }
-.orca-lsp-add-language svg { width: 12px; height: 12px; }
 #orca-lsp :is(input[type="text"], select) { box-sizing: border-box; min-width: 0; width: 100%; height: 26px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); color: inherit; font: inherit; }
 #orca-lsp :is(#orca-lsp-command, #orca-lsp-mount) { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: calc(11px * var(--fs)); }
 #orca-lsp :is(input[type="text"], select):focus { outline: 2px solid var(--accent); border-color: transparent; }
-#orca-lsp .orca-lsp-how select { width: auto; }
 .orca-lsp-auto-label { display: flex; align-items: center; gap: 8px; }
 .orca-lsp-foot { display: flex; align-items: center; gap: 6px; }
+.orca-lsp-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 2px; }
+.orca-lsp-card > .orca-lsp-container { align-self: flex-start; }
 #orca-lsp .text-btn { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #orca-lsp-reset { margin-left: auto; }
 .orca-edit-lock { flex: none; display: flex; color: var(--muted); }

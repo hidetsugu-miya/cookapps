@@ -13,21 +13,20 @@ import { openDueEditor, openProjectPicker } from "./todo-detail.js";
 import { draftOpen, type DraftHooks, openDraft } from "./todo-draft.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // Creates a Todoist task in the inbox that points at the thread, and says so. The button shows a spinner in place of its icon meanwhile.
 export async function makeTodo(account: string, id: string, subject: string, button: HTMLButtonElement) {
-  $("error").hidden = true;
   button.disabled = true;
   const icon = button.innerHTML;
   button.classList.add("busy");
   button.replaceChildren(tag("span", "spin"));
   try {
     const done = await invoke("todoist_task_from_mail", { account, threadId: id, subject });
-    if (done === null) return showError("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
+    if (done === null) return showFailure("todo-add", "Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
     toast(`インボックスに「${subject || "(件名なし)"}」を追加しました`);
   } catch (e) {
-    showError(e);
+    showFailure("todo-add", e);
   } finally {
     button.disabled = false;
     button.classList.remove("busy");

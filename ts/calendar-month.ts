@@ -7,7 +7,7 @@ import { $, composing, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
 import { CHEVRON_LEFT_SVG, CHEVRON_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { showError } from "./view.js";
+import { logError } from "./error-card.js";
 
 const today = new Date();
 let view = { year: today.getFullYear(), month: today.getMonth() + 1 };
@@ -57,7 +57,7 @@ async function redraw() {
     drawnOn = isoDate(new Date());
     for (const c of calendars) c.grid.replaceChildren(...rowsOf(grid));
   } catch (e) {
-    if (mine === seq) showError(e);
+    if (mine === seq) logError("calendar-month", e);
   }
 }
 

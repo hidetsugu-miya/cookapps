@@ -100,13 +100,14 @@ struct LspRepoArgs {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct LspServerArgs {
-    /// The name of the server, unique in the project, at most 64 characters. A server of this name is replaced as a whole, else this one is added.
-    name: String,
-    /// The languages it takes, at least one: the language names of the Orca editor's colors (A-21), such as `ruby`, `typescript`, `javascript`, `python`, `go` and `rust`. A language belongs to one server of a project.
-    languages: Vec<String>,
+    /// The language it takes, one: a language name of the Orca editor's colors (A-21), such as `ruby`, `typescript`, `javascript`, `python`, `go` and `rust`. A project has one server for each language: the server of this language is replaced as a whole, else this one is added.
+    language: String,
+    /// The name the screen shows for the server, at most 64 characters, such as `rust-analyzer`. Leave it out for the name that the app gives the language.
+    #[serde(default)]
+    name: Option<String>,
     /// Whether the app starts it by itself when a file of its languages is opened.
     auto_start: bool,
-    /// The command that starts the server, a shell statement that `/bin/sh -c` runs in the worktree (inside the compose service, when the server runs in one), speaking LSP on its standard input and output. Leave it out for the way that the app decides (only ruby-lsp has one).
+    /// The command that starts the server, a shell statement that `/bin/sh -c` runs in the worktree (inside the compose service, when the server runs in one), speaking LSP on its standard input and output. Leave it out for the way that the app decides (the server of the app's table for the language: ruby-lsp, rust-analyzer, typescript-language-server, gopls, pyright or pylsp, found in the place it runs).
     #[serde(default)]
     command: Option<String>,
     /// The absolute path that the worktree has where the server runs (inside the container). Leave it out for the path that the app decides.
@@ -120,8 +121,8 @@ struct LspServerArgs {
 impl From<LspServerArgs> for LspServerSettings {
     fn from(a: LspServerArgs) -> Self {
         Self {
-            name: a.name,
-            languages: a.languages,
+            language: a.language,
+            name: a.name.unwrap_or_default(),
             auto_start: a.auto_start,
             command: a.command,
             mount: a.mount,
@@ -146,8 +147,8 @@ struct LspServerDeleteArgs {
     environment: String,
     /// The project: the id of its repository in Orca (`repoId` of `orca worktree ps`, `id` of `orca repo list`).
     project: String,
-    /// The name of the server to delete.
-    name: String,
+    /// The language of the server to delete (A-21).
+    language: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -503,7 +504,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Read the language servers of a project of the Orca screen (A-34): {environment, project, sshHost, servers: [{name, languages, autoStart, command, mount, service}]}. A project with nothing saved has ruby-lsp, which takes ruby and starts by itself. command, mount and service are left out when the app decides them. Not offered to the orchestrator.",
+        description = "Read the language servers of a project of the Orca screen (A-34): {environment, project, sshHost, servers: [{language, name, autoStart, command, mount, service}]}: one server for each language. A project with nothing saved has ruby-lsp, which takes ruby and starts by itself. command, mount and service are left out when the app decides them. Not offered to the orchestrator.",
         annotations(read_only_hint = true)
     )]
     async fn lsp_settings(&self, Parameters(a): Parameters<LspRepoArgs>) -> Result<String, String> {
@@ -517,7 +518,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Save one language server of a project of the Orca screen (A-34): the server of the same name is replaced as a whole (a setting left out is not kept), else this one is added after the others. languages are the language names of the Orca editor's colors (A-21: ruby, typescript, javascript, python, go, rust and the like), and a language belongs to one server of a project, so one that another server takes is refused. command is a shell statement that /bin/sh -c runs in the worktree of the project (inside the compose service when the server runs in one), and must speak LSP on its standard input and output; the app runs it as written when a file of the languages is opened. A project with nothing saved has ruby-lsp, which takes ruby: to use another server for ruby, replace ruby-lsp or delete it first. Answers the settings of the project as saved, as lsp_settings does.",
+        description = "Save the language server of one language of a project of the Orca screen (A-34): the server of the same language is replaced as a whole (a setting left out is not kept), else this one is added after the others. language is a language name of the Orca editor's colors (A-21: ruby, typescript, javascript, python, go, rust and the like), and a project has one server for each language. name is what the screen shows (left out: the name of the app's table for the language). command is a shell statement that /bin/sh -c runs in the worktree of the project (inside the compose service when the server runs in one), and must speak LSP on its standard input and output; the app runs it as written when a file of the languages is opened. A project with nothing saved has ruby-lsp, which takes ruby: to use another server for ruby, save a server of ruby, which replaces it. Leave command out to run the server that the app finds for the language in the place the worktree runs in (a service of compose that mounts it, else the host). Answers the settings of the project as saved, as lsp_settings does.",
         annotations(destructive_hint = true)
     )]
     async fn lsp_server_save(
@@ -539,7 +540,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Delete the language server of that name from a project of the Orca screen (A-34). A name that the project does not have is an error. Answers the settings of the project as saved, as lsp_settings does.",
+        description = "Delete the language server of that language from a project of the Orca screen (A-34). A language that the project has no server for is an error. Answers the settings of the project as saved, as lsp_settings does.",
         annotations(destructive_hint = true)
     )]
     async fn lsp_server_delete(
@@ -548,7 +549,12 @@ impl Tsunagiai {
     ) -> Result<String, String> {
         let dir = self.dir.clone();
         let saved = tokio::task::spawn_blocking(move || {
-            lsp::delete_server(&dir, lsp_environment(&a.environment), &a.project, &a.name)
+            lsp::delete_server(
+                &dir,
+                lsp_environment(&a.environment),
+                &a.project,
+                &a.language,
+            )
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -928,19 +934,19 @@ mod tests {
 
     #[test]
     fn the_arguments_of_the_language_server_tools_leave_a_server_with_what_the_app_decides() {
-        let server =
-            serde_json::json!({"name": "ts", "languages": ["typescript"], "autoStart": false});
+        let server = serde_json::json!({"language": "typescript", "autoStart": false});
         let save = serde_json::from_value::<LspServerSaveArgs>(
             serde_json::json!({"environment": "local", "project": "r1", "server": server}),
         )
         .unwrap();
         assert_eq!(lsp_environment(&save.environment), None);
         let settings = LspServerSettings::from(save.server);
-        assert_eq!(settings.name, "ts");
+        assert_eq!(settings.language, "typescript");
+        assert_eq!(settings.name, "");
         assert!(!settings.auto_start);
         assert_eq!(settings.command, None);
         assert_eq!(lsp_environment("work"), Some("work"));
-        for missing in ["name", "languages", "autoStart"] {
+        for missing in ["language", "autoStart"] {
             let mut value = server.clone();
             value.as_object_mut().unwrap().remove(missing);
             assert!(

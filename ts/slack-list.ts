@@ -29,7 +29,8 @@ import { openSlackThread } from "./slack-thread.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { drawUnreadPane } from "./unread-pane.js";
-import { setNavCount, show, showError } from "./view.js";
+import { showFailure } from "./error-card.js";
+import { setNavCount, show } from "./view.js";
 
 // The workspaces (`slack_load`), or null until read.
 let workspaces: Workspace[] | null = null;
@@ -158,7 +159,7 @@ function foldWorkspace(teamId: string) {
     if (!foldedTeams.delete(teamId)) foldedTeams.add(teamId);
     drawSide();
     // A failed save leaves the fold as pressed: it only is not kept for the next start.
-    foldsSaved = foldsSaved.then(() => invoke("slack_set_side_folded", { teamIds: [...foldedTeams] })).catch(showError);
+    foldsSaved = foldsSaved.then(() => invoke("slack_set_side_folded", { teamIds: [...foldedTeams] })).catch((e) => showFailure("slack-list", e));
   });
 }
 let foldsRead: Promise<void> = Promise.resolve();
@@ -229,7 +230,7 @@ async function saveHidden(command: "slack_hide_channel" | "slack_unhide_channel"
     await invoke(command, { teamId, channel });
     return true;
   } catch (e) {
-    showError(e);
+    showFailure("slack-list", e);
     return false;
   } finally {
     changing--;
@@ -452,8 +453,8 @@ async function readOne(m: TimelineMessage) {
     changing--;
     runPendingResync();
   }
-  if (failed) showError("既読を Slack に送れませんでした");
-  else if (otherFailed) showError("既読にできませんでした");
+  if (failed) showFailure("slack-list", "既読を Slack に送れませんでした");
+  else if (otherFailed) showFailure("slack-list", "既読にできませんでした");
   load(true);
 }
 
@@ -481,8 +482,8 @@ async function readChannel(c: UnreadChannel) {
     changing--;
     runPendingResync();
   }
-  if (failed) showError("既読を Slack に送れませんでした");
-  else if (otherFailed) showError("既読にできませんでした");
+  if (failed) showFailure("slack-list", "既読を Slack に送れませんでした");
+  else if (otherFailed) showFailure("slack-list", "既読にできませんでした");
   load(true);
 }
 
@@ -615,7 +616,7 @@ async function guarded<T>(run: () => Promise<T>): Promise<{ value: T } | null> {
   try {
     return { value: await run() };
   } catch (e) {
-    showError(e);
+    showFailure("slack-list", e);
     return null;
   } finally {
     changing--;

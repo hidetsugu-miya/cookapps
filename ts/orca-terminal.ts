@@ -57,14 +57,14 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 
 // Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
-// `pty` is what a pty is started with: whether Claude Code keeps its own tools and the saved skill it is given; `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
+// `pty` is what a pty is started with: whether Claude Code keeps its own tools, the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
 // `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, or a read that says the terminal is not listed, which also stops the mirror's reads. The last screen stays drawn.
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
   path: string;
   environment: string | null;
-  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; onEnd?: () => void };
+  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; onEnd?: () => void };
   onGone?: () => void;
 }
 
@@ -95,6 +95,8 @@ interface Instance {
   // The keys typed and not sent yet, and a send on its way.
   pending: string;
   sending: boolean;
+  // A send failed and none has worked since: the failure is reported once, not at every key typed.
+  failing: boolean;
   // The writes on their way that draw a screen again (a snapshot, a mirror frame): an OSC 52 request in them is not made.
   replaying: number;
   // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
@@ -306,7 +308,7 @@ function newInstance(source: TermSource, owner: string): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
+  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, failing: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -381,8 +383,10 @@ async function sendKeys(instance: Instance) {
       if (!instance.ended) await invoke("claude_code_input", { id: instance.source.handle, text });
     } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
+    instance.failing = false;
   } catch (e) {
-    onError(e);
+    if (!instance.failing) onError(e);
+    instance.failing = true;
   }
   instance.sending = false;
   // What was typed meanwhile goes next, also when the terminal is no longer shown; a mirror still shown reads the frame that shows the effect soon.
@@ -542,7 +546,7 @@ function startPty(instance: Instance) {
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   const { handle, pty } = instance.source;
-  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, channel }).then(
+  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, prompt: pty?.prompt ?? null, channel }).then(
     (launch) => launch,
     (e) => {
       if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e), clean: false });

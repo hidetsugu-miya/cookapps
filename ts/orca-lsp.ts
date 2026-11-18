@@ -1,19 +1,24 @@
-// The language server of the Orca screen (A-34): the state of the language servers of a worktree and their settings, shown as a card for each server in the file pane, and when they are started and stopped. A repository has any number of servers, each with a name and the languages it takes; a Ruby file or any file whose language a server takes asks Rust for that server (`lsp_server_for`).
-// Rust starts, keeps and stops the processes (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of their state (the event `lsp-status`), reads how the servers are started from the worktree (`lsp_launches`, once for all of them) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
-// A file opened in the editor starts the server that takes its language when the settings say 「自動で起動」 (`ensureServer`); a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
-// While the part is shown, the settings are read at an interval, so that a change made elsewhere (`tsunagiai-mcp`, A-34) is drawn: the text that is being typed in, the open card and a card that is not saved yet stay. The interval stops when the part is hidden, when another worktree is shown or when the project is gone from the list.
+// The language server of the Orca screen (A-34): the state of the language servers of a worktree and their settings, shown in the file pane as one card for each language, and when they are started and stopped. A repository has one server for each language (a card each), and the language is the server's key in every command; a file whose language a server takes asks Rust for that server (`lsp_server_for`), which answers the language.
+// Rust starts, keeps and stops the processes (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of their state (the event `lsp-status`), reads how the servers are started from the worktree (`lsp_launches`, once for all of them), finds the languages that the worktree has and the server of the app's table for each (`lsp_detect`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
+// A card of a language that the repository has a server of shows its state and the way it is started; the fields of the settings are opened only by 「手で直す」 of its menu. A language that the worktree has and the repository has no server of is a card of dotted line, where 「使う」 saves the server of the table with nothing replaced. 「使わない」 hides it while this worktree is shown.
+// A file opened in the editor starts the server that takes its language when the settings say 「自動で起動」 (`ensureServer`), unless the owner stopped it with 「止める」; a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
+// Claude Code sets the servers up (#976): the ✦ of the heading, and 「Claude に頼む」 of a language the worktree has and no server is found for, open the pane of A-36 under the cards (`showClaudeCode`, with Claude Code's own tools, the owner `orca-lsp`, and the first instruction Rust built, `lsp_claude_request`). The pane is of one request (the worktree and the language, or all of them): another request closes it and starts a new one, its ✕ closes it (`closeClaudeCode`), and the part hidden, another worktree shown or the Orca screen left only hide it (the process goes on, and the same pane comes back). It is closed when its worktree is gone from Orca's list. The cards follow what Claude saves through the watch of the settings below.
+// While the part is shown, the settings are read at an interval, so that a change made elsewhere (`tsunagiai-mcp`, A-34) is drawn: the text that is being typed in and the fields that are open stay. The interval stops when the part is hidden, when another worktree is shown or when the project is gone from the list.
+import type { LspFound } from "./bindings/LspFound";
+import type { LspLanguageLook } from "./bindings/LspLanguageLook";
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspServerSettings } from "./bindings/LspServerSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { LspStatusEvent } from "./bindings/LspStatusEvent";
+import { closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { confirmDelete } from "./hint.js";
-import { CHEVRON_SVG, CLOSE_SVG, DELETE_SVG, MORE_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
+import { CLAUDE_SVG, CLOSE_SVG, DELETE_SVG, EDIT_SVG, MORE_SVG, RELOAD_SVG, SERVER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // A worktree of a project, where it is (null: this machine).
 export interface LspPlace {
@@ -30,7 +35,7 @@ const WATCH_MS = 2000;
 // What the screen is told: the settings of a project changed, so the files open in it look for their server again.
 let changed: (place: LspPlace) => void = () => {};
 
-// A server of a worktree: its name in the settings of the repository too.
+// A server of a worktree: its key is the language it takes.
 interface ServerPlace extends LspPlace {
   server: string;
 }
@@ -43,6 +48,8 @@ const started = new Map<string, ServerPlace>();
 const checking = new Set<string>();
 // The last state told of each server (a server that was not asked about is not started).
 const statuses = new Map<string, LspStatus>();
+// The servers that the owner stopped with 「止める」: a file opened later does not start them. The restart and the button of the container take them out.
+const halted = new Set<string>();
 
 // How a server is started in the worktree that is shown: what `lsp_launches` answered, or why it could not.
 interface Read {
@@ -54,16 +61,21 @@ interface Read {
 let pane: LspPlace | null = null;
 let loaded = false;
 let settings: LspRepoSettings | null = null;
-// The languages of A-21 that a server may take (read once).
-let languages: string[] | null = null;
+// How a language is drawn (read once): the title and the icon.
+let looks: Map<string, LspLanguageLook> | null = null;
 // The Hosts of this Mac's `~/.ssh/config`, read with the settings of a worktree of a saved environment (empty for this machine's).
 let sshHosts: string[] = [];
 const launches = new Map<string, Read>();
-// The card that is open (null: none), and the card that is not saved yet: it waits for its first language.
-let openName: string | null = null;
-let draft: LspServerSettings | null = null;
-// The message of a save, a restart or a start of the container that failed.
-let note: string | null = null;
+// What the worktree has and the table gives a server for (null: not read, or it failed), and the languages whose card 「使わない」 hid while this worktree is shown.
+let found: LspFound[] | null = null;
+const dismissed = new Set<string>();
+let detecting = false;
+// The number of the last read of the languages: an older one that ends later is dropped.
+let detectSeq = 0;
+// The card whose fields 「手で直す」 opened (null: none), by its language.
+let editing: string | null = null;
+// The message of a save, a restart, a stop or a start of the container that failed, and the language of the card it belongs to (null: the heading).
+let note: { key: string | null; text: string } | null = null;
 let busy: "restart" | "container" | null = null;
 // Another worktree ends the reads of the old one.
 let generation = 0;
@@ -72,77 +84,74 @@ let saving: Promise<void> = Promise.resolve();
 let version = 0;
 let pending = 0;
 let timer: number | null = null;
+// The Claude Code pane's id and owner, the request it was opened for (null: none open) and whether the part is shown.
+const CLAUDE_ID = "lsp-claude";
+const CLAUDE_OWNER = "orca-lsp";
+let claude: (LspPlace & { language: string | null; prompt: string }) | null = null;
+let partShown = false;
 
-const statusOf = (name: string): LspStatus => (pane === null ? NOT_STARTED : (statuses.get(keyOf(pane.target, pane.path, name)) ?? NOT_STARTED));
+const statusOf = (language: string): LspStatus => (pane === null ? NOT_STARTED : (statuses.get(keyOf(pane.target, pane.path, language)) ?? NOT_STARTED));
 const args = (place: ServerPlace) => ({ environment: place.target, project: place.project, worktree: place.path, server: place.server });
-const serverPlace = (name: string): ServerPlace | null => (pane === null ? null : { ...pane, server: name });
-const savedServer = (name: string) => settings?.servers.find((s) => s.name === name) ?? null;
-const serverNamed = (name: string) => (draft !== null && draft.name === name ? draft : savedServer(name));
-const names = () => [...(settings?.servers.map((s) => s.name) ?? []), ...(draft === null ? [] : [draft.name])];
-
-// The card that is open at first: the one whose server failed, else the first.
-function ensureOpen() {
-  if (settings === null || (openName !== null && names().includes(openName))) return;
-  openName = settings.servers.find((s) => statusOf(s.name).reason === "failed")?.name ?? settings.servers[0]?.name ?? draft?.name ?? null;
-}
-
-// A name that no server of the repository has: server-1, server-2 and so on.
-function freeName(): string {
-  const taken = new Set(names());
-  for (let n = 1; ; n++) if (!taken.has(`server-${n}`)) return `server-${n}`;
-}
+const serverPlace = (language: string): ServerPlace | null => (pane === null ? null : { ...pane, server: language });
+const savedServer = (language: string) => settings?.servers.find((s) => s.language === language) ?? null;
+const launchOf = (language: string): LspLaunch | null => launches.get(language)?.launch ?? null;
+const lookOf = (language: string): { title: string; icon: string | null } => {
+  const look = looks?.get(language);
+  return { title: look?.title ?? language, icon: look?.icon ?? null };
+};
 
 const methodOf = (launch: LspLaunch) => (launch.method === "compose" ? `compose の ${launch.service ?? ""}` : launch.method === "host" ? "ホスト" : "方法なし");
+const placeOf = (place: LspFound["place"]) => (place.kind === "compose" ? `compose の ${place.service}` : "ホスト");
+// The server that 「使う」 saves for a language found: the one of the table, with nothing replaced.
+const autoServer = (f: LspFound): LspServerSettings => ({ language: f.language, name: f.name, autoStart: true, command: null, mount: null, service: null });
+// The cards of the languages that the worktree has and the repository has no server of, unless 「使わない」 hid them. JavaScript has none while the repository has a server of TypeScript: that server takes its files too (`server_for`, #976), so a second process is not offered.
+const foundCards = () => (found ?? []).filter((f) => savedServer(f.language) === null && !dismissed.has(f.language) && !(f.language === "javascript" && savedServer("typescript") !== null));
 
 // ---- drawing ----
 
-// The message of the open card: the first of the message of the last press that failed, the message of the stopped state and the message of the reading of the way that failed.
-function messageOf(name: string | null): string | null {
-  if (note !== null) return note;
-  if (name === null || serverNamed(name) === null) return null;
-  const status = statusOf(name);
+// The message of a card: the message of the last press that failed, else, for a server, the message of the stopped state and the message of the reading of the way that failed.
+function messageOf(language: string): string | null {
+  if (note?.key === language) return note.text;
+  if (savedServer(language) === null) return null;
+  const status = statusOf(language);
   if (status.state === "stopped" && status.message) return status.message;
-  return launches.get(name)?.error ?? null;
+  return launches.get(language)?.error ?? null;
 }
 
-// The line of the message: in the open card, else (no card is open, or none is read) under the heading.
+// The line of each card, and the line under the heading for a message that no card holds (a read of the settings that failed, a press of the heading).
 function drawNote() {
-  const text = messageOf(openName);
-  const inCard = document.getElementById("orca-lsp-note");
-  const lines: [HTMLElement, boolean][] = [
-    [$("orca-lsp-error"), inCard === null],
-    ...(inCard === null ? [] : ([[inCard, true]] as [HTMLElement, boolean][])),
-  ];
-  for (const [line, here] of lines) {
-    line.hidden = !here || text === null;
-    line.textContent = here ? (text ?? "") : "";
+  const roots = [...$("orca-lsp-cards").querySelectorAll<HTMLElement>(".orca-lsp-card")];
+  for (const root of roots) {
+    const line = root.querySelector<HTMLElement>(".orca-lsp-note")!;
+    const text = messageOf(root.dataset.name ?? "");
+    line.hidden = text === null;
+    line.textContent = text ?? "";
   }
+  const loose = note !== null && !roots.some((root) => root.dataset.name === note?.key) ? note.text : null;
+  $("orca-lsp-error").hidden = loose === null;
+  $("orca-lsp-error").textContent = loose ?? "";
 }
 
-// The state of every card and the buttons that depend on it. A card is not drawn again: only its words change.
+// The state of every card of a server and the buttons that depend on it. A card is not drawn again: only its words change.
 function drawState() {
-  for (const root of $("orca-lsp-cards").querySelectorAll<HTMLElement>(".orca-lsp-card")) {
-    const name = root.dataset.name ?? "";
-    const server = serverNamed(name);
-    const status = root.dataset.draft === "true" ? NOT_STARTED : statusOf(name);
+  for (const root of $("orca-lsp-cards").querySelectorAll<HTMLElement>('.orca-lsp-card[data-kind="server"]')) {
+    const language = root.dataset.name ?? "";
+    const server = savedServer(language);
+    const status = statusOf(language);
     const dot = root.querySelector<HTMLElement>(".orca-lsp-dot")!;
     dot.dataset.state = status.state;
     if (status.reason) dot.dataset.reason = status.reason;
     else delete dot.dataset.reason;
     root.querySelector(".orca-lsp-state")!.textContent = STATE_LABELS[status.state];
-    root.querySelector<HTMLButtonElement>(".orca-lsp-restart")!.disabled = busy !== null || root.dataset.draft === "true";
-    const summary = root.querySelector(".orca-lsp-summary");
-    if (summary !== null && server !== null) summary.textContent = [STATE_LABELS[status.state], server.languages.join(", "), launchOf(name) === null ? "" : methodOf(launchOf(name)!)].filter((part) => part !== "").join(" ・ ");
-    const container = root.querySelector<HTMLButtonElement>("#orca-lsp-container");
-    if (container !== null) {
-      container.hidden = !(status.state === "stopped" && status.reason === "containerDown");
-      container.disabled = busy !== null;
-    }
+    const launch = launchOf(language);
+    if (server !== null) root.querySelector(".orca-lsp-summary")!.textContent = [server.name, launch === null ? "" : methodOf(launch)].filter((part) => part !== "").join(" ・ ");
+    const container = root.querySelector<HTMLButtonElement>(".orca-lsp-container")!;
+    container.hidden = !(status.state === "stopped" && status.reason === "containerDown");
+    container.disabled = busy !== null;
   }
+  for (const container of $("orca-lsp-cards").querySelectorAll<HTMLButtonElement>('.orca-lsp-card[data-kind="found"] .orca-lsp-container')) container.disabled = busy !== null;
   drawNote();
 }
-
-const launchOf = (name: string): LspLaunch | null => launches.get(name)?.launch ?? null;
 
 function textInput(id: string, field: string, value: string): HTMLInputElement {
   const input = tag("input");
@@ -168,48 +177,27 @@ const autoMark = () => tag("span", "chip", "自動");
 // The text of a field as a setting: none when it is empty.
 const textOf = (input: HTMLInputElement | HTMLSelectElement) => input.value.trim() || null;
 
-// The fields of the open card.
-function body(server: LspServerSettings, isDraft: boolean): HTMLElement {
-  const name = server.name;
-  const launch = isDraft ? null : launchOf(name);
-  const box = tag("div", "orca-lsp-body");
-  const noteLine = tag("p", "orca-file-note fail", "");
-  noteLine.id = "orca-lsp-note";
-  noteLine.setAttribute("role", "alert");
-  noteLine.hidden = true;
-
-  const nameInput = textInput("orca-lsp-name", "name", name);
-  nameInput.onchange = () => {
-    const value = nameInput.value.trim();
-    if (value !== name) edit(name, { name: value });
-  };
-
-  const chips = tag("div", "orca-lsp-chips");
-  for (const language of server.languages) {
-    const chip = tag("span", "chip", language);
-    const drop = tag("button", "orca-lsp-drop");
-    drop.type = "button";
-    drop.setAttribute("aria-label", `${language} を外す`);
-    drop.innerHTML = CLOSE_SVG;
-    drop.onclick = () => edit(name, { languages: server.languages.filter((l) => l !== language) });
-    chip.append(drop);
-    chips.append(chip);
+// The icon of a language (A-34): an SVG of JetBrains' that the app holds (src/vendor/jetbrains-icons/), drawn as an image of the same origin, else the line drawing of a server.
+function languageIcon(language: string): HTMLElement {
+  const node = tag("span", "orca-lsp-ic");
+  const { icon } = lookOf(language);
+  if (icon === null) node.innerHTML = SERVER_SVG;
+  else {
+    const image = document.createElement("img");
+    image.src = `vendor/jetbrains-icons/${icon}.svg`;
+    image.alt = "";
+    image.draggable = false;
+    node.append(image);
   }
-  const add = tag("button", "icon-btn orca-lsp-add-language");
-  add.type = "button";
-  add.setAttribute("aria-label", "言語を足す");
-  add.innerHTML = PLUS_SVG;
-  add.onclick = () =>
-    openMenu(
-      add,
-      (languages ?? []).filter((l) => !server.languages.includes(l)).map((l) => ({ label: l, color: "", current: false, pick: () => edit(name, { languages: [...server.languages, l] }) })),
-      { search: { label: "言語を検索", empty: "該当なし" } },
-    );
-  chips.append(add);
+  return node;
+}
 
-  const method = tag("span", "chip", launch === null ? "" : methodOf(launch));
-  method.id = "orca-lsp-method";
-  method.hidden = launch === null;
+// The fields of the settings of a server, opened by 「手で直す」: the command and the path of the worktree in the server hold what was decided (the saved value, else the decided one) with the mark 「自動」 while nothing is saved.
+function body(server: LspServerSettings): HTMLElement {
+  const key = server.language;
+  const launch = launchOf(key);
+  const box = tag("div", "orca-lsp-body");
+
   const candidates = launch?.candidates ?? [];
   const service = tag("select");
   service.id = "orca-lsp-service";
@@ -221,97 +209,150 @@ function body(server: LspServerSettings, isDraft: boolean): HTMLElement {
     }),
   );
   service.value = launch?.service ?? "";
-  service.hidden = candidates.length < 2;
-  service.onchange = () => edit(name, { service: service.value });
-  const how = tag("div", "orca-lsp-how");
-  how.append(method, service);
+  service.onchange = () => edit(key, { service: service.value });
 
   const command = textInput("orca-lsp-command", "command", launch === null ? (server.command ?? "") : (launch.command ?? ""));
   command.onchange = () => {
     const value = textOf(command);
-    if (value !== (isDraft ? (server.command ?? null) : (launch?.command ?? null))) edit(name, { command: value });
+    if (value !== (launch === null ? (server.command ?? null) : (launch.command ?? null))) edit(key, { command: value });
   };
   const commandAuto = autoMark();
   commandAuto.id = "orca-lsp-command-auto";
-  commandAuto.hidden = isDraft || server.command != null || launch?.command == null;
+  commandAuto.hidden = server.command != null || launch?.command == null;
   const commandBox = tag("div", "orca-lsp-field");
   commandBox.append(command, commandAuto);
 
   const mount = textInput("orca-lsp-mount", "mount", launch === null ? (server.mount ?? "") : (launch.mount ?? ""));
   mount.onchange = () => {
     const value = textOf(mount);
-    if (value !== (isDraft ? (server.mount ?? null) : (launch?.mount ?? null))) edit(name, { mount: value });
+    if (value !== (launch === null ? (server.mount ?? null) : (launch.mount ?? null))) edit(key, { mount: value });
   };
   const mountAuto = autoMark();
   mountAuto.id = "orca-lsp-mount-auto";
-  mountAuto.hidden = isDraft || server.mount != null || launch?.mount == null;
+  mountAuto.hidden = server.mount != null || launch?.mount == null;
   const mountBox = tag("div", "orca-lsp-field");
   mountBox.append(mount, mountAuto);
-  const places = tag("div", "orca-lsp-places");
-  const here = tag("span", "orca-lsp-path", pane?.path ?? "");
-  here.id = "orca-lsp-path";
-  places.append(tag("span", "", "この Mac"), here, tag("span", "", "サーバー"), mountBox);
 
   const auto = tag("input");
   auto.type = "checkbox";
   auto.id = "orca-lsp-auto";
   auto.checked = server.autoStart;
-  auto.onchange = () => edit(name, { autoStart: auto.checked });
+  auto.onchange = () => edit(key, { autoStart: auto.checked });
   const autoLabel = tag("label", "orca-lsp-auto-label");
   autoLabel.append(auto, "自動で起動");
 
-  const container = tag("button", "text-btn", "コンテナを起動");
-  container.id = "orca-lsp-container";
-  container.type = "button";
-  container.hidden = true;
-  container.onclick = () => void startContainer(name);
   const reset = tag("button", "text-btn", "自動に戻す");
   reset.id = "orca-lsp-reset";
   reset.type = "button";
   reset.disabled = server.command == null && server.mount == null && server.service == null;
-  reset.onclick = () => edit(name, { command: null, mount: null, service: null });
+  reset.onclick = () => edit(key, { command: null, mount: null, service: null });
   const foot = tag("div", "orca-lsp-foot");
-  foot.append(container, reset);
+  foot.append(autoLabel, reset);
 
-  box.append(noteLine, row("名前", "orca-lsp-name", nameInput), row("言語", null, chips), row("起動の方法", null, how), row("起動コマンド", "orca-lsp-command", commandBox), row("worktree", null, places), autoLabel, foot);
+  // The choice of the service is shown only when several services mount the worktree.
+  box.append(...(candidates.length < 2 ? [] : [row("サービス", "orca-lsp-service", service)]), row("起動コマンド", "orca-lsp-command", commandBox), row("worktree", "orca-lsp-mount", mountBox), foot);
   return box;
 }
 
-function card(server: LspServerSettings, isDraft: boolean): HTMLElement {
-  const name = server.name;
-  const open = openName === name;
+function containerButton(onclick: () => void): HTMLButtonElement {
+  const container = tag("button", "text-btn orca-lsp-container", "コンテナを起動");
+  container.type = "button";
+  container.hidden = true;
+  container.onclick = onclick;
+  return container;
+}
+
+function noteLine(): HTMLElement {
+  const line = tag("p", "orca-file-note fail orca-lsp-note", "");
+  line.setAttribute("role", "alert");
+  line.hidden = true;
+  return line;
+}
+
+// The row with 「Claude に頼む」 of the card of a language that the worktree has and no server is found for.
+function askButton(language: string): HTMLElement {
+  const ask = tag("button", "text-btn orca-lsp-ask", "Claude に頼む");
+  ask.type = "button";
+  ask.onclick = () => void askClaude(language);
+  const actions = tag("div", "orca-lsp-actions");
+  actions.append(ask);
+  return actions;
+}
+
+// The card of a language that the repository has a server of.
+function card(server: LspServerSettings): HTMLElement {
+  const key = server.language;
   const root = tag("div", "orca-lsp-card");
-  root.dataset.name = name;
-  root.dataset.open = String(open);
-  if (isDraft) root.dataset.draft = "true";
+  root.dataset.name = key;
+  root.dataset.kind = "server";
   const head = tag("div", "orca-lsp-card-head");
-  const dot = tag("span", "orca-lsp-dot");
+  const status = tag("span", "orca-lsp-status");
   const state = tag("span", "orca-lsp-state");
   state.setAttribute("role", "status");
-  const restart = tag("button", "icon-btn orca-lsp-restart");
-  restart.type = "button";
-  restart.setAttribute("aria-label", "再起動");
-  restart.innerHTML = RELOAD_SVG;
-  restart.onclick = () => void restartServer(name);
+  status.append(tag("span", "orca-lsp-dot"), state);
   const menu = tag("button", "icon-btn orca-lsp-menu");
   menu.type = "button";
   menu.setAttribute("aria-label", "メニュー");
   menu.innerHTML = MORE_SVG;
-  menu.onclick = () => openMenu(menu, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmDelete(menu, name, () => void removeServer(name)) }]);
-  const toggle = tag("button", "icon-btn orca-lsp-toggle");
-  toggle.type = "button";
-  toggle.setAttribute("aria-label", open ? "閉じる" : "開く");
-  toggle.setAttribute("aria-expanded", String(open));
-  toggle.innerHTML = CHEVRON_SVG;
-  toggle.onclick = () => {
-    openName = open ? null : name;
-    note = null;
-    drawCards();
-  };
-  head.append(dot, tag("span", "orca-lsp-name", name), state, restart, menu, toggle);
-  root.append(head);
-  if (open) root.append(body(server, isDraft));
-  else root.append(tag("div", "orca-lsp-summary"));
+  menu.onclick = () =>
+    openMenu(menu, [
+      { label: "再起動", color: "", icon: RELOAD_SVG, current: false, disabled: busy !== null, pick: () => void restartServer(key) },
+      { label: "止める", color: "", icon: CLOSE_SVG, current: false, disabled: busy !== null, pick: () => void stopServer(key) },
+      { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmDelete(menu, lookOf(key).title, () => removeServer(key)) },
+      {
+        label: "手で直す",
+        color: "",
+        icon: EDIT_SVG,
+        current: editing === key,
+        pick: () => {
+          editing = editing === key ? null : key;
+          drawCards();
+        },
+      },
+    ]);
+  head.append(languageIcon(key), tag("span", "orca-lsp-name", lookOf(key).title), status, menu);
+  root.append(head, tag("div", "orca-lsp-summary"), noteLine(), containerButton(() => void startContainer(key)));
+  if (editing === key) root.append(body(server));
+  return root;
+}
+
+// The card of a language that the worktree has and the repository has no server of: dotted, with what the table gives.
+function foundCard(f: LspFound): HTMLElement {
+  const root = tag("div", "orca-lsp-card");
+  root.dataset.name = f.language;
+  root.dataset.kind = "found";
+  root.dataset.found = f.state;
+  const head = tag("div", "orca-lsp-card-head");
+  head.append(languageIcon(f.language), tag("span", "orca-lsp-name", lookOf(f.language).title));
+  const line = tag("div", "orca-lsp-summary", f.state === "found" ? `${f.name} ・ ${placeOf(f.place)}` : f.state === "missing" ? "サーバーがありません" : "コンテナが止まっています");
+  root.append(head, line, noteLine());
+  if (f.state === "found") {
+    const skip = tag("button", "text-btn orca-lsp-skip", "使わない");
+    skip.type = "button";
+    skip.onclick = () => {
+      dismissed.add(f.language);
+      drawCards();
+    };
+    const use = tag("button", "text-btn orca-lsp-use", "使う");
+    use.type = "button";
+    use.onclick = () => queue(() => saveNow({ add: autoServer(f) }));
+    const actions = tag("div", "orca-lsp-actions");
+    actions.append(skip, use);
+    root.append(actions);
+  } else if (f.state === "missing") root.append(askButton(f.language));
+  else if (f.state === "containerDown") {
+    // The container is started for a server of the repository, so the server of the table is saved as 「使う」 does, and then its container is started.
+    const container = containerButton(() =>
+      queue(async () => {
+        await saveNow({ add: autoServer(f) });
+        if (savedServer(f.language) !== null) void startContainer(f.language);
+      }),
+    );
+    container.hidden = false;
+    const actions = tag("div", "orca-lsp-actions");
+    actions.append(container);
+    root.append(actions);
+  }
   return root;
 }
 
@@ -326,8 +367,7 @@ function focused(): { card: string; field: string; value: string; start: number 
 
 function drawCards() {
   const keep = focused();
-  const servers = [...(settings?.servers ?? []).map((s) => card(s, false)), ...(draft === null ? [] : [card(draft, true)])];
-  $("orca-lsp-cards").replaceChildren(...servers);
+  $("orca-lsp-cards").replaceChildren(...(settings?.servers ?? []).map(card), ...foundCards().map(foundCard));
   // The field that is being typed in keeps its text: a save of another field ends meanwhile and the cards are drawn.
   if (keep !== null) {
     const input = [...$("orca-lsp-cards").querySelectorAll<HTMLElement>(".orca-lsp-card")].find((c) => c.dataset.name === keep.card)?.querySelector<HTMLInputElement>(`[data-field="${keep.field}"]`);
@@ -357,32 +397,60 @@ function drawSsh() {
   $("orca-lsp-ssh-row").hidden = pane === null || pane.target === null;
 }
 
+function drawReload() {
+  ($("orca-lsp-reload") as HTMLButtonElement).disabled = settings === null || detecting;
+}
+
 function draw() {
   $("orca-lsp").hidden = pane === null;
   if (pane === null) return;
-  ($("orca-lsp-add") as HTMLButtonElement).disabled = settings === null;
+  drawReload();
   drawSsh();
   drawCards();
 }
 
 // ---- reading ----
 
-// Reads how the servers `names` are started in the worktree, in one read of the worktree (and, for the servers that `withStatus` names, not asked about yet, their state).
-async function readServers(names: string[], mine: number, withStatus: (name: string) => boolean) {
+// Reads how the servers of the languages `targets` are started in the worktree, in one read of the worktree (and, for the servers that `withStatus` names, not asked about yet, their state).
+async function readServers(targets: string[], mine: number, withStatus: (language: string) => boolean) {
   const here = pane;
-  if (here === null || names.length === 0) return;
+  if (here === null || targets.length === 0) return;
   const [launched, states] = await Promise.all([
-    invoke("lsp_launches", { environment: here.target, project: here.project, worktree: here.path, servers: names }).then(
+    invoke("lsp_launches", { environment: here.target, project: here.project, worktree: here.path, servers: targets }).then(
       (all) => ({ all, error: null }),
       (e) => ({ all: null, error: String(e) }),
     ),
-    Promise.allSettled(names.map((name) => (withStatus(name) ? invoke("lsp_status", { environment: here.target, worktree: here.path, server: name }) : Promise.resolve(null)))),
+    Promise.allSettled(targets.map((language) => (withStatus(language) ? invoke("lsp_status", { environment: here.target, worktree: here.path, server: language }) : Promise.resolve(null)))),
   ]);
   if (mine !== generation) return;
-  for (const [i, name] of names.entries()) {
-    launches.set(name, launched.all === null ? { launch: null, error: launched.error } : { launch: launched.all[i] ?? null, error: null });
+  for (const [i, language] of targets.entries()) {
+    launches.set(language, launched.all === null ? { launch: null, error: launched.error } : { launch: launched.all[i] ?? null, error: null });
     const state = states[i];
-    if (state.status === "fulfilled" && state.value !== null) statuses.set(keyOf(here.target, here.path, name), state.value);
+    if (state.status === "fulfilled" && state.value !== null) statuses.set(keyOf(here.target, here.path, language), state.value);
+  }
+  drawCards();
+}
+
+// Reads the languages that the worktree has and the server of the table for each (`lsp_detect`): when the part is shown, by the reload button, and after the ssh Host changed. The cards of the languages that the repository has no server of are drawn from it; a failure is the line under the heading.
+async function detect(mine: number) {
+  const here = pane;
+  if (here === null) return;
+  const seq = ++detectSeq;
+  detecting = true;
+  drawReload();
+  try {
+    const all = await invoke("lsp_detect", { environment: here.target, project: here.project, worktree: here.path });
+    if (mine !== generation || seq !== detectSeq) return;
+    found = all;
+  } catch (e) {
+    if (mine !== generation || seq !== detectSeq) return;
+    found = null;
+    note = { key: null, text: String(e) };
+  } finally {
+    if (mine === generation && seq === detectSeq) {
+      detecting = false;
+      drawReload();
+    }
   }
   drawCards();
 }
@@ -399,25 +467,25 @@ async function load() {
     // The list is read when the field is shown, which is for a saved environment only.
     const [hosts, all, states] = await Promise.all([
       here.target === null ? Promise.resolve([]) : invoke("ssh_hosts"),
-      languages === null ? invoke("orca_languages") : Promise.resolve(languages),
-      Promise.all(read.servers.map((s) => invoke("lsp_status", { environment: here.target, worktree: here.path, server: s.name }))),
+      looks === null ? invoke("lsp_language_looks") : Promise.resolve([...looks.values()]),
+      Promise.all(read.servers.map((s) => invoke("lsp_status", { environment: here.target, worktree: here.path, server: s.language }))),
     ]);
     if (mine !== generation) return;
     settings = read;
     version++;
     sshHosts = hosts;
-    languages = all;
-    for (const [i, s] of read.servers.entries()) statuses.set(keyOf(here.target, here.path, s.name), states[i]);
+    looks = new Map(all.map((look) => [look.language, look]));
+    for (const [i, s] of read.servers.entries()) statuses.set(keyOf(here.target, here.path, s.language), states[i]);
   } catch (e) {
     if (mine !== generation) return;
-    note = String(e);
+    note = { key: null, text: String(e) };
     draw();
     return;
   }
-  ensureOpen();
   draw();
+  void detect(mine);
   await readServers(
-    read.servers.map((s) => s.name),
+    read.servers.map((s) => s.language),
     mine,
     () => false,
   );
@@ -445,41 +513,44 @@ async function watch() {
   settings = read;
   version++;
   const same = (s: LspServerSettings) => before.servers.some((b) => JSON.stringify(b) === JSON.stringify(s));
-  for (const gone of before.servers.filter((b) => !read.servers.some((s) => s.name === b.name))) void forget(gone.name);
-  ensureOpen();
+  for (const gone of before.servers.filter((b) => !read.servers.some((s) => s.language === b.language))) void forget(gone.language);
+  if (editing !== null && savedServer(editing) === null) editing = null;
   draw();
   const ssh = before.sshHost !== read.sshHost;
   changed(here);
   await readServers(
-    read.servers.filter((s) => ssh || !same(s)).map((s) => s.name),
+    read.servers.filter((s) => ssh || !same(s)).map((s) => s.language),
     mine,
-    (name) => !before.servers.some((b) => b.name === name),
+    (language) => !before.servers.some((b) => b.language === language),
   );
 }
 
 // ---- saving ----
 
-// What a save changes: the ssh Host of the repository, a server (by its name), or a server taken away.
+// What a save changes: the ssh Host of the repository, a server (by its language), a server taken away, or a server added.
 interface Patch {
   sshHost?: string | null;
-  server?: { name: string; change: Partial<LspServerSettings> };
+  server?: { language: string; change: Partial<LspServerSettings> };
   remove?: string;
+  add?: LspServerSettings;
 }
 
-// Stops what runs for a server that was renamed or deleted, and drops what is known of it.
-async function forget(name: string) {
+// Stops what runs for the server of a language that was deleted, and drops what is known of it.
+async function forget(language: string) {
   const here = pane;
   if (here === null) return;
-  const places = [...started.values()].filter((p) => p.server === name && p.target === here.target && p.project === here.project);
-  const key = keyOf(here.target, here.path, name);
-  if (statuses.get(key)?.state !== undefined && statuses.get(key)?.state !== "stopped" && !places.some((p) => p.path === here.path)) places.push({ ...here, server: name });
+  const places = [...started.values()].filter((p) => p.server === language && p.target === here.target && p.project === here.project);
+  const key = keyOf(here.target, here.path, language);
+  if (statuses.get(key)?.state !== undefined && statuses.get(key)?.state !== "stopped" && !places.some((p) => p.path === here.path)) places.push({ ...here, server: language });
   for (const place of places) {
-    started.delete(keyOf(place.target, place.path, name));
-    statuses.delete(keyOf(place.target, place.path, name));
-    invoke("lsp_stop", { environment: place.target, worktree: place.path, server: name }).catch(showError);
+    started.delete(keyOf(place.target, place.path, language));
+    statuses.delete(keyOf(place.target, place.path, language));
+    halted.delete(keyOf(place.target, place.path, language));
+    invoke("lsp_stop", { environment: place.target, worktree: place.path, server: language }).catch((e) => showFailure("orca-lsp", e));
   }
   statuses.delete(key);
-  launches.delete(name);
+  halted.delete(key);
+  launches.delete(language);
 }
 
 async function saveNow(patch: Patch) {
@@ -487,20 +558,20 @@ async function saveNow(patch: Patch) {
   if (pane === null || settings === null) return;
   const before = settings;
   let servers = before.servers;
-  let at = -1;
   if (patch.server !== undefined) {
-    const { name, change } = patch.server;
-    at = servers.findIndex((s) => s.name === name);
-    if (at < 0) return;
-    servers = servers.map((s, i) => (i === at ? { ...s, ...change } : s));
+    const { language, change } = patch.server;
+    if (!servers.some((s) => s.language === language)) return;
+    servers = servers.map((s) => (s.language === language ? { ...s, ...change } : s));
   }
-  if (patch.remove !== undefined) servers = servers.filter((s) => s.name !== patch.remove);
+  if (patch.remove !== undefined) servers = servers.filter((s) => s.language !== patch.remove);
+  if (patch.add !== undefined) servers = [...servers, patch.add];
+  const language = patch.server?.language ?? patch.remove ?? patch.add?.language ?? null;
   let next: LspRepoSettings;
   try {
     next = await invoke("lsp_settings_set", { settings: { ...before, ...(patch.sshHost === undefined ? {} : { sshHost: patch.sshHost }), servers } });
   } catch (e) {
     if (mine !== generation) return;
-    note = String(e);
+    note = { key: language, text: String(e) };
     draw();
     return;
   }
@@ -508,62 +579,23 @@ async function saveNow(patch: Patch) {
   settings = next;
   version++;
   note = null;
-  let renamed: string | null = null;
-  if (patch.server !== undefined) {
-    const was = patch.server.name;
-    const now = next.servers[at]?.name;
-    if (now !== undefined && now !== was) {
-      renamed = now;
-      await forget(was);
-      if (openName === was) openName = now;
-    }
-  }
   if (patch.remove !== undefined) {
     await forget(patch.remove);
-    if (openName === patch.remove) openName = null;
+    if (editing === patch.remove) editing = null;
   }
   draw();
   if (mine !== generation) return;
   if (pane !== null) changed(pane);
   if (patch.sshHost !== undefined) {
+    // The Host is the route of every read of the worktree, so the languages are found again too.
+    void detect(mine);
     await readServers(
-      next.servers.map((s) => s.name),
+      next.servers.map((s) => s.language),
       mine,
       () => false,
     );
-  } else if (patch.server !== undefined) await readServers([renamed ?? patch.server.name], mine, () => renamed !== null);
-}
-
-// Saves the card that is not saved yet, now that it has a language.
-async function saveDraft() {
-  const mine = generation;
-  const added = draft;
-  if (pane === null || settings === null || added === null) return;
-  let next: LspRepoSettings;
-  try {
-    next = await invoke("lsp_settings_set", { settings: { ...settings, servers: [...settings.servers, added] } });
-  } catch (e) {
-    if (mine !== generation) return;
-    note = String(e);
-    draw();
-    return;
-  }
-  if (mine !== generation) return;
-  settings = next;
-  version++;
-  note = null;
-  // What was typed into the card while the save was on its way is saved on the saved server, after this one.
-  const later = draft;
-  draft = null;
-  const saved = next.servers[next.servers.length - 1]?.name ?? added.name;
-  if (openName === added.name || (later !== null && openName === later.name)) openName = saved;
-  if (later !== null && later !== added) {
-    const change = Object.fromEntries(Object.entries(later).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(added[key as keyof LspServerSettings]))) as Partial<LspServerSettings>;
-    if (Object.keys(change).length > 0) queue(() => saveNow({ server: { name: saved, change } }));
-  }
-  draw();
-  if (pane !== null) changed(pane);
-  await readServers([saved], mine, () => true);
+  } else if (patch.server !== undefined) await readServers([patch.server.language], mine, () => false);
+  else if (patch.add !== undefined) await readServers([patch.add.language], mine, () => true);
 }
 
 const queue = (task: () => Promise<void>) => {
@@ -573,27 +605,54 @@ const queue = (task: () => Promise<void>) => {
   });
 };
 
-// A change of the fields of the server `name`: the card that is not saved yet takes it into itself, and is saved once it has a language.
-function edit(name: string, change: Partial<LspServerSettings>) {
-  if (draft !== null && draft.name === name) {
-    draft = { ...draft, ...change };
-    if (openName === name) openName = draft.name;
-    note = null;
-    if (draft.languages.length > 0) queue(saveDraft);
-    else drawCards();
-    return;
-  }
-  queue(() => saveNow({ server: { name, change } }));
+// A change of the fields of the server of `language`.
+const edit = (language: string, change: Partial<LspServerSettings>) => queue(() => saveNow({ server: { language, change } }));
+
+const removeServer = (language: string) => queue(() => saveNow({ remove: language }));
+
+// ---- Claude Code ----
+
+const sameWorktree = (a: LspPlace, b: LspPlace | null) => b !== null && a.target === b.target && a.project === b.project && a.path === b.path;
+
+// Shows the pane of the request, or hides it: it is shown while the part is shown and the worktree is the one of the request.
+function drawClaude() {
+  const root = $("orca-lsp-claude");
+  const shown = claude !== null && partShown && sameWorktree(claude, pane);
+  root.hidden = !shown;
+  if (!shown) return hideClaudeCode(CLAUDE_OWNER);
+  const host = $("orca-lsp-claude-term");
+  if (!isClaudeCodeShowing(host, CLAUDE_ID, CLAUDE_OWNER)) showClaudeCode(host, { id: CLAUDE_ID, builtinTools: true, prompt: claude!.prompt }, CLAUDE_OWNER);
 }
 
-function removeServer(name: string) {
-  if (draft !== null && draft.name === name) {
-    draft = null;
-    if (openName === name) openName = null;
-    drawCards();
+function closeClaude() {
+  if (claude === null) return;
+  claude = null;
+  closeClaudeCode(CLAUDE_ID, CLAUDE_OWNER);
+  drawClaude();
+}
+
+// Opens the pane for the worktree that is shown and `language` (null: every language of it). The same request that is open stays as it is; another one closes the pane and starts a new one. A refusal of the instruction is the message of the card of that language, else the line under the heading.
+async function askClaude(language: string | null) {
+  const here = pane;
+  if (here === null) return;
+  const mine = generation;
+  const same = () => claude !== null && sameWorktree(claude, here) && claude.language === language;
+  if (same()) return;
+  let prompt: string;
+  try {
+    prompt = await invoke("lsp_claude_request", { environment: here.target, project: here.project, worktree: here.path, language });
+  } catch (e) {
+    if (mine !== generation) return;
+    note = { key: language, text: String(e) };
+    drawNote();
     return;
   }
-  queue(() => saveNow({ remove: name }));
+  if (mine !== generation || same()) return;
+  closeClaude();
+  claude = { ...here, language, prompt };
+  note = null;
+  drawNote();
+  drawClaude();
 }
 
 // ---- starting and stopping ----
@@ -602,12 +661,13 @@ function removeServer(name: string) {
 async function startServer(place: ServerPlace) {
   const key = keyOf(place.target, place.path, place.server);
   started.set(key, place);
+  halted.delete(key);
   statuses.set(key, await invoke("lsp_start", args(place)));
 }
 
-// Runs a press of a card (the restart, the start of the container): the buttons wait, and a failure is the note of the pane.
-async function run(kind: "restart" | "container", name: string, action: (place: ServerPlace) => Promise<void>) {
-  const here = serverPlace(name);
+// Runs a press of a card (the restart, the start of the container): the buttons wait, and a failure is the note of the card.
+async function run(kind: "restart" | "container", language: string, action: (place: ServerPlace) => Promise<void>) {
+  const here = serverPlace(language);
   if (here === null || busy !== null) return;
   const mine = generation;
   busy = kind;
@@ -616,7 +676,7 @@ async function run(kind: "restart" | "container", name: string, action: (place: 
   try {
     await action(here);
   } catch (e) {
-    if (mine === generation) note = String(e);
+    if (mine === generation) note = { key: language, text: String(e) };
   }
   if (mine !== generation) {
     // Another worktree is shown now: the one this press was for is only started or not.
@@ -627,15 +687,34 @@ async function run(kind: "restart" | "container", name: string, action: (place: 
   drawState();
 }
 
-const restartServer = (name: string) =>
-  run("restart", name, async (place) => {
+const restartServer = (language: string) =>
+  run("restart", language, async (place) => {
     const key = keyOf(place.target, place.path, place.server);
     started.set(key, place);
+    halted.delete(key);
     statuses.set(key, await invoke("lsp_restart", args(place)));
   });
 
-const startContainer = (name: string) =>
-  run("container", name, async (place) => {
+// 「止める」: stops the server, and a file opened later does not start it (the restart does).
+async function stopServer(language: string) {
+  const here = serverPlace(language);
+  if (here === null) return;
+  const mine = generation;
+  const key = keyOf(here.target, here.path, language);
+  halted.add(key);
+  started.delete(key);
+  note = null;
+  try {
+    await invoke("lsp_stop", { environment: here.target, worktree: here.path, server: language });
+    statuses.set(key, NOT_STARTED);
+  } catch (e) {
+    if (mine === generation) note = { key: language, text: String(e) };
+  }
+  if (mine === generation) drawState();
+}
+
+const startContainer = (language: string) =>
+  run("container", language, async (place) => {
     await invoke("lsp_container_start", args(place));
     await startServer(place);
   });
@@ -644,23 +723,24 @@ const startContainer = (name: string) =>
 export async function ensureServer(place: LspPlace, server: string) {
   const here = { ...place, server };
   const key = keyOf(place.target, place.path, server);
-  if (started.has(key) || checking.has(key)) return;
+  if (started.has(key) || checking.has(key) || halted.has(key)) return;
   checking.add(key);
   try {
     const status = await invoke("lsp_status", { environment: place.target, worktree: place.path, server });
     statuses.set(key, status);
     if (status.state !== "stopped") started.set(key, here);
-    else if (status.reason === "notStarted" && (await invoke("lsp_settings", { environment: place.target, project: place.project })).servers.find((s) => s.name === server)?.autoStart) await startServer(here);
+    else if (status.reason === "notStarted" && (await invoke("lsp_settings", { environment: place.target, project: place.project })).servers.find((s) => s.language === server)?.autoStart) await startServer(here);
   } catch (e) {
-    showError(e);
+    logError("orca-lsp", e);
   } finally {
     checking.delete(key);
   }
   if (pane?.target === place.target && pane?.path === place.path) drawState();
 }
 
-// Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree).
-export function syncServers(gone: (target: string | null, path: string) => boolean) {
+// Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree). The pane of Claude Code is closed only when `listed` says that Orca's list has not its worktree: the file pane shows a worktree with no tab open.
+export function syncServers(gone: (target: string | null, path: string) => boolean, listed: (target: string | null, path: string) => boolean) {
+  if (claude !== null && listed(claude.target, claude.path)) closeClaude();
   for (const [key, place] of started) {
     if (!gone(place.target, place.path)) continue;
     started.delete(key);
@@ -669,7 +749,7 @@ export function syncServers(gone: (target: string | null, path: string) => boole
         statuses.delete(key);
         if (pane?.target === place.target && pane?.path === place.path) drawState();
       })
-      .catch(showError);
+      .catch((e) => logError("orca-lsp", e));
   }
 }
 
@@ -685,7 +765,11 @@ function stopWatch() {
 }
 
 // The Orca screen is left (or the work pane is not shown): nothing is read by the clock until the file pane is drawn again.
-export const pauseLsp = stopWatch;
+export function pauseLsp() {
+  stopWatch();
+  partShown = false;
+  drawClaude();
+}
 
 // Whether a question of the Command key may be sent to the server `server` of the worktree: not when it is known to be indexing or stopped (it can only refuse), and when nothing is known of it yet Rust says.
 export function mayAsk(target: string | null, path: string, server: string) {
@@ -697,37 +781,42 @@ export function mayAsk(target: string | null, path: string, server: string) {
 export function syncLsp(next: LspPlace | null, visible: boolean) {
   const same = next?.path === pane?.path && next?.target === pane?.target && next?.project === pane?.project;
   if (!same) {
-    // A card that is not saved yet and the card that is open belong to the repository: another project drops them.
-    if (next?.target !== pane?.target || next?.project !== pane?.project) {
-      draft = null;
-      openName = null;
-    }
     generation++;
     pane = next;
     loaded = false;
     settings = null;
     sshHosts = [];
     launches.clear();
+    found = null;
+    dismissed.clear();
+    detecting = false;
+    editing = null;
     note = null;
     busy = null;
     reading = false;
     draw();
   }
-  if (visible && pane !== null) {
+  partShown = visible && pane !== null;
+  if (partShown) {
     startWatch();
     if (!loaded) void load();
   } else stopWatch();
+  drawClaude();
 }
 
 export function initLsp(on: { changed: (place: LspPlace) => void }) {
   changed = on.changed;
-  $("orca-lsp-add").innerHTML = PLUS_SVG;
-  $("orca-lsp-add").onclick = () => {
+  $("orca-lsp-ask").innerHTML = CLAUDE_SVG;
+  $("orca-lsp-ask").onclick = () => void askClaude(null);
+  $("orca-lsp-claude-close").innerHTML = CLOSE_SVG;
+  $("orca-lsp-claude-close").onclick = closeClaude;
+  $("orca-lsp-reload").innerHTML = RELOAD_SVG;
+  // The reload finds the languages again, and shows the cards that 「使わない」 hid.
+  $("orca-lsp-reload").onclick = () => {
     if (settings === null) return;
-    if (draft === null) draft = { name: freeName(), languages: [], autoStart: true, command: null, mount: null, service: null };
-    openName = draft.name;
+    dismissed.clear();
     note = null;
-    drawCards();
+    void detect(generation);
   };
   $("orca-lsp-ssh").onchange = () => queue(() => saveNow({ sshHost: textOf($("orca-lsp-ssh") as HTMLSelectElement) }));
   window.__TAURI__.event.listen<LspStatusEvent>("lsp-status", ({ payload }) => {

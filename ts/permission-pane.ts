@@ -1,6 +1,6 @@
 // The pane for a Slack workspace whose token lacks the scopes to read messages, and the scope list the hints share.
 import type { Workspace } from "./bindings/Workspace";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 import { tag } from "./dom.js";
 import { COPY_SVG } from "./icons.js";
 import { code, lockFoot, stepList } from "./hint.js";
@@ -49,7 +49,7 @@ export function scopesBlock(list: string[], notes?: Record<string, string>) {
       copy.textContent = "コピーしました";
       setTimeout(() => (copy.innerHTML = label), 2000);
     } catch (err) {
-      showError(err);
+      showFailure("permission-pane", err);
     }
   };
   const scopes = tag("div", "scopes");

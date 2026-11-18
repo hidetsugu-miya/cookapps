@@ -1,4 +1,4 @@
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
@@ -113,11 +113,11 @@ describe("settings: calendar", () => {
     expect(await callsOf(save)).toEqual([{ firstDay: 1 }]);
   });
 
-  it("keeps the selection and shows the error when the day cannot be saved", async () => {
+  it("keeps the selection and shows the error on a card when the day cannot be saved", async () => {
     await openCalendarSettings();
     await mock("set_calendar_first_day", rejects("保存できません"));
     await dayButton("火").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("保存できません"));
     await expect(dayButton("日")).toHaveAttribute("aria-pressed", "true");
     await expect(dayButton("火")).toHaveAttribute("aria-pressed", "false");
   });
@@ -182,7 +182,7 @@ describe("settings: Todoist", () => {
     await mock("todoist_disconnect", rejects("資格情報を消せません"));
     await unlink().click();
     await $('[role="alertdialog"]').$("button=解除").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("資格情報を消せません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("資格情報を消せません"));
     await expect($("#todoist-items .status")).toHaveText("接続済み");
   });
 });
@@ -302,7 +302,7 @@ describe("settings: Slack リアルタイム更新", () => {
     await mock("slack_app_token_set", rejects("App-Level Token は xapp- で始まります"));
     await tokenField().setValue("xoxp-1-2-3");
     await $("#slack-socket-form button").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("App-Level Token は xapp- で始まります"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("App-Level Token は xapp- で始まります"));
     await expect(label()).toHaveText("未登録");
     await expect(tokenField()).toHaveValue("");
   });
@@ -551,7 +551,7 @@ describe("settings: Claude API key", () => {
     const card = await mock("claude_connection", rejects("接続の確認に失敗しました"));
     await $("#claude-recheck").click();
     await waitForCalls(card);
-    await expect($("#error")).toHaveText(expect.stringContaining("接続の確認に失敗しました"));
+    await waitForLog("接続の確認に失敗しました");
     expect(await count("#claude-items .item")).toBe(1);
     expect(await count('#claude-items input[type="radio"]')).toBe(0);
     await expect(row(1).$(".status")).toHaveText("確認できません");
@@ -585,7 +585,7 @@ describe("settings: Claude API key", () => {
     await mock("claude_key_save", rejects("Admin キー（sk-ant-admin…）は使えません。通常の API キーを貼ってください"));
     await types("sk-ant-admin01-example");
     await $("#claude-key button").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("Admin キー"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Admin キー"));
     await expect($("#claude-key-input")).toHaveValue("");
     await expect($("#claude-key")).toBeDisplayed();
     await expect(row(2).$(".status")).toHaveText("未登録");
@@ -600,7 +600,7 @@ describe("settings: Claude API key", () => {
     await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
     await types(key);
     await $("#claude-key button").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("claude auth logout"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("claude auth logout"));
     await expect($("#claude-key")).not.toBeDisplayed();
     await expect(row(2).$('input[type="radio"]')).toBeSelected();
   });
@@ -651,7 +651,7 @@ describe("settings: Claude API key", () => {
     await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
     await types(key);
     await $("#claude-key button").click();
-    await expect($("#error")).toHaveText(expect.stringContaining("claude auth logout"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("claude auth logout"));
     await expect($("#claude-key")).not.toBeDisplayed();
     await expect(radio(2)).toBeSelected();
   });
@@ -687,7 +687,7 @@ describe("settings: Claude API key", () => {
     await withKey("subscription");
     await mock("claude_method_set", rejects("資格情報の読み取りに失敗: x"));
     await radio(2).click();
-    await expect($("#error")).toHaveText(expect.stringContaining("資格情報の読み取りに失敗"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("資格情報の読み取りに失敗"));
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
   });
 
@@ -920,16 +920,16 @@ describe("settings: Claude model and effort", () => {
     await openSettings([], claudeReady, "claude");
     await mock("claude_model_settings_save", rejects("モデルが不正です: x"));
     await choose("mailSummary", "model", "haiku");
-    await expect($("#error")).toHaveText(expect.stringContaining("モデルが不正です"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("モデルが不正です"));
     await expect(selectOf("mailSummary", "model")).toHaveValue("sonnet");
   });
 
-  it("shows the error and no selects when the settings cannot be read", async () => {
+  it("writes the error to the log, with no card and no selects, when the settings cannot be read", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]) });
     await mock("claude_model_settings", rejects("設定を読めません"));
     await $("#nav-settings").click();
     await openTab("claude");
-    await expect($("#error")).toHaveText(expect.stringContaining("設定を読めません"));
+    await waitForLog("設定を読めません");
     await expect($("#claude-prompt .item-name")).toHaveText("Todo の要約プロンプト");
     expect(await drawnSelects()).toBe(0);
   });
@@ -987,7 +987,7 @@ describe("settings: Claude model and effort", () => {
       // A failed save puts the value, and its mark, back.
       await mock("claude_model_settings_save", rejects("effort が不正です"));
       await choose("slackSummary", "effort", "low");
-      await expect($("#error")).toHaveText(expect.stringContaining("effort が不正です"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("effort が不正です"));
       await expect(selectOf("slackSummary", "effort")).toHaveValue("max");
       await expect(selectOf("slackSummary", "effort")).toHaveAttribute("data-effort", "max");
     });
@@ -1217,7 +1217,7 @@ describe("settings: Ghostty (the Orca tab)", () => {
     await openOrcaTab({ ghostty_saved: ghosttyImport({ imported: ["font-size = 14"] }) });
     await mock("ghostty_import", rejects("Ghostty の設定ファイルが見つかりません。探した場所: ~/.config/ghostty/config.ghostty"));
     await $("#ghostty-import").click();
-    await expect($("#error")).toHaveText("Ghostty の設定ファイルが見つかりません。探した場所: ~/.config/ghostty/config.ghostty");
+    await expect($(CARD)).toHaveText("Ghostty の設定ファイルが見つかりません。探した場所: ~/.config/ghostty/config.ghostty");
     await expect(status()).toHaveText("取り込み済み");
     await expect($("#ghostty-imported h3")).toHaveText("取り込んだ項目（1）");
     await expect($("#ghostty-import")).toBeEnabled();
@@ -1260,7 +1260,7 @@ describe("settings: the PCs with the server of the orchestration (the Orca tab)"
     await revokeButton("box").click();
     expect(await waitForCalls(revoke)).toEqual([{ environment: "box" }]);
     await browser.waitUntil(async () => (await names()).join() === "mac-studio");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("keeps the button off while the PC is being cleared, and draws nothing new until the answer", async () => {
@@ -1275,20 +1275,20 @@ describe("settings: the PCs with the server of the orchestration (the Orca tab)"
     expect(await callsOf(revoke)).toHaveLength(1);
   });
 
-  it("shows the words of a refusal where the other settings show a failure, and keeps the PC listed with its button on", async () => {
+  it("shows the words of a refusal on a card, and keeps the PC listed with its button on", async () => {
     await openOrcaTab({ formation_consents: [formationConsent("mac-studio")] });
     await browser.waitUntil(async () => (await names()).length === 1);
     const reason = "環境「mac-studio」には、フォーメーション（won-1）が残っています。削除してから取り消してください";
     await mock("formation_consent_revoke", rejects(reason));
     await revokeButton("mac-studio").click();
-    await expect($("#error")).toHaveText(reason);
+    await expect($(CARD)).toHaveText(reason);
     expect(await names()).toEqual(["mac-studio"]);
     await expect(revokeButton("mac-studio")).toBeEnabled();
   });
 
-  it("shows the words when the consents cannot be read", async () => {
+  it("writes the words to the log, with no card, when the consents cannot be read", async () => {
     await openOrcaTab({ formation_consents: rejects("formation-remote.json を読めません") });
-    await expect($("#error")).toHaveText("formation-remote.json を読めません");
+    await waitForLog("formation-remote.json を読めません");
   });
 });
 
@@ -1351,7 +1351,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     expect((await swatch("light")).theme).toBe("One Light");
     await expect($("#terminal-theme-dark")).toHaveValue("Ghostty Default Style Dark");
     await expect($("#terminal-theme-dark")).toBeEnabled();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("offers system, light and dark for the appearance, with the system's as the default", async () => {
@@ -1373,7 +1373,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Dracula", appearance: "light" } }]);
     await expect($("#terminal-theme-appearance")).toHaveValue("light");
     await expect($("#terminal-theme-appearance")).toBeEnabled();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("keeps the appearance when a theme is chosen", async () => {
@@ -1387,7 +1387,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
     await mock("terminal_theme_set", rejects("保存できません"));
     await chooseAppearance("dark");
-    await expect($("#error")).toHaveText("保存できません");
+    await expect($(CARD)).toHaveText("保存できません");
     await expect($("#terminal-theme-appearance")).toHaveValue("system");
     await expect($("#terminal-theme-appearance")).toBeEnabled();
   });
@@ -1396,7 +1396,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     await openOrcaTab({ terminal_themes: terminalThemes({ light: "One Light", dark: "Dracula" }) });
     await mock("terminal_theme_set", rejects("テーマ Nope は選べません"));
     await chooseTheme("light", "Dracula");
-    await expect($("#error")).toHaveText("テーマ Nope は選べません");
+    await expect($(CARD)).toHaveText("テーマ Nope は選べません");
     await expect($("#terminal-theme-light")).toHaveValue("One Light");
     await expect($("#terminal-theme-light")).toBeEnabled();
     expect((await swatch("light")).theme).toBe("One Light");
@@ -1408,9 +1408,9 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     expect(await callsOf("terminal_theme_set")).toEqual([]);
   });
 
-  it("shows the message of a failed read and no rows", async () => {
+  it("writes the message of a failed read to the log, and draws no rows", async () => {
     await openOrcaTab({ terminal_themes: rejects("テーマを読めません") });
-    await expect($("#error")).toHaveText("テーマを読めません");
+    await waitForLog("テーマを読めません");
     expect(await count("#terminal-theme-items .item")).toBe(0);
   });
 });
@@ -1461,7 +1461,7 @@ describe("settings: editor (the Orca tab, A-18)", () => {
     expect(await waitForCalls(set)).toEqual([{ autosaveMs: 50 }]);
     await expect($("#editor-autosave")).toHaveValue("100");
     await expect($("#editor-autosave")).toBeEnabled();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("sends nothing for what is not a number, and shows the time held", async () => {
@@ -1476,7 +1476,7 @@ describe("settings: editor (the Orca tab, A-18)", () => {
     await openOrcaTab();
     await mock("editor_settings_set", rejects("editor-settings.json を書けません"));
     await typeMs("300");
-    await expect($("#error")).toHaveText("editor-settings.json を書けません");
+    await expect($(CARD)).toHaveText("editor-settings.json を書けません");
     await expect($("#editor-autosave")).toHaveValue("1000");
     await expect($("#editor-autosave")).toBeEnabled();
   });
@@ -1488,9 +1488,9 @@ describe("settings: editor (the Orca tab, A-18)", () => {
     await expect($("#editor-help")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("shows the message of a failed read and leaves the field empty", async () => {
+  it("writes the message of a failed read to the log, and leaves the field empty", async () => {
     await openOrcaTab({ editor_settings: rejects("editor-settings.json を読めません") });
-    await expect($("#error")).toHaveText("editor-settings.json を読めません");
+    await waitForLog("editor-settings.json を読めません");
     await expect($("#editor-autosave")).toHaveValue("");
     await expect($("#editor-autosave")).toBeDisabled();
   });
@@ -1625,7 +1625,7 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     // The other screens keep the system's.
     expect((await fontOf("#calendar")).family).not.toContain("Hiragino Sans");
     expect(await selectedText("font-mail-family")).toBe("Hiragino Sans");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await expect($("#font-mail-family")).toBeEnabled();
   });
 
@@ -1824,21 +1824,21 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     await openFontTab();
     await mock("font_settings_set", rejects("font-settings.json を書けません"));
     await chooseOption("font-slack-size", "20");
-    await expect($("#error")).toHaveText("font-settings.json を書けません");
+    await expect($(CARD)).toHaveText("font-settings.json を書けません");
     expect(await selectedText("font-slack-size")).toBe("14 px");
     await expect($("#font-slack-size")).toBeEnabled();
     expect((await fontOf("#slack-list")).size).toBe("14px");
   });
 
-  it("shows the message of a failed read and draws no row", async () => {
+  it("writes the message of a failed read to the log, and draws no row", async () => {
     await openFontTab({ font_settings: rejects("font-settings.json を読めません") });
-    await expect($("#error")).toHaveText("font-settings.json を読めません");
+    await waitForLog("font-settings.json を読めません");
     expect(await count("#font-items .item")).toBe(0);
   });
 
-  it("shows the message of a failed list of families, with the system's alone to choose", async () => {
+  it("writes the message of a failed list of families to the log, with the system's alone to choose", async () => {
     await openFontTab({ font_families: rejects("書体の一覧を読めません") });
-    await expect($("#error")).toHaveText("書体の一覧を読めません");
+    await waitForLog("書体の一覧を読めません");
     expect(await options("font-mail-family")).toEqual(["システム標準"]);
   });
 
@@ -1929,16 +1929,16 @@ describe("settings: tabs", () => {
     await expect(panel("claude")).toBeDisplayed();
   });
 
-  it("clears a shown error when another tab is pressed", async () => {
+  it("keeps a failure card when another tab is pressed", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, todoist_connected: true });
     await $("#nav-settings").click();
     await openTab("todoist");
     await mock("todoist_disconnect", rejects("資格情報を消せません"));
     await $('button[aria-label="Todoist の接続を解除"]').click();
     await $('[role="alertdialog"]').$("button=解除").click();
-    await expect($("#error")).toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
     await openTab("slack");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
   });
 
   it("opens on Google again when the settings are left and entered from the side menu", async () => {
@@ -2079,9 +2079,10 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await expect($("#skill-form")).not.toBeDisplayed();
   });
 
-  it("shows a failed read in the error line", async () => {
+  it("writes a failed read to the log", async () => {
     await openSkills([], { skill_list: rejects("スキルを読めません") });
-    await expect($("#error")).toHaveText("スキルを読めません");
+    await waitForLog("スキルを読めません");
+    await expect($(CARDS)).not.toExist();
   });
 
   it("fills the form from the pressed skill, with its name read-only and 削除 shown, and no placeholder", async () => {
@@ -2148,7 +2149,7 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await expect($("#skill-name")).toHaveAttribute("readonly");
     await expect($("#skill-delete")).toBeDisplayed();
     await expect($("#skill-new")).toHaveAttribute("aria-pressed", "false");
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("saves a changed skill under its own name, and the form shows the answer as Rust saved it", async () => {
@@ -2174,7 +2175,7 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await $("#skill-display-name").setValue("Again");
     await $("#skill-instructions").setValue("Do.");
     await $("#skill-save").click();
-    await expect($("#error")).toHaveText("スキル「alpha」はもうあります");
+    await expect($(CARD)).toHaveText("スキル「alpha」はもうあります");
     await browser.pause(300);
     expect(await callsOf(save)).toEqual([]);
     await expect($("#skill-display-name")).toHaveValue("Again");
@@ -2182,7 +2183,7 @@ describe("settings: skills (the スキル tab, A-32)", () => {
 
   it("sends a new skill with create even when the list was not read, and shows the refusal of Rust", async () => {
     await openSkills([], { skill_list: rejects("スキルを読めません") });
-    await expect($("#error")).toHaveText("スキルを読めません");
+    await waitForLog("スキルを読めません");
     const save = await mock("skill_save", rejects("スキル「alpha」はもうあります"));
     await $("#skill-new").click();
     await $("#skill-name").setValue("alpha");
@@ -2190,11 +2191,11 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await $("#skill-instructions").setValue("Do.");
     await $("#skill-save").click();
     expect(await waitForCalls(save)).toEqual([{ skill: { name: "alpha", displayName: "Again", screens: [], description: "", instructions: "Do." }, create: true }]);
-    await expect($("#error")).toHaveText("スキル「alpha」はもうあります");
+    await expect($(CARD)).toHaveText("スキル「alpha」はもうあります");
     await expect($("#skill-display-name")).toHaveValue("Again");
   });
 
-  it("shows a failed save in the error line and keeps what was typed", async () => {
+  it("shows a failed save on a card and keeps what was typed", async () => {
     await openSkills([skill("alpha")]);
     await waitForCount("#skill-list .skill-row", 1);
     await mock("skill_save", rejects("表示名を入れてください"));
@@ -2202,7 +2203,7 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await $("#skill-name").setValue("delta");
     await $("#skill-instructions").setValue("Typed.");
     await $("#skill-save").click();
-    await expect($("#error")).toHaveText("表示名を入れてください");
+    await expect($(CARD)).toHaveText("表示名を入れてください");
     await expect($("#skill-name")).toHaveValue("delta");
     await expect($("#skill-instructions")).toHaveValue("Typed.");
     await expect($("#skill-name")).not.toHaveAttribute("readonly");
@@ -2251,14 +2252,14 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
   });
 
-  it("shows a failed delete in the error line and keeps the form and the list", async () => {
+  it("shows a failed delete on a card and keeps the form and the list", async () => {
     await openSkills();
     await waitForCount("#skill-list .skill-row", 2);
     await row(1).click();
     await mock("skill_delete", rejects("スキル「alpha」を消せません"));
     await $("#skill-delete").click();
     await $(`${dialog} .text-btn.danger`).click();
-    await expect($("#error")).toHaveText("スキル「alpha」を消せません");
+    await expect($(CARD)).toHaveText("スキル「alpha」を消せません");
     await expect($("#skill-form")).toBeDisplayed();
     expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
   });
@@ -2359,19 +2360,19 @@ describe("settings: log (the ログ tab, A-3, A-28)", () => {
     await mock("log_open_folder", null);
     await $("#log-open-folder").click();
     expect((await waitForCalls("log_open_folder")).length).toBe(1);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("shows the message when the folder cannot be opened", async () => {
     await openLog();
     await mock("log_open_folder", rejects("/example/config を開けません"));
     await $("#log-open-folder").click();
-    await expect($("#error")).toHaveText("/example/config を開けません");
+    await expect($(CARD)).toHaveText("/example/config を開けません");
   });
 
-  it("shows the message when the log cannot be read, and no table", async () => {
+  it("writes the message to the log when the log cannot be read, and shows no table", async () => {
     await openLog(rejects("app-log.jsonl を読めません"));
-    await expect($("#error")).toHaveText("app-log.jsonl を読めません");
+    await waitForLog("app-log.jsonl を読めません");
     await expect($("#log-body table")).not.toExist();
   });
 

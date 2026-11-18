@@ -15,7 +15,7 @@ import { openDuePop, openProjectMenu } from "./todo-detail.js";
 import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
 import { archiveProject, deleteProject, moveProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 function projectButton(view: string, icon: string, name: string, count: number) {
   const b = tag("button", "proj");
@@ -281,7 +281,7 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   // A subtask stands alone in its own project, at the end of the top-level tasks.
   if (t.parent) actions.append(rowButton("unparent-row", "親タスクから外す", OUTDENT_SVG, () => moveTask(t.id, t.projectId)));
   if (mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(mail)));
-  actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch(showError)));
+  actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch((e) => showFailure("todo-list", e))));
   li.append(actions);
   return li;
 }

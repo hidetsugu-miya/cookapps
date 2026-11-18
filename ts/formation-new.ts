@@ -1,11 +1,11 @@
 // The dialog that makes a formation (A-37): a name and the projects of the formation, the repositories of this Mac and of the saved environments (`formation_environments`). Rust checks the name and the projects and makes the formation (`formation_create`); this module draws the fields and tells the caller the formation that was made.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationProject } from "./bindings/FormationProject";
-import { $, composing, partMatcher, tag } from "./dom.js";
+import { composing, partMatcher, tag } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // Opens the dialog under `anchor`. `created` runs with the formation that Rust made (a project of a saved environment with no consent asks for it first, `ensureConsent`). The environments are read when the dialog opens; the dialog is drawn at once and its list is filled when they answer.
 export function openFormationDialog(anchor: Element, created: (entry: FormationEntry) => void) {
@@ -56,7 +56,6 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
   const submit = async () => {
     const wanted = name.value;
     if (busy || make.disabled || wanted === "") return;
-    $("error").hidden = true;
     busy = true;
     make.disabled = true;
     try {
@@ -73,7 +72,7 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
       created(entry);
     } catch (e) {
       // A failure keeps the dialog (when it is still open) as it was typed.
-      showError(e);
+      showFailure("formation-new", e);
       busy = false;
       make.disabled = false;
     }
@@ -89,7 +88,6 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
   showMenu(anchor, pop);
   name.focus();
 
-  $("error").hidden = true;
   void invoke("formation_environments").then(
     (view) => {
       if (!pop.isConnected) return;
@@ -115,7 +113,7 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
     (e) => {
       // Without the environments no project can be chosen: the dialog closes with the words of the failure.
       if (pop.isConnected) closeMenu();
-      showError(e);
+      showFailure("formation-new", e);
     },
   );
 }

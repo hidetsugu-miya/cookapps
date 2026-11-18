@@ -1,8 +1,8 @@
 // The owner's consent to put `tsunagiai-mcp` on the PC of a saved environment (A-37, #893): one for each PC. The consent is Rust's (`formation_consents`: the PCs whose server is placed and pinned); this module asks for it in a dialog when a PC has none, and `formation_consent` puts the program there.
-import { $, tag } from "./dom.js";
+import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // The environment of this Mac: it needs no consent.
 const LOCAL = "local";
@@ -56,7 +56,6 @@ function openConsentDialog(anchor: Element, environment: string): Promise<boolea
     };
     agree.onclick = async () => {
       if (busy) return;
-      $("error").hidden = true;
       busy = true;
       agree.disabled = decline.disabled = true;
       try {
@@ -65,7 +64,7 @@ function openConsentDialog(anchor: Element, environment: string): Promise<boolea
         settle(true);
       } catch (e) {
         // The reason is shown, and the dialog stays for another try. A dialog that was closed while it waited is a decline.
-        showError(e);
+        showFailure("formation-consent", e);
         busy = false;
         agree.disabled = decline.disabled = false;
         if (!pop.isConnected) settle(false);
@@ -81,11 +80,10 @@ function openConsentDialog(anchor: Element, environment: string): Promise<boolea
 // Resolves true when the PC of `environment` has the owner's consent, asking for it in a dialog under `anchor` when it has none. This Mac needs none. False when the owner declines, and when the consents cannot be read (their words are shown).
 export async function ensureConsent(anchor: Element, environment: string): Promise<boolean> {
   if (environment === LOCAL) return true;
-  $("error").hidden = true;
   try {
     if (await agreed(environment)) return true;
   } catch (e) {
-    showError(e);
+    showFailure("formation-consent", e);
     return false;
   }
   return openConsentDialog(anchor, environment);

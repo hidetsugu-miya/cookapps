@@ -19,7 +19,8 @@ import { loadedComments } from "./todo-comments.js";
 import { editingField, projectName, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
-import { copyText, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { copyText } from "./view.js";
 
 const TODO_REFRESH_MS = 10 * 1000;
 
@@ -131,6 +132,9 @@ function drawTodoNotice(offline: Offline | null | undefined) {
   notice.replaceChildren(...(text ? [div] : []));
 }
 
+// Consecutive timed refreshes that failed; the log gets one line at the third, as the inbox's sync does (M-7), so that an offline Mac does not fill it.
+let quietFails = 0;
+
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
 // Without `withDone` the backend reuses the completed tasks it fetched last, unless `doneStale` says it has none. Returns true when a token is needed (the token form is shown).
 export async function loadTodo(quiet = false, withDone = true) {
@@ -138,6 +142,7 @@ export async function loadTodo(quiet = false, withDone = true) {
   const seq = ++todoState.seq;
   try {
     const data = await invoke("todoist_load", { withDone: withDone || todoState.doneStale });
+    quietFails = 0;
     if (data && !data.offline) todoState.doneStale = false;
     // Not while a change is in flight: the reload after the last one draws.
     if (seq !== todoState.seq || currentScreen() !== "todo" || todoState.writes) return false;
@@ -165,7 +170,7 @@ export async function loadTodo(quiet = false, withDone = true) {
     if (quiet && same && !todoState.undrawn) return false;
     renderTodo();
   } catch (e) {
-    showError(e);
+    if (!quiet || ++quietFails === 3) logError("todo", e);
   }
   return false;
 }
@@ -366,11 +371,10 @@ export function initTodo() {
     const token = input.value;
     // The token is never shown: the field is emptied as soon as it is read.
     input.value = "";
-    $("error").hidden = true;
     try {
       await invoke("todoist_save_token", { token });
     } catch (err) {
-      return showError(err);
+      return showFailure("todo", err);
     }
     // Only a rejected token says so; a failed load (network, 5xx) shows its own error.
     if (await loadTodo()) showTokenForm("トークンを確認できませんでした。もう一度入力してください");

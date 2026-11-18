@@ -36,6 +36,8 @@ import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
+import type { LspFound } from "./bindings/LspFound";
+import type { LspLanguageLook } from "./bindings/LspLanguageLook";
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspOutsideFile } from "./bindings/LspOutsideFile";
@@ -351,8 +353,8 @@ export interface Commands {
   orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
-  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given. The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
-  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; channel: unknown }; result: number };
+  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given, `prompt` is its first instruction (1 to 20,000 characters, null for none; passed as `claude [prompt]`, and the orchestrator takes none from here). The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
+  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; channel: unknown }; result: number };
   // A-36: types `text` into the pane `id` as it is (no Enter is added).
   claude_code_input: { args: { id: string; text: string }; result: null };
   // A-36: the new size of the pane `id` in cells.
@@ -406,15 +408,19 @@ export interface Commands {
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
   // A-34: the names of the Hosts of this Mac's `~/.ssh/config` (and of the files it includes), in the order they come, with no pattern (`*`, `?`, `!`) and no name that ssh is not given; the choices of the ssh Host of a repository. No file is an empty list.
   ssh_hosts: { args: undefined; result: string[] };
-  // A-34: the languages of A-21 (`plaintext` too), each once and sorted: the choices of the languages that a language server takes.
-  orca_languages: { args: undefined; result: string[] };
-  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, taking `ruby`, with `autoStart` true and nothing replaced).
+  // A-34: how the card of a language server draws each language of A-21 (`plaintext` too, each once, sorted): its title (`Ruby`, `TypeScript`; any other is its name) and its icon of src/vendor/jetbrains-icons/, none for a language that has none.
+  lsp_language_looks: { args: undefined; result: LspLanguageLook[] };
+  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, of the language `ruby`, with `autoStart` true and nothing replaced). A repository has one server for each language.
   lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
-  // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name that is empty, used twice or over 64 characters, and a language that is not one of A-21, that a server has twice or that two servers have are errors.
+  // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name over 64 characters (an empty one is saved as the name of the app's table for the language, else the language), a language that is not one of A-21 and a language that two servers have are errors.
   lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
-  // A-34: the name of the server of the project `project` of `environment` that takes `language` (a language of A-21), null when none does.
+  // A-34: the key of the server of the project `project` of `environment` that takes `language` (a language of A-21), which is the language itself, null when the repository has no server of it. The key is what every command below takes as `server`.
+  // A-34, A-36: the first instruction of the Claude Code pane that sets up the language servers of `worktree` (`language`: only that one, null for every language of it): the values in a quote as data, the ssh Host saved for the repository, the worktree checked against Orca's list. A value that is refused is an error in Japanese.
+  lsp_claude_request: { args: { environment: string | null; project: string; worktree: string; language: string | null }; result: string };
   lsp_server_for: { args: { environment: string | null; project: string; language: string }; result: string | null };
-  // A-34: how each of the servers `servers` is started in `worktree` of the project `project` of `environment` (null: this machine), in their order: read from the worktree just now, once for all of them (a saved environment's through the ssh Host of its settings), with the settings of each server applied.
+  // A-34: the languages that `worktree` of the project `project` of `environment` (null: this machine) has, each with the server of the app's table (name, command, where it runs, mount, and whether it was `found`, is `missing` or its container is down), read from the worktree just now (a saved environment's through the ssh Host of its settings; in the service of compose that mounts the worktree, when there is one). A language that the worktree does not show is not answered.
+  lsp_detect: { args: { environment: string | null; project: string; worktree: string }; result: LspFound[] };
+  // A-34: how the server of each of the languages `servers` is started in `worktree` of the project `project` of `environment` (null: this machine), in their order: read from the worktree just now, once for all of them (a saved environment's through the ssh Host of its settings), with the settings of each server applied.
   lsp_launches: { args: { environment: string | null; project: string; worktree: string; servers: string[] }; result: LspLaunch[] };
   // A-34: starts the server `server` for `worktree` of the project `project` of `environment` (null: this machine) and answers its state (`indexing`). A server that is there and not stopped is left as it is; a stopped one is started again. How it is started is read from the worktree by Rust; a failure of that or of the process is the state `stopped` with its message, told by the event `lsp-status` (`LspStatusEvent`).
   lsp_start: { args: { environment: string | null; project: string; worktree: string; server: string }; result: LspStatus };

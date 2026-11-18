@@ -7,7 +7,7 @@ import { $, tag } from "./dom.js";
 import { code, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { applyTerminalTheme } from "./orca-terminal.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 type Slot = "light" | "dark";
 
@@ -94,13 +94,12 @@ function applyChoice() {
 async function choose(change: Partial<ThemeSelection>, focusId: string) {
   if (saving || selection === null) return;
   saving = true;
-  $("error").hidden = true;
   render();
   try {
     selection = await invoke("terminal_theme_set", { selection: { ...selection, ...change } });
     applyChoice();
   } catch (e) {
-    showError(e);
+    showFailure("orca-theme", e);
   } finally {
     saving = false;
     render();
@@ -132,6 +131,6 @@ export function initOrcaTheme() {
       applyChoice();
       render();
     },
-    (e) => showError(e),
+    (e) => logError("orca-theme", e),
   );
 }
