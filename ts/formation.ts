@@ -1,22 +1,17 @@
-// The orchestration mode of the development screen (A-37): three panes, the list of the formations at the left (formation-list.ts), the terminal of the orchestrator of the selected formation in the middle and its flow at the right, with the session of the selected child under it (formation-flow.ts). While no formation is selected only the list is shown.
-// A formation belongs to one PC. The orchestrator of one of this Mac runs in a pseudo terminal of the app (A-36); the one of a formation of a saved environment runs in a terminal of the Orca of that environment, which Rust makes (`formation_orchestrator`) and which is shown here as a child's session is: streamed when the Orca screen streams that environment, else mirrored.
-// The mode is kept only while the app runs; the first one is Orca.
+// The orchestration of the development screen (A-37): a formation selected in the list (formation-list.ts, under its heading at the top of the Orca screen's list) takes the place of the work pane of a project with two panes, the tabs in the middle (the leader's terminal and the children's, formation-flow.ts) and the flow at the right, a column of cards. While a project or a session is selected, or nothing, the work pane of Orca is shown.
+// A formation belongs to one PC. The orchestrator of one of this Mac runs in a pseudo terminal of the app (A-36); the one of a formation of a saved environment runs in a terminal of the Orca of that environment, which Rust makes (`formation_orchestrator`) and which is shown here as a child's terminal is: streamed when the Orca screen streams that environment, else mirrored.
 import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
 import { claudeCodeStarted, closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
-import { hideSession, startCount, startFlow, stopFlow, switchFormation } from "./formation-flow.js";
+import { hideSession, isLeaderTab, onTabChange, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
 import { currentFormation, formationEnvironment, initFormationList } from "./formation-list.js";
 import { RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { streamsEnvironment } from "./orca.js";
+import { redrawOrca, streamsEnvironment } from "./orca.js";
 import { isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
-import { initSplit } from "./split.js";
-import { show } from "./view.js";
 
-export type DevMode = "orca" | "formation";
-
-// The name of the pane's owner: what `hideClaudeCode` is told when the mode or the screen is left.
+// The name of the pane's owner: what `hideClaudeCode` is told when the formation is deselected or the screen is left.
 const OWNER = "formation-screen";
 // The pane of the orchestrator of the formation the screen shows; null while none is selected.
 const pane = () => {
@@ -33,29 +28,27 @@ const starting = new Set<string>();
 const restarting = new Set<string>();
 const failures = new Map<string, string>();
 
-let mode: DevMode = "orca";
-export const devMode = () => mode;
-export function setDevMode(next: DevMode) {
-  mode = next;
-}
+// Whether the development screen is shown (set by `showFormation` and `hideFormation`).
+let onScreen = false;
 
 // Shows the terminal of the orchestrator of the formation that is shown, and hides the one of another (its process goes on). The process starts with the first show of a formation, and a show of a running one starts nothing (A-36).
-// Nothing is shown while the mode or the screen is left: a selection or a deletion that ends then (it was on its way when the owner left) must not take the hidden pane.
+// Nothing is shown while the screen is left: a selection or a deletion that ends then (it was on its way when the owner left) must not take the hidden pane.
 // While no formation is selected the middle pane is not shown, and no orchestrator is started.
 function showPane() {
-  if (mode !== "formation" || $("formation").hidden) return;
+  if (!onScreen) return;
   const id = pane();
-  $("formation-orchestrator").hidden = id === null;
-  $("formation-split").hidden = id === null;
   if (id === null) return hideClaudeCode(OWNER);
   const name = currentFormation()!;
-  $("formation-head-name").textContent = name;
   const host = $("formation-term");
   const remote = formationEnvironment(name) !== LOCAL;
   const said = remote ? (failures.get(name) ?? null) : null;
-  $("formation-term-error").hidden = said === null;
+  // The leader's terminal and its words are shown only while the leader's tab is the selected one; a child's tab shows the child's terminal under the strip (formation-flow.ts), and the leader's process goes on.
+  const leader = isLeaderTab();
+  host.hidden = !leader;
+  $("formation-term-error").hidden = said === null || !leader;
   $("formation-term-error").textContent = said ?? "";
   syncRestart();
+  if (!leader) return hideClaudeCode(OWNER);
   if (remote) return showRemote(name, host, said);
   if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, kind: "formation" }, OWNER);
 }
@@ -64,8 +57,9 @@ function showPane() {
 function syncRestart() {
   const name = currentFormation();
   if (name === null) return;
+  // It is off while a child's tab is the selected one too: it restarts the leader, whose terminal is not in view then.
   $<HTMLButtonElement>("formation-restart").disabled =
-    formationEnvironment(name) === LOCAL ? restarting.has(formationPaneId(name)) : starting.has(name);
+    !isLeaderTab() || (formationEnvironment(name) === LOCAL ? restarting.has(formationPaneId(name)) : starting.has(name));
 }
 
 // Shows the terminal of the orchestrator of a formation of a saved environment, and starts it when it has none and no failure is on the screen (a failure is tried again by the restart button, or by pressing the formation again).
@@ -104,26 +98,39 @@ async function startRemote(name: string, restart: boolean) {
   if (currentFormation() === name) showPane();
 }
 
-// Shows the mode and the orchestrator's terminal in it. The flow and the list are read while the mode is shown.
-export function showFormation() {
-  show("formation");
-  startFlow();
+// The panes of the formation take the place of the work pane of Orca while a formation is selected, and the other way round. The list is read while the screen is shown, and the children of the selected formation with it.
+function syncPanes() {
+  if (!onScreen) return;
+  const formation = currentFormation() !== null;
+  $("formation").hidden = !formation;
+  $("orca-session").hidden = formation;
+  if (formation) startFlow();
+  else {
+    startList();
+    hidePanes();
+  }
   showPane();
+}
+
+// The development screen is shown.
+export function showFormation() {
+  onScreen = true;
+  syncPanes();
 }
 
 // The restart button of the header: ends the process of the orchestrator of the formation that is shown, if it is running (or has ended), and begins a new one with the keyboard, as a first show does (A-37). The other formations' orchestrators and the children are not touched.
 // The button is off until the new start has answered, because two starts of the pane's id at once could end each other's process.
 export function initFormation() {
-  initSplit($("formation"), $("formation-split"), { side: "left", min: 0.15, max: 0.35, initial: 0.18, property: "--list-w" });
-  // The divider between the orchestrator and the right pane (shown with the pane, formation-flow.ts). It starts at half of what the list leaves ((1 - 0.18) / 2), as the two panes were of equal width before the divider.
-  initSplit($("formation"), $("formation-flow-split"), { side: "right", min: 0.2, max: 0.5, initial: 0.41, property: "--flow-w" });
-  // Another formation is selected in the list: its flow is read in place of the last one's, and its orchestrator is shown in the middle.
+  // The tab changes between the leader's and a child's: the leader's terminal is hidden or shown.
+  onTabChange(showPane);
+  // Another formation is selected in the list, or none (a project or a session is): the panes of the selection are shown, its flow is read in place of the last one's, and its orchestrator is shown in the middle.
   initFormationList(
     (name) => {
       // A formation that is pressed again tries again after a failure.
       if (name !== null) failures.delete(name);
       switchFormation();
-      showPane();
+      syncPanes();
+      redrawOrca();
     },
     // A formation was deleted: Rust has ended its orchestrator's process, so its terminal is dropped. The release hides the shown terminal of this owner too, so the shown formation's is shown again.
     (name) => {
@@ -159,17 +166,15 @@ export function initFormation() {
   };
 }
 
-// The mode or the screen is left: the terminals are hidden (the orchestrator's process goes on, the children's mirrors stop), and the flow is no longer read.
+// The screen is left: the terminals are hidden (the orchestrator's process goes on, the children's mirrors stop), and nothing is read.
 export function hideFormation() {
+  onScreen = false;
   stopFlow();
   hidePanes();
 }
 
-// Only the terminals are hidden: the numbers of the footer, from the read in hand, go on.
-export function hidePanes() {
+// Only the terminals are hidden.
+function hidePanes() {
   hideSession();
   hideClaudeCode(OWNER);
 }
-
-// Orca is the mode of the development screen: the children are read only to count those that wait.
-export const watchFormation = startCount;

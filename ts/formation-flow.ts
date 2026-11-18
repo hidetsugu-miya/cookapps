@@ -1,13 +1,13 @@
-// The right pane of the orchestration mode, "チームメイト" (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
-// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait and the formations that work, on the footer's icon (the reads of the orchestration mode move the same number).
-// The pane is opened and closed with the button of its heading (open at first, in memory only); closed, a strip of 40px stays at the right end with the button that opens it and a mark for the state of each child, and the terminal of the session is hidden (its reads stop).
-// The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
+// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
+// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab.
+// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
+// 「自動で追う」 is off when a formation is opened, so the middle pane stays on the leader, where the owner types; pressed on, it moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
+import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { currentFormation, noteCounts, readList, showCount, STATE_LABELS } from "./formation-list.js";
-import { setFormationCount } from "./footer.js";
+import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
 import { confirmChildDelete, confirmChildForce } from "./hint.js";
 import { DELETE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -26,60 +26,54 @@ let children: FormationChild[] = [];
 let failure: string | null = null;
 // What a close told that is no failure: the branch that Orca kept for the commits no remote has. It stays until the next close or another formation, which a read of the children does not clear.
 let notice: string | null = null;
-// The children that have a terminal (the last read), the selected child (its name) and whether 「自動で追う」 is on (on at first, in memory only).
+// The children that have a terminal (the last read), the selected tab (the child's name; null is the leader's) and whether 「自動で追う」 is on (off at first and each time a formation is opened, in memory only).
 let terms: FormationChild[] = [];
 let selected: string | null = null;
-let follow = true;
-// Whether the pane is open (in memory only).
-let open = true;
+let follow = false;
+// What the middle pane does when the tab changes between the leader's and a child's: formation.ts shows or hides the leader's terminal.
+let onTab: () => void = () => {};
+// Whether the leader's tab is the one whose terminal is shown now (undefined: nothing yet), so that a read that changes nothing touches no terminal.
+let shownLeader: boolean | undefined;
 // The handles whose terminals were shown, to forget the ones of children that are gone.
 const held = new Set<string>();
 // The children whose close is on its way, by the formation and the name (`closingKey`); a second close of one is not started meanwhile.
 const closing = new Set<string>();
 const closingKey = (formation: string, name: string) => `${formation}\n${name}`;
-// The clock of the reads and what the reads are for (the pane, or the count only), and whether one is on its way (the next tick waits for it).
+// The clock of the reads and what the reads are for (the pane, or the list only), and whether one is on its way (the next tick waits for it).
 let timer: number | null = null;
-let watching: "flow" | "count" | null = null;
+let watching: "flow" | "list" | null = null;
 let reading = false;
 // Counts the switches of the formation, so that a read that was on its way when the formation changed is dropped.
 let epoch = 0;
-// What the tree shows now, and what the session band and the marks of the strip show now; each is drawn again only when its key changes.
+// What the cards and the tabs show now; each is drawn again only when its key changes.
 let treeKey = "";
-let marksKey = "";
-let sessionKey: string | null = "";
-// The child whose card was last brought into the view of the tree (the selection that moved is shown, the one that stays is not scrolled to again).
-let scrolledTo: string | null = null;
+let tabsKey = "";
+// The selection whose card and tab were last brought into view (the selection that moved is shown, the one that stays is not scrolled to again).
+let scrolledTo: string | null | undefined;
 
 async function read() {
   // A hidden window reads nothing, as the Orca list does; it reads once when it is shown again (initFormationFlow).
   if (document.hidden) return;
-  // The list of the formations is read on this clock too, while the pane is shown (not for the count).
-  if (watching === "flow") void readList();
-  if (reading) return;
+  // The list of the formations is read on this clock too, whichever pane is shown.
+  void readList();
+  if (watching !== "flow" || reading) return;
   reading = true;
   const mine = epoch;
-  const counting = watching === "count";
   try {
-    if (counting) {
-      // A read that fails keeps the last count, and so does an answer that says Orca could not be read (its counts take every launched child as working).
-      const answer = await invoke("formation_list");
-      if (answer.readError === null) noteCounts(answer.formations);
-    } else {
-      const name = currentFormation();
-      // No formation is selected: there is no child to read.
-      const got = name === null ? [] : await invoke("formation_children", { name });
-      if (mine === epoch) {
-        children = got;
-        failure = null;
-      }
+    const name = currentFormation();
+    // No formation is selected: there is no child to read.
+    const got = name === null ? [] : await invoke("formation_children", { name });
+    if (mine === epoch) {
+      children = got;
+      failure = null;
     }
   } catch (e) {
-    if (mine === epoch && !counting) failure = String(e);
+    if (mine === epoch) failure = String(e);
   } finally {
     reading = false;
   }
   // The formation changed while this read ran: its answer is dropped, and the new formation is read now (one read at a time, so a repeated switch never runs the reads side by side).
-  if (!counting && mine !== epoch) {
+  if (mine !== epoch) {
     if (watching === "flow") void read();
     return;
   }
@@ -87,7 +81,7 @@ async function read() {
 }
 
 // Reads now and then by the clock, for `next`; one clock at a time, so the two ways never read together.
-function watch(next: "flow" | "count", ms: number) {
+function watch(next: "flow" | "list", ms: number) {
   if (watching === next) return;
   stopFlow();
   watching = next;
@@ -104,10 +98,11 @@ export function switchFormation() {
   notice = null;
   terms = [];
   selected = null;
-  sessionKey = null;
+  follow = false;
+  shownLeader = undefined;
   treeKey = "";
-  marksKey = "";
-  scrolledTo = null;
+  tabsKey = "";
+  scrolledTo = undefined;
   for (const handle of held) releaseTerminal(handle, OWNER);
   held.clear();
   hideTerminals(OWNER);
@@ -116,23 +111,22 @@ export function switchFormation() {
   if (watching === "flow") void read();
 }
 
-// The orchestrator's card of the tree has the name of the formation that is shown.
+// The leader's card of the tree has the name of the formation that is shown.
 function drawRoot() {
   $("formation-flow-root").querySelector(".formation-card-name")!.textContent = currentFormation() ?? "";
 }
 
-// The mode is shown.
+// A formation is selected on the development screen.
 export const startFlow = () => watch("flow", periodMs("formationFlow", READ_MS));
 
-// Orca is the mode of the development screen: the children that wait and the formations that work are counted (from the list) at the period of the Orca list's read.
-export const startCount = () => watch("count", shownMs());
+// No formation is selected on the development screen: only the list is read, at the period of the Orca list's read.
+export const startList = () => watch("list", shownMs());
 
-// The mode or the screen is left: nothing is read until it is shown again.
+// The screen is left: nothing is read until it is shown again.
 export function stopFlow() {
   if (timer !== null) window.clearInterval(timer);
   timer = null;
   watching = null;
-  setFormationCount(0, 0);
 }
 
 // The child that 「自動で追う」 selects: the one that has waited for approval the longest, else the selected one when it works, else the first one that works; null when none works.
@@ -149,40 +143,58 @@ function placementOf(child: FormationChild): Placement {
   const environment = child.environment === LOCAL ? null : child.environment;
   // A saved environment that the Orca screen streams (A-12) streams the terminal, with its colors and the size of the pane; this Mac's Orca cannot stream, and a saved environment that is not streamed is mirrored, as the Orca screen's are.
   const kind = environment !== null && streamsEnvironment(environment) ? "stream" : "mirror";
-  return { id: handle, source: { kind, handle, path: "", environment }, host: $("formation-child-term") };
+  return { id: handle, source: { kind, handle, path: "", environment }, host: $("formation-teammate-term") };
 }
 
-// Shows the terminal of the selected child, and hides the others (their reads stop). `focus` gives it the keyboard: only a press of the user does, never the follow, so the orchestrator's terminal keeps the keys the owner is typing.
+// Shows the terminal of the selected tab and hides the others (their reads stop): a child's under the strip, or the leader's, which formation.ts shows (`onTab`). `focus` gives it the keyboard: only a press of the user does, never the follow, so the leader's terminal keeps the keys the owner is typing.
+// The leader's terminal is hidden before a child's is placed and shown after the child's is hidden, so that the two never share the height of the pane; and it is not asked for while the screen is being shown (formation.ts shows it then).
 function showSelected(focus: boolean) {
+  const host = $("formation-teammate-term");
   const child = terms.find((c) => c.name === selected);
-  if (!child) return hideTerminals(OWNER);
+  if (!child) {
+    host.hidden = true;
+    hideTerminals(OWNER);
+    const changed = shownLeader === false;
+    shownLeader = true;
+    if (changed) onTab();
+    return;
+  }
+  const changed = shownLeader !== false;
+  shownLeader = false;
+  if (changed) onTab();
+  host.hidden = false;
   const placement = placementOf(child);
   if (!isShowing(placement, OWNER) || focus) showTerminals([placement], focus ? placement.id : null, OWNER);
   held.add(placement.id);
 }
 
-// The children of a read: the session follows them, the selection follows the waiting child while 「自動で追う」 is on, and the terminals of the children that are gone are forgotten.
-// The session is shown before its terminal is placed, so that the terminal is placed in a host that has its size.
-function syncSession() {
+// Whether the selected tab is the leader's.
+export const isLeaderTab = () => selected === null;
+
+// formation.ts tells what to do when the tab changes between the leader's and a child's.
+export function onTabChange(fn: () => void) {
+  onTab = fn;
+}
+
+// The children of a read: the terminals follow them, the selection follows the waiting child while 「自動で追う」 is on, and the terminals of the children that are gone are forgotten. A selected child that is gone from the terminals leaves the selection at the leader's tab.
+function syncSelection() {
   terms = children.filter((c) => c.handle !== null);
   if (follow) selected = followTarget(terms, selected) ?? selected;
-  if (!terms.some((c) => c.name === selected)) selected = terms[0]?.name ?? null;
+  if (selected !== null && !terms.some((c) => c.name === selected)) selected = null;
   const handles = new Set(terms.map((c) => c.handle));
   for (const handle of held) {
     if (handles.has(handle)) continue;
     held.delete(handle);
     releaseTerminal(handle, OWNER);
   }
-  const child = terms.find((c) => c.name === selected);
-  const key = child ? `${child.name}\n${child.state}` : "";
-  if (key !== sessionKey) {
-    sessionKey = key;
-    $("formation-session").hidden = !child;
-    $("formation-session-head").dataset.state = child?.state ?? "";
-    $("formation-session-name").textContent = child?.name ?? "";
-  }
-  // A closed pane has no room for the terminal: it is shown again when the pane is opened.
-  if (open) showSelected(false);
+  showSelected(false);
+}
+
+// Asks before the child is closed: the same confirmation for the menu of a card and for the × of a done child's tab and card (it is anchored on the name, which a redraw does not touch while it is open).
+function askClose(c: FormationChild, anchor: Element) {
+  const formation = currentFormation();
+  if (formation === null || closing.has(closingKey(formation, c.name))) return;
+  confirmChildDelete(anchor, c.name, c.created, () => void closeChild(formation, c.name, false, null));
 }
 
 // The menu of a right press on a card: 「削除」 alone, as a row of the list has (formation-list.ts).
@@ -190,7 +202,7 @@ function openCardMenu(c: FormationChild, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   const formation = currentFormation();
   if (formation === null || closing.has(closingKey(formation, c.name))) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmChildDelete(anchor, c.name, c.created, () => void closeChild(formation, c.name, false, null)) }], { at: { x: e.clientX, y: e.clientY } });
+  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => askClose(c, anchor) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
 // Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it (`path`: where the worktree was shown to be) the worktree goes all the same, and only when Rust finds the child at that path. An error shows as a failed read does, and so does the branch that Orca kept (`notice`).
@@ -218,7 +230,7 @@ async function closeChild(formation: string, name: string, force: boolean, path:
   if (error !== null) failure = error;
   notice = closed && preserved !== null ? `「${name}」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（${preserved}）。` : null;
   if (closed) {
-    // The child is gone from the pane and from the session at once (the session lets its terminal go), and a read that began before the close, which still lists it, is dropped.
+    // The child is gone from the tabs and from the cards at once (its terminal is let go), and a read that began before the close, which still lists it, is dropped.
     children = children.filter((c) => c.name !== name);
     failure = null;
     epoch++;
@@ -231,7 +243,7 @@ async function closeChild(formation: string, name: string, force: boolean, path:
   }
 }
 
-// A press of the user on a card selects that child and turns 「自動で追う」 off. A child with no terminal is not selected.
+// A press of the user on a tab or a card selects that child and turns 「自動で追う」 off. A child with no terminal is not selected.
 function selectChild(name: string) {
   if (!terms.some((c) => c.name === name)) return;
   selected = name;
@@ -240,10 +252,22 @@ function selectChild(name: string) {
   showSelected(true);
 }
 
-// The mode or the screen is left: the terminal is hidden and its reads stop.
+// A press of the user on the leader's tab or card: the leader's terminal is shown (and takes the keyboard), and 「自動で追う」 is turned off.
+function selectLeader() {
+  selected = null;
+  follow = false;
+  draw();
+}
+
+// The formation is deselected or the screen is left: the child's terminal is hidden and its reads stop, and the next show places the tab's terminal anew.
 export function hideSession() {
   hideTerminals(OWNER);
+  shownLeader = undefined;
 }
+
+const MARKS: Record<FormationState, string> = { working: "◐", waiting: "●", done: "✓", planned: "○" };
+// The effort a child is started with (the leader's is high, A-37).
+const EFFORT = "medium";
 
 function card(c: FormationChild, now: number): HTMLLIElement {
   const li = tag("li");
@@ -273,64 +297,75 @@ function card(c: FormationChild, now: number): HTMLLIElement {
     node.onclick = () => selectChild(c.name);
   }
   li.append(node);
+  if (c.state === "done") li.append(closeButton(c, name, "formation-card-close"));
   return li;
 }
 
-// The strip of the closed pane: the label of the button that opens it says how many children work and wait for approval and how many are planned, and under it a mark for each child, in the order of the cards, with the dot of its state.
-function drawStrip(planned: number) {
-  const working = children.filter((c) => c.state === "working").length;
-  const waiting = children.filter((c) => c.state === "waiting").length;
-  $("formation-strip-open").setAttribute("aria-label", `チームメイトを開く（作業中 ${working}${waiting > 0 ? ` · 承認待ち ${waiting}` : ""} · 予定 ${planned}）`);
-  const key = JSON.stringify(children.map((c) => [c.name, c.state]));
-  if (key === marksKey) return;
-  marksKey = key;
-  $("formation-strip-marks").replaceChildren(
-    ...children.map((c) => {
-      const mark = tag("span", "formation-strip-mark");
-      mark.dataset.state = c.state;
-      mark.dataset.name = c.name;
-      mark.setAttribute("role", "img");
-      mark.setAttribute("aria-label", `${c.name}（${STATE_LABELS[c.state]}）`);
-      mark.append(tag("i", "formation-dot"));
-      return mark;
-    }),
-  );
+// The × of a done child: the same close as 「削除」 of the menu of its card.
+function closeButton(c: FormationChild, anchor: Element, className: string): HTMLButtonElement {
+  const button = tag("button", className, "×");
+  button.type = "button";
+  button.dataset.close = c.name;
+  button.setAttribute("aria-label", `${c.name} を閉じる`);
+  button.onclick = () => askClose(c, anchor);
+  return button;
 }
 
-// Closes or opens the pane. The focus moves to the button that takes the place of the one pressed, and an opened pane shows the terminal of its session again.
-function setOpen(next: boolean) {
-  open = next;
-  if (!open) hideTerminals(OWNER);
-  marksKey = "";
-  $("formation-flow-toggle").setAttribute("aria-expanded", String(open));
-  draw();
-  $(open ? "formation-flow-toggle" : "formation-strip-open").focus({ preventScroll: true });
+// The tab of a child: the mark of its state, its name and its effort; a done one has a × too. Only a child with a terminal is a button; a planned child, and a done one whose terminal is gone, are shown and not pressed.
+function tab(c: FormationChild): HTMLSpanElement {
+  const wrap = tag("span", "formation-tab");
+  wrap.dataset.state = c.state;
+  wrap.dataset.name = c.name;
+  const mark = span("formation-tab-mark", MARKS[c.state]);
+  mark.setAttribute("aria-hidden", "true");
+  const name = span("formation-tab-name", c.name);
+  const label = [mark, name, span("formation-tab-effort", EFFORT)];
+  if (c.handle !== null) {
+    const main = tag("button", "formation-tab-main");
+    main.type = "button";
+    main.setAttribute("role", "tab");
+    main.setAttribute("aria-selected", String(selected === c.name));
+    main.dataset.child = c.name;
+    main.onclick = () => selectChild(c.name);
+    main.append(...label);
+    wrap.append(main);
+  } else {
+    const main = tag("span", "formation-tab-main");
+    main.append(...label);
+    wrap.append(main);
+  }
+  if (closing.has(closingKey(currentFormation() ?? "", c.name))) wrap.setAttribute("aria-busy", "true");
+  if (c.state === "done") wrap.append(closeButton(c, name, "formation-tab-close"));
+  return wrap;
+}
+
+// The tabs of the children, drawn again in place only when what they show changed; the leader's tab is always there.
+function drawTabs() {
+  $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null));
+  const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.handle !== null])]);
+  if (key === tabsKey) return;
+  tabsKey = key;
+  const box = $("formation-tabs-mates");
+  const focused = box.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.child : undefined;
+  box.replaceChildren(...children.map(tab));
+  if (focused) box.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
 function draw() {
   const now = Date.now();
-  if (watching === null) setFormationCount(0, 0);
-  else showCount();
-  if (watching === "count") return;
-  const launched = children.filter((c) => c.state !== "planned");
-  const planned = children.length - launched.length;
-  // The pane is shown from the first child (a planned one too) on, and the orchestrator has the whole width before. Closed, the strip is shown in its place and the divider is not.
-  const any = children.length > 0;
-  $("formation-flow").hidden = !any || !open;
-  $("formation-flow-split").hidden = !any || !open;
-  $("formation-strip").hidden = !any || open;
-  // The session first: the follow may move the selection that the cards mark.
-  if (watching === "flow") syncSession();
+  if (watching === "list") return;
+  // The selection first: the follow may move it, and the tabs and the cards mark it.
+  if (watching === "flow") syncSelection();
+  drawTabs();
   $("formation-follow").setAttribute("aria-pressed", String(follow));
-  $("formation-flow-count").textContent = `子 ${launched.length}${planned > 0 ? ` · 予定 ${planned}` : ""}`;
-  if (!open) drawStrip(planned);
+  $("formation-flow-root").setAttribute("aria-pressed", String(selected === null));
   const said = failure ?? notice;
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
   const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply])]);
   if (key === treeKey) return;
   treeKey = key;
-  // The tree is drawn again in place: the scroll and the focus stay where they were.
+  // The cards are drawn again in place: the scroll and the focus stay where they were.
   const body = $("formation-flow-body");
   const top = body.scrollTop;
   const list = $("formation-flow-list");
@@ -338,16 +373,17 @@ function draw() {
   list.replaceChildren(...children.map((c) => card(c, now)));
   body.scrollTop = top;
   if (focused) list.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
-  // A selection that moved (the follow moves it too) is brought into the view of the tree; the focus stays where it was.
+  // A selection that moved (the follow moves it too) is brought into the view of the cards and the tabs; the focus stays where it was.
   if (selected !== scrolledTo) {
     scrolledTo = selected;
     list.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
+    $("formation-tabs").querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
 }
 
 export function initFormationFlow() {
-  $("formation-flow-toggle").onclick = () => setOpen(false);
-  $("formation-strip-open").onclick = () => setOpen(true);
+  $("formation-tab-leader-main").onclick = selectLeader;
+  $("formation-flow-root").onclick = selectLeader;
   $("formation-follow").onclick = () => {
     follow = !follow;
     draw();

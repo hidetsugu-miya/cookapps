@@ -69,16 +69,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .footer-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
 .footer-btn:hover { background: var(--soft); }
 .footer-btn svg { width: 20px; height: 20px; }
-/* A-37: at the left end of the footer, only while the development screen is shown: the switch between Orca and the orchestration, two icons with no frame. The mode that is on has a pale green ground and a green icon. */
-#footer-modes { display: flex; gap: 2px; margin-right: auto; }
-.footer-mode { position: relative; padding: 0 7px; color: var(--muted); }
-.footer-mode svg { width: 18px; height: 18px; }
-.footer-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent-text); }
-/* What waits for the owner (the children that wait for approval; what waits for a check in Orca), at the corner of the icon. */
-.footer-mode-count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--bar); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
-/* Work alone is no number: the icon is yellow and fades slowly, as the sidebar's 開発 button does (A-6); it stays yellow where motion is reduced. */
-.footer-mode.working svg { stroke: var(--agent-working); animation: nav-working 2s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .footer-mode.working svg { animation: none; } }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
 #unread-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
@@ -104,8 +94,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #formation-list-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #formation-list-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #error { color: #b00020; padding: 8px 32px; margin: 0; white-space: pre-wrap; }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
@@ -1010,62 +1000,68 @@ button.status:hover { filter: brightness(.95); }
 .header-sub { min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .back-text { display: inline-flex; align-items: center; gap: 4px; padding: 0 12px 0 6px; border-color: transparent; background: transparent; }
 
-/* The orchestration mode of the development screen (A-37): the orchestrator's terminal at the left, and the right pane (the flow, and under it the session of the selected child) of the same width. */
-#formation { flex: 1; min-height: 0; display: flex; }
-/* The list of the formations at the left, narrower than the Orca screen's list (`--list-w` is where the divider put it, 15% to 35% of the screen, 18% at first, and 160px at least). */
-#formation-list { flex: none; width: clamp(15%, var(--list-w, 18%), 35%); min-width: 160px; display: flex; flex-direction: column; background: var(--bar); }
-#formation-split { flex: none; }
-#formation-list-head { flex: none; display: flex; align-items: center; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px 0 18px; border-bottom: 1px solid var(--line); }
-#formation-new { flex: none; margin-left: auto; }
-#formation-list-error { flex: none; margin: 8px 8px 0; overflow-wrap: anywhere; }
-#formation-list-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
-.formation-row { display: grid; gap: 6px; width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 10px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* The orchestration of the development screen (A-37): the tabs of the leader and the children with their terminal under them, and the right pane of cards, at the right of the list of the Orca screen. `#orca-session` and `#formation` take no box of their own: their panes are the children of `#orca`, and one of the two is hidden. */
+#orca-session, #formation { display: contents; }
+/* The formations at the top of the list (A-37): the heading, and a row with the name alone, in the shape of a project's row; the selected row has the ground of the selected project. */
+.orca-list-head { flex: none; margin: 0; padding: 10px 18px 4px; color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 700; letter-spacing: .04em; }
+#orca-formations { flex: none; display: flex; flex-direction: column; max-height: 40vh; min-height: 0; }
+#formation-list-error { flex: none; margin: 4px 8px 0; overflow-wrap: anywhere; }
+#formation-list-feed { min-height: 0; overflow-y: auto; padding: 0 8px; }
+.formation-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .formation-row:hover { background: var(--hover); }
-.formation-row[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); }
+.formation-row[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
 .formation-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.formation-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.formation-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); font-weight: 700; }
-.formation-row-time { flex: none; color: var(--muted); font-size: calc(11px * var(--fs)); }
-.formation-row-counts { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.formation-row[aria-busy="true"] { opacity: .5; }
+/* The ring before the name: gray; while the leader waits for input (#915) it is filled orange with a pale ring around it, and a label stands at the right end of the row. */
+.formation-row-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 3px; border: 1.5px solid var(--muted); border-radius: 50%; }
+.formation-row[data-waiting="true"] .formation-row-dot { border-color: var(--agent-question); background: var(--agent-question); box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-question) 25%, var(--surface)); }
+.formation-row-waiting { flex: none; margin-left: auto; padding: 2px 7px; border-radius: 10px; background: color-mix(in srgb, var(--agent-question) 14%, var(--surface)); color: color-mix(in srgb, var(--agent-question) 75%, #000); font-size: calc(11px * var(--fs)); font-weight: 600; }
+.formation-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 /* The projects of a formation at the top of the menu of its row: headings that are not pressed, in the monospace of the names. */
 .menu button:disabled:has(> .formation-menu-mark) { opacity: 1; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); cursor: default; }
 .formation-menu-mark { display: inline-flex; flex: none; }
-.formation-row-count { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-size: calc(11px * var(--fs)); white-space: nowrap; }
-.formation-row-count[data-state="waiting"] { color: var(--agent-question); font-weight: 700; }
 #formation-orchestrator { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
-#formation-head, #formation-session-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#formation-head h1 { flex: none; }
-#formation-head-name { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
-#formation-restart { flex: none; margin-left: auto; }
+/* The tabs of the middle pane: the leader's and a child's each, in the header, with the restart button at the right end. The selected tab takes the ground of the terminal's frame and covers the line under the header; a planned child's is dashed. */
+#formation-head, #formation-flow-head { flex: none; display: flex; align-items: center; box-sizing: border-box; min-height: var(--header-h); background: var(--bar); border-bottom: 1px solid var(--line); }
+#formation-head { align-items: flex-end; gap: 8px; padding: 0 12px 0 8px; }
+#formation-tabs { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+#formation-tabs-mates { display: contents; }
+#formation-restart { flex: none; align-self: center; margin-left: auto; }
 #formation-term-error { flex: none; margin: 8px; overflow-wrap: anywhere; }
-/* The right pane, "チームメイト", is as wide as the divider before it puts it (`--flow-w`, 20% to 50% of the screen, 41% at first, half of what the list leaves at its first width). The orchestrator takes the rest. */
-#formation-flow { flex: none; width: clamp(20%, var(--flow-w, 41%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; background: var(--bar); }
-#formation-flow-split { flex: none; }
-/* Closed: a strip of 40px stays at the right end, with the button that opens the pane and a mark for each child. */
-#formation-strip { flex: none; width: 40px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; border-left: 1px solid var(--line); background: var(--bar); }
-#formation-strip-head { flex: none; display: flex; align-items: center; justify-content: center; align-self: stretch; min-height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
-#formation-strip-marks { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 14px 0; align-self: stretch; scrollbar-width: none; }
-.formation-strip-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
-#formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
-#formation-flow-head .icon-btn, #formation-session-head .icon-btn, #formation-strip-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#formation-flow-head .icon-btn svg, #formation-session-head .icon-btn svg, #formation-strip-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+.formation-tab { flex: none; display: flex; align-items: center; box-sizing: border-box; height: 34px; margin-bottom: 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; font-size: calc(12px * var(--fs)); color: var(--ink-soft); }
+.formation-tab:has([aria-selected="true"]) { height: 36px; margin-bottom: -1px; background: var(--surface); color: inherit; font-weight: 700; }
+.formation-tab[data-state="planned"] { border: 1px dashed var(--chip-line); border-bottom: 0; color: var(--muted); }
+.formation-tab[aria-busy="true"] { opacity: .5; }
+.formation-tab-main { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 12px; border: 0; border-radius: 8px 8px 0 0; background: transparent; font: inherit; color: inherit; white-space: nowrap; }
+button.formation-tab-main { cursor: pointer; }
+button.formation-tab-main:hover { background: var(--hover); }
+button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.formation-tab-name { font-family: ui-monospace, Menlo, monospace; }
+#formation-tab-leader .formation-tab-name { font-family: inherit; }
+.formation-tab-effort { padding: 0 5px; border-radius: 4px; background: var(--soft); color: var(--accent-text); font-size: calc(10px * var(--fs)); font-weight: 400; line-height: 16px; }
+.formation-tab-mark { flex: none; }
+.formation-tab[data-state="working"] .formation-tab-mark { color: var(--agent-working); }
+.formation-tab[data-state="waiting"] .formation-tab-mark { color: var(--agent-question); }
+.formation-tab[data-state="done"] .formation-tab-mark { color: var(--agent-done); }
+.formation-tab-close, .formation-card-close { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: inherit; line-height: 1; cursor: pointer; }
+.formation-tab-close { margin-right: 8px; }
+.formation-tab-close:hover, .formation-card-close:hover { background: var(--hover); color: inherit; }
+#formation-teammate-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+/* The right pane, "流れ", is 260px wide, with the leader's card on top and the children's cards under it, a line at their left joining them to it. */
+#formation-flow { flex: none; width: 260px; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
+#formation-flow-head { gap: 10px; padding: 0 12px 0 16px; }
+#formation-flow-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#formation-flow-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #formation-flow-head h2 { flex: none; }
-#formation-flow-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
 #formation-follow { flex: none; margin-left: auto; color: var(--muted); }
 #formation-follow[aria-pressed="true"], #formation-follow[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
-/* The view has a height of its own at most, and scrolls inside when the tree is taller; without a session under it, it takes the height of the pane. */
-#formation-flow-body { flex: 0 1 auto; min-height: 0; max-height: min(300px, 50%); overflow-y: auto; box-sizing: border-box; padding: 14px 10px; }
-#formation-flow:has(#formation-session[hidden]) #formation-flow-body { flex: 1 1 auto; max-height: none; }
+#formation-flow-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box; padding: 14px 12px; }
 #formation-flow-error { margin: 0 0 10px; overflow-wrap: anywhere; }
-/* The tree: the orchestrator's card on top, and the children in a frame under one branch from it (the cards wrap inside the frame when they do not fit in a row). A planned child is dashed and faint, with a hollow dot. */
-#formation-flow-root { width: fit-content; min-width: 140px; margin: 0 auto; cursor: default; }
-#formation-flow-list { list-style: none; margin: 14px 0 0; padding: 8px; position: relative; display: flex; flex-wrap: wrap; justify-content: center; box-sizing: border-box; border: 2px solid var(--chip-line); border-radius: 12px; }
-#formation-flow-list::before { content: ""; position: absolute; left: calc(50% - 1px); top: -16px; height: 16px; border-left: 2px solid var(--chip-line); }
-#formation-flow-list li { position: relative; flex: none; width: 188px; box-sizing: border-box; padding: 6px; }
-/* The session of the selected child: the band of the same form as #formation-head (the rule above) with the state and the name, and the terminal under it. */
-#formation-session { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
-#formation-session-head { gap: 8px; }
-#formation-child-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+#formation-flow-root { cursor: pointer; }
+#formation-flow-list { list-style: none; margin: 0 0 0 16px; padding: 10px 0 0 14px; border-left: 1.5px solid var(--chip-line); display: flex; flex-direction: column; gap: 8px; }
+#formation-flow-list li { position: relative; }
+#formation-flow-list li:has(.formation-card-close) .formation-card { padding-right: 30px; }
+.formation-card-close { position: absolute; top: 6px; right: 7px; }
 .formation-card { display: grid; gap: 2px; width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 9px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; text-align: left; }
 button.formation-card { cursor: pointer; }
 .formation-card[data-state="working"] { border-color: color-mix(in srgb, var(--agent-working) 55%, var(--line)); }
@@ -1084,13 +1080,13 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }
 .formation-card[data-state="planned"] .formation-card-state { color: var(--muted); font-weight: 600; }
 .formation-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-idle); }
-.formation-card[data-state="working"] .formation-dot, .formation-strip-mark[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
-.formation-card[data-state="waiting"] .formation-dot, .formation-strip-mark[data-state="waiting"] .formation-dot, .formation-row-count[data-state="waiting"] .formation-dot, #formation-session-head[data-state="waiting"] .formation-dot { background: var(--agent-question); }
-.formation-card[data-state="done"] .formation-dot, .formation-strip-mark[data-state="done"] .formation-dot, .formation-row-count[data-state="done"] .formation-dot, #formation-session-head[data-state="done"] .formation-dot { background: var(--agent-done); }
-.formation-card[data-state="planned"] .formation-dot, .formation-strip-mark[data-state="planned"] .formation-dot, .formation-row-count[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
+.formation-card[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
+.formation-card[data-state="waiting"] .formation-dot { background: var(--agent-question); }
+.formation-card[data-state="done"] .formation-dot { background: var(--agent-done); }
+.formation-card[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
 .formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
-@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-strip-mark[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }
@@ -1105,6 +1101,7 @@ button.formation-card { cursor: pointer; }
 .list-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 #orca-header .list-toggle { margin-right: auto; }
 .orca-tabbar .list-toggle { margin-left: 6px; }
+#formation-head .list-toggle { align-self: center; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
 button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }

@@ -54,16 +54,13 @@ describe("footer", () => {
   it("shows the tooltip of a footer control above it, because the footer is at the window's bottom edge", async () => {
     await start();
     await waitForText("#footer-bell .footer-count", "5");
-    await $("#nav-orca").click();
-    for (const id of ["footer-bell", "footer-mode-orca"]) {
-      // The window has no pointer to put over the control (`:hover` is not met), so the mouseover that the tooltip listens for is dispatched, once.
-      await browser.execute((i, once) => window.__e2e_once__(once) && document.getElementById(i)!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })), id, onceId());
-      await expect($(".tooltip")).toBeDisplayed();
-      const where = await browser.execute((i) => ({ tip: document.querySelector(".tooltip")!.getBoundingClientRect().bottom, target: document.getElementById(i)!.getBoundingClientRect().top }), id);
-      expect(where.tip).toBeLessThanOrEqual(where.target);
-      await browser.execute((i, once) => window.__e2e_once__(once) && document.getElementById(i)!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })), id, onceId());
-      await expect($(".tooltip")).not.toBeDisplayed();
-    }
+    // The window has no pointer to put over the control (`:hover` is not met), so the mouseover that the tooltip listens for is dispatched, once.
+    await browser.execute((once) => window.__e2e_once__(once) && document.getElementById("footer-bell")!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })), onceId());
+    await expect($(".tooltip")).toBeDisplayed();
+    const where = await browser.execute(() => ({ tip: document.querySelector(".tooltip")!.getBoundingClientRect().bottom, target: document.getElementById("footer-bell")!.getBoundingClientRect().top }));
+    expect(where.tip).toBeLessThanOrEqual(where.target);
+    await browser.execute((once) => window.__e2e_once__(once) && document.getElementById("footer-bell")!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })), onceId());
+    await expect($(".tooltip")).not.toBeDisplayed();
   });
 
   it("draws the sum again when the Slack count changes", async () => {

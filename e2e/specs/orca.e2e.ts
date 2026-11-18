@@ -444,13 +444,13 @@ describe("orca", () => {
     expect(box.header).toBe(44);
     expect(box.tabs).toBe(44);
     expect(box.tabsTop).toBe(box.headerTop);
-    expect(box.buttons).toEqual([28, 28]);
-    // No label, no 「新規」 and no reload button: the button of the list (A-23) and the one that adds a project (A-38) are the only ones.
+    expect(box.buttons).toEqual([28, 28, 28]);
+    // No label, no 「新規」 and no reload button: the button of the list (A-23), the one that makes a formation (A-37) and the one that adds a project (A-38) are the only ones.
     expect(await count("#orca-heading")).toBe(0);
     expect(await count("#orca-new")).toBe(0);
     expect(await count("#orca-refresh")).toBe(0);
     const order = await browser.execute(() => [...document.querySelectorAll("#orca-header button")].map((b) => b.id));
-    expect(order).toEqual(["orca-list-toggle", "orca-add"]);
+    expect(order).toEqual(["orca-list-toggle", "formation-new", "orca-add"]);
     // The plus is in the tab bar, after the strip of tabs (the button that opens the list is before the strip, and hidden while the list is open); it is a menu button, and waits for a project.
     await expect($(".orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
     await expect($(".orca-plus")).toHaveAttribute("aria-haspopup", "menu");
