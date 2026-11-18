@@ -1,12 +1,15 @@
-//! A-34: telling ruby-lsp which Ruby files of the worktree changed on the disk, as pure functions.
+//! A-34: telling a language server which files of its languages changed in the worktree on the disk, as pure functions.
 //!
-//! ruby-lsp indexes the worktree once, when it starts, and then follows only what the client tells it (`workspace/didChangeWatchedFiles`): it registers no watcher of its own. So before each question the app lists, by one command run in the worktree by the route of the server (`command`), the `*.rb` files that changed since the last look and all the `*.rb` files there are now, and tells the server the difference (`changes`, `message`). The command prints no more than the folders that hold the project's own code: `.git`, `node_modules`, `vendor/bundle`, `tmp`, `log` and `.claude/worktrees` (the worktrees of the children of a formation are made there, A-37) are not looked into. Nothing is written in the worktree, and `-mmin`, `-path` and `-prune` are what GNU, BSD and BusyBox `find` all have.
+//! A server such as ruby-lsp indexes the worktree once, when it starts, and then follows only what the client tells it (`workspace/didChangeWatchedFiles`): it registers no watcher of its own. So before each question the app lists, by one command run in the worktree by the route of the server (`command`), the files that changed since the last look and all the files there are now, of the extensions of the languages the server takes (`orca_language::extensions_of`), and tells the server the difference (`changes`, `message`). The command prints no more than the folders that hold the project's own code: `.git`, `node_modules`, `vendor/bundle`, `tmp`, `log` and `.claude/worktrees` (the worktrees of the children of a formation are made there, A-37) are not looked into. Nothing is written in the worktree, and `-mmin`, `-path` and `-prune` are what GNU, BSD and BusyBox `find` all have.
 
 use std::{collections::HashSet, time::Duration};
 
 use serde_json::{json, Value};
 
-use super::protocol::{notification, server_path, uri_of};
+use super::{
+    protocol::{notification, server_path, uri_of},
+    shell_quote,
+};
 
 /// The most bytes of the listing that are kept.
 pub(crate) const LIMIT: usize = 4 * 1024 * 1024;
@@ -17,8 +20,8 @@ const MAX_PATH: usize = 4096;
 /// The line between the changed files and all the files, and the last line of a listing that ended well.
 const SPLIT: &str = "--";
 const END: &str = "--end";
-/// The folders that are not looked into.
-const SKIP: &str = r"\( -name .git -o -name node_modules -o -path ./vendor/bundle -o -path ./tmp -o -path ./log -o -path ./.claude/worktrees \) -prune -o -type f -name '*.rb'";
+/// The folders that are not looked into, and what is looked at in the others: files.
+const SKIP: &str = r"\( -name .git -o -name node_modules -o -path ./vendor/bundle -o -path ./tmp -o -path ./log -o -path ./.claude/worktrees \) -prune -o -type f";
 
 /// How a file changed, as the numbers of LSP's `FileChangeType`.
 const CREATED: u8 = 1;
@@ -44,11 +47,19 @@ pub(crate) fn minutes_since(elapsed: Duration) -> u64 {
     elapsed.as_secs().div_ceil(60) + 1
 }
 
-/// The command, run in the worktree, that prints the `*.rb` files modified in the last `minutes` minutes, the line `--`, all the `*.rb` files, and the line `--end` when the second listing ended well. It is one script: `cd` failing runs none of it, and a `find` that failed somewhere prints no end.
-pub(crate) fn command(minutes: u64) -> String {
-    format!(
-        "{{ find . {SKIP} -mmin -{minutes} -print 2>/dev/null; echo {SPLIT}; find . {SKIP} -print 2>/dev/null && echo {END}; }}"
-    )
+/// The command, run in the worktree, that prints the files of the extensions `extensions` (each with its dot, as `orca_language::extensions_of` gives them) modified in the last `minutes` minutes, the line `--`, all the files of them, and the line `--end` when the second listing ended well. It is one script: `cd` failing runs none of it, and a `find` that failed somewhere prints no end. With no extension there is nothing to look at, and no command.
+pub(crate) fn command(minutes: u64, extensions: &[String]) -> Option<String> {
+    if extensions.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = extensions
+        .iter()
+        .map(|extension| format!("-name {}", shell_quote(&format!("*{extension}"))))
+        .collect();
+    let find = format!("{SKIP} \\( {} \\)", names.join(" -o "));
+    Some(format!(
+        "{{ find . {find} -mmin -{minutes} -print 2>/dev/null; echo {SPLIT}; find . {find} -print 2>/dev/null && echo {END}; }}"
+    ))
 }
 
 /// A line of the listing as a path from the worktree: `./` is taken off, and a line that is not a path of a file (empty, with a control character, too long) is none.
@@ -175,7 +186,7 @@ mod tests {
 
     #[test]
     fn the_command_lists_the_recent_files_then_all_of_them_and_skips_the_big_folders() {
-        let command = command(5);
+        let command = command(5, &[".rb".to_owned()]).unwrap();
         assert!(command.starts_with("{ find . "), "{command}");
         assert!(command.ends_with("; }"), "{command}");
         assert!(command.contains("-mmin -5 -print"), "{command}");
@@ -192,6 +203,29 @@ mod tests {
         ] {
             assert_eq!(command.matches(skipped).count(), 2, "{skipped}");
         }
+    }
+
+    #[test]
+    fn the_command_looks_for_every_extension_of_the_server_and_for_nothing_else() {
+        let command = command(5, &[".ts".to_owned(), ".tsx".to_owned()]).unwrap();
+        for name in ["-name '*.ts'", "-name '*.tsx'"] {
+            assert_eq!(command.matches(name).count(), 2, "{name}");
+        }
+        assert!(!command.contains("*.rb"), "{command}");
+        assert_eq!(
+            command
+                .matches(r"-type f \( -name '*.ts' -o -name '*.tsx' \) ")
+                .count(),
+            2,
+            "{command}"
+        );
+    }
+
+    #[test]
+    fn an_extension_is_one_quoted_word_and_no_extension_is_no_command() {
+        let command = command(1, &[".a b;c".to_owned()]).unwrap();
+        assert!(command.contains("-name '*.a b;c'"), "{command}");
+        assert_eq!(super::command(1, &[]), None);
     }
 
     // ---- what it printed ----

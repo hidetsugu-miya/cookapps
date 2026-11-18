@@ -2,6 +2,7 @@ import type { LspLaunch } from "../../ts/bindings/LspLaunch";
 import type { LspLocation } from "../../ts/bindings/LspLocation";
 import type { LspPlace } from "../../ts/bindings/LspPlace";
 import type { LspRepoSettings } from "../../ts/bindings/LspRepoSettings";
+import type { LspServerSettings } from "../../ts/bindings/LspServerSettings";
 import type { LspStatus } from "../../ts/bindings/LspStatus";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
@@ -130,7 +131,7 @@ describe("orca: definition (A-34)", () => {
     await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(0, 0));
     await contextAt(onRails());
     expect(await waitForCalls("lsp_word")).toEqual([{ line: "    Rails.logger.info(x)", character: 6 }]);
-    expect(await waitForCalls("lsp_definition")).toEqual([{ environment: null, worktree, relative: "a.rb", text: source, line: 2, character: 6 }]);
+    expect(await waitForCalls("lsp_definition")).toEqual([{ environment: null, worktree, server: "ruby-lsp", relative: "a.rb", text: source, line: 2, character: 6 }]);
     expect(await prevented()).toBe(true);
     await expect($("#orca-definition")).toBeDisplayed();
     await expect(mode("定義")).toHaveAttribute("aria-pressed", "true");
@@ -158,7 +159,7 @@ describe("orca: definition (A-34)", () => {
     await browser.pause(150);
     await contextAt(typed.lastIndexOf("Rails") + 4);
     const [call] = await waitForCalls("lsp_definition");
-    expect(call).toEqual({ environment: null, worktree, relative: "a.rb", text: typed, line: 5, character: 8 });
+    expect(call).toEqual({ environment: null, worktree, server: "ruby-lsp", relative: "a.rb", text: typed, line: 5, character: 8 });
     expect(await callsOf("lsp_word")).toEqual([{ line: "x = Rails", character: 8 }]);
   });
 
@@ -191,7 +192,7 @@ describe("orca: definition (A-34)", () => {
     await expect($('#orca-definition-list .orca-def-toggle[aria-expanded="true"]')).toBeDisplayed();
     await waitForCount("#orca-definition-list .orca-def-line", 7);
     expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails", "1 件"]);
-    expect(await callsOf("orca_file_read")).toEqual([{ path: worktree, relative: "app/lib/rails_ext.rb", environment: null }]);
+    expect(await callsOf("orca_file_read")).toEqual([{ path: worktree, server: "ruby-lsp", relative: "app/lib/rails_ext.rb", environment: null }]);
   });
 
   it("opens a row to the three lines before and after the definition, marks its line, and closes it without reading again (A-34)", async () => {
@@ -202,7 +203,7 @@ describe("orca: definition (A-34)", () => {
     await waitForCount("#orca-definition-list .orca-def-line", 7);
     expect(await lineTexts(0)).toEqual(["4row 4", "5row 5", "6row 6", "7row 7", "8row 8", "9row 9", "10row 10"]);
     expect(await textsOf('#orca-definition-list .orca-def-line[data-hit="true"]')).toEqual(["7row 7"]);
-    expect(await callsOf(read)).toEqual([{ path: worktree, relative: "app/lib/rails_ext.rb", environment: null }]);
+    expect(await callsOf(read)).toEqual([{ path: worktree, server: "ruby-lsp", relative: "app/lib/rails_ext.rb", environment: null }]);
     await defRow(0).$(".orca-def-toggle").click();
     await expect($('#orca-definition-list .orca-def-toggle[aria-expanded="true"]')).not.toExist();
     expect(await count("#orca-definition-list .orca-def-code")).toBe(0);
@@ -217,7 +218,7 @@ describe("orca: definition (A-34)", () => {
     const read = await mock("lsp_read_outside", { path: other.path, text: rows(30) });
     await defRow(2).$(".orca-def-toggle").click();
     await waitForCount("#orca-definition-list .orca-def-line", 6);
-    expect(await callsOf(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, path: other.path }]);
+    expect(await callsOf(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, server: "ruby-lsp", path: other.path }]);
     expect(await lineTexts(2)).toEqual(["1row 1", "2row 2", "3row 3", "4row 4", "5row 5", "6row 6"]);
     expect(await textsOf('#orca-definition-list .orca-def-line[data-hit="true"]')).toEqual(["3row 3"]);
     expect(await callsOf("orca_file_read")).toHaveLength(1);
@@ -237,7 +238,7 @@ describe("orca: definition (A-34)", () => {
     await waitForCount("#orca-definition-list .orca-def", 3);
     const read = await mock("orca_file_read", text(rows(40), "ruby"));
     await press(0, "open");
-    expect(await waitForCalls(read)).toEqual([{ path: worktree, relative: "app/lib/rails_ext.rb", environment: null }]);
+    expect(await waitForCalls(read)).toEqual([{ path: worktree, server: "ruby-lsp", relative: "app/lib/rails_ext.rb", environment: null }]);
     await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
     expect(await tabTitles()).toEqual(expect.arrayContaining(["a.rb", "rails_ext.rb"]));
     await expect($(".orca-edit-path")).toHaveText("app/lib/rails_ext.rb");
@@ -269,7 +270,7 @@ describe("orca: definition (A-34)", () => {
     const read = await mock("lsp_read_outside", { path: gem.path, text: rails });
     const write = await mock("orca_file_write", { state: "saved", signature: "sig-2" });
     await press(1, "open");
-    expect(await waitForCalls(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, path: gem.path }]);
+    expect(await waitForCalls(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, server: "ruby-lsp", path: gem.path }]);
     await expect($(".orca-edit-area")).toHaveValue(rails, { trim: false });
     await expect($(".orca-edit-area")).toHaveAttribute("readonly");
     await expect($(".orca-edit-path")).toHaveText(gem.path);
@@ -367,7 +368,11 @@ describe("orca: definition (A-34)", () => {
   // ---- the language server under the definition ----
 
   const repo = "proj_example-app";
-  const unset = (extra: Partial<LspRepoSettings> = {}): LspRepoSettings => ({ environment: null, project: repo, autoStart: true, command: null, mount: null, service: null, sshHost: null, ...extra });
+  // The settings of a repository with nothing saved: the one server, ruby-lsp, taking Ruby. `extra` changes the repository (`environment`, `sshHost`) or that server (the rest).
+  const unset = (extra: { environment?: string | null; sshHost?: string | null } & Partial<LspServerSettings> = {}): LspRepoSettings => {
+    const { environment = null, sshHost = null, ...over } = extra;
+    return { environment, project: repo, sshHost, servers: [{ name: "ruby-lsp", languages: ["ruby"], autoStart: true, command: null, mount: null, service: null, ...over }] };
+  };
   const composeLaunch = (extra: Partial<LspLaunch> = {}): LspLaunch => ({
     method: "compose",
     candidates: [{ service: "app", mount: "/application" }],
@@ -380,7 +385,7 @@ describe("orca: definition (A-34)", () => {
   const notStarted = status("stopped", { reason: "notStarted" });
   const down = status("stopped", { reason: "containerDown", message: "サービスのコンテナが動いていません" });
   // The event Rust sends at each change of the state of a server.
-  const tell = (next: LspStatus, at = worktree) => emitEvent("lsp-status", { environment: null, worktree: at, status: next });
+  const tell = (next: LspStatus, at = worktree) => emitEvent("lsp-status", { environment: null, worktree: at, server: "ruby-lsp", status: next });
   // Sets a field as the owner leaves it: its value (or, for a check box, its state) and the `change` event.
   const change = (id: string, value: string | boolean) =>
     browser.execute(
@@ -406,7 +411,7 @@ describe("orca: definition (A-34)", () => {
     await expect($("#orca-lsp")).toBeDisplayed();
     await waitForCalls("lsp_launch");
   }
-  const worktreeArgs = { environment: null, project: repo, worktree };
+  const worktreeArgs = { environment: null, project: repo, worktree, server: "ruby-lsp" };
 
   it("draws the state, the way the server is started and the settings under the definition, and reads them once (A-34)", async () => {
     await showServer(composeLaunch(), unset({ autoStart: false }));
@@ -422,7 +427,7 @@ describe("orca: definition (A-34)", () => {
     await expect($("#orca-lsp-note")).not.toBeDisplayed();
     expect(await callsOf("lsp_settings")).toEqual([{ environment: null, project: repo }]);
     expect(await callsOf("lsp_launch")).toEqual([worktreeArgs]);
-    expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree }]);
+    expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree, server: "ruby-lsp" }]);
   });
 
   it("reads nothing while the definition is not what the pane shows (A-34)", async () => {
@@ -455,6 +460,15 @@ describe("orca: definition (A-34)", () => {
     // The reason is the one Rust told (it was `failed` just before), so the dot is no longer red.
     await expect($("#orca-lsp-dot")).toHaveAttribute("data-reason", "notStarted");
     await expect(stateText()).toHaveText("ruby-lsp 停止中");
+  });
+
+  it("shows and saves the first server of a repository that has several, and leaves the others as they are (A-34)", async () => {
+    const other: LspServerSettings = { name: "ts", languages: ["typescript"], autoStart: true, command: null, mount: null, service: null };
+    const base = unset();
+    await showServer(composeLaunch(), { ...base, servers: [...base.servers, other] });
+    await expect(stateText()).toHaveText("ruby-lsp 動作中");
+    await change("orca-lsp-auto", false);
+    expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: { ...base, servers: [{ ...base.servers[0], autoStart: false }, other] } }]);
   });
 
   it("says why the way cannot be read, with the fields left empty (A-34)", async () => {
@@ -550,7 +564,7 @@ describe("orca: definition (A-34)", () => {
     await expect($("#orca-lsp-ssh-row")).toBeDisplayed();
     await expect($("#orca-lsp-ssh")).toHaveValue("dev");
     expect(await callsOf("lsp_settings")).toEqual([{ environment: "Studio", project: repo }]);
-    expect(await callsOf("lsp_launch")).toEqual([{ environment: "Studio", project: repo, worktree }]);
+    expect(await callsOf("lsp_launch")).toEqual([{ environment: "Studio", project: repo, worktree, server: "ruby-lsp" }]);
     await change("orca-lsp-ssh", "build");
     expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ environment: "Studio", sshHost: "build" }) }]);
   });
@@ -606,7 +620,7 @@ describe("orca: definition (A-34)", () => {
     const start = await mock("lsp_start", status("indexing"));
     await openFileWith("a.rb", text(source));
     expect(await waitForCalls(start)).toEqual([worktreeArgs]);
-    expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree }]);
+    expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree, server: "ruby-lsp" }]);
     expect(await callsOf("lsp_settings")).toEqual([{ environment: null, project: repo }]);
   });
 
@@ -675,7 +689,7 @@ describe("orca: definition (A-34)", () => {
     await browser.pause(300);
     expect(await callsOf(stop)).toEqual([]);
     await closeFileTab();
-    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree }]);
+    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree, server: "ruby-lsp" }]);
     await expect($('.orca-tab[data-file="true"]')).not.toExist();
   });
 
@@ -703,7 +717,7 @@ describe("orca: definition (A-34)", () => {
     // The tab of the file is still open: only the list changes.
     await mock("orca_overview", orcaOverview(sample(), [orcaWorktree("example-api", "main")]));
     await showAgain();
-    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree }]);
+    expect(await waitForCalls(stop)).toEqual([{ environment: null, worktree, server: "ruby-lsp" }]);
   });
 
   it("starts the server again when a Ruby file is opened after it was stopped (A-34)", async () => {

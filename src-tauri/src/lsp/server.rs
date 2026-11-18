@@ -1,9 +1,9 @@
-//! A-34: the ruby-lsp processes that stay, one for each worktree (the place of its project and its path), their state, and the questions to them.
+//! A-34: the language server processes that stay, one for each worktree (the place of its project and its path) and server name, their state, and the questions to them.
 //!
-//! A server is started by `lsp_start` (or replaced by `lsp_restart`) and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
-//! The state is `indexing` from the start to the end of the progress ruby-lsp shows (`protocol::Progress`), `running` after it, and `stopped` with a reason when the process is gone. A service of compose whose container does not run is told as `containerDown`, so that the screen can offer to start it; starting the container is not done here. Each change of the state is told by the event `lsp-status` (`LspStatusEvent`), and `lsp_status` answers the state as it is.
-//! A server is stopped by `shutdown` and `exit`, and then by closing its standard input, which ends ruby-lsp, through `docker compose exec` and `ssh` as well; a process that is still there after a moment is killed.
-//! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which Ruby files changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered.
+//! A server has the name of its entry in the settings of its repository (`lsp::LspServerSettings`), and every command is given it. A server is started by `lsp_start` (or replaced by `lsp_restart`) and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
+//! The state is `indexing` from the start to the end of the progress the server shows (`protocol::Progress`), `running` after it, and `stopped` with a reason when the process is gone. A service of compose whose container does not run is told as `containerDown`, so that the screen can offer to start it; starting the container is not done here. Each change of the state is told by the event `lsp-status` (`LspStatusEvent`, with the server's name), and `lsp_status` answers the state as it is.
+//! A server is stopped by `shutdown` and `exit`, and then by closing its standard input, which ends the server, through `docker compose exec` and `ssh` as well; a process that is still there after a moment is killed.
+//! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which files of its languages changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered.
 
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
@@ -32,17 +32,18 @@ use tokio::{
 use ts_rs::TS;
 
 use super::{
-    check_worktree, plan_for,
+    check_server, check_worktree, plan_for,
     protocol::{
         answer_request, classify, encode, error_response, initialize_params, locations,
         notification, read_frame, request, response, server_path, uri_of, Frame, Incoming,
         LspLocation, Progress,
     },
-    run_on, spawn_of, watch, LspMethod, Route, Spawn,
+    run_on, spawn_of, watch, LspMethod, Planned, Route, Spawn,
 };
 use crate::{
     auth::config_dir,
     orca_files::check_worktree_of_project,
+    orca_language,
     ssh::{failure, shared_control, Ran},
 };
 
@@ -69,13 +70,14 @@ const NOT_READY: &str = "言語サーバーの準備がまだできていませ�
 const BUSY: &str = "言語サーバーへの問い合わせが多すぎます";
 const TIMED_OUT: &str = "言語サーバーが時間内に答えませんでした";
 const TOO_LARGE: &str = "ファイルが大きすぎます";
-const NO_WAY: &str = "ruby-lsp を起動する方法が見つかりません";
-const NOT_RUN: &str = "ruby-lsp を起動できません";
-const EXITED: &str = "ruby-lsp が終了しました";
-const INIT_TIMEOUT: &str = "ruby-lsp が時間内に起動しませんでした";
-const INIT_FAILED: &str = "ruby-lsp の初期化に失敗しました";
-const WRITE_FAILED: &str = "ruby-lsp に送れません";
-const WRITE_TIMEOUT: &str = "ruby-lsp が時間内に受け取りませんでした";
+// What is said of the server, without its name: `named` puts the name in front of them.
+const NO_WAY: &str = "を起動する方法が見つかりません";
+const NOT_RUN: &str = "を起動できません";
+const EXITED: &str = "が終了しました";
+const INIT_TIMEOUT: &str = "が時間内に起動しませんでした";
+const INIT_FAILED: &str = "の初期化に失敗しました";
+const WRITE_FAILED: &str = "に送れません";
+const WRITE_TIMEOUT: &str = "が時間内に受け取りませんでした";
 const CONTAINER_DOWN: &str = "サービスのコンテナが動いていません";
 
 // ---- what the screen gets ----
@@ -145,7 +147,12 @@ impl LspStatus {
     }
 }
 
-/// A change of the state of the server of a worktree: the event `lsp-status`.
+/// What is said of the server `name`: its name, then `what` (one of the texts above, which goes on from the name).
+fn named(name: &str, what: &str) -> String {
+    format!("{name} {what}")
+}
+
+/// A change of the state of the server `server` of a worktree: the event `lsp-status`.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -154,6 +161,7 @@ pub struct LspStatusEvent {
     #[cfg_attr(test, ts(optional = nullable))]
     pub environment: Option<String>,
     pub worktree: String,
+    pub server: String,
     pub status: LspStatus,
 }
 
@@ -230,9 +238,10 @@ impl Timing {
 
 /// What a question to the server can be.
 pub(crate) enum Cmd {
-    /// The definition at a position of the file `uri`, whose whole text is `text`. The answer is the `result` of the server, as it came.
+    /// The definition at a position of the file `uri`, whose language is `language` and whole text is `text`. The answer is the `result` of the server, as it came.
     Definition {
         uri: String,
+        language: String,
         text: String,
         line: u32,
         character: u32,
@@ -271,11 +280,12 @@ fn text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
-/// Tells the server the text of the file `uri`: `didOpen` the first time, `didChange` with the whole text when it is not the text sent last, nothing when it is. Only the version and the hash of the text are kept.
+/// Tells the server the text of the file `uri`, whose language is `language` (A-21): `didOpen` the first time, `didChange` with the whole text when it is not the text sent last, nothing when it is. Only the version and the hash of the text are kept.
 async fn sync_document<W: AsyncWrite + Unpin>(
     writer: &mut W,
     docs: &mut HashMap<String, (i64, u64)>,
     uri: &str,
+    language: &str,
     text: &str,
     limit: Duration,
 ) -> Result<(), String> {
@@ -285,7 +295,7 @@ async fn sync_document<W: AsyncWrite + Unpin>(
             docs.insert(uri.to_owned(), (1, hash));
             notification(
                 "textDocument/didOpen",
-                json!({"textDocument": {"uri": uri, "languageId": "ruby", "version": 1, "text": text}}),
+                json!({"textDocument": {"uri": uri, "languageId": language, "version": 1, "text": text}}),
             )
         }
         Some(&(_, sent)) if sent == hash => return Ok(()),
@@ -471,7 +481,7 @@ where
                         }
                     }
                 }
-                Some(Cmd::Definition { uri, text, line, character, reply }) => {
+                Some(Cmd::Definition { uri, language, text, line, character, reply }) => {
                     if !initialized {
                         let _ = reply.send(Err(NOT_READY.into()));
                         continue;
@@ -492,7 +502,7 @@ where
                         let _ = reply.send(Err(BUSY.into()));
                         continue;
                     }
-                    if let Err(e) = sync_document(writer, &mut docs, &uri, &text, timing.write).await {
+                    if let Err(e) = sync_document(writer, &mut docs, &uri, &language, &text, timing.write).await {
                         return End::Died(e);
                     }
                     next_id += 1;
@@ -537,15 +547,16 @@ async fn run_spawn(ctx: &mut Ctx, spawn: &Spawn, mount: &str, timing: &Timing) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    let name = ctx.publisher.key.server.clone();
     let Ok(mut child) = command.spawn() else {
-        ctx.publisher.set(LspStatus::failed(NOT_RUN));
+        ctx.publisher.set(LspStatus::failed(named(&name, NOT_RUN)));
         return;
     };
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
         let _ = child.kill().await;
-        ctx.publisher.set(LspStatus::failed(NOT_RUN));
+        ctx.publisher.set(LspStatus::failed(named(&name, NOT_RUN)));
         return;
     };
     let kept = Arc::new(Mutex::new(Vec::new()));
@@ -589,28 +600,46 @@ async fn run_spawn(ctx: &mut Ctx, spawn: &Spawn, mount: &str, timing: &Timing) {
     if let End::Died(reason) = end {
         let stderr =
             String::from_utf8_lossy(&kept.lock().unwrap_or_else(|e| e.into_inner())).into_owned();
-        ctx.publisher.set(stopped_status(&reason, code, &stderr));
+        ctx.publisher
+            .set(stopped_status(&named(&name, &reason), code, &stderr));
     }
 }
 
-/// How a server was started, as it was decided when it started: where its worktree is, the path the worktree has where it runs, and the method and the service. What it needs later (reading a file of its side, looking at the disk) goes by this and not by what the worktree says then, which may have changed.
+/// How a server was started, as it was decided when it started: where its worktree is, the path the worktree has where it runs, the method and the service, and the extensions of the files of its languages (`orca_language::extensions_of`). What it needs later (reading a file of its side, looking at the disk) goes by this and not by what the worktree or the settings say then, which may have changed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Way {
     pub mount: String,
     pub route: Route,
     pub method: LspMethod,
     pub service: Option<String>,
+    pub extensions: Vec<String>,
 }
 
-/// How the server of a worktree is started, read from the worktree: the process, and how it was decided. Blocking (it runs the commands of `lsp::plan_for`).
+/// The extensions of the files of `languages`, each once.
+fn extensions_of(languages: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = languages
+        .iter()
+        .flat_map(|language| orca_language::extensions_of(language))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// How the server `server` of a worktree is started, read from the worktree: the process, and how it was decided. Blocking (it runs the commands of `lsp::plan_for`).
 fn plan(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     worktree: &str,
+    server: &str,
 ) -> Result<(Spawn, Way), String> {
-    let (route, launch) = plan_for(dir, environment, project, worktree, run_on)?;
-    let command = launch.command.ok_or(NO_WAY)?;
+    let Planned {
+        route,
+        launch,
+        languages,
+    } = plan_for(dir, environment, project, worktree, server, run_on)?;
+    let command = launch.command.ok_or_else(|| named(server, NO_WAY))?;
     let mount = launch.mount.unwrap_or_else(|| worktree.to_owned());
     let control = match route {
         Route::Local => None,
@@ -624,6 +653,7 @@ fn plan(
             route,
             method: launch.method,
             service: launch.service,
+            extensions: extensions_of(&languages),
         },
     ))
 }
@@ -631,7 +661,13 @@ fn plan(
 /// The whole life of the server of a worktree: how it is started, the process, the talk and the end.
 async fn run_server(mut ctx: Ctx, dir: PathBuf, key: Key, project: String) {
     let planned = tokio::task::spawn_blocking(move || {
-        plan(&dir, key.environment.as_deref(), &project, &key.worktree)
+        plan(
+            &dir,
+            key.environment.as_deref(),
+            &project,
+            &key.worktree,
+            &key.server,
+        )
     })
     .await
     .map_err(|e| e.to_string())
@@ -648,11 +684,12 @@ async fn run_server(mut ctx: Ctx, dir: PathBuf, key: Key, project: String) {
 
 // ---- the servers ----
 
-/// A server is known by the place of its project (`None`: this machine, else the name of the saved environment) and its worktree.
+/// A server is known by the place of its project (`None`: this machine, else the name of the saved environment), its worktree and its name in the settings of its repository.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
     environment: Option<String>,
     worktree: String,
+    server: String,
 }
 
 type Emit = Arc<dyn Fn(LspStatusEvent) + Send + Sync>;
@@ -677,6 +714,7 @@ impl Publisher {
         (self.emit)(LspStatusEvent {
             environment: self.key.environment.clone(),
             worktree: self.key.worktree.clone(),
+            server: self.key.server.clone(),
             status,
         });
     }
@@ -733,7 +771,7 @@ impl Server {
     }
 }
 
-/// The servers of the app, one for each worktree (managed state).
+/// The servers of the app, one for each worktree and server name (managed state).
 #[derive(Default)]
 pub struct LspServers {
     inner: tokio::sync::Mutex<HashMap<Key, Arc<Server>>>,
@@ -871,11 +909,13 @@ impl LspServers {
             return Err(TOO_LARGE.into());
         }
         let uri = uri_of(&server_path(&mount, relative)?);
+        let language = orca_language::detect_language(relative, &text).to_owned();
         let (reply, answer) = oneshot::channel();
         server
             .commands
             .send(Cmd::Definition {
                 uri,
+                language,
                 text,
                 line,
                 character,
@@ -897,14 +937,15 @@ impl LspServers {
         Ok(found)
     }
 
-    /// How the server of the worktree was started, when it gave `path` as a definition outside the worktree: only such a path may be read from the server's side, and it is read the way the server was started (`Way`), not the way the worktree says now.
+    /// How the server `server` of the worktree was started, when it gave `path` as a definition outside the worktree: only such a path may be read from the server's side, and it is read the way the server was started (`Way`), not the way the worktree says now.
     pub(crate) async fn outside_way(
         &self,
         environment: Option<&str>,
         worktree: &str,
+        server: &str,
         path: &str,
     ) -> Option<Way> {
-        let server = self.get(&key_of(environment, worktree)).await?;
+        let server = self.get(&key_of(environment, worktree, server)).await?;
         let known = server
             .outside
             .lock()
@@ -913,7 +954,7 @@ impl LspServers {
         known.then(|| server.way()).flatten()
     }
 
-    /// Tells the server of `key` which Ruby files of the worktree changed on the disk since the last look (`look`): `run` runs the listing in the worktree by the route of the server. A look that fails is left out and tried again at the next question, and the question goes on without it.
+    /// Tells the server of `key` which files of its languages in the worktree changed on the disk since the last look (`look`): `run` runs the listing in the worktree by the route of the server. A look that fails is left out and tried again at the next question, and the question goes on without it.
     pub(crate) async fn refresh<F>(&self, key: &Key, run: F)
     where
         F: FnOnce(&Route, &str, &str, usize) -> Result<Ran, String> + Send + 'static,
@@ -943,7 +984,12 @@ where
 {
     let mut state = state.lock().await;
     let looked_at = Instant::now();
-    let command = watch::command(watch::minutes_since(looked_at.duration_since(state.at)));
+    let Some(command) = watch::command(
+        watch::minutes_since(looked_at.duration_since(state.at)),
+        &way.extensions,
+    ) else {
+        return Vec::new();
+    };
     let (route, worktree) = (way.route.clone(), worktree.to_owned());
     let ran = timeout(
         REFRESH_TIMEOUT,
@@ -966,10 +1012,11 @@ where
     changes
 }
 
-fn key_of(environment: Option<&str>, worktree: &str) -> Key {
+fn key_of(environment: Option<&str>, worktree: &str, server: &str) -> Key {
     Key {
         environment: environment.map(str::to_owned),
         worktree: worktree.to_owned(),
+        server: server.to_owned(),
     }
 }
 
@@ -982,7 +1029,7 @@ fn emitter(app: AppHandle) -> Emit {
 
 // ---- the commands ----
 
-/// Starts ruby-lsp for `worktree` of the project `project` of `environment` (`None`: this machine), and answers its state, `indexing`. A server that is there and not stopped is left as it is, a stopped one is started again. How it is started is read from the worktree by the task, and a failure of that, or of the process, is its state `stopped` with the message, told by the event `lsp-status` (A-34).
+/// Starts the server `server` for `worktree` of the project `project` of `environment` (`None`: this machine), and answers its state, `indexing`. A server that is there and not stopped is left as it is, a stopped one is started again. How it is started is read from the worktree by the task, and a failure of that, or of the process, is its state `stopped` with the message, told by the event `lsp-status` (A-34).
 #[tauri::command]
 pub async fn lsp_start(
     app: AppHandle,
@@ -990,11 +1037,13 @@ pub async fn lsp_start(
     environment: Option<String>,
     project: String,
     worktree: String,
+    server: String,
 ) -> Result<LspStatus, String> {
+    check_server(&server)?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
-    let key = key_of(environment.as_deref(), &worktree);
+    let key = key_of(environment.as_deref(), &worktree, &server);
     let run_key = key.clone();
     Ok(servers
         .start_with(key, emitter(app), move |ctx| {
@@ -1003,7 +1052,7 @@ pub async fn lsp_start(
         .await)
 }
 
-/// Stops the server of `worktree` and starts it again, as `lsp_start` does (the restart of the screen), and answers the state, `indexing`. The places outside the worktree that the stopped one gave stay known to the new one, which `lsp_stop` and `lsp_start` one after the other would lose (A-34).
+/// Stops the server `server` of `worktree` and starts it again, as `lsp_start` does (the restart of the screen), and answers the state, `indexing`. The places outside the worktree that the stopped one gave stay known to the new one, which `lsp_stop` and `lsp_start` one after the other would lose (A-34).
 #[tauri::command]
 pub async fn lsp_restart(
     app: AppHandle,
@@ -1011,11 +1060,13 @@ pub async fn lsp_restart(
     environment: Option<String>,
     project: String,
     worktree: String,
+    server: String,
 ) -> Result<LspStatus, String> {
+    check_server(&server)?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
-    let key = key_of(environment.as_deref(), &worktree);
+    let key = key_of(environment.as_deref(), &worktree, &server);
     let run_key = key.clone();
     Ok(servers
         .restart_with(key, emitter(app), move |ctx| {
@@ -1024,43 +1075,47 @@ pub async fn lsp_restart(
         .await)
 }
 
-/// Stops the server of `worktree`: `shutdown` and `exit`, then its standard input is closed, which ends ruby-lsp. Nothing to stop is no error (A-34).
+/// Stops the server `server` of `worktree`: `shutdown` and `exit`, then its standard input is closed, which ends the process. Nothing to stop is no error (A-34).
 #[tauri::command]
 pub async fn lsp_stop(
     servers: State<'_, LspServers>,
     environment: Option<String>,
     worktree: String,
+    server: String,
 ) -> Result<(), String> {
     servers
-        .stop(&key_of(environment.as_deref(), &worktree))
+        .stop(&key_of(environment.as_deref(), &worktree, &server))
         .await;
     Ok(())
 }
 
-/// The state of the server of `worktree`, `stopped` with the reason `notStarted` when there is none (A-34).
+/// The state of the server `server` of `worktree`, `stopped` with the reason `notStarted` when there is none (A-34).
 #[tauri::command]
 pub async fn lsp_status(
     servers: State<'_, LspServers>,
     environment: Option<String>,
     worktree: String,
+    server: String,
 ) -> Result<LspStatus, String> {
     Ok(servers
-        .status(&key_of(environment.as_deref(), &worktree))
+        .status(&key_of(environment.as_deref(), &worktree, &server))
         .await)
 }
 
-/// The places of the definition of the name at `line` and `character` (UTF-16 units, as the index of a string of the editor) of the file `relative` of `worktree`, whose text now is `text` (A-34). A place inside the worktree has its path from the worktree; one outside has the server's absolute path and `outside`.
+/// The places of the definition of the name at `line` and `character` (UTF-16 units, as the index of a string of the editor) of the file `relative` of `worktree`, whose text now is `text`, asked of the server `server` (A-34). A place inside the worktree has its path from the worktree; one outside has the server's absolute path and `outside`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn lsp_definition(
     servers: State<'_, LspServers>,
     environment: Option<String>,
     worktree: String,
+    server: String,
     relative: String,
     text: String,
     line: u32,
     character: u32,
 ) -> Result<Vec<LspLocation>, String> {
-    let key = key_of(environment.as_deref(), &worktree);
+    let key = key_of(environment.as_deref(), &worktree, &server);
     servers.refresh(&key, run_on).await;
     servers
         .definition(&key, &relative, text, line, character)
@@ -1226,10 +1281,22 @@ mod tests {
             line: u32,
             character: u32,
         ) -> Result<Value, String> {
+            self.definition_in(uri, "ruby", text, line, character).await
+        }
+
+        async fn definition_in(
+            &self,
+            uri: &str,
+            language: &str,
+            text: &str,
+            line: u32,
+            character: u32,
+        ) -> Result<Value, String> {
             let (reply, answer) = oneshot::channel();
             self.commands
                 .send(Cmd::Definition {
                     uri: uri.into(),
+                    language: language.into(),
                     text: text.into(),
                     line,
                     character,
@@ -1471,6 +1538,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_language_id_of_an_open_is_the_language_of_the_file() {
+        let run = run(Plan::new());
+        run.plan.end.notify_one();
+        run.until_states(2).await;
+        run.definition_in("file:///app/a.ts", "typescript", "let x = 1\n", 0, 4)
+            .await
+            .unwrap();
+        until_calls(&run, 2 + 3).await;
+        assert_eq!(
+            run.calls()[2]["params"]["textDocument"],
+            json!({"uri": "file:///app/a.ts", "languageId": "typescript", "version": 1, "text": "let x = 1\n"})
+        );
+        run.stop().await;
+    }
+
+    #[tokio::test]
     async fn a_notice_of_changed_files_is_sent_as_it_is_and_the_next_question_follows_it() {
         let run = run(Plan::new());
         run.plan.end.notify_one();
@@ -1591,6 +1674,7 @@ mod tests {
         commands
             .send(Cmd::Definition {
                 uri: "file:///app/a.rb".into(),
+                language: "ruby".into(),
                 text: "a".into(),
                 line: 0,
                 character: 0,
@@ -1662,6 +1746,7 @@ mod tests {
         run.commands
             .send(Cmd::Definition {
                 uri: "file:///app/a.rb".into(),
+                language: "ruby".into(),
                 text: "a".into(),
                 line: 0,
                 character: 0,
@@ -1726,7 +1811,7 @@ mod tests {
     // ---- the servers ----
 
     fn key(worktree: &str) -> Key {
-        key_of(None, worktree)
+        key_of(None, worktree, "ruby-lsp")
     }
 
     fn collector() -> (Emit, Arc<Mutex<Vec<LspStatusEvent>>>) {
@@ -1744,6 +1829,7 @@ mod tests {
             route: Route::Local,
             method: LspMethod::Compose,
             service: Some("app".into()),
+            extensions: vec![".rb".into()],
         }
     }
 
@@ -1839,8 +1925,8 @@ mod tests {
         assert_eq!(states, vec![LspState::Running]);
         let event = events.lock().unwrap()[0].clone();
         assert_eq!(
-            (event.environment, event.worktree),
-            (None, "/w/a".to_owned())
+            (event.environment, event.worktree, event.server),
+            (None, "/w/a".to_owned(), "ruby-lsp".to_owned())
         );
         servers.close_all().await;
     }
@@ -1852,22 +1938,32 @@ mod tests {
         let started = Arc::new(AtomicUsize::new(0));
         let plan = Plan::new();
         for k in [
-            key_of(None, "/w"),
-            key_of(Some("srv"), "/w"),
-            key_of(None, "/other"),
+            key_of(None, "/w", "ruby-lsp"),
+            key_of(Some("srv"), "/w", "ruby-lsp"),
+            key_of(None, "/other", "ruby-lsp"),
+            key_of(None, "/w", "ts"),
         ] {
             servers
                 .start_with(k, emit.clone(), standin(plan.clone(), started.clone()))
                 .await;
         }
-        until(|| started.load(Ordering::SeqCst) == 3).await;
-        servers.stop(&key_of(Some("srv"), "/w")).await;
+        until(|| started.load(Ordering::SeqCst) == 4).await;
+        servers.stop(&key_of(Some("srv"), "/w", "ruby-lsp")).await;
         assert_eq!(
-            servers.status(&key_of(Some("srv"), "/w")).await.reason,
+            servers
+                .status(&key_of(Some("srv"), "/w", "ruby-lsp"))
+                .await
+                .reason,
+            Some(LspStopReason::NotStarted)
+        );
+        // The other server of the same worktree is another server, and keeps running.
+        servers.stop(&key_of(None, "/w", "ts")).await;
+        assert_eq!(
+            servers.status(&key_of(None, "/w", "ts")).await.reason,
             Some(LspStopReason::NotStarted)
         );
         assert_ne!(
-            servers.status(&key_of(None, "/w")).await.state,
+            servers.status(&key_of(None, "/w", "ruby-lsp")).await.state,
             LspState::Stopped
         );
         servers.close_all().await;
@@ -1962,18 +2058,31 @@ mod tests {
         let gem = "/usr/local/bundle/gems/rack-3.1.0/lib/rack.rb";
         // The way it was started by comes with the path.
         assert_eq!(
-            servers.outside_way(None, "/w/a", gem).await,
+            servers.outside_way(None, "/w/a", "ruby-lsp", gem).await,
             Some(way_of("/app"))
         );
-        assert_eq!(servers.outside_way(None, "/w/a", "/etc/passwd").await, None);
         assert_eq!(
             servers
-                .outside_way(None, "/w/a", "app/models/user.rb")
+                .outside_way(None, "/w/a", "ruby-lsp", "/etc/passwd")
                 .await,
             None
         );
-        assert_eq!(servers.outside_way(Some("srv"), "/w/a", gem).await, None);
-        assert_eq!(servers.outside_way(None, "/w/other", gem).await, None);
+        assert_eq!(
+            servers
+                .outside_way(None, "/w/a", "ruby-lsp", "app/models/user.rb")
+                .await,
+            None
+        );
+        assert_eq!(
+            servers
+                .outside_way(Some("srv"), "/w/a", "ruby-lsp", gem)
+                .await,
+            None
+        );
+        assert_eq!(
+            servers.outside_way(None, "/w/other", "ruby-lsp", gem).await,
+            None
+        );
         servers.close_all().await;
     }
 
@@ -2013,7 +2122,7 @@ mod tests {
         again.end.notify_one();
         wait_for(&servers, &k, LspState::Running).await;
         assert_eq!(
-            servers.outside_way(None, "/w/a", gem).await,
+            servers.outside_way(None, "/w/a", "ruby-lsp", gem).await,
             Some(way_of("/app"))
         );
         servers.close_all().await;
@@ -2265,7 +2374,7 @@ mod tests {
         run_spawn(&mut ctx, &sh("echo 'boom' >&2; exit 3"), "/app", &FAST).await;
         assert_eq!(
             events.lock().unwrap().last().unwrap().status,
-            LspStatus::failed(format!("{EXITED}: boom"))
+            LspStatus::failed(format!("ruby-lsp {EXITED}: boom"))
         );
     }
 
@@ -2279,7 +2388,7 @@ mod tests {
         run_spawn(&mut ctx, &spawn, "/app", &FAST).await;
         assert_eq!(
             events.lock().unwrap().last().unwrap().status,
-            LspStatus::failed(NOT_RUN)
+            LspStatus::failed(format!("ruby-lsp {NOT_RUN}"))
         );
     }
 

@@ -483,10 +483,17 @@ function setMode(f: EditorFile, mode: "rich" | "source") {
   }
 }
 
+// The server that takes `ruby`, the language of the files that ask for a definition (A-34); none is an error in Japanese.
+async function serverOf(f: EditorFile) {
+  const server = await invoke("lsp_server_for", { environment: f.target, project: f.project, language: "ruby" });
+  if (server === null) throw new Error("Ruby を受け持つ言語サーバーがありません");
+  return server;
+}
+
 async function load(f: EditorFile) {
   try {
     const text = f.outside
-      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
+      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: await serverOf(f), path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
       : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.edits++;
@@ -569,7 +576,7 @@ async function askDefinition(f: EditorFile, x: number, y: number) {
   try {
     const word = await invoke("lsp_word", { line: text.slice(lineStart, end === -1 ? undefined : end), character });
     if (word === null) return;
-    definition({ target: f.target, project: f.project, path: f.path, relative: f.relative, text, line, character, word });
+    definition({ target: f.target, project: f.project, path: f.path, server: await serverOf(f), relative: f.relative, text, line, character, word });
   } catch (e) {
     fail(e);
   }

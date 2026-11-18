@@ -395,6 +395,7 @@ pub fn run() {
             lsp::lsp_settings,
             lsp::lsp_settings_set,
             lsp::lsp_launch,
+            lsp::lsp_server_for,
             lsp::server::lsp_start,
             lsp::server::lsp_stop,
             lsp::server::lsp_restart,

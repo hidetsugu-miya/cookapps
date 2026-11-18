@@ -1,4 +1,4 @@
-// The definition of the file pane of the Orca screen (A-34): the places of the definition of the name that was pressed in the editor with the Command key and the right button. Rust asks ruby-lsp (`lsp_definition`) and decides how each place is drawn (`lsp_places`); this module draws the heading (the name and the count), the rows, and the lines around the definition of an open row, and gives the screen a place to open as a tab.
+// The definition of the file pane of the Orca screen (A-34): the places of the definition of the name that was pressed in the editor with the Command key and the right button. Rust asks the language server (`lsp_definition`) and decides how each place is drawn (`lsp_places`); this module draws the heading (the name and the count), the rows, and the lines around the definition of an open row, and gives the screen a place to open as a tab.
 // The list belongs to one worktree of one target: another worktree clears it, and an answer that comes late for an older question (or for a row that is gone) is dropped. Nothing is kept outside memory, and nothing is read until the owner asks or opens a row. A file inside the worktree is read by `orca_file_read` and one outside it by `lsp_read_outside`, both only for the lines shown.
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspPlace } from "./bindings/LspPlace";
@@ -11,6 +11,8 @@ export interface DefinitionQuery {
   target: string | null;
   project: string;
   path: string;
+  // The server that answers: the one that takes the language of the file.
+  server: string;
   relative: string;
   text: string;
   line: number;
@@ -134,7 +136,7 @@ async function readPreview(row: Row) {
   let next: Preview;
   try {
     const text = row.location.outside
-      ? (await invoke("lsp_read_outside", { environment: here.target, project: here.project, worktree: here.path, path: row.location.path })).text
+      ? (await invoke("lsp_read_outside", { environment: here.target, project: here.project, worktree: here.path, server: here.server, path: row.location.path })).text
       : (await invoke("orca_file_read", { path: here.path, relative: row.location.path, environment: here.target })).content;
     const all = text.split("\n").map((l) => l.replace(/\r$/, ""));
     const from = Math.max(0, hit - 1 - AROUND);
@@ -162,7 +164,7 @@ export async function askDefinition(q: DefinitionQuery) {
   rows = [];
   draw();
   try {
-    const locations = await invoke("lsp_definition", { environment: q.target, worktree: q.path, relative: q.relative, text: q.text, line: q.line, character: q.character });
+    const locations = await invoke("lsp_definition", { environment: q.target, worktree: q.path, server: q.server, relative: q.relative, text: q.text, line: q.line, character: q.character });
     if (mine !== generation) return;
     const places = locations.length === 0 ? [] : await invoke("lsp_places", { locations });
     if (mine !== generation) return;

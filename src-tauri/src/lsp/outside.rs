@@ -1,6 +1,6 @@
-//! A-34: reading, read only, a file outside the worktree that ruby-lsp gave as a definition (a gem, for example).
+//! A-34: reading, read only, a file outside the worktree that a language server gave as a definition (a gem, for example).
 //!
-//! Only a path that the server of that (place, worktree) answered as a definition outside the worktree is read (`LspServers::outside_way`); any other path is refused before anything is run. The way is the one the server was started by, kept with it (`server::Way`, so the worktree is not read again, and a setting changed since the start does not send the read to another container or host), run by `lsp::run_on`: `cat` on this machine, `docker compose exec -T {service} cat` in the service of compose, and, for a saved environment, the same through ssh. The path is the server's own (the path inside the container for compose). Nothing is written, and nothing of the file is kept.
+//! Only a path that the server of that (place, worktree, server name) answered as a definition outside the worktree is read (`LspServers::outside_way`); any other path is refused before anything is run. The way is the one the server was started by, kept with it (`server::Way`, so the worktree is not read again, and a setting changed since the start does not send the read to another container or host), run by `lsp::run_on`: `cat` on this machine, `docker compose exec -T {service} cat` in the service of compose, and, for a saved environment, the same through ssh. The path is the server's own (the path inside the container for compose). Nothing is written, and nothing of the file is kept.
 
 use serde::Serialize;
 use tauri::State;
@@ -89,18 +89,19 @@ fn read_outside(
     text_of(run(&way.route, worktree, &command, MAX_FILE + 1)?)
 }
 
-/// The text of the file `path`, outside the worktree `worktree` of the project `project` of `environment` (`None`: this machine), that ruby-lsp gave as a definition (A-34). A path that the server of that worktree did not give is refused, and so is a worktree that is not one of Orca's list or not of that project.
+/// The text of the file `path`, outside the worktree `worktree` of the project `project` of `environment` (`None`: this machine), that the server `server` gave as a definition (A-34). A path that that server of the worktree did not give is refused, and so is a worktree that is not one of Orca's list or not of that project.
 #[tauri::command]
 pub async fn lsp_read_outside(
     servers: State<'_, LspServers>,
     environment: Option<String>,
     project: String,
     worktree: String,
+    server: String,
     path: String,
 ) -> Result<LspOutsideFile, String> {
     check_path(&path)?;
     let way = servers
-        .outside_way(environment.as_deref(), &worktree, &path)
+        .outside_way(environment.as_deref(), &worktree, &server, &path)
         .await
         .ok_or(NOT_KNOWN)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
@@ -125,6 +126,7 @@ mod tests {
             route: Route::Local,
             method,
             service: service.map(str::to_owned),
+            extensions: vec![".rb".into()],
         }
     }
 

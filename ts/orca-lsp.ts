@@ -1,8 +1,9 @@
-// The language server of the Orca screen (A-34): the state of ruby-lsp for a worktree and its settings, shown under the definition in the file pane, and when it is started and stopped.
+// The language server of the Orca screen (A-34): the state of a language server for a worktree and its settings, shown under the definition in the file pane, and when it is started and stopped. A repository has any number of servers, each with a name; the pane shows and edits the first one of the settings, and a Ruby file asks Rust for the server that takes `ruby` (`lsp_server_for`).
 // Rust starts, keeps and stops the process (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of its state (the event `lsp-status`), reads how it is started from the worktree (`lsp_launch`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
-// A Ruby file opened in the editor starts the server of its worktree when the settings say 「自動で起動」 (`ensureServer`); a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
+// A Ruby file opened in the editor starts the server of `ruby` of its worktree when the settings say 「自動で起動」 (`ensureServer`); a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
+import type { LspServerSettings } from "./bindings/LspServerSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { LspStatusEvent } from "./bindings/LspStatusEvent";
 import { $, tag } from "./dom.js";
@@ -20,13 +21,19 @@ export interface LspPlace {
 const NOT_STARTED: LspStatus = { state: "stopped", reason: "notStarted" };
 const STATE_LABELS = { indexing: "索引中", running: "動作中", stopped: "停止中" };
 
-const keyOf = (target: string | null, path: string) => JSON.stringify([target, path]);
+// A server of a worktree: its name in the settings of the repository too.
+interface ServerPlace extends LspPlace {
+  server: string;
+}
+
+const worktreeKey = (target: string | null, path: string) => JSON.stringify([target, path]);
+const keyOf = (target: string | null, path: string, server: string) => JSON.stringify([target, path, server]);
 
 // The servers this screen asked to start, or found running: it stops them.
-const started = new Map<string, LspPlace>();
+const started = new Map<string, ServerPlace>();
 // The worktrees whose server is being looked at to be started (a second Ruby file opened meanwhile asks nothing more).
 const checking = new Set<string>();
-// The last state told of each server (a worktree with none is not started).
+// The last state told of each server (a server that was not asked about is not started).
 const statuses = new Map<string, LspStatus>();
 
 // The worktree the pane shows (null: none, and the part is hidden), what was read for it, and what is on its way.
@@ -43,9 +50,18 @@ let generation = 0;
 // The saves, one after another: each takes the settings the one before it saved.
 let saving: Promise<void> = Promise.resolve();
 
-const paneKey = () => (pane === null ? null : keyOf(pane.target, pane.path));
+// The server the pane shows and edits: the first of the settings (none before they are read, or when the repository has none).
+const shownServer = (): LspServerSettings | null => settings?.servers[0] ?? null;
+const paneKey = () => {
+  const name = shownServer()?.name;
+  return pane === null || name === undefined ? null : keyOf(pane.target, pane.path, name);
+};
 const statusOf = (): LspStatus => statuses.get(paneKey() ?? "") ?? NOT_STARTED;
-const args = (place: LspPlace) => ({ environment: place.target, project: place.project, worktree: place.path });
+const args = (place: ServerPlace) => ({ environment: place.target, project: place.project, worktree: place.path, server: place.server });
+const serverPlace = (place: LspPlace): ServerPlace | null => {
+  const name = shownServer()?.name;
+  return name === undefined ? null : { ...place, server: name };
+};
 
 // ---- drawing ----
 
@@ -59,7 +75,7 @@ function message(status: LspStatus): string | null {
 function drawState() {
   if (pane === null) return;
   const status = statusOf();
-  $("orca-lsp-state-text").textContent = `ruby-lsp ${STATE_LABELS[status.state]}`;
+  $("orca-lsp-state-text").textContent = `${shownServer()?.name ?? "言語サーバー"} ${STATE_LABELS[status.state]}`;
   const dot = $("orca-lsp-dot");
   dot.dataset.state = status.state;
   if (status.reason) dot.dataset.reason = status.reason;
@@ -77,7 +93,8 @@ function drawState() {
 // The fields, from what was read. Only a read or a save redraws them: a field that is being typed in is not touched by the state, nor by a read or a save that ends while it is typed in.
 function drawFields() {
   if (pane === null) return;
-  const ready = settings !== null;
+  const server = shownServer();
+  const ready = server !== null;
   const set = (id: string, value: string) => {
     const input = $(id) as HTMLInputElement;
     // The field that is being typed in keeps its text: a save of another field ends meanwhile and draws these.
@@ -87,6 +104,7 @@ function drawFields() {
   set("orca-lsp-command", launch?.command ?? "");
   set("orca-lsp-mount", launch?.mount ?? "");
   set("orca-lsp-ssh", settings?.sshHost ?? "");
+  ($("orca-lsp-ssh") as HTMLInputElement).disabled = settings === null;
   $("orca-lsp-ssh-row").hidden = pane.target === null;
   const candidates = launch?.candidates ?? [];
   $("orca-lsp-service-row").hidden = candidates.length < 2;
@@ -101,12 +119,12 @@ function drawFields() {
   select.value = launch?.service ?? "";
   select.disabled = !ready;
   const auto = $("orca-lsp-auto") as HTMLInputElement;
-  auto.checked = settings?.autoStart ?? true;
+  auto.checked = server?.autoStart ?? true;
   auto.disabled = !ready;
   const method = $("orca-lsp-method");
   method.hidden = launch === null;
   method.textContent = launch === null ? "" : launch.method === "compose" ? `compose の ${launch.service ?? ""}` : launch.method === "host" ? "ホスト" : "方法なし";
-  ($("orca-lsp-reset") as HTMLButtonElement).disabled = settings === null || (settings.command == null && settings.mount == null && settings.service == null);
+  ($("orca-lsp-reset") as HTMLButtonElement).disabled = server === null || (server.command == null && server.mount == null && server.service == null);
 }
 
 function draw() {
@@ -118,7 +136,7 @@ function draw() {
 // ---- reading and saving ----
 
 async function readLaunch(mine: number) {
-  const here = pane;
+  const here = pane === null ? null : serverPlace(pane);
   if (here === null) return;
   let next: LspLaunch | null = null;
   let error: string | null = null;
@@ -139,10 +157,15 @@ async function load() {
   const mine = generation;
   loaded = true;
   try {
-    const [read, status] = await Promise.all([invoke("lsp_settings", { environment: here.target, project: here.project }), invoke("lsp_status", { environment: here.target, worktree: here.path })]);
+    const read = await invoke("lsp_settings", { environment: here.target, project: here.project });
     if (mine !== generation) return;
     settings = read;
-    statuses.set(keyOf(here.target, here.path), status);
+    const name = read.servers[0]?.name;
+    if (name !== undefined) {
+      const status = await invoke("lsp_status", { environment: here.target, worktree: here.path, server: name });
+      if (mine !== generation) return;
+      statuses.set(keyOf(here.target, here.path, name), status);
+    }
   } catch (e) {
     if (mine !== generation) return;
     note = String(e);
@@ -153,11 +176,19 @@ async function load() {
   await readLaunch(mine);
 }
 
-async function saveNow(patch: Partial<LspRepoSettings>) {
+// What a save changes: the ssh Host of the repository, and the fields of the server the pane shows (the first).
+interface Patch {
+  sshHost?: string | null;
+  server?: Partial<LspServerSettings>;
+}
+
+async function saveNow(patch: Patch) {
   const mine = generation;
   if (pane === null || settings === null) return;
   try {
-    const next = await invoke("lsp_settings_set", { settings: { ...settings, ...patch } });
+    const next = await invoke("lsp_settings_set", {
+      settings: { ...settings, ...(patch.sshHost === undefined ? {} : { sshHost: patch.sshHost }), servers: settings.servers.map((s, i) => (i === 0 ? { ...s, ...patch.server } : s)) },
+    });
     if (mine !== generation) return;
     settings = next;
     note = null;
@@ -170,7 +201,7 @@ async function saveNow(patch: Partial<LspRepoSettings>) {
   await readLaunch(mine);
 }
 
-const save = (patch: Partial<LspRepoSettings>) => {
+const save = (patch: Patch) => {
   saving = saving.then(() => saveNow(patch));
 };
 
@@ -180,14 +211,15 @@ const textOf = (id: string) => ($(id) as HTMLInputElement).value.trim() || null;
 // ---- starting and stopping ----
 
 // Starts the server of `place` and keeps what it answers; the later states come by the event.
-async function startServer(place: LspPlace) {
-  started.set(keyOf(place.target, place.path), place);
-  statuses.set(keyOf(place.target, place.path), await invoke("lsp_start", args(place)));
+async function startServer(place: ServerPlace) {
+  const key = keyOf(place.target, place.path, place.server);
+  started.set(key, place);
+  statuses.set(key, await invoke("lsp_start", args(place)));
 }
 
 // Runs a press of the pane (the restart, the start of the container): the buttons wait, and a failure is the note of the pane.
-async function run(kind: "restart" | "container", action: (place: LspPlace) => Promise<void>) {
-  const here = pane;
+async function run(kind: "restart" | "container", action: (place: ServerPlace) => Promise<void>) {
+  const here = pane === null ? null : serverPlace(pane);
   if (here === null || busy !== null) return;
   const mine = generation;
   busy = kind;
@@ -209,8 +241,9 @@ async function run(kind: "restart" | "container", action: (place: LspPlace) => P
 
 const restart = () =>
   run("restart", async (place) => {
-    started.set(keyOf(place.target, place.path), place);
-    statuses.set(keyOf(place.target, place.path), await invoke("lsp_restart", args(place)));
+    const key = keyOf(place.target, place.path, place.server);
+    started.set(key, place);
+    statuses.set(key, await invoke("lsp_restart", args(place)));
   });
 
 const startContainer = () =>
@@ -221,20 +254,26 @@ const startContainer = () =>
 
 // A Ruby file of the worktree was opened (A-34): its server is started when the settings say so, unless it is there already (running, or ended: an ended one is started by the restart or the container button, not by every file). A server found running is the screen's to stop.
 export async function ensureServer(place: LspPlace) {
-  const key = keyOf(place.target, place.path);
-  if (started.has(key) || checking.has(key)) return;
-  checking.add(key);
+  const worktree = worktreeKey(place.target, place.path);
+  if ([...started.values()].some((s) => worktreeKey(s.target, s.path) === worktree) || checking.has(worktree)) return;
+  checking.add(worktree);
+  let key: string | null = null;
   try {
-    const status = await invoke("lsp_status", { environment: place.target, worktree: place.path });
-    statuses.set(key, status);
-    if (status.state !== "stopped") started.set(key, place);
-    else if (status.reason === "notStarted" && (await invoke("lsp_settings", { environment: place.target, project: place.project })).autoStart) await startServer(place);
+    const server = await invoke("lsp_server_for", { environment: place.target, project: place.project, language: "ruby" });
+    if (server !== null) {
+      const here = { ...place, server };
+      key = keyOf(place.target, place.path, server);
+      const status = await invoke("lsp_status", args(here));
+      statuses.set(key, status);
+      if (status.state !== "stopped") started.set(key, here);
+      else if (status.reason === "notStarted" && (await invoke("lsp_settings", { environment: place.target, project: place.project })).servers.find((s) => s.name === server)?.autoStart) await startServer(here);
+    }
   } catch (e) {
     showError(e);
   } finally {
-    checking.delete(key);
+    checking.delete(worktree);
   }
-  if (paneKey() === key) drawState();
+  if (key !== null && paneKey() === key) drawState();
 }
 
 // Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree).
@@ -242,7 +281,7 @@ export function syncServers(gone: (target: string | null, path: string) => boole
   for (const [key, place] of started) {
     if (!gone(place.target, place.path)) continue;
     started.delete(key);
-    invoke("lsp_stop", { environment: place.target, worktree: place.path })
+    invoke("lsp_stop", { environment: place.target, worktree: place.path, server: place.server })
       .then(() => {
         statuses.delete(key);
         if (paneKey() === key) drawState();
@@ -276,18 +315,18 @@ export function initLsp() {
   $("orca-lsp-container").onclick = () => void startContainer();
   $("orca-lsp-command").onchange = () => {
     const value = textOf("orca-lsp-command");
-    if (value !== (launch?.command ?? null)) save({ command: value });
+    if (value !== (launch?.command ?? null)) save({ server: { command: value } });
   };
   $("orca-lsp-mount").onchange = () => {
     const value = textOf("orca-lsp-mount");
-    if (value !== (launch?.mount ?? null)) save({ mount: value });
+    if (value !== (launch?.mount ?? null)) save({ server: { mount: value } });
   };
-  $("orca-lsp-service").onchange = () => save({ service: ($("orca-lsp-service") as HTMLSelectElement).value });
+  $("orca-lsp-service").onchange = () => save({ server: { service: ($("orca-lsp-service") as HTMLSelectElement).value } });
   $("orca-lsp-ssh").onchange = () => save({ sshHost: textOf("orca-lsp-ssh") });
-  $("orca-lsp-auto").onchange = () => save({ autoStart: ($("orca-lsp-auto") as HTMLInputElement).checked });
-  $("orca-lsp-reset").onclick = () => save({ command: null, mount: null, service: null });
+  $("orca-lsp-auto").onchange = () => save({ server: { autoStart: ($("orca-lsp-auto") as HTMLInputElement).checked } });
+  $("orca-lsp-reset").onclick = () => save({ server: { command: null, mount: null, service: null } });
   window.__TAURI__.event.listen<LspStatusEvent>("lsp-status", ({ payload }) => {
-    const key = keyOf(payload.environment ?? null, payload.worktree);
+    const key = keyOf(payload.environment ?? null, payload.worktree, payload.server);
     statuses.set(key, payload.status);
     if (paneKey() === key) drawState();
   });

@@ -296,6 +296,49 @@ pub fn detect_language(path: &str, content: &str) -> &'static str {
     language
 }
 
+/// Whether `name` is a language that `detect_language` can answer (`plaintext` too): the names of A-21 that a language server may be given as the language it takes.
+pub fn is_language(name: &str) -> bool {
+    let table = associations();
+    name == "plaintext"
+        || [
+            EXT_TO_LANGUAGE,
+            FILENAME_TO_LANGUAGE,
+            SHEBANG_INTERPRETER_TO_LANGUAGE,
+        ]
+        .iter()
+        .any(|names| names.iter().any(|(_, language)| *language == name))
+        || table.filenames.values().any(|language| language == name)
+        || table.extensions.values().any(|language| language == name)
+}
+
+/// The extensions (with their dot, sorted) that give a file the language `language`, read back from the tables of `detect_language`: those of `EXT_TO_LANGUAGE`, then Monaco's that the first does not decide. A name that is not made of letters, digits and `._+-` is left out, so that an extension is safe in a `find -name`. A language that only file names or a `#!` line give has none.
+pub fn extensions_of(language: &str) -> Vec<String> {
+    let monaco = associations()
+        .extensions
+        .iter()
+        .filter(|(extension, id)| {
+            id.as_str() == language && lookup(EXT_TO_LANGUAGE, extension).is_none()
+        })
+        .map(|(extension, _)| extension.as_str());
+    let mut found: Vec<String> = EXT_TO_LANGUAGE
+        .iter()
+        .filter(|(_, id)| *id == language)
+        .map(|(extension, _)| *extension)
+        .chain(monaco)
+        .filter(|extension| {
+            extension.len() > 1
+                && extension.starts_with('.')
+                && extension[1..]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
+        })
+        .map(str::to_owned)
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// The name the page's highlighter knows an Orca language by, or None when it has no grammar for it (the text is then drawn plain).
 /// Every name here is in `src/vendor/highlight.min.js` or `src/vendor/highlight-languages.js` (a test checks it).
 pub fn highlight_name(language: &str) -> Option<&'static str> {
@@ -648,6 +691,83 @@ mod tests {
             .collect();
         for (orca, _) in HIGHLIGHT_NAMES {
             assert!(known.contains(orca), "{orca}");
+        }
+    }
+
+    #[test]
+    fn a_name_is_a_language_when_detect_language_can_answer_it() {
+        for name in [
+            "ruby",
+            "typescript",
+            "python",
+            "plaintext",
+            "dockerfile",
+            "shell",
+            "groovy",
+            "dotenv",
+            "liquid",
+        ] {
+            assert!(is_language(name), "{name}");
+        }
+        for name in ["", "Ruby", "ruby-lsp", "cobol-2000", " ruby"] {
+            assert!(!is_language(name), "{name:?}");
+        }
+        // Every name that detect_language answers for the pairs of the oracle is one.
+        for (path, content, language) in ORACLE {
+            assert!(is_language(language), "{path:?} {content:?} {language}");
+        }
+    }
+
+    #[test]
+    fn the_extensions_of_a_language_are_read_back_from_the_tables() {
+        let ruby = extensions_of("ruby");
+        for extension in [".rb", ".rake", ".gemspec", ".ru"] {
+            assert!(ruby.contains(&extension.to_owned()), "{extension}");
+        }
+        assert_eq!(
+            extensions_of("typescript"),
+            vec![".cts", ".mts", ".ts", ".tsx"]
+        );
+        // Every extension answers the language it was read back from.
+        for language in ["ruby", "python", "rust", "javascript", "json"] {
+            for extension in extensions_of(language) {
+                assert_eq!(
+                    detect_language(&format!("a{extension}"), ""),
+                    language,
+                    "{extension}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plaintext_or_no_such_language_has_no_extension() {
+        assert_eq!(extensions_of("plaintext"), Vec::<String>::new());
+        assert_eq!(extensions_of("cobol-2000"), Vec::<String>::new());
+        assert_eq!(extensions_of(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_extension_with_a_character_that_a_shell_reads_is_left_out() {
+        for language in [
+            "ruby",
+            "python",
+            "rust",
+            "javascript",
+            "html",
+            "markdown",
+            "shell",
+            "c",
+            "java",
+        ] {
+            for extension in extensions_of(language) {
+                assert!(
+                    extension
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c)),
+                    "{extension}"
+                );
+            }
         }
     }
 

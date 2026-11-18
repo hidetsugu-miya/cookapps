@@ -1,13 +1,13 @@
-//! A-34: how ruby-lsp is started for a worktree of the Orca screen, and the settings of each repository that say otherwise.
+//! A-34: how a language server is started for a worktree of the Orca screen, and the settings of each repository that say otherwise.
 //!
-//! The way is decided from what the worktree holds, in this order: a service of `docker compose config --format json` that bind mounts the worktree (`docker compose exec -T -w {mount} {service} bundle exec ruby-lsp`, the path of the worktree there being the mount's target), else a `Gemfile.lock` that lists `ruby-lsp` (`bundle exec ruby-lsp` on the host), else none. `decide` is a pure function of the two texts.
-//! The texts are read by one command each (the `Gemfile.lock` only when no service of compose mounts the worktree), run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
+//! A repository has any number of servers (`LspServerSettings`): each has a name, the languages of A-21 it takes (one language belongs to one server of a repository, `server_for`), a command, and the rest. The way is decided for one server of it. A server that takes `ruby` has the automatic way of ruby-lsp, which is decided from what the worktree holds, in this order: a service of `docker compose config --format json` that bind mounts the worktree (`docker compose exec -T -w {mount} {service} bundle exec ruby-lsp`, the path of the worktree there being the mount's target), else a `Gemfile.lock` that lists `ruby-lsp` (`bundle exec ruby-lsp` on the host), else none. `decide` is a pure function of the two texts. A server that does not take `ruby` has no automatic command (it needs the `command` of its settings, else it has no way), and the services that mount the worktree and the mount are decided for it as they are for ruby-lsp.
+//! The texts are read by one command each (the `Gemfile.lock` only for a server that takes `ruby`, and only when no service of compose mounts the worktree), run in the worktree: on this machine, or, for a worktree of a saved environment (A-33), through the `ssh` of this Mac to the host the settings name. The command is a shell script that is built in one place (`script`, `spawn_of`), so that the start of the server (`server`) goes the same way: this machine, a `docker compose exec -T` inside it, or the `ssh` in front of it.
 //! What the definition pane draws of an answer (the name under the mouse, the place of each definition) is decided in `view`, from texts alone.
-//! The server itself is in `server` (the processes that stay, one for each worktree, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
-//! The settings of a repository are saved in `lsp-settings.json` in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list.
+//! The server itself is in `server` (the processes that stay, one for each worktree and server name, their state and the questions) and `protocol` (the frame, the messages, the paths and the answers, as pure functions).
+//! The settings of a repository are saved in `lsp-settings.json` (version 2) in the app config directory, under the place of the repository (this machine, or a saved environment) and the key of its project in Orca's list. A file of version 1, which held one ruby-lsp for each repository, is read as a repository with that one server, and the next save writes version 2.
 //! A file outside the worktree that the server gave as a definition is read, read only, by the same route (`outside`).
 //! The container of the service is started, only when the owner asks, by the same route (`container`).
-//! The Ruby files that changed on the disk are told to the server before each question (`watch`, with `server::LspServers::refresh`).
+//! The files of the server's languages that changed on the disk are told to the server before each question (`watch`, with `server::LspServers::refresh`).
 //! Nothing of a file of a worktree is kept: the answers of the two commands are used and dropped.
 
 pub mod container;
@@ -29,11 +29,17 @@ use crate::{
     accounts::write_atomic,
     auth::config_dir,
     orca_files::check_worktree_of_project,
+    orca_language,
     ssh::{check_host, failure, run_process, shared_control, ssh_args, Ran, SSH, TIMEOUT},
 };
 
 const FILE: &str = "lsp-settings.json";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+/// The longest name of a server, in characters.
+const MAX_NAME: usize = 64;
+/// The language whose servers have the automatic way of ruby-lsp, and the name of the server that a repository with nothing saved has.
+const RUBY: &str = "ruby";
+const DEFAULT_SERVER: &str = "ruby-lsp";
 /// The longest text of a setting, in characters.
 const MAX_TEXT: usize = 4096;
 /// The most bytes of the compose configuration or of the `Gemfile.lock` that are read.
@@ -61,6 +67,7 @@ const NOT_UTF8: &str = "設定が UTF-8 ではありません";
 const NO_SSH_HOST: &str = "ssh の接続先が設定されていません";
 const ON_SSH_HOST: &str = "SSH ホストの worktree には使えません";
 const BAD_WORKTREE: &str = "worktree のパスが正しくありません";
+const BAD_SERVER: &str = "サーバーの名前が正しくありません";
 
 // ---- what the screen gets ----
 
@@ -102,8 +109,44 @@ pub struct LspLaunch {
     pub mount: Option<String>,
 }
 
-/// The settings of a repository. `environment` is where its project is (`None` for this machine, else the name of the saved environment) and `project` its key in Orca's list (`OrcaProject::key`).
-/// `command` and `mount` replace what `decide` gives (the command run in the worktree, and the path the worktree has where it runs), `service` chooses among the services that mount the worktree, and `ssh_host` is the Host of `~/.ssh/config` through which a saved environment's worktrees are reached (Orca's environments say nothing of ssh).
+/// The settings of one language server of a repository: its `name` (unique in the repository), the `languages` of A-21 it takes (at least one, each taken by no other server of the repository), and whether it starts by itself.
+/// `command` and `mount` replace what `decide` gives (the command run in the worktree, and the path the worktree has where it runs), and `service` chooses among the services that mount the worktree.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct LspServerSettings {
+    pub name: String,
+    pub languages: Vec<String>,
+    pub auto_start: bool,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub command: Option<String>,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub mount: Option<String>,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub service: Option<String>,
+}
+
+impl LspServerSettings {
+    /// The server that a repository with nothing saved has, and that a file of version 1 held: ruby-lsp, which takes `ruby` and starts by itself, with nothing replaced.
+    fn ruby_lsp() -> Self {
+        Self {
+            name: DEFAULT_SERVER.to_owned(),
+            languages: vec![RUBY.to_owned()],
+            auto_start: true,
+            command: None,
+            mount: None,
+            service: None,
+        }
+    }
+
+    /// Whether the server has the automatic way of ruby-lsp.
+    fn takes_ruby(&self) -> bool {
+        self.languages.iter().any(|language| language == RUBY)
+    }
+}
+
+/// The settings of a repository. `environment` is where its project is (`None` for this machine, else the name of the saved environment) and `project` its key in Orca's list (`OrcaProject::key`). `ssh_host` is the Host of `~/.ssh/config` through which a saved environment's worktrees are reached (Orca's environments say nothing of ssh), and `servers` its language servers.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -112,30 +155,35 @@ pub struct LspRepoSettings {
     #[cfg_attr(test, ts(optional = nullable))]
     pub environment: Option<String>,
     pub project: String,
-    pub auto_start: bool,
-    #[cfg_attr(test, ts(optional = nullable))]
-    pub command: Option<String>,
-    #[cfg_attr(test, ts(optional = nullable))]
-    pub mount: Option<String>,
-    #[cfg_attr(test, ts(optional = nullable))]
-    pub service: Option<String>,
     #[cfg_attr(test, ts(optional = nullable))]
     pub ssh_host: Option<String>,
+    pub servers: Vec<LspServerSettings>,
 }
 
 impl LspRepoSettings {
-    /// What a repository with nothing saved has: the server starts by itself, and nothing is replaced.
+    /// What a repository with nothing saved has: ruby-lsp, which starts by itself, and nothing is replaced.
     fn unset(environment: Option<&str>, project: &str) -> Self {
         Self {
             environment: environment.map(str::to_owned),
             project: project.to_owned(),
-            auto_start: true,
-            command: None,
-            mount: None,
-            service: None,
             ssh_host: None,
+            servers: vec![LspServerSettings::ruby_lsp()],
         }
     }
+
+    /// The server named `name`.
+    fn server(&self, name: &str) -> Option<&LspServerSettings> {
+        self.servers.iter().find(|server| server.name == name)
+    }
+}
+
+/// The name of the server of `settings` that takes `language` (a language of A-21), none when no server does. A language belongs to one server of a repository (`clean`), so there is at most one.
+pub(crate) fn server_for(settings: &LspRepoSettings, language: &str) -> Option<String> {
+    settings
+        .servers
+        .iter()
+        .find(|server| server.languages.iter().any(|taken| taken == language))
+        .map(|server| server.name.clone())
 }
 
 // ---- the decision ----
@@ -217,8 +265,8 @@ pub(crate) fn decide(
     })
 }
 
-/// `launch` with the settings of the repository applied (`LspLaunch`).
-fn resolve(launch: Launch, settings: &LspRepoSettings, worktree: &str) -> LspLaunch {
+/// `launch` with the settings of the server applied (`LspLaunch`). Only a server that takes `ruby` has a command of its own to decide (`bundle exec ruby-lsp`, in the service of compose or on the host).
+fn resolve(launch: Launch, settings: &LspServerSettings, worktree: &str) -> LspLaunch {
     let (method, candidates) = match launch {
         Launch::Compose(found) => (LspMethod::Compose, found),
         Launch::Host => (LspMethod::Host, Vec::new()),
@@ -230,16 +278,19 @@ fn resolve(launch: Launch, settings: &LspRepoSettings, worktree: &str) -> LspLau
         .and_then(|name| candidates.iter().find(|c| c.service == name))
         .or_else(|| candidates.first());
     let service = chosen.map(|c| c.service.clone());
+    let ruby = settings.takes_ruby();
     let (decided_command, decided_mount) = match (method, chosen) {
         (LspMethod::Compose, Some(c)) => (
-            Some(format!(
-                "docker compose exec -T -w {} {} {RUBY_LSP}",
-                shell_quote(&c.mount),
-                shell_quote(&c.service)
-            )),
+            ruby.then(|| {
+                format!(
+                    "docker compose exec -T -w {} {} {RUBY_LSP}",
+                    shell_quote(&c.mount),
+                    shell_quote(&c.service)
+                )
+            }),
             Some(c.mount.clone()),
         ),
-        (LspMethod::Host, _) => (Some(RUBY_LSP.to_owned()), Some(worktree.to_owned())),
+        (LspMethod::Host, _) => (ruby.then(|| RUBY_LSP.to_owned()), Some(worktree.to_owned())),
         _ => (None, None),
     };
     let command = settings.command.clone().or(decided_command);
@@ -356,10 +407,11 @@ fn read_text(
     Ok((!text.trim().is_empty()).then_some(text))
 }
 
-/// Reads the compose configuration (`docker compose config --format json`, only when the folder has a compose file) and, unless a service of it mounts `worktree` (then the `Gemfile.lock` decides nothing), the `Gemfile.lock` of the worktree that `run` runs its commands in.
+/// Reads the compose configuration (`docker compose config --format json`, only when the folder has a compose file) and, when `ruby` (the server takes `ruby`) and no service of it mounts `worktree` (then the `Gemfile.lock` decides nothing), the `Gemfile.lock` of the worktree that `run` runs its commands in.
 fn collect(
     run: &mut impl FnMut(&str, usize) -> Result<Ran, String>,
     worktree: &str,
+    ruby: bool,
 ) -> Result<Inputs, String> {
     let has_file = COMPOSE_FILES
         .map(|file| format!("[ -f {file} ]"))
@@ -373,7 +425,7 @@ fn collect(
         Some(config) => !candidates(worktree, config)?.is_empty(),
         None => false,
     };
-    let gemfile_lock = if in_compose {
+    let gemfile_lock = if in_compose || !ruby {
         None
     } else {
         read_text(
@@ -396,6 +448,47 @@ struct Store {
     repositories: Vec<LspRepoSettings>,
 }
 
+/// The first field of the file, to find which version it is before the rest is read.
+#[derive(Deserialize)]
+struct Head {
+    version: u32,
+}
+
+/// A repository of a file of version 1: one ruby-lsp, whose settings were those of the repository.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoV1 {
+    environment: Option<String>,
+    project: String,
+    auto_start: bool,
+    command: Option<String>,
+    mount: Option<String>,
+    service: Option<String>,
+    ssh_host: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StoreV1 {
+    repositories: Vec<RepoV1>,
+}
+
+impl From<RepoV1> for LspRepoSettings {
+    fn from(old: RepoV1) -> Self {
+        Self {
+            environment: old.environment,
+            project: old.project,
+            ssh_host: old.ssh_host,
+            servers: vec![LspServerSettings {
+                auto_start: old.auto_start,
+                command: old.command,
+                mount: old.mount,
+                service: old.service,
+                ..LspServerSettings::ruby_lsp()
+            }],
+        }
+    }
+}
+
 fn load(dir: &Path) -> Result<Store, String> {
     let path = dir.join(FILE);
     let text = match std::fs::read_to_string(&path) {
@@ -408,16 +501,28 @@ fn load(dir: &Path) -> Result<Store, String> {
         }
         Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
     };
-    let store: Store = serde_json::from_str(&text)
-        .map_err(|e| format!("{} の形式が不正です: {e}", path.display()))?;
-    if store.version != VERSION {
-        return Err(format!(
-            "{} の版 {} は読めません",
-            path.display(),
-            store.version
-        ));
-    }
-    Ok(store)
+    let bad = |e: serde_json::Error| format!("{} の形式が不正です: {e}", path.display());
+    let head: Head = serde_json::from_str(&text).map_err(bad)?;
+    let repositories = match head.version {
+        1 => serde_json::from_str::<StoreV1>(&text)
+            .map_err(bad)?
+            .repositories
+            .into_iter()
+            .map(LspRepoSettings::from)
+            .collect(),
+        VERSION => {
+            serde_json::from_str::<Store>(&text)
+                .map_err(bad)?
+                .repositories
+        }
+        other => {
+            return Err(format!("{} の版 {other} は読めません", path.display()));
+        }
+    };
+    Ok(Store {
+        version: VERSION,
+        repositories,
+    })
 }
 
 fn save(dir: &Path, store: &Store) -> Result<(), String> {
@@ -438,39 +543,106 @@ fn settings_of(
         .unwrap_or_else(|| LspRepoSettings::unset(environment, project)))
 }
 
-/// A setting as it is saved: texts trimmed and an empty one taken as not set, each checked. The key (`environment`, `project`) must be real, and `ssh_host` is checked as `ssh::check_host` checks a host, `mount` must be an absolute path, and no text holds a control character (a command is one line).
-fn clean(settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
-    let key = |what: &str, text: &str| -> Result<(), String> {
-        if text.is_empty() || text.chars().count() > MAX_TEXT || text.chars().any(char::is_control)
-        {
-            return Err(format!("{what}が正しくありません"));
-        }
-        Ok(())
-    };
-    let optional = |what: &str, text: Option<String>| -> Result<Option<String>, String> {
-        let Some(text) = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) else {
-            return Ok(None);
-        };
-        key(what, &text)?;
-        Ok(Some(text))
-    };
-    if let Some(environment) = &settings.environment {
-        key("接続先", environment)?;
+/// A text that is a name, a key or a path in a setting: not empty, not longer than `MAX_TEXT`, with no control character.
+fn check_text(what: &str, text: &str) -> Result<(), String> {
+    if text.is_empty() || text.chars().count() > MAX_TEXT || text.chars().any(char::is_control) {
+        return Err(format!("{what}が正しくありません"));
     }
-    key("プロジェクト", &settings.project)?;
-    let mount = optional("パスの対応", settings.mount)?;
+    Ok(())
+}
+
+/// A text that may be left out: trimmed, and an empty one is none; the rest is checked as `check_text` does.
+fn optional_text(what: &str, text: Option<String>) -> Result<Option<String>, String> {
+    let Some(text) = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) else {
+        return Ok(None);
+    };
+    check_text(what, &text)?;
+    Ok(Some(text))
+}
+
+/// Whether `name` can be the name of a server: not empty, at most `MAX_NAME` characters, no control character.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= MAX_NAME && !name.chars().any(char::is_control)
+}
+
+/// The name of a server that a command is given.
+pub(crate) fn check_server(name: &str) -> Result<(), String> {
+    if valid_name(name) {
+        Ok(())
+    } else {
+        Err(BAD_SERVER.into())
+    }
+}
+
+/// A server as it is saved: the name trimmed and checked, the languages checked (at least one, each a language of A-21 and none twice), and the other texts trimmed, an empty one taken as not set, each checked. `mount` must be an absolute path.
+fn clean_server(server: LspServerSettings) -> Result<LspServerSettings, String> {
+    let name = server.name.trim().to_owned();
+    if !valid_name(&name) {
+        return Err(BAD_SERVER.into());
+    }
+    if server.languages.is_empty() {
+        return Err(format!("サーバー「{name}」の言語がありません"));
+    }
+    for (i, language) in server.languages.iter().enumerate() {
+        if !orca_language::is_language(language) {
+            return Err(format!(
+                "サーバー「{name}」の言語「{language}」は使えません"
+            ));
+        }
+        if server.languages[..i].contains(language) {
+            return Err(format!(
+                "サーバー「{name}」の言語「{language}」が重なっています"
+            ));
+        }
+    }
+    let mount = optional_text("パスの対応", server.mount)?;
     if mount.as_ref().is_some_and(|m| !m.starts_with('/')) {
         return Err("パスの対応が正しくありません".into());
     }
-    let ssh_host = optional("ssh の接続先", settings.ssh_host)?;
+    Ok(LspServerSettings {
+        name,
+        command: optional_text("起動コマンド", server.command)?,
+        service: optional_text("サービス", server.service)?,
+        mount,
+        ..server
+    })
+}
+
+/// A setting as it is saved: each server cleaned (`clean_server`), no name twice and no language taken by two servers. The key (`environment`, `project`) must be real, and `ssh_host` is checked as `ssh::check_host` checks a host.
+fn clean(settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
+    if let Some(environment) = &settings.environment {
+        check_text("接続先", environment)?;
+    }
+    check_text("プロジェクト", &settings.project)?;
+    let ssh_host = optional_text("ssh の接続先", settings.ssh_host)?;
     if let Some(host) = &ssh_host {
         check_host(host)?;
     }
+    let servers = settings
+        .servers
+        .into_iter()
+        .map(clean_server)
+        .collect::<Result<Vec<_>, _>>()?;
+    for (i, server) in servers.iter().enumerate() {
+        for earlier in &servers[..i] {
+            if earlier.name == server.name {
+                return Err(format!("サーバーの名前「{}」が重なっています", server.name));
+            }
+            if let Some(language) = server
+                .languages
+                .iter()
+                .find(|language| earlier.languages.contains(language))
+            {
+                return Err(format!(
+                    "言語「{language}」は「{}」と「{}」のどちらかだけが受け持てます",
+                    earlier.name, server.name
+                ));
+            }
+        }
+    }
     Ok(LspRepoSettings {
-        command: optional("起動コマンド", settings.command)?,
-        service: optional("サービス", settings.service)?,
-        mount,
         ssh_host,
+        servers,
         ..settings
     })
 }
@@ -523,39 +695,56 @@ fn check_worktree(worktree: &str) -> Result<(), String> {
     }
 }
 
-/// The route to `worktree` and the way ruby-lsp is started in it, read from it by `run` (a command, its folder's route and the most bytes to keep).
+/// What `plan_for` decided for one server of a worktree: the route to the worktree, the way the server is started in it, and the languages it takes.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Planned {
+    pub route: Route,
+    pub launch: LspLaunch,
+    pub languages: Vec<String>,
+}
+
+/// The route to `worktree` and the way the server `server` of its repository is started in it, read from it by `run` (a command, its folder's route and the most bytes to keep). A server that the settings do not have is an error, before anything is run.
 fn plan_for(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     worktree: &str,
+    server: &str,
     mut run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
-) -> Result<(Route, LspLaunch), String> {
+) -> Result<Planned, String> {
     check_worktree(worktree)?;
     let settings = settings_of(dir, environment, project)?;
+    let server = settings
+        .server(server)
+        .ok_or_else(|| format!("言語サーバー「{server}」の設定がありません"))?;
     let route = route_of(environment, project, &settings)?;
     let inputs = collect(
         &mut |command, limit| run(&route, worktree, command, limit),
         worktree,
+        server.takes_ruby(),
     )?;
     let launch = decide(
         worktree,
         inputs.compose.as_deref(),
         inputs.gemfile_lock.as_deref(),
     )?;
-    let launch = resolve(launch, &settings, worktree);
-    Ok((route, launch))
+    Ok(Planned {
+        route,
+        launch: resolve(launch, server, worktree),
+        languages: server.languages.clone(),
+    })
 }
 
-/// The way ruby-lsp is started for `worktree`, read from it by `run` (a command, its folder's route and the most bytes to keep).
+/// The way the server `server` is started for `worktree`, read from it by `run` (a command, its folder's route and the most bytes to keep).
 fn launch_for(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     worktree: &str,
+    server: &str,
     run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
 ) -> Result<LspLaunch, String> {
-    plan_for(dir, environment, project, worktree, run).map(|(_, launch)| launch)
+    plan_for(dir, environment, project, worktree, server, run).map(|planned| planned.launch)
 }
 
 /// The settings of the project `project` of `environment` (`None`: this machine): the saved ones, else the unset ones (A-34).
@@ -571,7 +760,7 @@ pub async fn lsp_settings(
         .map_err(|e| e.to_string())?
 }
 
-/// Saves the settings of a repository (A-34) and answers them as saved. Settings with nothing set take the entry away.
+/// Saves the settings of a repository (A-34) and answers them as saved. Settings that are the unset ones (ruby-lsp alone, as nothing saved has it) take the entry away.
 #[tauri::command]
 pub async fn lsp_settings_set(
     app: AppHandle,
@@ -583,19 +772,45 @@ pub async fn lsp_settings_set(
         .map_err(|e| e.to_string())?
 }
 
-/// How ruby-lsp is started in `worktree` of the project `project` of `environment` (`None`: this machine), read from the worktree just now, with the settings of its repository applied (A-34).
+/// The name of the server of the project `project` of `environment` that takes `language` (a language of A-21), none when no server does (A-34).
+#[tauri::command]
+pub async fn lsp_server_for(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    language: String,
+) -> Result<Option<String>, String> {
+    let dir = config_dir(&app)?;
+    tokio::task::spawn_blocking(move || {
+        settings_of(&dir, environment.as_deref(), &project)
+            .map(|settings| server_for(&settings, &language))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// How the server `server` is started in `worktree` of the project `project` of `environment` (`None`: this machine), read from the worktree just now, with the settings of its repository applied (A-34).
 #[tauri::command]
 pub async fn lsp_launch(
     app: AppHandle,
     environment: Option<String>,
     project: String,
     worktree: String,
+    server: String,
 ) -> Result<LspLaunch, String> {
+    check_server(&server)?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
-        launch_for(&dir, environment.as_deref(), &project, &worktree, run_on)
+        launch_for(
+            &dir,
+            environment.as_deref(),
+            &project,
+            &worktree,
+            &server,
+            run_on,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -769,11 +984,23 @@ mod tests {
         LspRepoSettings::unset(None, "repo-1")
     }
 
+    fn server() -> LspServerSettings {
+        LspServerSettings::ruby_lsp()
+    }
+
+    fn server_taking(languages: &[&str]) -> LspServerSettings {
+        LspServerSettings {
+            name: "other".into(),
+            languages: languages.iter().map(|l| (*l).to_owned()).collect(),
+            ..server()
+        }
+    }
+
     #[test]
     fn compose_uses_the_first_service_and_its_mount_and_the_command_for_it() {
         let launch = Launch::Compose(vec![cand("app", "/app"), cand("worker", "/srv")]);
         assert_eq!(
-            resolve(launch, &settings(), WT),
+            resolve(launch, &server(), WT),
             LspLaunch {
                 method: LspMethod::Compose,
                 candidates: vec![cand("app", "/app"), cand("worker", "/srv")],
@@ -787,9 +1014,9 @@ mod tests {
     #[test]
     fn the_service_of_the_settings_is_used_when_it_is_a_candidate_and_ignored_when_it_is_not() {
         let launch = Launch::Compose(vec![cand("app", "/app"), cand("worker", "/srv")]);
-        let chosen = LspRepoSettings {
+        let chosen = LspServerSettings {
             service: Some("worker".into()),
-            ..settings()
+            ..server()
         };
         let got = resolve(launch.clone(), &chosen, WT);
         assert_eq!(got.service.as_deref(), Some("worker"));
@@ -798,9 +1025,9 @@ mod tests {
             got.command.as_deref(),
             Some("docker compose exec -T -w /srv worker bundle exec ruby-lsp")
         );
-        let stale = LspRepoSettings {
+        let stale = LspServerSettings {
             service: Some("gone".into()),
-            ..settings()
+            ..server()
         };
         assert_eq!(resolve(launch, &stale, WT).service.as_deref(), Some("app"));
     }
@@ -809,7 +1036,7 @@ mod tests {
     fn a_service_name_is_quoted_in_the_command() {
         let launch = Launch::Compose(vec![cand("a b;c", "/app")]);
         assert_eq!(
-            resolve(launch, &settings(), WT).command.as_deref(),
+            resolve(launch, &server(), WT).command.as_deref(),
             Some("docker compose exec -T -w /app 'a b;c' bundle exec ruby-lsp")
         );
     }
@@ -817,7 +1044,7 @@ mod tests {
     #[test]
     fn a_mount_is_quoted_in_the_command() {
         let launch = Launch::Compose(vec![cand("app", "/my work/it's;x")]);
-        let got = resolve(launch, &settings(), WT);
+        let got = resolve(launch, &server(), WT);
         assert_eq!(
             got.command.as_deref(),
             Some(r"docker compose exec -T -w '/my work/it'\''s;x' app bundle exec ruby-lsp")
@@ -828,10 +1055,10 @@ mod tests {
     #[test]
     fn the_command_and_the_mount_of_the_settings_replace_the_decided_ones() {
         let launch = Launch::Compose(vec![cand("app", "/app")]);
-        let over = LspRepoSettings {
+        let over = LspServerSettings {
             command: Some("docker compose exec -T web ruby-lsp".into()),
             mount: Some("/workspace".into()),
-            ..settings()
+            ..server()
         };
         let got = resolve(launch, &over, WT);
         assert_eq!(got.method, LspMethod::Compose);
@@ -846,7 +1073,7 @@ mod tests {
     #[test]
     fn the_host_runs_bundler_in_the_worktree_and_sees_the_worktree_as_it_is() {
         assert_eq!(
-            resolve(Launch::Host, &settings(), WT),
+            resolve(Launch::Host, &server(), WT),
             LspLaunch {
                 method: LspMethod::Host,
                 candidates: vec![],
@@ -860,7 +1087,7 @@ mod tests {
     #[test]
     fn nothing_decided_has_no_command_unless_the_settings_give_one() {
         assert_eq!(
-            resolve(Launch::Unavailable, &settings(), WT),
+            resolve(Launch::Unavailable, &server(), WT),
             LspLaunch {
                 method: LspMethod::None,
                 candidates: vec![],
@@ -869,14 +1096,86 @@ mod tests {
                 mount: None,
             }
         );
-        let over = LspRepoSettings {
+        let over = LspServerSettings {
             command: Some("ruby-lsp".into()),
-            ..settings()
+            ..server()
         };
         let got = resolve(Launch::Unavailable, &over, WT);
         assert_eq!(got.method, LspMethod::None);
         assert_eq!(got.command.as_deref(), Some("ruby-lsp"));
         assert_eq!(got.mount.as_deref(), Some(WT));
+    }
+
+    #[test]
+    fn a_server_that_does_not_take_ruby_has_no_command_of_its_own_but_the_same_service_and_mount() {
+        let launch = Launch::Compose(vec![cand("app", "/app"), cand("worker", "/srv")]);
+        let got = resolve(launch.clone(), &server_taking(&["typescript"]), WT);
+        assert_eq!(
+            got,
+            LspLaunch {
+                method: LspMethod::Compose,
+                candidates: vec![cand("app", "/app"), cand("worker", "/srv")],
+                service: Some("app".into()),
+                command: None,
+                mount: Some("/app".into()),
+            }
+        );
+        // The service and the command of its settings are used as they are for ruby-lsp.
+        let over = LspServerSettings {
+            service: Some("worker".into()),
+            command: Some(
+                "docker compose exec -T worker typescript-language-server --stdio".into(),
+            ),
+            ..server_taking(&["typescript"])
+        };
+        let got = resolve(launch, &over, WT);
+        assert_eq!(got.service.as_deref(), Some("worker"));
+        assert_eq!(got.mount.as_deref(), Some("/srv"));
+        assert_eq!(
+            got.command.as_deref(),
+            Some("docker compose exec -T worker typescript-language-server --stdio")
+        );
+        // A host with a Gemfile.lock decides nothing for it.
+        let got = resolve(Launch::Host, &server_taking(&["python"]), WT);
+        assert_eq!(got.command, None);
+        let over = LspServerSettings {
+            command: Some("pyright-langserver --stdio".into()),
+            ..server_taking(&["python"])
+        };
+        let got = resolve(Launch::Unavailable, &over, WT);
+        assert_eq!(got.command.as_deref(), Some("pyright-langserver --stdio"));
+        assert_eq!(got.mount.as_deref(), Some(WT));
+    }
+
+    #[test]
+    fn a_server_that_takes_ruby_among_others_has_the_way_of_ruby_lsp() {
+        let got = resolve(Launch::Host, &server_taking(&["python", "ruby"]), WT);
+        assert_eq!(got.command.as_deref(), Some("bundle exec ruby-lsp"));
+    }
+
+    // ---- the server of a language ----
+
+    #[test]
+    fn the_server_that_takes_a_language_is_found_by_it() {
+        let repo = LspRepoSettings {
+            servers: vec![
+                server(),
+                LspServerSettings {
+                    name: "ts".into(),
+                    languages: vec!["typescript".into(), "javascript".into()],
+                    ..server()
+                },
+            ],
+            ..settings()
+        };
+        assert_eq!(server_for(&repo, "ruby").as_deref(), Some("ruby-lsp"));
+        assert_eq!(server_for(&repo, "javascript").as_deref(), Some("ts"));
+        assert_eq!(server_for(&repo, "typescript").as_deref(), Some("ts"));
+        assert_eq!(server_for(&repo, "python"), None);
+        assert_eq!(server_for(&repo, ""), None);
+        // A repository with nothing saved has ruby-lsp for ruby.
+        assert_eq!(server_for(&settings(), "ruby").as_deref(), Some("ruby-lsp"));
+        assert_eq!(server_for(&settings(), "typescript"), None);
     }
 
     // ---- the way to the worktree ----
@@ -995,6 +1294,7 @@ mod tests {
                 })
             },
             WT,
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -1014,7 +1314,7 @@ mod tests {
 
     #[test]
     fn a_worktree_with_neither_has_neither() {
-        let inputs = collect(&mut |_, _| Ok(ran(0, "", "")), WT).unwrap();
+        let inputs = collect(&mut |_, _| Ok(ran(0, "", "")), WT, true).unwrap();
         assert_eq!(
             inputs,
             Inputs {
@@ -1035,6 +1335,7 @@ mod tests {
                 })
             },
             WT,
+            true,
         )
         .unwrap_err();
         assert_eq!(err, format!("{NOT_COMPOSE}: sh: docker: not found"));
@@ -1051,17 +1352,18 @@ mod tests {
                 ))
             },
             WT,
+            true,
         )
         .unwrap_err();
         assert!(err.starts_with("接続できません"), "{err}");
-        let err = collect(&mut |_, _| Err("ssh を実行できません".into()), WT).unwrap_err();
+        let err = collect(&mut |_, _| Err("ssh を実行できません".into()), WT, true).unwrap_err();
         assert_eq!(err, "ssh を実行できません");
     }
 
     #[test]
     fn an_answer_over_the_limit_or_not_utf8_is_an_error() {
         let big = "x".repeat(READ_MAX + 1);
-        let err = collect(&mut |_, _| Ok(ran(0, &big, "")), WT).unwrap_err();
+        let err = collect(&mut |_, _| Ok(ran(0, &big, "")), WT, true).unwrap_err();
         assert_eq!(err, TOO_LARGE);
         let err = collect(
             &mut |_, _| {
@@ -1072,6 +1374,7 @@ mod tests {
                 })
             },
             WT,
+            true,
         )
         .unwrap_err();
         assert_eq!(err, NOT_UTF8);
@@ -1086,9 +1389,30 @@ mod tests {
                 Ok(ran(0, "", ""))
             },
             WT,
+            true,
         )
         .unwrap();
         assert_eq!(limits, vec![READ_MAX + 1, READ_MAX + 1]);
+    }
+
+    #[test]
+    fn the_gemfile_lock_is_not_read_for_a_server_that_does_not_take_ruby() {
+        let mut commands = Vec::new();
+        let inputs = collect(
+            &mut |command, _| {
+                commands.push(command.to_owned());
+                Ok(if command.contains("docker compose") {
+                    ran(0, "", "")
+                } else {
+                    ran(0, LOCK, "")
+                })
+            },
+            WT,
+            false,
+        )
+        .unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(inputs.gemfile_lock, None);
     }
 
     #[test]
@@ -1101,6 +1425,7 @@ mod tests {
                 Ok(ran(0, &config, ""))
             },
             WT,
+            true,
         )
         .unwrap();
         assert_eq!(commands.len(), 1);
@@ -1115,32 +1440,60 @@ mod tests {
                 Ok(ran(0, &other, ""))
             },
             WT,
+            true,
         )
         .unwrap();
         assert_eq!(commands.len(), 2);
         // A broken one is the error it is for `decide`.
-        let err = collect(&mut |_, _| Ok(ran(0, "nope", "")), WT).unwrap_err();
+        let err = collect(&mut |_, _| Ok(ran(0, "nope", "")), WT, true).unwrap_err();
         assert_eq!(err, BAD_COMPOSE);
     }
 
     // ---- the settings file ----
 
+    fn read_file(dir: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("lsp-settings.json")).unwrap())
+            .unwrap()
+    }
+
+    fn typescript() -> LspServerSettings {
+        LspServerSettings {
+            name: "ts".into(),
+            languages: vec!["typescript".into(), "javascript".into()],
+            auto_start: false,
+            command: Some("typescript-language-server --stdio".into()),
+            mount: Some("/workspace".into()),
+            service: Some("web".into()),
+        }
+    }
+
     #[test]
-    fn nothing_saved_gives_the_unset_settings_and_a_save_is_read_back() {
+    fn nothing_saved_gives_the_unset_settings_with_ruby_lsp_and_a_save_is_read_back() {
         let dir = temp_dir("roundtrip");
+        let unset = settings_of(&dir, None, "r1").unwrap();
+        assert_eq!(unset, LspRepoSettings::unset(None, "r1"));
         assert_eq!(
-            settings_of(&dir, None, "r1").unwrap(),
-            LspRepoSettings::unset(None, "r1")
+            unset.servers,
+            vec![LspServerSettings {
+                name: "ruby-lsp".into(),
+                languages: vec!["ruby".into()],
+                auto_start: true,
+                command: None,
+                mount: None,
+                service: None,
+            }]
         );
-        assert!(settings_of(&dir, None, "r1").unwrap().auto_start);
         let saved = set_settings(
             &dir,
             LspRepoSettings {
-                auto_start: false,
-                command: Some("docker compose exec -T web ruby-lsp".into()),
-                mount: Some("/workspace".into()),
-                service: Some("web".into()),
                 ssh_host: Some("dev".into()),
+                servers: vec![
+                    LspServerSettings {
+                        auto_start: false,
+                        ..server()
+                    },
+                    typescript(),
+                ],
                 ..LspRepoSettings::unset(Some("srv"), "r1")
             },
         )
@@ -1159,12 +1512,15 @@ mod tests {
     }
 
     #[test]
-    fn the_file_holds_the_version_and_one_entry_for_each_repository_that_differs() {
+    fn the_file_is_of_version_2_with_the_servers_of_each_repository_that_differs() {
         let dir = temp_dir("shape");
         set_settings(
             &dir,
             LspRepoSettings {
-                auto_start: false,
+                servers: vec![LspServerSettings {
+                    auto_start: false,
+                    ..server()
+                }],
                 ..LspRepoSettings::unset(None, "r1")
             },
         )
@@ -1172,7 +1528,7 @@ mod tests {
         set_settings(
             &dir,
             LspRepoSettings {
-                service: Some("web".into()),
+                ssh_host: Some("dev".into()),
                 ..LspRepoSettings::unset(Some("srv"), "r1")
             },
         )
@@ -1180,45 +1536,118 @@ mod tests {
         set_settings(
             &dir,
             LspRepoSettings {
-                auto_start: true,
-                command: Some("x".into()),
+                servers: vec![
+                    LspServerSettings {
+                        command: Some("x".into()),
+                        ..server()
+                    },
+                    typescript(),
+                ],
                 ..LspRepoSettings::unset(None, "r1")
             },
         )
         .unwrap();
-        let file: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("lsp-settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(file["version"], 1);
+        let file = read_file(&dir);
+        assert_eq!(file["version"], 2);
         assert_eq!(file["repositories"].as_array().unwrap().len(), 2);
         assert_eq!(
             file["repositories"][0],
-            json!({"environment": null, "project": "r1", "autoStart": true, "command": "x", "mount": null, "service": null, "sshHost": null})
+            json!({
+                "environment": null, "project": "r1", "sshHost": null,
+                "servers": [
+                    {"name": "ruby-lsp", "languages": ["ruby"], "autoStart": true, "command": "x", "mount": null, "service": null},
+                    {"name": "ts", "languages": ["typescript", "javascript"], "autoStart": false, "command": "typescript-language-server --stdio", "mount": "/workspace", "service": "web"},
+                ]
+            })
         );
         assert!(!dir.join("lsp-settings.json.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn settings_with_nothing_set_take_their_entry_away() {
+    fn a_file_of_version_1_is_read_as_a_repository_with_one_ruby_lsp_and_saved_as_version_2() {
+        let dir = temp_dir("v1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = json!({"version": 1, "repositories": [
+            {"environment": "srv", "project": "r1", "autoStart": false, "command": "docker compose exec -T web ruby-lsp", "mount": "/workspace", "service": "web", "sshHost": "dev"},
+            {"environment": null, "project": "r2", "autoStart": true, "command": null, "mount": null, "service": null, "sshHost": null},
+        ]});
+        std::fs::write(dir.join("lsp-settings.json"), old.to_string()).unwrap();
+        assert_eq!(
+            settings_of(&dir, Some("srv"), "r1").unwrap(),
+            LspRepoSettings {
+                ssh_host: Some("dev".into()),
+                servers: vec![LspServerSettings {
+                    auto_start: false,
+                    command: Some("docker compose exec -T web ruby-lsp".into()),
+                    mount: Some("/workspace".into()),
+                    service: Some("web".into()),
+                    ..server()
+                }],
+                ..LspRepoSettings::unset(Some("srv"), "r1")
+            }
+        );
+        assert_eq!(
+            settings_of(&dir, None, "r2").unwrap(),
+            LspRepoSettings::unset(None, "r2")
+        );
+        // Nothing is written by a read, and the next save writes every repository as version 2.
+        assert_eq!(read_file(&dir)["version"], 1);
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![server(), typescript()],
+                ..LspRepoSettings::unset(None, "r3")
+            },
+        )
+        .unwrap();
+        let file = read_file(&dir);
+        assert_eq!(file["version"], 2);
+        assert_eq!(file["repositories"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            file["repositories"][0]["servers"],
+            json!([{"name": "ruby-lsp", "languages": ["ruby"], "autoStart": false, "command": "docker compose exec -T web ruby-lsp", "mount": "/workspace", "service": "web"}])
+        );
+        assert_eq!(file["repositories"][0]["sshHost"], "dev");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn settings_that_are_the_unset_ones_take_their_entry_away() {
         let dir = temp_dir("drop");
         set_settings(
             &dir,
             LspRepoSettings {
-                command: Some("x".into()),
+                servers: vec![LspServerSettings {
+                    command: Some("x".into()),
+                    ..server()
+                }],
                 ..settings()
             },
         )
         .unwrap();
         set_settings(&dir, settings()).unwrap();
-        let file: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("lsp-settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(file["repositories"], json!([]));
+        assert_eq!(read_file(&dir)["repositories"], json!([]));
         // Settings never saved and nothing set leave no file.
         let none = temp_dir("drop-none");
         set_settings(&none, settings()).unwrap();
         assert!(!none.join("lsp-settings.json").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_repository_may_have_no_server_and_that_is_kept() {
+        let dir = temp_dir("none");
+        let saved = set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![],
+                ..settings()
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.servers, vec![]);
+        assert_eq!(settings_of(&dir, None, "repo-1").unwrap().servers, vec![]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1228,19 +1657,33 @@ mod tests {
         let saved = set_settings(
             &dir,
             LspRepoSettings {
-                command: Some("  ruby-lsp  ".into()),
-                mount: Some("   ".into()),
-                service: Some("".into()),
                 ssh_host: Some(" dev ".into()),
+                servers: vec![LspServerSettings {
+                    name: "  ruby-lsp ".into(),
+                    command: Some("  ruby-lsp  ".into()),
+                    mount: Some("   ".into()),
+                    service: Some("".into()),
+                    ..server()
+                }],
                 ..settings()
             },
         )
         .unwrap();
-        assert_eq!(saved.command.as_deref(), Some("ruby-lsp"));
-        assert_eq!(saved.mount, None);
-        assert_eq!(saved.service, None);
         assert_eq!(saved.ssh_host.as_deref(), Some("dev"));
+        assert_eq!(saved.servers[0].name, "ruby-lsp");
+        assert_eq!(saved.servers[0].command.as_deref(), Some("ruby-lsp"));
+        assert_eq!(saved.servers[0].mount, None);
+        assert_eq!(saved.servers[0].service, None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn with_server(change: impl FnOnce(&mut LspServerSettings)) -> LspRepoSettings {
+        let mut s = server();
+        change(&mut s);
+        LspRepoSettings {
+            servers: vec![s],
+            ..settings()
+        }
     }
 
     #[test]
@@ -1251,16 +1694,103 @@ mod tests {
             change(&mut s);
             set_settings(&dir, s)
         };
+        let bad_server =
+            |change: fn(&mut LspServerSettings)| set_settings(&dir, with_server(change));
         assert!(bad(|s| s.project = String::new()).is_err());
         assert!(bad(|s| s.project = "a\nb".into()).is_err());
         assert!(bad(|s| s.environment = Some(String::new())).is_err());
-        assert!(bad(|s| s.command = Some("a\nb".into())).is_err());
-        assert!(bad(|s| s.command = Some("x".repeat(MAX_TEXT + 1))).is_err());
-        assert!(bad(|s| s.mount = Some("relative".into())).is_err());
-        assert!(bad(|s| s.service = Some("a\tb".into())).is_err());
         assert!(bad(|s| s.ssh_host = Some("-oProxyCommand=x".into())).is_err());
         assert!(bad(|s| s.ssh_host = Some("a b".into())).is_err());
+        assert!(bad_server(|s| s.command = Some("a\nb".into())).is_err());
+        assert!(bad_server(|s| s.command = Some("x".repeat(MAX_TEXT + 1))).is_err());
+        assert!(bad_server(|s| s.mount = Some("relative".into())).is_err());
+        assert!(bad_server(|s| s.service = Some("a\tb".into())).is_err());
         assert!(!dir.join("lsp-settings.json").exists());
+    }
+
+    #[test]
+    fn the_name_of_a_server_is_not_empty_has_no_control_character_and_is_at_most_64_characters() {
+        let dir = temp_dir("names");
+        let name = |name: String| set_settings(&dir, with_server(|s| s.name = name));
+        assert_eq!(name(String::new()), Err(BAD_SERVER.into()));
+        assert_eq!(name("   ".into()), Err(BAD_SERVER.into()));
+        assert_eq!(name("a\nb".into()), Err(BAD_SERVER.into()));
+        assert_eq!(name("a\u{7f}b".into()), Err(BAD_SERVER.into()));
+        assert_eq!(name("x".repeat(65)), Err(BAD_SERVER.into()));
+        assert!(name("x".repeat(64)).is_ok());
+        // Characters are counted, not bytes.
+        assert!(name("あ".repeat(64)).is_ok());
+        assert_eq!(name("あ".repeat(65)), Err(BAD_SERVER.into()));
+        assert_eq!(check_server("ruby-lsp"), Ok(()));
+        assert_eq!(check_server(""), Err(BAD_SERVER.into()));
+        assert_eq!(check_server("a\nb"), Err(BAD_SERVER.into()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_languages_of_a_server_are_one_or_more_languages_of_a21_with_no_repeat() {
+        let dir = temp_dir("languages");
+        let languages = |languages: &[&str]| {
+            let languages: Vec<String> = languages.iter().map(|l| (*l).to_owned()).collect();
+            set_settings(&dir, with_server(|s| s.languages = languages))
+        };
+        assert!(languages(&[]).unwrap_err().contains("言語がありません"));
+        assert!(languages(&["cobol-2000"])
+            .unwrap_err()
+            .contains("「cobol-2000」は使えません"));
+        assert!(languages(&["Ruby"]).is_err());
+        assert!(languages(&[" ruby"]).is_err());
+        assert!(languages(&["ruby", "python", "ruby"])
+            .unwrap_err()
+            .contains("「ruby」が重なっています"));
+        assert!(languages(&["ruby", "python", "plaintext"]).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_name_is_used_once_and_a_language_is_taken_by_one_server_of_a_repository() {
+        let dir = temp_dir("unique");
+        let two = |second: LspServerSettings| {
+            set_settings(
+                &dir,
+                LspRepoSettings {
+                    servers: vec![server(), second],
+                    ..settings()
+                },
+            )
+        };
+        let err = two(LspServerSettings {
+            languages: vec!["python".into()],
+            ..server()
+        })
+        .unwrap_err();
+        assert!(err.contains("「ruby-lsp」が重なっています"), "{err}");
+        // The trimmed name is the one that is compared.
+        assert!(two(LspServerSettings {
+            name: " ruby-lsp ".into(),
+            languages: vec!["python".into()],
+            ..server()
+        })
+        .is_err());
+        let err = two(LspServerSettings {
+            name: "other".into(),
+            languages: vec!["python".into(), "ruby".into()],
+            ..server()
+        })
+        .unwrap_err();
+        assert!(err.contains("「ruby」は「ruby-lsp」と「other」"), "{err}");
+        assert!(!dir.join("lsp-settings.json").exists());
+        // The same language in two repositories is no matter.
+        assert!(two(typescript()).is_ok());
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![typescript()],
+                ..LspRepoSettings::unset(None, "repo-2")
+            },
+        )
+        .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1270,8 +1800,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         for text in [
             "not json",
-            r#"{"version":2,"repositories":[]}"#,
+            r#"{"version":3,"repositories":[]}"#,
+            r#"{"version":0,"repositories":[]}"#,
             r#"{"repositories":[]}"#,
+            r#"{"version":1}"#,
+            r#"{"version":2,"repositories":[{"project":"r"}]}"#,
         ] {
             std::fs::write(dir.join("lsp-settings.json"), text).unwrap();
             let err = settings_of(&dir, None, "r1").unwrap_err();
@@ -1279,7 +1812,10 @@ mod tests {
             assert!(set_settings(
                 &dir,
                 LspRepoSettings {
-                    command: Some("x".into()),
+                    servers: vec![LspServerSettings {
+                        command: Some("x".into()),
+                        ..server()
+                    }],
                     ..settings()
                 }
             )
@@ -1295,27 +1831,19 @@ mod tests {
     #[test]
     fn a_failed_save_leaves_the_saved_settings() {
         let dir = temp_dir("atomic");
-        set_settings(
-            &dir,
-            LspRepoSettings {
-                command: Some("one".into()),
-                ..settings()
-            },
-        )
-        .unwrap();
+        let with_command = |command: &str| LspRepoSettings {
+            servers: vec![LspServerSettings {
+                command: Some(command.into()),
+                ..server()
+            }],
+            ..settings()
+        };
+        set_settings(&dir, with_command("one")).unwrap();
         // A folder in the temporary file's place makes the write fail before the rename.
         std::fs::create_dir(dir.join("lsp-settings.json.tmp")).unwrap();
-        assert!(set_settings(
-            &dir,
-            LspRepoSettings {
-                command: Some("two".into()),
-                ..settings()
-            }
-        )
-        .is_err());
+        assert!(set_settings(&dir, with_command("two")).is_err());
         assert_eq!(
-            settings_of(&dir, None, "repo-1")
-                .unwrap()
+            settings_of(&dir, None, "repo-1").unwrap().servers[0]
                 .command
                 .as_deref(),
             Some("one")
@@ -1326,12 +1854,15 @@ mod tests {
     // ---- the whole decision for a worktree ----
 
     #[test]
-    fn launch_for_reads_the_worktree_by_the_route_and_applies_the_settings() {
+    fn launch_for_reads_the_worktree_by_the_route_and_applies_the_settings_of_the_server() {
         let dir = temp_dir("launch");
         set_settings(
             &dir,
             LspRepoSettings {
-                service: Some("worker".into()),
+                servers: vec![LspServerSettings {
+                    service: Some("worker".into()),
+                    ..server()
+                }],
                 ..settings()
             },
         )
@@ -1340,14 +1871,21 @@ mod tests {
             json!({"app": {"volumes": [bind(WT, "/app")]}, "worker": {"volumes": [bind(WT, "/srv")]}}),
         );
         let mut seen = Vec::new();
-        let got = launch_for(&dir, None, "repo-1", WT, |route, worktree, command, _| {
-            seen.push((route.clone(), worktree.to_owned()));
-            Ok(if command.contains("docker compose") {
-                ran(0, &config, "")
-            } else {
-                ran(0, "", "")
-            })
-        })
+        let got = launch_for(
+            &dir,
+            None,
+            "repo-1",
+            WT,
+            "ruby-lsp",
+            |route, worktree, command, _| {
+                seen.push((route.clone(), worktree.to_owned()));
+                Ok(if command.contains("docker compose") {
+                    ran(0, &config, "")
+                } else {
+                    ran(0, "", "")
+                })
+            },
+        )
         .unwrap();
         assert_eq!(got.method, LspMethod::Compose);
         assert_eq!(got.service.as_deref(), Some("worker"));
@@ -1359,6 +1897,58 @@ mod tests {
     }
 
     #[test]
+    fn plan_for_a_server_that_does_not_take_ruby_never_reads_the_gemfile_lock_and_gives_its_languages(
+    ) {
+        let dir = temp_dir("launch-ts");
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![server(), typescript()],
+                ..settings()
+            },
+        )
+        .unwrap();
+        let mut commands = Vec::new();
+        let got = plan_for(&dir, None, "repo-1", WT, "ts", |_, _, command, _| {
+            commands.push(command.to_owned());
+            Ok(ran(0, "", ""))
+        })
+        .unwrap();
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("docker compose config"));
+        assert_eq!(got.route, Route::Local);
+        assert_eq!(got.launch.method, LspMethod::None);
+        assert_eq!(
+            got.launch.command.as_deref(),
+            Some("typescript-language-server --stdio")
+        );
+        assert_eq!(got.launch.mount.as_deref(), Some("/workspace"));
+        assert_eq!(got.languages, vec!["typescript", "javascript"]);
+        // The same worktree for ruby-lsp reads the Gemfile.lock too.
+        let mut commands = Vec::new();
+        plan_for(&dir, None, "repo-1", WT, "ruby-lsp", |_, _, command, _| {
+            commands.push(command.to_owned());
+            Ok(ran(0, "", ""))
+        })
+        .unwrap();
+        assert_eq!(commands.len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_server_that_the_settings_do_not_have_is_an_error_before_anything_is_run() {
+        let dir = temp_dir("launch-none");
+        let mut runs = 0;
+        let err = launch_for(&dir, None, "repo-1", WT, "gone", |_, _, _, _| {
+            runs += 1;
+            Ok(ran(0, "", ""))
+        })
+        .unwrap_err();
+        assert_eq!(err, "言語サーバー「gone」の設定がありません");
+        assert_eq!(runs, 0);
+    }
+
+    #[test]
     fn launch_for_of_a_saved_environment_goes_through_the_host_of_its_settings() {
         let dir = temp_dir("launch-ssh");
         let env_settings = LspRepoSettings {
@@ -1367,19 +1957,33 @@ mod tests {
         };
         set_settings(&dir, env_settings).unwrap();
         let mut routes = Vec::new();
-        let got = launch_for(&dir, Some("srv"), "repo-1", WT, |route, _, _, _| {
-            routes.push(route.clone());
-            Ok(ran(0, "", ""))
-        })
+        let got = launch_for(
+            &dir,
+            Some("srv"),
+            "repo-1",
+            WT,
+            "ruby-lsp",
+            |route, _, _, _| {
+                routes.push(route.clone());
+                Ok(ran(0, "", ""))
+            },
+        )
         .unwrap();
         assert_eq!(got.method, LspMethod::None);
         assert_eq!(routes, vec![Route::Ssh { host: "dev".into() }; 2]);
         // Without the host nothing is run.
         let mut runs = 0;
-        let err = launch_for(&dir, Some("other"), "repo-1", WT, |_, _, _, _| {
-            runs += 1;
-            Ok(ran(0, "", ""))
-        })
+        let err = launch_for(
+            &dir,
+            Some("other"),
+            "repo-1",
+            WT,
+            "ruby-lsp",
+            |_, _, _, _| {
+                runs += 1;
+                Ok(ran(0, "", ""))
+            },
+        )
         .unwrap_err();
         assert_eq!(err, NO_SSH_HOST);
         assert_eq!(runs, 0);
@@ -1390,7 +1994,7 @@ mod tests {
     fn launch_for_refuses_a_bad_worktree_before_it_runs_anything() {
         let dir = temp_dir("launch-bad");
         let mut runs = 0;
-        let err = launch_for(&dir, None, "repo-1", "rel", |_, _, _, _| {
+        let err = launch_for(&dir, None, "repo-1", "rel", "ruby-lsp", |_, _, _, _| {
             runs += 1;
             Ok(ran(0, "", ""))
         })
@@ -1402,7 +2006,7 @@ mod tests {
     #[test]
     fn launch_for_falls_back_to_the_host_when_only_the_gemfile_lock_has_ruby_lsp() {
         let dir = temp_dir("launch-host");
-        let got = launch_for(&dir, None, "repo-1", WT, |_, _, command, _| {
+        let got = launch_for(&dir, None, "repo-1", WT, "ruby-lsp", |_, _, command, _| {
             Ok(if command.contains("Gemfile.lock") {
                 ran(0, LOCK, "")
             } else {
