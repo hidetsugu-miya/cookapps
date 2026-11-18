@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.83.1
+
+A-37: the orchestrator is now called the leader and its children the teammates (#910, #911, #912). The leader starts at effort `high` and each teammate at effort `medium`. A teammate that has finished stays, with its worktree and its tab, until you close it with the × of its tab or card; the leader closes one only when you ask it to in so many words.
+
+A-35, A-37: the development screen has one list at the left (#913). The formations are under the heading 「フォーメーション」 and the projects under 「プロジェクト」. The mode switch at the left of the footer is gone, with the numbers on it; the footer keeps the bell. A formation row shows its name alone, and pressing it shows the leader and the flow in place of the Orca work pane; pressing a project or a session shows the work pane. The screen opens on the work pane. When the list is closed while a formation is shown, a button at the left of the tab strip opens it again.
+
+A-37: the teammates' terminals are tabs in the middle pane (#914). After the leader's tab, tagged 「high」, come the teammates' tabs, tagged 「medium」, each with a mark for its state; a finished teammate shows ✓ and ×, and a planned one has a dashed frame. The right pane is a column of cards 260px wide, with a line from the leader's card to the teammates' cards, and pressing a card selects its tab. The terminal under the tree, the strip of 40px, the divider and the button that closed the pane are gone. 「自動で追う」 is off when a formation is opened.
+
+A-37: when the leader waits for your input, its row in the list has an orange dot and the label 「入力待ち」, and its tab shows the orange mark (#915).
+
 ## v0.83.0
 
 A-39: the tree of the Orca file pane shows which files and folders differ from HEAD (#898, #899, #900). The name and the icon of a changed entry are amber, and those of a new entry (untracked or added) are green; at the right end a file has `M` or `U`, and a folder that holds a change has a dot. The marks come a moment after a folder is drawn, and are read again with the tree: when the window gets the focus back, every 10 seconds, after the app creates, deletes or moves a file, and after a switch of the branch. A selected row stays white.
