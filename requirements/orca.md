@@ -546,9 +546,9 @@ Pressing the preview button again, and the reload button, make a new frame (the 
 Nothing else reloads the frame: the clock of the Orca screen reads the text again (A-18) and does not touch it, and a save does not.
 Leaving the preview (the source button), closing the tab and a file that is gone from the disk take the frame out, which stops its load.
 A drawing of the frame that is out of date when the save or the address comes (the preview was left, the tab closed, another drawing began) is dropped.
-When the save or the command fails, the message is shown on a card (A-28) and the source is shown.
+When the save that comes first does not go through (the disk changed, the file is gone, or the save errors), the frame is not made and the source is shown; the heading says why the save failed, as a save does (A-18), and an error also shows a card (A-28). When the command fails, the message is shown on a card (A-28) and the source is shown.
 
-E2E (`orca-files.e2e.ts`): an HTML file opens in the preview with the buttons in their states, the frame with its `src` and `sandbox`, and the command called with the worktree, the path and the target; the source and the preview buttons switch the views and the preview calls the command again; the reload button is shown only in the preview and makes a new frame and calls the command again; a typing that waits is saved before the command is called; a failure of the command shows the card and the source; and a file that is not HTML has no preview button.
+E2E (`orca-files.e2e.ts`): an HTML file opens in the preview with the buttons in their states, the frame with its `src` and `sandbox`, and the command called with the worktree, the path and the target; the source and the preview buttons switch the views and the preview calls the command again; the reload button is shown only in the preview and makes a new frame and calls the command again; a typing that waits is saved before the command is called; a failure of the command shows the card and the source; a save that does not go through keeps the source and asks for no address; and a file that is not HTML has no preview button.
 
 ## A-33 This machine and a saved environment in one list
 

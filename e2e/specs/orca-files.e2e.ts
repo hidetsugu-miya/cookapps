@@ -2815,6 +2815,25 @@ describe("orca: files and editor (A-18)", () => {
     expect(await count(".orca-edit-preview iframe")).toBe(0);
   });
 
+  it("keeps the source when the save that comes first does not go through, and does not ask for the address (A-42)", async () => {
+    const url = await openPage();
+    await modeButton("ソース").click();
+    const write = await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+    await type("<p>追記</p>\n");
+    await waitForCalls(write);
+    await expect(stateText()).toHaveText("ディスクのファイルが変わっています");
+    // The record of the address is cleared, so that only a call after the failed save would show.
+    await mock(url, PREVIEW_URL);
+    await modeButton("プレビュー").click();
+    await browser.waitUntil(() => $(".orca-edit-body").isDisplayed(), { timeoutMsg: "the source did not come back" });
+    await expect($(".orca-edit-preview")).not.toBeDisplayed();
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("プレビュー")).toHaveAttribute("aria-pressed", "false");
+    await expect(modeButton("再読み込み")).not.toBeDisplayed();
+    expect(await count(".orca-edit-preview iframe")).toBe(0);
+    expect(await callsOf(url)).toEqual([]);
+  });
+
   it("shows no preview button and no reload button for a file that is not HTML (A-42)", async () => {
     await openFiles();
     await openFileWith(rust("fn main() {}\n"));

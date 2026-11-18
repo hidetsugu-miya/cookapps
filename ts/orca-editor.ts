@@ -499,6 +499,11 @@ async function drawPreview(f: EditorFile) {
   try {
     await flush(f);
     if (turn !== f.previewTurn) return;
+    // A save that did not go through keeps the editor on the source (the heading says why), so the owner sees the text that is not on the disk, not a preview of the old file.
+    if (f.save === "error" || f.blocked) {
+      setMode(f, "source");
+      return;
+    }
     const address = await invoke("orca_file_preview_url", { path: f.path, relative: f.relative, environment: f.target });
     if (turn !== f.previewTurn) return;
     const frame = tag("iframe");
