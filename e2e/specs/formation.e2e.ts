@@ -1,4 +1,4 @@
-import { boot, callsOf, count, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
 
 import type { FormationList } from "../../ts/bindings/FormationList";
 
@@ -2403,5 +2403,289 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダー"), { timeoutMsg: "the new terminal never showed" });
     expect((await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
     await expect($("#formation-restart")).toBeEnabled();
+  });
+});
+
+// A-41: the decision page of a child, in a tab of the middle pane.
+const MARK_AT = Date.now() - 3 * 60_000;
+const asking = (extra: Record<string, unknown> = {}) => formationChild("req-login", "working", { pendingPage: { title: "要件の未決事項", atMs: MARK_AT }, ...extra });
+const PAGE_TAB = '#formation-tabs-mates [data-page="req-login"]';
+const OPEN = '#formation-flow-list [data-open="req-login"]';
+const pageCall = () => callsOf("formation_page_read");
+// Whether a fold of the page is open.
+const folded = (selector: string) => browser.execute((s) => document.querySelector<HTMLDetailsElement>(s)!.open, selector);
+
+// Opens the page of `req-login`: the formation is shown with that child waiting on it, and 「開く」 is pressed.
+async function openPage(page = decisionPage(), children: unknown[] = [asking()]) {
+  await openFlow(children, { formation_page_read: page });
+  await browser.waitUntil(async () => (await cardNames()).length === children.length);
+  await $(OPEN).click();
+  await expect($("#formation-page")).toBeDisplayed();
+}
+
+const QUESTION = decisionCard("Q1", {
+  title: "ログインに何回失敗したら止めるか",
+  summary: "止める回数を決める",
+  options: [
+    { key: "A", label: "5 回で 15 分止める", detail: "API の上限と同じ" },
+    { key: "B", label: "10 回で 15 分止める", detail: null },
+  ],
+  recommendation: "A",
+  recommendationReason: "今の API の上限と同じ",
+});
+
+describe("orchestration mode: the decision page of a child", () => {
+  it("says 判断待ち on the card of a child that has a page, with 開く, and gives it a tab right after its own", async () => {
+    await openFlow([asking(), formationChild("api-update", "working")]);
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    const card = '#formation-flow-list [data-name="req-login"]';
+    expect(await textsOf(`${card} .formation-card-state`)).toEqual(["判断待ち"]);
+    expect(await textsOf(`${card} .formation-card-msg`)).toEqual(["要件の未決事項"]);
+    expect(await textsOf(`${card} .formation-card-open`)).toEqual(["開く"]);
+    await expect($(`${card} .formation-card`)).toHaveAttribute("data-state", "waiting");
+    expect(await browser.execute((sel) => getComputedStyle(document.querySelector(sel)!).borderTopColor, `${card} .formation-card`)).toBe(await resolvedGround("--agent-question"));
+    expect(await textsOf("#formation-flow-list .formation-card-open")).toEqual(["開く"]);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["req-login", "判断: 要件の未決事項", "api-update"]);
+    await expect($(PAGE_TAB)).toHaveAttribute("role", "tab");
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "false");
+    // The page is read only when it is shown.
+    expect(await pageCall()).toEqual([]);
+  });
+
+  it("shows the page in place of the terminal when 開く is pressed, and reads it once for the formation and the child", async () => {
+    await openPage(decisionPage({ contextLabel: "要件定義 · 未決事項 1 件", title: "要件の未決事項", questions: [QUESTION] }));
+    expect(await waitForCalls("formation_page_read", 1)).toEqual([{ name: "formation", child: "req-login" }]);
+    await expect($("#formation-term")).not.toBeDisplayed();
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "false");
+    await expect($(OPEN)).toHaveAttribute("aria-pressed", "true");
+    await expect($("#formation-page .fp-title")).toHaveText("要件の未決事項");
+    await expect($("#formation-page .fp-from")).toHaveText("req-login から");
+    await expect($("#formation-page .fp-context")).toHaveText("要件定義 · 未決事項 1 件");
+    await expect($('#formation-page [data-card="Q1"] .fp-card-title')).toHaveText("ログインに何回失敗したら止めるか");
+    // A poll that changes nothing reads the page no more.
+    await browser.pause(READ * 3);
+    expect(await pageCall()).toHaveLength(1);
+    // The leader's tab shows the terminal again, and the page is kept for the next time.
+    await $("#formation-tab-leader-main").click();
+    await expect($("#formation-term")).toBeDisplayed();
+    await expect($("#formation-page")).not.toBeDisplayed();
+    await $(PAGE_TAB).click();
+    await expect($("#formation-page .fp-title")).toBeDisplayed();
+    expect(await pageCall()).toHaveLength(1);
+  });
+
+  it("opens the same page from its tab", async () => {
+    await openFlow([asking()], { formation_page_read: decisionPage() });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await $(PAGE_TAB).click();
+    await expect($("#formation-page .fp-title")).toBeDisplayed();
+    await expect($("#formation-term")).not.toBeDisplayed();
+  });
+
+  it("draws a question with its options as radios, the recommended one marked with its reason, and free text for その他 only", async () => {
+    await openPage(decisionPage({ questions: [QUESTION] }));
+    const card = '#formation-page [data-card="Q1"]';
+    expect(await textsOf(`${card} .fp-choice-label`)).toEqual(["A5 回で 15 分止める推奨", "B10 回で 15 分止める", "調べてから決めて", "その他"]);
+    expect(await count(`${card} input[type="radio"]`)).toBe(4);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-choice`)].map((e) => (e as HTMLElement).dataset.recommended ?? ""), card)).toEqual(["true", "", "", ""]);
+    expect(await textsOf(`${card} .fp-reason`)).toEqual(["理由: 今の API の上限と同じ"]);
+    const cancel = $(`${card} .fp-cancel`);
+    await expect(cancel).toBeDisabled();
+    await expect($(`${card} .fp-text`)).not.toBeDisplayed();
+    await $(`${card} input[value="B"]`).click();
+    await expect(cancel).toBeEnabled();
+    await expect($(`${card} input[value="B"]`)).toBeSelected();
+    await $(`${card} input[value="other"]`).click();
+    await expect($(`${card} .fp-text`)).toBeDisplayed();
+    await $(`${card} .fp-text`).setValue("5 回と 10 回の間");
+    await expect($(`${card} input[value="B"]`)).not.toBeSelected();
+    await cancel.click();
+    await expect($(`${card} input[value="other"]`)).not.toBeSelected();
+    await expect(cancel).toBeDisabled();
+    await expect($(`${card} .fp-text`)).not.toBeDisplayed();
+    // Nothing on the page sends the answer: that is another part.
+    expect(await textsOf("#formation-page button")).toEqual(["選択を取り消す"]);
+  });
+
+  it("gives the other kinds of card the fixed choices of their kind, and a field for a note", async () => {
+    const approval = decisionPage({
+      pageKind: "approval",
+      subject: "design",
+      what: "設計を承認します",
+      needsUserDecision: [decisionCard("NR-1", { kind: "nr", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
+      structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
+      adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
+      qualityLoop: { rounds: 2, mustFixResolved: 3 },
+    });
+    await openPage(approval);
+    const labels = (n: string) => textsOf(`#formation-page [data-card="${n}"] .fp-choice-label`);
+    expect(await labels("NR-1")).toEqual(["A案 A推奨", "その他"]);
+    expect(await labels("MF-1")).toEqual(["指摘のとおり修正する推奨", "今回は対応しない"]);
+    expect(await labels("SP-1")).toEqual(["承認推奨", "却下", "保留"]);
+    expect(await labels("ADR-1")).toEqual(["残す推奨", "不要"]);
+    expect(await textsOf('#formation-page [data-card="SP-1"] .fp-note > span')).toEqual(["理由（却下・保留のとき）"]);
+    expect(await textsOf('#formation-page [data-card="MF-1"] .fp-note > span')).toEqual(["補足（任意）"]);
+    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "ADR（設計判断の記録） 1 件"]);
+    await $("#formation-page .fp-reference > summary").click();
+    expect(await textsOf("#formation-page .fp-reference .fp-ref .fp-p")).toEqual(["実施回数: 2 回", "解消した必ず直す指摘: 3 件"]);
+  });
+
+  it("draws a code review with its changes open, the unmet criterion with no answer, and the pull request", async () => {
+    await openPage(
+      decisionPage({
+        pageKind: "code-review",
+        subject: "code",
+        what: "ロックを足しました",
+        changes: [{ heading: "api の変更", blocks: [{ type: "paragraph", text: "失敗の回数を数えます" }] }],
+        unmetCriteria: [decisionCard("UC-1", { kind: "unmet-criterion", title: "条件 1", cards: ["RMF-1"] })],
+        residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" })],
+        pr: { url: "https://example.com/pr/1", note: null },
+      }),
+    );
+    expect(await folded("#formation-page .fp-change")).toBe(true);
+    await expect($("#formation-page .fp-change .fp-p")).toHaveText("失敗の回数を数えます");
+    expect(await textsOf('#formation-page [data-card="RMF-1"] .fp-choice-label')).toEqual(["修正して再レビューする推奨", "現状で完了する"]);
+    expect(await count('#formation-page [data-card="UC-1"] input')).toBe(0);
+    await $("#formation-page .fp-reference > summary").click();
+    expect(await textsOf("#formation-page .fp-reference .fp-ev-path")).toEqual(["https://example.com/pr/1"]);
+  });
+
+  it("draws the blocks, the facts and the evidence of a card behind 詳しく見る", async () => {
+    const card = decisionCard("Q1", {
+      background: "今の上限は 5 回",
+      facts: [{ label: "場所", value: "api/auth" }],
+      blocks: [
+        { type: "heading", text: "比べ方" },
+        { type: "paragraph", text: "二つの案" },
+        { type: "list", items: ["一つめ", "二つめ"] },
+        { type: "callout", text: "注意してください" },
+        { type: "table", header: ["案", "回数"], rows: [[{ text: "A", changed: false }, { text: "5", changed: true }]] },
+        { type: "before-after", before: [{ type: "paragraph", text: "前の文" }], after: [{ type: "paragraph", text: "後の文" }], beforeCaption: null, afterCaption: "直したあと" },
+        { type: "folded", summary: "詳しい理由", blocks: [{ type: "paragraph", text: "畳んだ文" }] },
+      ],
+      evidence: [
+        { type: "excerpt", root: "deliverables", path: "design.md", start: 10, end: 12, highlight: [11], note: "ここが要", lines: ["一行め", "二行め", "三行め"] },
+        { type: "diff", summary: "文言を変えた", name: "a.txt", before: ["古い"], after: ["新しい"], note: null },
+        { type: "git-diff", summary: "回数を直した", root: "api", path: "lock.rb", base: "main", head: null, note: null, diff: "@@ -1 +1 @@\n-LIMIT = 5\n+LIMIT = 10\n keep", truncated: true },
+        { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-01", note: null, text: JSON.stringify({ id: "DESIGN-01", steps: ["a", "b"], deep: { n: 1 } }, null, 2) },
+      ],
+    });
+    await openPage(decisionPage({ questions: [card] }));
+    const more = '#formation-page [data-card="Q1"] .fp-more';
+    expect(await folded(more)).toBe(false);
+    await $(`${more} > summary`).click();
+    expect(await folded(more)).toBe(true);
+    expect(await textsOf(`${more} .fp-h`)).toEqual(["背景", "比べ方"]);
+    expect(await textsOf(`${more} .fp-facts dt`)).toEqual(["場所"]);
+    expect(await textsOf(`${more} .fp-facts dd`)).toEqual(["api/auth"]);
+    expect(await textsOf(`${more} .fp-list li`)).toEqual(["一つめ", "二つめ"]);
+    expect(await textsOf(`${more} .fp-callout`)).toEqual(["注意してください"]);
+    expect(await textsOf(`${more} .fp-table th`)).toEqual(["案", "回数"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-table td`)].map((e) => (e as HTMLElement).dataset.changed ?? ""), more)).toEqual(["", "true"]);
+    expect(await textsOf(`${more} > .fp-before-after .fp-side-caption`)).toEqual(["今", "直したあと"]);
+    expect(await textsOf(`${more} .fp-folded > summary`)).toEqual(["詳しい理由"]);
+    // An excerpt has the numbers of its lines, and marks the highlighted one.
+    expect(await textsOf(`${more} [data-evidence="excerpt"] .fp-ln`)).toEqual(["10", "11", "12"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} [data-evidence="excerpt"] .fp-line`)].map((e) => (e as HTMLElement).dataset.highlight ?? ""), more)).toEqual(["", "true", ""]);
+    expect(await textsOf(`${more} [data-evidence="excerpt"] .fp-ev-note`)).toEqual(["ここが要"]);
+    // A difference: the two sides, and a git diff with its added and removed lines marked.
+    expect(await textsOf(`${more} [data-evidence="diff"] .fp-side-caption`)).toEqual(["変更前", "変更後"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} [data-evidence="git-diff"] .fp-line`)].map((e) => (e as HTMLElement).dataset.kind), more)).toEqual(["hunk", "del", "ins", "ctx"]);
+    expect(await textsOf(`${more} [data-evidence="git-diff"] .fp-ev-range`)).toEqual(["main → 作業ツリー"]);
+    expect(await textsOf(`${more} [data-evidence="git-diff"] > .fp-ev-note`)).toEqual(["途中で切れています"]);
+    // A node is a tree of its values.
+    expect(await textsOf(`${more} [data-evidence="node"] .fp-leaf-value`)).toEqual(["DESIGN-01", "a", "b", "1"]);
+  });
+
+  it("puts the text of a page in as text and never as HTML", async () => {
+    const hostile = '<img src=x onerror="document.title=1"><b>太字</b>';
+    await openFlow([asking({ pendingPage: { title: hostile, atMs: MARK_AT } })], {
+      formation_page_read: decisionPage({ title: hostile, what: null, questions: [decisionCard("Q1", { title: hostile, summary: hostile })] }),
+    });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await $(OPEN).click();
+    await expect($("#formation-page .fp-title")).toHaveText(hostile);
+    expect(await count("#formation-page img, #formation-page b, #formation-tabs img, #formation-flow-list img")).toBe(0);
+    expect(await textsOf(PAGE_TAB)).toEqual([`●判断: ${hostile}`]);
+  });
+
+  it("draws a diagram with Mermaid as an SVG, and shows the source as text when it cannot", async () => {
+    const good = "flowchart TD\n  A[開始] --> B[終了]";
+    await openPage(decisionPage({ questions: [decisionCard("Q1", { options: [{ key: "A", label: "案", detail: null }], blocks: [{ type: "diagram", mermaid: good, caption: "流れ" }] })], changes: [] }));
+    const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
+    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
+    expect(await count(`${box} svg`)).toBe(1);
+    expect(await $(`${box} svg`).getAttribute("aria-label")).toBe("流れ");
+    expect(await browser.execute((s) => document.querySelector(s)!.textContent, `${box} svg`)).toContain("開始");
+    expect(await textsOf('#formation-page [data-card="Q1"] figcaption')).toEqual(["流れ"]);
+    expect(await browser.execute(() => document.querySelectorAll('script[src$="mermaid.min.js"]').length)).toBe(1);
+    // The diagram is in the card, not behind 詳しく見る.
+    expect(await count('#formation-page [data-card="Q1"] .fp-more')).toBe(0);
+  });
+
+  it("shows the Mermaid source as text when the diagram cannot be drawn", async () => {
+    const bad = "flowchart TD\n  A[開始 --> ((";
+    await openPage(decisionPage({ questions: [decisionCard("Q1", { blocks: [{ type: "paragraph", text: "x" }, { type: "diagram", mermaid: bad, caption: null }] })] }));
+    await $('#formation-page [data-card="Q1"] .fp-more > summary').click();
+    const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
+    await browser.waitUntil(async () => (await $(box).getAttribute("data-failed")) === "true", { timeoutMsg: "the diagram did not fail" });
+    expect(await count(`${box} svg`)).toBe(0);
+    expect(await textsOf(`${box} .fp-diagram-source`)).toEqual([bad]);
+    await expect($(`${box} .fp-diagram-source`)).toBeDisplayed();
+  });
+
+  it("closes the tab when the mark is gone and shows the tab that was selected before", async () => {
+    await openFlow([asking(), formationChild("api-update", "working")], { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 確認します"], formation_page_read: decisionPage() });
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    await card("api-update").click();
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    await $(OPEN).click();
+    await expect($("#formation-page")).toBeDisplayed();
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
+    await mock("formation_children", [formationChild("req-login", "working"), formationChild("api-update", "working")]);
+    await browser.waitUntil(async () => !(await $(PAGE_TAB).isExisting()), { timeoutMsg: "the tab never closed" });
+    await expect($("#formation-page")).not.toBeDisplayed();
+    expect(await count("#formation-page > *")).toBe(0);
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    expect(await textsOf("#formation-flow-list .formation-card-open")).toEqual([]);
+    expect(await textsOf('#formation-flow-list [data-name="req-login"] .formation-card-state')).toEqual(["作業中"]);
+  });
+
+  it("reads the page again when the time of the mark changes, and not before", async () => {
+    await openPage(decisionPage({ title: "最初のページ" }));
+    await expect($("#formation-page .fp-title")).toHaveText("最初のページ");
+    await mock("formation_page_read", decisionPage({ title: "置き換えたページ" }));
+    await mock("formation_children", [asking({ pendingPage: { title: "置き換えたページ", atMs: MARK_AT + 60_000 } })]);
+    await browser.waitUntil(async () => (await $("#formation-page .fp-title").getText()) === "置き換えたページ", { timeoutMsg: "the page was never read again" });
+    expect(await pageCall()).toHaveLength(1);
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    expect(await textsOf("#formation-page .fp-title")).toEqual(["置き換えたページ"]);
+  });
+
+  it("says why when the page cannot be read, and reads it again when the tab is pressed again", async () => {
+    await openFlow([asking()], { formation_page_read: rejects("$.questions[0].title: 空です\n$.what: ありません") });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await $(OPEN).click();
+    await expect($("#formation-page .fp-error")).toBeDisplayed();
+    expect(await rawTextsOf("#formation-page .fp-error")).toEqual(["$.questions[0].title: 空です\n$.what: ありません"]);
+    await mock("formation_page_read", decisionPage({ title: "直したページ" }));
+    await $("#formation-tab-leader-main").click();
+    await $(PAGE_TAB).click();
+    await expect($("#formation-page .fp-title")).toHaveText("直したページ");
+  });
+
+  it("leaves the page of another formation behind when a formation is selected", async () => {
+    await openList({ formation_list: formationList([formationEntry("formation"), formationEntry("other")]), formation_children: [asking()], formation_page_read: decisionPage() });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await $(OPEN).click();
+    await expect($("#formation-page")).toBeDisplayed();
+    await mock("formation_children", []);
+    await row("other").click();
+    await expect($("#formation-page")).not.toBeDisplayed();
+    expect(await count("#formation-page > *")).toBe(0);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
   });
 });

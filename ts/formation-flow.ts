@@ -1,5 +1,6 @@
 // The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
 // The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab.
+// A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
 // 「自動で追う」 is off when a formation is opened, so the middle pane stays on the leader, where the owner types; pressed on, it moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
@@ -8,6 +9,7 @@ import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
+import { drawPage } from "./formation-page.js";
 import { confirmChildDelete, confirmChildForce } from "./hint.js";
 import { DELETE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -30,6 +32,15 @@ let notice: string | null = null;
 let terms: FormationChild[] = [];
 let selected: string | null = null;
 let follow = false;
+// The child whose decision page the middle pane shows in place of a terminal (null: a terminal does). The selected tab stays as it was under it, and is shown again when the page closes.
+let pageChild: string | null = null;
+// The pages that were read, by the child: the mark's time they were read for, and their element in `#formation-page` (null while the read is on its way, and after a read that failed, which says why in `error`). A page is read only while its tab is shown.
+interface PageState {
+  atMs: number;
+  el: HTMLElement | null;
+  error: string | null;
+}
+const pages = new Map<string, PageState>();
 // What the middle pane does when the tab changes between the leader's and a child's: formation.ts shows or hides the leader's terminal.
 let onTab: () => void = () => {};
 // Whether the leader's tab is the one whose terminal is shown now (undefined: nothing yet), so that a read that changes nothing touches no terminal.
@@ -99,6 +110,9 @@ export function switchFormation() {
   terms = [];
   selected = null;
   follow = false;
+  pageChild = null;
+  pages.clear();
+  $("formation-page").replaceChildren();
   shownLeader = undefined;
   treeKey = "";
   tabsKey = "";
@@ -150,8 +164,9 @@ function placementOf(child: FormationChild): Placement {
 // The leader's terminal is hidden before a child's is placed and shown after the child's is hidden, so that the two never share the height of the pane; and it is not asked for while the screen is being shown (formation.ts shows it then).
 function showSelected(focus: boolean) {
   const host = $("formation-teammate-term");
-  const child = terms.find((c) => c.name === selected);
-  if (!child) {
+  // A decision page takes the place of the terminals, the leader's too.
+  const child = pageChild === null ? terms.find((c) => c.name === selected) : undefined;
+  if (!child && pageChild === null) {
     host.hidden = true;
     hideTerminals(OWNER);
     const changed = shownLeader === false;
@@ -162,14 +177,52 @@ function showSelected(focus: boolean) {
   const changed = shownLeader !== false;
   shownLeader = false;
   if (changed) onTab();
+  if (!child) {
+    host.hidden = true;
+    hideTerminals(OWNER);
+    return;
+  }
   host.hidden = false;
   const placement = placementOf(child);
   if (!isShowing(placement, OWNER) || focus) showTerminals([placement], focus ? placement.id : null, OWNER);
   held.add(placement.id);
 }
 
+const hasPage = (name: string) => children.some((c) => c.name === name && c.pendingPage !== null);
+
+// Reads the page of `name` for the mark of the time `atMs` and puts it in the pane, hidden until its tab is shown (`syncPages`); a read that failed shows the violations or the reason in its place.
+async function loadPage(formation: string, name: string, atMs: number) {
+  const state: PageState = { atMs, el: null, error: null };
+  pages.set(name, state);
+  try {
+    const page = await invoke("formation_page_read", { name: formation, child: name });
+    if (pages.get(name) !== state) return;
+    state.el = drawPage(page, name, atMs);
+  } catch (e) {
+    if (pages.get(name) !== state) return;
+    state.error = String(e);
+    state.el = tag("p", "fp-error pending fail", state.error);
+    state.el.setAttribute("role", "alert");
+  }
+  state.el.hidden = name !== pageChild;
+  $("formation-page").append(state.el);
+  draw();
+}
+
+// The pages follow the marks: a page whose mark is gone or whose time changed is forgotten, and the page of the selected tab is read when it is not held. The pane shows the page of the selected tab alone.
+function syncPages() {
+  for (const [name, state] of [...pages]) {
+    if (state.atMs !== children.find((c) => c.name === name)?.pendingPage?.atMs) dropPage(name);
+  }
+  const mark = pageChild === null ? null : (children.find((c) => c.name === pageChild)?.pendingPage ?? null);
+  const formation = currentFormation();
+  if (pageChild !== null && mark !== null && formation !== null && !pages.has(pageChild)) void loadPage(formation, pageChild, mark.atMs);
+  $("formation-page").hidden = pageChild === null;
+  for (const [name, state] of pages) if (state.el) state.el.hidden = name !== pageChild;
+}
+
 // Whether the selected tab is the leader's.
-export const isLeaderTab = () => selected === null;
+export const isLeaderTab = () => selected === null && pageChild === null;
 
 // formation.ts tells what to do when the tab changes between the leader's and a child's.
 export function onTabChange(fn: () => void) {
@@ -179,6 +232,8 @@ export function onTabChange(fn: () => void) {
 // The children of a read: the terminals follow them, the selection follows the waiting child while 「自動で追う」 is on, and the terminals of the children that are gone are forgotten. A selected child that is gone from the terminals leaves the selection at the leader's tab.
 function syncSelection() {
   terms = children.filter((c) => c.handle !== null);
+  // The page whose mark is gone (it was answered, or replaced and read again) closes: the tab that was selected before is shown again.
+  if (pageChild !== null && !hasPage(pageChild)) pageChild = null;
   if (follow) selected = followTarget(terms, selected) ?? selected;
   if (selected !== null && !terms.some((c) => c.name === selected)) selected = null;
   const handles = new Set(terms.map((c) => c.handle));
@@ -247,14 +302,31 @@ async function closeChild(formation: string, name: string, force: boolean, path:
 function selectChild(name: string) {
   if (!terms.some((c) => c.name === name)) return;
   selected = name;
+  pageChild = null;
   follow = false;
   draw();
   showSelected(true);
 }
 
+// A press of the user on a page's tab or on 「開く」: the page of that child is shown in place of the terminal, and 「自動で追う」 is turned off. A page whose read failed is read again.
+function selectPage(name: string) {
+  if (!children.some((c) => c.name === name && c.pendingPage !== null)) return;
+  if (pages.get(name)?.error) dropPage(name);
+  pageChild = name;
+  follow = false;
+  draw();
+}
+
+// What a page held is forgotten: its element goes out of the pane.
+function dropPage(name: string) {
+  pages.get(name)?.el?.remove();
+  pages.delete(name);
+}
+
 // A press of the user on the leader's tab or card: the leader's terminal is shown (and takes the keyboard), and 「自動で追う」 is turned off.
 function selectLeader() {
   selected = null;
+  pageChild = null;
   follow = false;
   draw();
 }
@@ -265,17 +337,34 @@ export function hideSession() {
   shownLeader = undefined;
 }
 
+// What the card of a child with a decision page says in place of its state (it looks as an approval that waits does).
+const PAGE_LABEL = "判断待ち";
+// Whether the tab or the card of `name` is the one that shows its terminal now.
+const viewing = (name: string) => pageChild === null && selected === name;
+
+// The attribute selector of the control that has the focus, to give it the focus again after a redraw.
+function focusSelector(el: HTMLElement | null): string | undefined {
+  for (const key of ["child", "page", "open"]) {
+    const value = el?.dataset[key];
+    if (value) return `[data-${key}="${CSS.escape(value)}"]`;
+  }
+  return undefined;
+}
+
 const MARKS: Record<FormationState, string> = { working: "◐", waiting: "●", done: "✓", planned: "○" };
 // The effort a child is started with (the leader's is high, A-37).
 const EFFORT = "medium";
 
 function card(c: FormationChild, now: number): HTMLLIElement {
   const li = tag("li");
-  li.dataset.state = c.state;
+  const page = c.pendingPage;
+  const state = page === null ? c.state : "waiting";
+  li.dataset.state = state;
   li.dataset.name = c.name;
   const planned = c.state === "planned";
   const node = planned ? tag("div", "formation-card") : tag("button", "formation-card");
-  node.dataset.state = c.state;
+  node.dataset.state = state;
+  if (page !== null) node.dataset.page = "true";
   const row = span("formation-card-row", "");
   const name = span("formation-card-name", c.name);
   row.append(name);
@@ -283,10 +372,11 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   const time = planned ? "" : elapsed(c.atMs, now, c.state === "done");
   if (time !== "") row.append(tag("time", "formation-card-time", time));
   const line = span("formation-card-row", "");
-  const state = span("formation-card-state", STATE_LABELS[c.state]);
-  state.prepend(tag("i", "formation-dot"));
-  line.append(state);
-  if (!planned && c.reply) line.append(span("formation-card-msg", c.reply));
+  const label = span("formation-card-state", page === null ? STATE_LABELS[c.state] : PAGE_LABEL);
+  label.prepend(tag("i", "formation-dot"));
+  line.append(label);
+  const msg = page === null ? c.reply : page.title;
+  if (!planned && msg) line.append(span("formation-card-msg", msg));
   node.append(row, line);
   // The menu and its confirmation are anchored on the name, which a redraw of the card does not touch while they are open.
   node.oncontextmenu = (e) => openCardMenu(c, name, e);
@@ -294,12 +384,23 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   if (node instanceof HTMLButtonElement) {
     node.type = "button";
     node.dataset.child = c.name;
-    node.setAttribute("aria-pressed", String(selected === c.name));
+    node.setAttribute("aria-pressed", String(viewing(c.name)));
     node.onclick = () => selectChild(c.name);
   }
   li.append(node);
+  if (page !== null) li.append(openButton(c.name));
   if (c.state === "done") li.append(closeButton(c, name, "formation-card-close"));
   return li;
+}
+
+// 「開く」 of a card that has a decision page: it shows the page. It sits beside the card, not in it, because a button does not hold a button.
+function openButton(name: string): HTMLButtonElement {
+  const button = tag("button", "formation-card-open", "開く");
+  button.type = "button";
+  button.dataset.open = name;
+  button.setAttribute("aria-pressed", String(pageChild === name));
+  button.onclick = () => selectPage(name);
+  return button;
 }
 
 // The × of a done child: the same close as 「削除」 of the menu of its card.
@@ -326,7 +427,7 @@ function tab(c: FormationChild): HTMLSpanElement {
     const main = tag("button", "formation-tab-main");
     main.type = "button";
     main.setAttribute("role", "tab");
-    main.setAttribute("aria-selected", String(selected === c.name));
+    main.setAttribute("aria-selected", String(viewing(c.name)));
     main.dataset.child = c.name;
     main.onclick = () => selectChild(c.name);
     main.append(...label);
@@ -341,16 +442,34 @@ function tab(c: FormationChild): HTMLSpanElement {
   return wrap;
 }
 
+// The tab of the decision page of a child: the mark that waits and 「判断: {title}」, right after the child's tab.
+function pageTab(c: FormationChild): HTMLSpanElement {
+  const wrap = tag("span", "formation-tab formation-tab-page");
+  wrap.dataset.state = "waiting";
+  wrap.dataset.pageOf = c.name;
+  const main = tag("button", "formation-tab-main");
+  main.type = "button";
+  main.setAttribute("role", "tab");
+  main.setAttribute("aria-selected", String(pageChild === c.name));
+  main.dataset.page = c.name;
+  main.onclick = () => selectPage(c.name);
+  const mark = span("formation-tab-mark", MARKS.waiting);
+  mark.setAttribute("aria-hidden", "true");
+  main.append(mark, span("formation-tab-name", `判断: ${c.pendingPage!.title}`));
+  wrap.append(main);
+  return wrap;
+}
+
 // The tabs of the children, drawn again in place only when what they show changed; the leader's tab is always there.
 function drawTabs() {
-  $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null));
-  const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.handle !== null, c.agent])]);
+  $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null && pageChild === null));
+  const key = JSON.stringify([selected, pageChild, [...closing], children.map((c) => [c.name, c.state, c.handle !== null, c.agent, c.pendingPage?.title ?? null])]);
   if (key === tabsKey) return;
   tabsKey = key;
   const box = $("formation-tabs-mates");
-  const focused = box.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.child : undefined;
-  box.replaceChildren(...children.map(tab));
-  if (focused) box.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  const focused = focusSelector(box.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null);
+  box.replaceChildren(...children.flatMap((c) => (c.pendingPage === null ? [tab(c)] : [tab(c), pageTab(c)])));
+  if (focused) box.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
 }
 
 function draw() {
@@ -358,26 +477,28 @@ function draw() {
   if (watching === "list") return;
   // The selection first: the follow may move it, and the tabs and the cards mark it.
   if (watching === "flow") syncSelection();
+  syncPages();
   drawTabs();
   $("formation-follow").setAttribute("aria-pressed", String(follow));
-  $("formation-flow-root").setAttribute("aria-pressed", String(selected === null));
+  $("formation-flow-root").setAttribute("aria-pressed", String(selected === null && pageChild === null));
   const said = failure ?? notice;
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
-  const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply])]);
+  const key = JSON.stringify([selected, pageChild, [...closing], children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null])]);
   if (key === treeKey) return;
   treeKey = key;
   // The cards are drawn again in place: the scroll and the focus stay where they were.
   const body = $("formation-flow-body");
   const top = body.scrollTop;
   const list = $("formation-flow-list");
-  const focused = list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.child : undefined;
+  const focused = focusSelector(list.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null);
   list.replaceChildren(...children.map((c) => card(c, now)));
   body.scrollTop = top;
-  if (focused) list.querySelector<HTMLElement>(`[data-child="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  if (focused) list.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
   // A selection that moved (the follow moves it too) is brought into the view of the cards and the tabs; the focus stays where it was.
-  if (selected !== scrolledTo) {
-    scrolledTo = selected;
+  const view = pageChild === null ? selected : `page:${pageChild}`;
+  if (view !== scrolledTo) {
+    scrolledTo = view;
     list.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
     $("formation-tabs").querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
@@ -388,6 +509,8 @@ export function initFormationFlow() {
   $("formation-flow-root").onclick = selectLeader;
   $("formation-follow").onclick = () => {
     follow = !follow;
+    // Pressed on, it moves to the child that waits: a page that is shown gives way.
+    if (follow) pageChild = null;
     draw();
   };
   drawRoot();

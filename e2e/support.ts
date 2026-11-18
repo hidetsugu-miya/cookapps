@@ -8,6 +8,7 @@ import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
+import type { Card } from "../ts/bindings/Card";
 import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
 import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
 import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
@@ -15,6 +16,7 @@ import type { DatabaseRecords } from "../ts/bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "../ts/bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
+import type { DecisionPage } from "../ts/bindings/DecisionPage";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { EnvironmentsView } from "../ts/bindings/EnvironmentsView";
 import type { FontSettings } from "../ts/bindings/FontSettings";
@@ -764,6 +766,47 @@ export const formationChild = (name: string, state: FormationState, extra: Parti
   const planned = state === "planned";
   return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", agent: "claude", created: true, pendingPage: null, ...rest };
 };
+
+// A decision page as `formation_page_read` answers it (A-41): an `open-questions` page with nothing on it, which `extra` fills in.
+export const decisionPage = (extra: Partial<DecisionPage> = {}): DecisionPage => ({
+  pageKind: "open-questions",
+  subject: "requirement",
+  contextLabel: "要件定義 · 未決事項",
+  title: "要件の未決事項",
+  what: null,
+  roots: {},
+  previousReply: null,
+  questions: [],
+  approvalScope: [],
+  changes: [],
+  needsUserDecision: [],
+  residualMustFix: [],
+  structuralProposals: [],
+  adr: null,
+  risks: null,
+  settledDecisions: [],
+  qualityLoop: null,
+  unmetCriteria: [],
+  pr: null,
+  ...extra,
+});
+
+// A card of a decision page: a `question` with no option, which `extra` fills in.
+export const decisionCard = (number: string, extra: Partial<Card> = {}): Card => ({
+  kind: "question",
+  number,
+  title: `質問 ${number}`,
+  summary: "",
+  options: [],
+  recommendation: null,
+  recommendationReason: null,
+  background: null,
+  facts: [],
+  blocks: [],
+  evidence: [],
+  cards: [],
+  ...extra,
+});
 
 // A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca; `extra` gives those of a saved environment, with its `environment`), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state; `waiting: true` in `extra` is a leader that waits for input (#915).
 export const formationEntry = (name: string, extra: Partial<FormationEntry> & { minutes?: number; repos?: string[] } = {}): FormationEntry => {

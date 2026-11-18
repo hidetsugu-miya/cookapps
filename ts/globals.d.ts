@@ -40,6 +40,11 @@ declare const TsunagiaiMilkdown: {
   normalize(markdown: string): Promise<string>;
   compose(root: HTMLElement, onChange: () => void): Promise<MilkdownComposer>;
 };
+// Mermaid (src/vendor/mermaid.min.js, A-41): only `initialize` and `render`, which gives the SVG of one diagram. The SVG is Mermaid's own output, drawn with `securityLevel: "strict"`.
+declare const mermaid: {
+  initialize(config: Record<string, unknown>): void;
+  render(id: string, text: string): Promise<{ svg: string }>;
+};
 declare const DOMPurify: { sanitize(html: string, config?: Record<string, unknown>): string };
 
 // xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js), its Unicode 11 addon (src/vendor/addon-unicode11.js) and its web links addon (src/vendor/addon-web-links.js): only what the terminals of the Orca screen use.
