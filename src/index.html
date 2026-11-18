@@ -673,6 +673,7 @@
           <section id="orca-lsp" aria-label="言語サーバー" hidden>
             <div id="orca-lsp-head">
               <span id="orca-lsp-title">言語サーバー</span>
+              <button id="orca-lsp-ask" class="icon-btn" type="button" aria-label="Claude に設定を頼む"></button>
               <button id="orca-lsp-reload" class="icon-btn" type="button" aria-label="再読み込み"></button>
             </div>
             <p id="orca-lsp-error" class="orca-file-note fail" role="alert" hidden></p>
@@ -681,6 +682,13 @@
               <select id="orca-lsp-ssh"></select>
             </div>
             <div id="orca-lsp-cards"></div>
+            <div id="orca-lsp-claude" hidden>
+              <div id="orca-lsp-claude-head">
+                <span>Claude</span>
+                <button id="orca-lsp-claude-close" class="icon-btn" type="button" aria-label="閉じる"></button>
+              </div>
+              <div id="orca-lsp-claude-term"></div>
+            </div>
           </section>
         </div>
       </aside>

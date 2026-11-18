@@ -1421,8 +1421,14 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-lsp { flex: none; display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 10px 12px 12px; background: var(--bar); font-size: calc(12px * var(--fs)); }
 #orca-lsp-head { display: flex; align-items: center; gap: 8px; }
 #orca-lsp-title { font-weight: 600; }
-#orca-lsp-reload { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--ink-soft); }
-#orca-lsp-reload svg { width: 14px; height: 14px; }
+#orca-lsp-ask { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--claude); }
+#orca-lsp-reload { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-lsp-ask svg, #orca-lsp-reload svg { width: 14px; height: 14px; }
+#orca-lsp-claude { display: flex; flex-direction: column; gap: 4px; }
+#orca-lsp-claude-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+#orca-lsp-claude-close { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-lsp-claude-close svg { width: 14px; height: 14px; }
+#orca-lsp-claude-term { display: flex; flex-direction: column; height: 360px; overflow: hidden; border-radius: 12px; }
 #orca-lsp-error, .orca-lsp-note { padding: 0; margin: 0; }
 #orca-lsp-cards { display: flex; flex-direction: column; gap: 8px; }
 .orca-lsp-card { display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; padding: 6px 10px 8px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }

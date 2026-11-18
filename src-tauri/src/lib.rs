@@ -399,6 +399,7 @@ pub fn run() {
             lsp::detect::lsp_detect,
             lsp::detect::lsp_language_looks,
             lsp::lsp_server_for,
+            lsp::lsp_claude_request,
             lsp::server::lsp_start,
             lsp::server::lsp_stop,
             lsp::server::lsp_restart,

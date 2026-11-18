@@ -783,7 +783,7 @@ describe("orca: definition (A-34)", () => {
     expect(await textsOf('.orca-lsp-card[data-name="typescript"] .text-btn')).toEqual(["使わない", "使う"]);
     await expect(card("go").$(".orca-lsp-summary")).toHaveText("gopls ・ compose の app");
     await expect(card("rust").$(".orca-lsp-summary")).toHaveText("サーバーがありません");
-    expect(await count('.orca-lsp-card[data-name="rust"] button')).toBe(0);
+    expect(await textsOf('.orca-lsp-card[data-name="rust"] .text-btn')).toEqual(["Claude に頼む"]);
     await expect(card("python").$(".orca-lsp-summary")).toHaveText("コンテナが止まっています");
     expect(await textsOf('.orca-lsp-card[data-name="python"] .text-btn')).toEqual(["コンテナを起動"]);
     // Nothing was saved or started by finding them.
@@ -851,6 +851,104 @@ describe("orca: definition (A-34)", () => {
     expect(await waitForCalls(start)).toEqual([pythonArgs]);
     await expect(card("python")).toHaveAttribute("data-kind", "server");
     await expect(stateText("python")).toHaveText("索引中");
+  });
+
+  // ---- Claude Code sets the servers up (A-34, A-36, #976) ----
+
+  const askText = "> 環境: local\n> プロジェクト: proj_example-app\nサーバーを調べて設定してください。\n";
+  const askArgs = (language: string | null) => ({ environment: null, project: repo, worktree, language });
+  const paneOf = () => $("#orca-lsp-claude");
+
+  it("has the ✦ of Claude in the heading, which opens the pane of Claude Code under the cards with the instruction of Rust (A-34, A-36)", async () => {
+    await showServer();
+    await expect($("#orca-lsp-ask")).toHaveAttribute("aria-label", "Claude に設定を頼む");
+    await expect(paneOf()).not.toBeDisplayed();
+    expect(await callsOf("claude_code_start")).toEqual([]);
+    const ask = await mock("lsp_claude_request", askText);
+    await $("#orca-lsp-ask").click();
+    expect(await waitForCalls(ask)).toEqual([askArgs(null)]);
+    await expect(paneOf()).toBeDisplayed();
+    await expect($("#orca-lsp-claude-term.claude-code-pane")).toBeDisplayed();
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "lsp-claude", builtinTools: true, skill: null, prompt: askText });
+    // Under the cards, inside the language server part.
+    expect(await browser.execute(() => document.getElementById("orca-lsp-cards")!.nextElementSibling?.id)).toBe("orca-lsp-claude");
+    expect(await callsOf("lsp_settings_set")).toEqual([]);
+  });
+
+  it("asks for the language of a card that has no server found with 「Claude に頼む」 (A-34, A-36)", async () => {
+    await showServer(composeLaunch(), unset(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
+    const ask = await mock("lsp_claude_request", askText);
+    await card("rust").$(".orca-lsp-ask").click();
+    expect(await waitForCalls(ask)).toEqual([askArgs("rust")]);
+    await expect(paneOf()).toBeDisplayed();
+    expect((await waitForCalls("claude_code_start"))[0]).toMatchObject({ id: "lsp-claude", prompt: askText });
+  });
+
+  it("shows why the instruction was refused, in the line of the card or under the heading, and opens no pane (A-34, A-36)", async () => {
+    await showServer(composeLaunch(), unset(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
+    await mock("lsp_claude_request", rejects("worktree のパスが正しくありません"));
+    await card("rust").$(".orca-lsp-ask").click();
+    await expect(noteOf("rust")).toHaveText("worktree のパスが正しくありません");
+    await $("#orca-lsp-ask").click();
+    await expect($("#orca-lsp-error")).toHaveText("worktree のパスが正しくありません");
+    await expect(paneOf()).not.toBeDisplayed();
+    expect(await callsOf("claude_code_start")).toEqual([]);
+  });
+
+  it("closes the process with the cross of the pane, and a second press starts another (A-36)", async () => {
+    await showServer();
+    await mock("lsp_claude_request", askText);
+    await $("#orca-lsp-ask").click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#orca-lsp-claude-close").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "lsp-claude", launch: 1 }]);
+    await expect(paneOf()).not.toBeDisplayed();
+    await $("#orca-lsp-ask").click();
+    await waitForCalls("claude_code_start", 2);
+    await expect(paneOf()).toBeDisplayed();
+  });
+
+  it("leaves the same request as it is, and closes the pane for a new one of another language (A-36)", async () => {
+    await showServer(composeLaunch(), unset(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
+    await mock("lsp_claude_request", askText);
+    await $("#orca-lsp-ask").click();
+    await waitForCalls("claude_code_start");
+    await $("#orca-lsp-ask").click();
+    await browser.pause(300);
+    expect(await callsOf("claude_code_start")).toHaveLength(1);
+    const close = await mock("claude_code_close", null);
+    await card("rust").$(".orca-lsp-ask").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "lsp-claude", launch: 1 }]);
+    expect(await waitForCalls("claude_code_start", 2)).toHaveLength(2);
+    expect((await callsOf("lsp_claude_request")).map((c) => (c as { language: string | null }).language)).toEqual([null, "rust"]);
+  });
+
+  it("hides the pane with the part, leaves the process running, and shows the same pane again (A-36)", async () => {
+    await showServer();
+    await mock("lsp_claude_request", askText);
+    await $("#orca-lsp-ask").click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await mode("ファイル").click();
+    await expect(paneOf()).not.toBeDisplayed();
+    await expect($("#orca-lsp-claude-term .orca-term-box")).not.toExist();
+    await mode("言語サーバー").click();
+    await expect(paneOf()).toBeDisplayed();
+    await expect($("#orca-lsp-claude-term .orca-term-box")).toExist();
+    expect(await callsOf("claude_code_start")).toHaveLength(1);
+    expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("draws the server that Claude saved on the card of its language at the next read of the settings (A-34, #976)", async () => {
+    await showServer(composeLaunch(), unset(), status("running"), 250, [foundOf("typescript", { name: "typescript-language-server" })]);
+    await expect(card("typescript")).toHaveAttribute("data-kind", "found");
+    await mock("lsp_launches", [composeLaunch()]);
+    await mock("lsp_settings", two());
+    await expect(card("typescript")).toHaveAttribute("data-kind", "server");
+    expect(await waitForCalls("lsp_launches")).toEqual([launchesArgs("typescript")]);
+    expect(await count('.orca-lsp-card[data-name="typescript"]')).toBe(1);
   });
 
   it("deletes a server from the menu of its card after the question, and stops what ran for it (A-34)", async () => {

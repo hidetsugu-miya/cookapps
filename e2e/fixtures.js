@@ -178,6 +178,8 @@ const answers = {
   lsp_server_for: "ruby",
   // A-34: the languages found in a worktree: none (a spec that checks the finding gives its own).
   lsp_detect: [],
+  // A-34, A-36: the first instruction of the Claude Code pane that sets up the language servers.
+  lsp_claude_request: "> 環境: local\nこのプロジェクトの言語サーバーを設定してください。\n",
   // How the card of a language server draws a language (A-34), as `lsp_language_looks` answers it: the six of the table with their titles and icons, and one that has neither.
   lsp_language_looks: [
     { language: "go", title: "Go", icon: "go" },
