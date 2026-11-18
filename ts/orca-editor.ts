@@ -119,7 +119,7 @@ let autosaveMs = 1000;
 let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
 let definition: (query: DefinitionQuery) => void = () => {};
-let ruby: (target: string | null, project: string, path: string) => void = () => {};
+let serve: (target: string | null, project: string, path: string, server: string) => void = () => {};
 
 export const nameOf = (relative: string) => relative.slice(relative.lastIndexOf("/") + 1);
 
@@ -507,10 +507,15 @@ async function load(f: EditorFile) {
     f.read = "ready";
     f.area.disabled = false;
     setMode(f, f.mode);
-    // A Ruby file of a worktree starts its language server (A-34); a file outside the worktree belongs to a server that is there already.
-    if (f.language === "ruby" && !f.outside) ruby(f.target, f.project, f.path);
-    // The server that takes the file's language is looked for once the text is shown; with none the Command key and the right button ask nothing.
-    if (!f.outside) void invoke("lsp_server_for", { environment: f.target, project: f.project, language: f.language }).then((server) => (f.server = server), () => {});
+    // The server that takes the file's language is looked for once the text is shown; with none the Command key and the right button ask nothing. A file of a worktree starts that server (A-34); a file outside the worktree belongs to a server that is there already.
+    if (!f.outside)
+      void invoke("lsp_server_for", { environment: f.target, project: f.project, language: f.language }).then(
+        (server) => {
+          f.server = server;
+          if (server !== null) serve(f.target, f.project, f.path, server);
+        },
+        () => {},
+      );
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -875,11 +880,11 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
   }
 }
 
-export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; ruby: (target: string | null, project: string, path: string) => void }) {
+export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; serve: (target: string | null, project: string, path: string, server: string) => void }) {
   changed = on.changed;
   fail = on.error;
   definition = on.definition;
-  ruby = on.ruby;
+  serve = on.serve;
   document.addEventListener("selectionchange", placeBands);
   // The page is going away (the window is closed): the typing that waits for its timer is sent now, for every file that can be saved.
   window.addEventListener("pagehide", () => {

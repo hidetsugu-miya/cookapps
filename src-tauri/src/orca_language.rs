@@ -311,6 +311,31 @@ pub fn is_language(name: &str) -> bool {
         || table.extensions.values().any(|language| language == name)
 }
 
+/// Every language that `is_language` accepts (`plaintext` too), each once, sorted: the choices of the language of a language server (A-34).
+pub fn languages() -> Vec<String> {
+    let table = associations();
+    let mut found: Vec<String> = [
+        EXT_TO_LANGUAGE,
+        FILENAME_TO_LANGUAGE,
+        SHEBANG_INTERPRETER_TO_LANGUAGE,
+    ]
+    .iter()
+    .flat_map(|names| names.iter().map(|(_, language)| (*language).to_owned()))
+    .chain(table.filenames.values().cloned())
+    .chain(table.extensions.values().cloned())
+    .chain(["plaintext".to_owned()])
+    .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// The languages of A-21 that a language server may take (A-34): the choices of the card of a server.
+#[tauri::command]
+pub fn orca_languages() -> Vec<String> {
+    languages()
+}
+
 /// The extensions (with their dot, sorted) that give a file the language `language`, read back from the tables of `detect_language`: those of `EXT_TO_LANGUAGE`, then Monaco's that the first does not decide. A name that is not made of letters, digits and `._+-` is left out, so that an extension is safe in a `find -name`. A language that only file names or a `#!` line give has none.
 pub fn extensions_of(language: &str) -> Vec<String> {
     let monaco = associations()
@@ -716,6 +741,21 @@ mod tests {
         for (path, content, language) in ORACLE {
             assert!(is_language(language), "{path:?} {content:?} {language}");
         }
+    }
+
+    #[test]
+    fn the_list_of_languages_holds_each_language_once_in_order_and_each_is_a_language() {
+        let all = languages();
+        for name in ["ruby", "typescript", "python", "plaintext", "dockerfile"] {
+            assert!(all.iter().any(|language| language == name), "{name}");
+        }
+        assert!(
+            all.windows(2).all(|pair| pair[0] < pair[1]),
+            "sorted, no twin"
+        );
+        assert!(all.iter().all(|name| is_language(name)));
+        // The names that only an extension of Monaco's table gives are there too.
+        assert!(all.iter().any(|language| language == "liquid"));
     }
 
     #[test]

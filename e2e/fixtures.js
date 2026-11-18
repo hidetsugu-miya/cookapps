@@ -176,6 +176,8 @@ const answers = {
   lsp_container_start: null,
   // The server that takes Ruby, of a repository with nothing saved.
   lsp_server_for: "ruby-lsp",
+  // The languages that a server can take (A-21), as `orca_languages` answers them.
+  orca_languages: ["plaintext", "python", "ruby", "typescript"],
   lsp_launch: { method: "none", candidates: [], service: null, command: null, mount: null },
   // A-14: the two default themes, with example colors (a spec that chooses among themes gives `terminalThemes` of e2e/support.ts); a spec that presses a select mocks `terminal_theme_set`.
   terminal_themes: {

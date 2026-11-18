@@ -406,6 +406,7 @@ pub fn run() {
             lsp::view::lsp_word,
             lsp::view::lsp_places,
             ssh::ssh_hosts,
+            orca_language::orca_languages,
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,

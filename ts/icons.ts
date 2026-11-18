@@ -71,4 +71,6 @@ export const BRANCH_SVG = svgOf('<path d="M6 3v12"/><circle cx="18" cy="6" r="3"
 // A-34: a server (two racks with a light each), the button of the language server in the file pane.
 export const SERVER_SVG = svgOf('<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/>');
 export const DEFINITION_SVG = svgOf('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>');
+// A-34: three dots, the menu of a card of a language server.
+export const MORE_SVG = svgOf('<path d="M5 12h.01M12 12h.01M19 12h.01"/>');
 export const CLOUD_SVG = svgOf('<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z"/>');

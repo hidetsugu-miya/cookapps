@@ -1432,7 +1432,7 @@ export function initOrca() {
   initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
-  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, ruby: (target, project, path) => void ensureServer({ target, project, path }) });
+  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server) });
   initLsp();
   initDefinition({ open: openPlace });
   initOrcaFiles({ open: (relative) => openFile(relative), diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
