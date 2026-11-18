@@ -5,7 +5,8 @@ import type { LogLevel } from "./bindings/LogLevel";
 import { $, tag } from "./dom.js";
 import { logTime } from "./format.js";
 import { invoke } from "./ipc.js";
-import { copyText, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { copyText } from "./view.js";
 
 type Filter = "all" | "error" | "warn";
 
@@ -52,7 +53,7 @@ export async function showLogTab() {
   try {
     read = await invoke("log_read");
   } catch (e) {
-    return showError(e);
+    return logError("log-settings", e);
   }
   if (seq !== readSeq) return;
   entries = read;
@@ -67,15 +68,13 @@ export function initLogSettings() {
     };
   // The lines on the screen, one a line: the time as the file holds it, the weight, the place and the text, apart by a tab.
   $("log-copy").onclick = () => {
-    $("error").hidden = true;
     void copyText(shown().map((e) => [e.time, LEVEL_LABELS[e.level], e.source, e.message].join("\t")).join("\n"), "ログをコピーしました");
   };
   $("log-open-folder").onclick = async () => {
-    $("error").hidden = true;
     try {
       await invoke("log_open_folder");
     } catch (e) {
-      showError(e);
+      showFailure("log-settings", e);
     }
   };
   draw();

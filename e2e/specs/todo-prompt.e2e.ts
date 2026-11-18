@@ -1,4 +1,4 @@
-import { boot, callsOf, composerLayout, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText, heightOf } from "../support";
+import { boot, callsOf, composerLayout, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText, heightOf, CARD } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -565,7 +565,7 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     await openPrompt();
     await mock("claude_model_settings_save", rejects("モデルが不正です: x"));
     await choose("#prompt-model", "model", "haiku");
-    await expect($("#error")).toHaveText(expect.stringContaining("モデルが不正です"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("モデルが不正です"));
     await expect(selectOf("model")).toHaveValue("sonnet");
   });
 

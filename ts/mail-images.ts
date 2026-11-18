@@ -1,9 +1,8 @@
 // The external and cid: images of a mail: showing them, and remembering which senders' images are shown without asking.
 import type { MessageDetail } from "./bindings/MessageDetail";
-import { $ } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { fitAfterImages, queryAll } from "./mail-frame.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // `cids` resolves to the cid: images Rust fetched after the body, by message ID;
 // `senders` to the Set of the thread's senders Rust remembers (`froms` asked about); `stale()` tells another thread was opened since.
@@ -70,14 +69,13 @@ function imagesBar(onClick: () => Promise<void>) {
   button.className = "text-btn";
   button.textContent = "画像を表示";
   button.onclick = async () => {
-    $("error").hidden = true;
     button.disabled = true;
     try {
       await onClick();
       bar.remove();
     } catch (e) {
       button.disabled = false;
-      showError(e);
+      showFailure("mail-images", e);
     }
   };
   bar.append(button);
@@ -98,7 +96,7 @@ export async function knownSenders(froms: string[]) {
   try {
     return new Set(await invoke("image_sender_known", { froms }));
   } catch (e) {
-    showError(e);
+    logError("mail-images", e);
     return new Set<string>();
   }
 }
@@ -132,7 +130,7 @@ export async function offerImages(m: MessageDetail, frame: HTMLIFrameElement, ur
           offerImages(w.m, w.frame, w.urls, ctx);
         });
       })
-      .catch(showError);
+      .catch((e) => showFailure("mail-images", e));
   });
   const entry = { m, frame, urls, bar };
   waiting.add(entry);

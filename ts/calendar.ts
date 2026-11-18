@@ -10,7 +10,8 @@ import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
-import { show, showError } from "./view.js";
+import { logError, setRelogin } from "./error-card.js";
+import { show } from "./view.js";
 
 const HOUR_PX = 64;
 // Keep in step with MIN_MINUTES in calendar.rs.
@@ -204,6 +205,8 @@ function renderWeek(w: Week) {
       return div;
     }),
   );
+  // An account that must log in again is also told by a card, once, until it has logged in.
+  setRelogin("calendar", w.needsLogin, (a) => `${a} はカレンダーを読むため再ログインが必要です`, addAccount);
   // A detail open on an event of the old draw follows it into this one.
   endEvents();
   refreshPopup();
@@ -257,12 +260,11 @@ async function showKeptWeek(key: string, seq: number) {
 // With `follow`, the month calendars go back to the month of the week when it is the one already shown.
 export async function loadCalendar(refresh = false, follow = false) {
   const seq = ++calSeq;
-  $("error").hidden = true;
   let first: number;
   try {
     first = await calendarFirstDay();
   } catch (e) {
-    if (seq === calSeq) showError(e);
+    if (seq === calSeq) logError("calendar", e);
     return;
   }
   if (seq !== calSeq) return;
@@ -282,7 +284,7 @@ export async function loadCalendar(refresh = false, follow = false) {
       prefetchAround(key, first);
     }
   } catch (e) {
-    if (seq === calSeq) showError(e);
+    if (seq === calSeq) logError("calendar", e);
   } finally {
     if (seq === calSeq) $("calendar").classList.remove("loading");
     // After the week, whose fetch lists the calendars again when they are stale, so this read finds them kept.

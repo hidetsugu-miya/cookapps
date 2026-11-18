@@ -13,7 +13,8 @@ import { currentScreen, setScreen } from "./nav.js";
 import { itemRow } from "./settings.js";
 import { decorateAvatar } from "./slack-view.js";
 import { goBack, loading, opened } from "./thread.js";
-import { show, showError } from "./view.js";
+import { setRelogin, showFailure } from "./error-card.js";
+import { show } from "./view.js";
 
 // Per account, what the last load could not do; the account popup reads it.
 let inboxIssues: { needsLogin: string[]; failed: Record<string, string> } = { needsLogin: [], failed: {} };
@@ -87,6 +88,8 @@ export function renderAccounts({ accounts, needsLogin, failed }: { accounts: str
       return div;
     }),
   );
+  // An account that must log in again is also told by a card, once, until it has logged in.
+  setRelogin("mail", needsLogin, (a) => `${a} は再ログインが必要です`, addAccount);
 }
 
 export function closePopup() {
@@ -298,7 +301,6 @@ export function refreshPopup() {
 
 // Logs in (the account chosen in the browser, or `hint` preselected) and reloads the list.
 export async function addAccount(hint: string | null, button: HTMLButtonElement) {
-  $("error").hidden = true;
   button.disabled = true;
   try {
     await invoke("login", { loginHint: hint });
@@ -308,7 +310,7 @@ export async function addAccount(hint: string | null, button: HTMLButtonElement)
     await load();
     if (currentScreen() === "calendar") await loadCalendar();
   } catch (e) {
-    showError(e);
+    showFailure("accounts", e);
   } finally {
     button.disabled = false;
   }
@@ -316,7 +318,6 @@ export async function addAccount(hint: string | null, button: HTMLButtonElement)
 
 // Removes the account in the backend (revokes Google's grant, deletes its token), then drops what the screen kept of it.
 async function removeAccount(account: string, button: HTMLButtonElement) {
-  $("error").hidden = true;
   button.disabled = true;
   try {
     await invoke("remove_account", { account });
@@ -324,7 +325,7 @@ async function removeAccount(account: string, button: HTMLButtonElement) {
     confirmingRemoval = null;
     popupKey = "";
     refreshPopup();
-    return showError(e);
+    return showFailure("accounts", e);
   }
   closePopup();
   for (const [key, r] of rows) {

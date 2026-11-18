@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { FormationList } from "../../ts/bindings/FormationList";
@@ -1654,7 +1654,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await headName()).toBe("mail-api");
     await browser.waitUntil(async () => (await callsOf("claude_code_start")).some((c) => (c as { id: string }).id === "formation:mail-api"));
     await browser.waitUntil(async () => (await callsOf("formation_children")).some((c) => (c as { name: string }).name === "mail-api"));
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     // The projects are of two environments: Rust refuses that mix with its own reason, so no consent is asked for it.
     expect(await callsOf("formation_consents")).toEqual([]);
     expect(await callsOf("formation_consent")).toEqual([]);
@@ -1700,13 +1700,13 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect((await waitForCalls(create))[0]).toMatchObject({ name: " Bad Name" });
   });
 
-  it("shows the words of a failed creation where the other screens show an error, and keeps the dialog with what was typed", async () => {
+  it("shows the words of a failed creation on a card, and keeps the dialog with what was typed", async () => {
     await ask();
     await mock("formation_create", rejects("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください"));
     await browser.keys("Bad Name");
     await pick(1);
     await makeButton().click();
-    await expect($("#error")).toHaveText("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください");
+    await expect($(CARD)).toHaveText("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください");
     await expect(dialog()).toBeDisplayed();
     await expect(nameField()).toHaveValue("Bad Name");
     expect(await checked()).toEqual([false, true, false, false]);
@@ -1716,48 +1716,48 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
   });
 
-  it("hides the words of a failed creation when the name is corrected and the formation is made", async () => {
+  it("keeps the card of a failed creation when the name is corrected and the formation is made", async () => {
     await ask();
     await mock("formation_create", rejects("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください"));
     await browser.keys("Bad Name");
     await pick(1);
     await makeButton().click();
-    await expect($("#error")).toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
     const create = await mock("formation_create", formationEntry("bad-name", { minutes: 0 }));
     await mock("formation_list", formationList([...listed().formations, formationEntry("bad-name", { minutes: 0 })]));
     await nameField().setValue("bad-name");
     await makeButton().click();
     await waitForCalls(create);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
     await expect(dialog()).not.toExist();
     await browser.waitUntil(async () => (await pressedRows()).join() === "bad-name");
   });
 
-  it("hides the words of a failed creation when the dialog is cancelled and opened again", async () => {
+  it("keeps the card of a failed creation when the dialog is cancelled and opened again", async () => {
     await ask();
     await mock("formation_create", rejects("名前は、先頭が小文字の英数字で、小文字の英数字とハイフンだけの 40 文字までにしてください"));
     await browser.keys("Bad Name");
     await makeButton().click();
-    await expect($("#error")).toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
     await $(".formation-new-actions .text-btn:not(.primary)").click();
     await expect(dialog()).not.toExist();
     await pressNew();
     await expect(dialog()).toBeDisplayed();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
   });
 
-  it("hides the words of a failed read of the environments when the dialog is opened again", async () => {
+  it("keeps the card of a failed read of the environments when the dialog is opened again", async () => {
     await openList({ formation_environments: rejects("Orca に届きません") });
     await pressNew();
-    await expect($("#error")).toHaveText("Orca に届きません");
+    await expect($(CARD)).toHaveText("Orca に届きません");
     await mock("formation_environments", ENVIRONMENTS());
     await pressNew();
     await expect(dialog()).toBeDisplayed();
     await browser.waitUntil(async () => (await repos()).length > 0);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
   });
 
-  it("shows the refusal of projects of two environments where the other failures show, and makes no formation", async () => {
+  it("shows the refusal of projects of two environments on a card, and makes no formation", async () => {
     await ask();
     const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）";
     const create = await mock("formation_create", rejects(reason));
@@ -1766,7 +1766,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await pick(3);
     await makeButton().click();
     expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "local", repo: "wonder-knowledge" }, { environment: "dev-server", repo: "wonder-api" }] }]);
-    await expect($("#error")).toHaveText(reason);
+    await expect($(CARD)).toHaveText(reason);
     await expect(dialog()).toBeDisplayed();
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
   });
@@ -1914,7 +1914,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await makeButton().click();
     await agreeButton().click();
     await waitForCalls(consent);
-    await expect($("#error")).toHaveText(reason);
+    await expect($(CARD)).toHaveText(reason);
     await expect(consentDialog()).toBeDisplayed();
     await expect(agreeButton()).toBeEnabled();
     await expect(declineButton()).toBeEnabled();
@@ -1924,7 +1924,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await waitForCalls(create)).toEqual([{ name: "mail-api", projects: [{ environment: "dev-server", repo: "wonder-api" }] }]);
   });
 
-  it("hides the words of a failed placement when the owner agrees again", async () => {
+  it("keeps the card of a failed placement when the owner agrees again", async () => {
     await ask({ formation_consents: [] });
     await mock("formation_create", formationEntry("mail-api", { minutes: 0 }));
     await mock("formation_consent", rejects("サーバーを置けませんでした: この PC は macOS（Apple Silicon）ではありません"));
@@ -1932,25 +1932,25 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await pick(3);
     await makeButton().click();
     await agreeButton().click();
-    await expect($("#error")).toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
     const consent = await mock("formation_consent", formationConsent("dev-server"));
     await agreeButton().click();
     await waitForCalls(consent);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
   });
 
-  it("hides the words of a failed read of the consents when the formation is made again", async () => {
+  it("keeps the card of a failed read of the consents when the formation is made again", async () => {
     await ask();
     await mock("formation_consents", rejects("同意を読めません"));
     await browser.keys("mail-api");
     await pick(3);
     await makeButton().click();
-    await expect($("#error")).toHaveText("同意を読めません");
+    await expect($(CARD)).toHaveText("同意を読めません");
     await expect(dialog()).toBeDisplayed();
     await mock("formation_consents", []);
     await makeButton().click();
     await expect(consentDialog()).toBeDisplayed();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).toBeDisplayed();
   });
 
   it("does not ask for a consent when the projects are of two environments, and leaves the refusal to Rust", async () => {
@@ -1962,7 +1962,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await pick(3);
     await makeButton().click();
     await waitForCalls(create);
-    await expect($("#error")).toHaveText(reason);
+    await expect($(CARD)).toHaveText(reason);
     await expect(consentDialog()).not.toExist();
     expect(await callsOf("formation_consents")).toEqual([]);
   });
@@ -1974,7 +1974,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await browser.keys("mail-api");
     await pick(3);
     await makeButton().click();
-    await expect($("#error")).toHaveText(reason);
+    await expect($(CARD)).toHaveText(reason);
     await expect(dialog()).toBeDisplayed();
     await expect(nameField()).toHaveValue("mail-api");
   });
@@ -2039,7 +2039,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
   it("closes with the words of the failure when the environments cannot be read", async () => {
     await openList({ formation_environments: rejects("Orca に届きません") });
     await pressNew();
-    await expect($("#error")).toHaveText("Orca に届きません");
+    await expect($(CARD)).toHaveText("Orca に届きません");
     await expect(dialog()).not.toExist();
   });
 

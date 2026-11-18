@@ -20,7 +20,7 @@ import { loadPromptState } from "./todo-prompt.js";
 import { showConsentCard } from "./formation-consent-settings.js";
 import { showLogTab } from "./log-settings.js";
 import { showSkillTab } from "./skill-settings.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 let settingsSeq = 0;
 
@@ -41,7 +41,6 @@ export function selectSettingsTab(name: SettingsTab) {
     $(`settings-panel-${t}`).hidden = t !== name;
   }
   closeHint();
-  $("error").hidden = true;
   $("settings").scrollTop = 0;
   // The connection is asked about only once the Claude tab is shown.
   if (name === "claude") showClaudeTab();
@@ -119,7 +118,6 @@ function workspaceRow(w: Workspace, result: Check | null) {
   unlink.setAttribute("data-hint", "");
   unlink.onclick = () =>
     confirmUnlink(unlink, w.team, "トークンを Slack で取り消し、つなぎAIから削除します。Slack のアプリは残ります。", async () => {
-      $("error").hidden = true;
       try {
         const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
         forgetEmojiCatalogs();
@@ -128,7 +126,7 @@ function workspaceRow(w: Workspace, result: Check | null) {
         // The channels kept off the list go with their workspace.
         loadHiddenCard();
       } catch (e) {
-        showError(e);
+        showFailure("settings", e);
       }
     });
   const meta =
@@ -189,12 +187,11 @@ function hiddenRow(h: HiddenChannel) {
   back.type = "button";
   back.setAttribute("aria-label", `${label} を一覧に戻す`);
   back.onclick = async () => {
-    $("error").hidden = true;
     try {
       await invoke("slack_unhide_channel", { teamId: h.teamId, channel: h.channel });
       bumpSlackList();
     } catch (e) {
-      showError(e);
+      showFailure("settings", e);
     }
     loadHiddenCard();
   };
@@ -214,7 +211,7 @@ async function loadHiddenCard() {
   try {
     list = await invoke("slack_hidden_list");
   } catch (e) {
-    return showError(e);
+    return logError("settings", e);
   }
   if (seq === hiddenSeq) renderHiddenCard(list);
 }
@@ -247,11 +244,10 @@ let savingDay = false;
 async function pickFirstDay(day: number) {
   if (day === calendarDay || savingDay) return;
   savingDay = true;
-  $("error").hidden = true;
   try {
     await setCalendarFirstDay(day);
   } catch (e) {
-    return showError(e);
+    return showFailure("settings", e);
   } finally {
     savingDay = false;
   }
@@ -263,7 +259,7 @@ async function loadCalendarCard() {
   try {
     calendarDay = await calendarFirstDay();
   } catch (e) {
-    return showError(e);
+    return logError("settings", e);
   }
   renderCalendarCard();
 }
@@ -291,12 +287,11 @@ function renderTodoistCard() {
 }
 
 async function unlinkTodoist() {
-  $("error").hidden = true;
   todoistSeq++;
   try {
     await invoke("todoist_disconnect");
   } catch (e) {
-    return showError(e);
+    return showFailure("settings", e);
   }
   // The Todo screen forgets its content too, and the sidebar's count goes to 0.
   showTokenForm();
@@ -310,7 +305,7 @@ async function loadTodoistCard() {
   try {
     connected = await invoke("todoist_connected");
   } catch (e) {
-    return showError(e);
+    return logError("settings", e);
   }
   if (seq !== todoistSeq) return;
   todoistConnected = connected;
@@ -319,7 +314,6 @@ async function loadTodoistCard() {
 
 export async function loadSettings() {
   const seq = ++settingsSeq;
-  $("error").hidden = true;
   loadPromptState();
   loadModelSettings();
   loadCalendarCard();
@@ -329,7 +323,7 @@ export async function loadSettings() {
   try {
     loaded = await invoke("slack_load");
   } catch (e) {
-    return showError(e);
+    return logError("settings", e);
   }
   if (seq !== settingsSeq) return;
   // Opening the settings forgets the answers; the Slack tab asks about every token again.
@@ -354,14 +348,13 @@ export function initSettings() {
     const token = input.value;
     // The token is never shown: the field is emptied as soon as it is read.
     input.value = "";
-    $("error").hidden = true;
     try {
       const list = await invoke("slack_add_workspace", { token });
       // A token pasted again may reach other emoji.
       forgetEmojiCatalogs();
       renderWorkspaces(list);
     } catch (err) {
-      showError(err);
+      showFailure("settings", err);
     }
   };
   $("slack-help").onclick = (e) =>

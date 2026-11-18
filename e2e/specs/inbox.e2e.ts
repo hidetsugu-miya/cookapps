@@ -1,4 +1,4 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount } from "../support";
+import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount, CARD, CARDS, count, logged, waitForLog } from "../support";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
 const syncRound = () =>
@@ -221,7 +221,7 @@ describe("inbox", () => {
       await release(setRead, rejects("Gmail が断りました"));
       await release(setRead, true);
       // The failures are reported once, when the last request has answered; the row that failed is unread again, so the 未読 heading is back with its count.
-      await expect($("#error")).toHaveText(expect.stringContaining("1 件を更新できませんでした: Gmail が断りました"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("1 件を更新できませんでした: Gmail が断りました"));
       await waitForCount("#unread-threads li", 1);
       await expect($("#unread-count")).toHaveText("1");
       await expect(rowOf("unread-threads", "First unread")).toExist();
@@ -243,17 +243,17 @@ describe("inbox", () => {
       await expect($(".toast")).toHaveText(expect.stringContaining("元に戻しました"));
     });
 
-    it("reads the list again for a login that is needed without clearing the error of another failure", async () => {
+    it("reads the list again for a login that is needed, and the card of another failure stays", async () => {
       const setRead = await mock("set_read", holds);
       await $("#mail-mark-all").click();
       await waitForCalls(setRead, 2);
       await release(setRead, rejects("Gmail が断りました"));
       await release(setRead, null);
-      await expect($("#error")).toHaveText(expect.stringContaining("Gmail が断りました"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("Gmail が断りました"));
       // The list was read again (the startup read and this one), and it did not hide the error.
       await waitForCalls("inbox", 2);
       await browser.pause(300);
-      await expect($("#error")).toHaveText(expect.stringContaining("Gmail が断りました"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("Gmail が断りました"));
     });
 
     it("keeps a row as it is when a sync arrives while its request is on its way", async () => {
@@ -289,24 +289,11 @@ describe("inbox", () => {
     await expect($("#relogin")).toHaveText(expect.stringContaining("再ログインが必要です"));
   });
 
-  // The error line as it is on screen.
-  const errorLine = () =>
-    browser.execute(() => {
-      const e = document.getElementById("error")!;
-      return { text: e.textContent, hidden: e.hidden };
-    });
   // The list's state line (M-1) as it is on screen.
   const stateLine = () =>
     browser.execute(() => {
       const e = document.getElementById("inbox-state")!;
       return { text: e.textContent, hidden: e.hidden };
-    });
-  // Puts an error of some other screen in the error line.
-  const otherError = () =>
-    browser.execute(() => {
-      const e = document.getElementById("error")!;
-      e.textContent = "other error";
-      e.hidden = false;
     });
 
   describe("a retry of a load that failed, in the background", () => {
@@ -355,24 +342,24 @@ describe("inbox", () => {
       await expect(rowOf("unread-threads", "Second unread").$(".read-box")).toBeFocused();
     });
 
-    it("keeps the failure for the list and clears nothing of another screen's error while another screen is shown", async () => {
+    it("keeps the failure for the list, with no card, while another screen is shown", async () => {
       const failing = { ...inbox(), failed: { [account]: "quota" } };
       await mock("inbox", failing);
       await loadByNeedsLogin();
       await browser.pause(300);
-      expect((await errorLine()).hidden).toBe(true);
+      expect(await count(CARDS)).toBe(0);
       expect((await stateLine()).text).toContain("quota");
       await $("#nav-settings").click();
-      // It fails: the failure goes to the list, not to the error line of the other screen.
+      // It fails: the failure goes to the list and to the log, not to a card.
       await retry(rejects("boom"), 70_000);
-      expect((await errorLine()).hidden).toBe(true);
+      expect(await count(CARDS)).toBe(0);
       expect((await stateLine()).text).toContain("boom");
-      await otherError();
+      expect((await logged()).some((l) => l.message.includes("boom"))).toBe(true);
       await retry(rejects("boom"), 200_000);
-      expect(await errorLine()).toEqual({ text: "other error", hidden: false });
-      // It works: the other error stays, and the failure of the list goes.
+      expect(await count(CARDS)).toBe(0);
+      // It works: the failure of the list goes.
       await retry(inbox(), 500_000);
-      expect(await errorLine()).toEqual({ text: "other error", hidden: false });
+      expect(await count(CARDS)).toBe(0);
       expect((await stateLine()).text).toBe("");
     });
 
@@ -432,7 +419,8 @@ describe("inbox", () => {
       await expect($("#inbox-state button")).toHaveText("再読み込み");
       await expect($("#inbox-state")).not.toHaveText(expect.stringContaining("受信トレイにスレッドはありません"));
       await expect($("#threads li")).not.toExist();
-      await expect($("#error")).not.toBeDisplayed();
+      await expect($(CARDS)).not.toExist();
+      await waitForLog("boom");
     });
 
     it("loads the list at once with the button, and the failure and the button go when it works", async () => {
@@ -504,7 +492,7 @@ describe("inbox", () => {
       await failWithRows("boom");
       await $("#nav-settings").click();
       await expect($("#inbox-state")).not.toBeDisplayed();
-      await expect($("#error")).not.toBeDisplayed();
+      await expect($(CARDS)).not.toExist();
       await $("#nav-mail").click();
       await expect($("#inbox-state")).toHaveText(expect.stringContaining("読み込めませんでした: boom"));
       await expect($("#inbox-state button")).toBeDisplayed();
@@ -526,33 +514,36 @@ describe("inbox", () => {
     });
   });
 
-  describe("the notice of a failing sync", () => {
-    async function failThreeRounds() {
+  describe("a failing sync", () => {
+    // The sync fails one round after another; each round has been answered when this returns.
+    async function failRounds(from: number, to: number) {
       const sync = await mock("sync", rejects("offline"));
-      for (let n = 1; n <= 3; n++) {
+      for (let n = from; n <= to; n++) {
         await syncRound();
-        await waitForCalls(sync, n);
+        await waitForCalls(sync, n - from + 1);
         await browser.pause(300);
       }
-      await expect($("#error")).toHaveText(expect.stringContaining("自動同期に失敗しています"));
     }
+    const syncLines = async () => (await logged()).filter((l) => l.message.includes("自動同期に失敗しています"));
 
-    it("goes when the sync works again", async () => {
-      await failThreeRounds();
-      await mock("sync", { kind: "unchanged" });
-      await syncRound();
-      await waitForCalls("sync");
-      await expect($("#error")).not.toBeDisplayed();
+    it("writes it to the log at the third round in a row, and shows no card", async () => {
+      await failRounds(1, 2);
+      expect(await syncLines()).toEqual([]);
+      await failRounds(3, 3);
+      await waitForLog("自動同期に失敗しています");
+      expect(await syncLines()).toEqual([{ level: "error", source: "inbox", message: "自動同期に失敗しています: offline" }]);
+      await expect($(CARDS)).not.toExist();
     });
 
-    it("leaves an error shown for something else when the sync works again", async () => {
-      await failThreeRounds();
-      await otherError();
+    it("writes it once while it keeps failing, and again when it fails three rounds after working", async () => {
+      await failRounds(1, 4);
+      expect(await syncLines()).toHaveLength(1);
       await mock("sync", { kind: "unchanged" });
       await syncRound();
       await waitForCalls("sync");
-      await browser.pause(300);
-      expect(await errorLine()).toEqual({ text: "other error", hidden: false });
+      await failRounds(1, 3);
+      await browser.waitUntil(async () => (await syncLines()).length === 2);
+      await expect($(CARDS)).not.toExist();
     });
   });
 
@@ -701,7 +692,7 @@ describe("inbox", () => {
       await expect($("#new-mail")).not.toBeDisplayed();
       await expect($("#inbox-header")).toBeDisplayed();
       await expect($(".toast")).toHaveText(expect.stringContaining("送信しました"));
-      await expect($("#error")).not.toBeDisplayed();
+      await expect($(CARDS)).not.toExist();
     });
 
     it("sends from the account chosen", async () => {
@@ -746,7 +737,7 @@ describe("inbox", () => {
       await $("#new-mail-subject").setValue("Hello");
       await $("#new-mail-body").setValue("Hi");
       await $("#new-mail-send").click();
-      await expect($("#error")).toHaveText("宛先がありません");
+      await expect($(CARD)).toHaveText("宛先がありません");
       await expect($("#new-mail")).toBeDisplayed();
       await expect($("#new-mail-subject")).toHaveValue("Hello");
       await expect($("#new-mail-body")).toHaveValue("Hi");

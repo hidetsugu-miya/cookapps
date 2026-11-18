@@ -45,7 +45,6 @@ export function showPromptScreen() {
   markNav("settings");
   syncTrays();
   closeHint();
-  $("error").hidden = true;
   show("prompt");
 }
 
@@ -55,7 +54,6 @@ export function showComposeScreen() {
   markNav("mail");
   syncTrays();
   closeHint();
-  $("error").hidden = true;
   show("slack");
 }
 
@@ -65,7 +63,6 @@ export function showNewMailScreen() {
   markNav("mail");
   syncTrays();
   closeHint();
-  $("error").hidden = true;
   show("new-mail");
 }
 
@@ -73,7 +70,6 @@ export function showNewMailScreen() {
 export function showThreadScreen() {
   screen = "mail";
   syncTrays();
-  $("error").hidden = true;
   show("thread");
 }
 
@@ -90,7 +86,6 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   }
   markNav(name);
   syncTrays();
-  $("error").hidden = true;
   if (name === "calendar") {
     showCalendar();
   } else if (name === "todo") {

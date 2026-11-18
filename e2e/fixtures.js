@@ -201,6 +201,9 @@ const answers = {
   install_update: null,
   restart_app: null,
   set_badge: null,
+  // The app's log (A-28): every failure is written with `log_write`, and the log tab (or the card's button) reads it.
+  log_write: null,
+  log_read: [],
   ...fixtures,
 };
 // The settings card's view of the connection follows the usable state (the subscription is the method in use) unless a spec gives its own.

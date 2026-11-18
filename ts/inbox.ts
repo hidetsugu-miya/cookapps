@@ -10,7 +10,8 @@ import { currentScreen } from "./nav.js";
 import { opened } from "./thread.js";
 import { hideToast, toast } from "./toast.js";
 import { initUnreadPane } from "./unread-pane.js";
-import { show, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { show } from "./view.js";
 
 // What the last archive / trash did, for "元に戻す" and Cmd+Z (Ctrl+Z off macOS): the command that reverses it and the thread data to put back.
 // One only; a newer removal replaces it.
@@ -35,7 +36,6 @@ export async function removeRow(command: "archive" | "trash", account: string, i
   pending.add(key);
   li.remove();
   updateBadge();
-  $("error").hidden = true;
   try {
     const done = await invoke(command, { account, id });
     if (done === null) return load();
@@ -50,7 +50,7 @@ export async function removeRow(command: "archive" | "trash", account: string, i
     place(li, li.classList.contains("unread"));
     // A row drawn from the kept list before the load answered is not in rows; without it the next sync adds the thread again.
     if (t && !rows.has(key)) rows.set(key, { t, li });
-    showError(e);
+    showFailure("inbox", e);
   } finally {
     pending.delete(key);
     updateBadge();
@@ -63,7 +63,6 @@ async function undoRemove() {
   if (!op) return;
   lastRemoved = null;
   hideToast();
-  $("error").hidden = true;
   try {
     const done = await invoke(op.undo, { account: op.account, id: op.id });
     if (done === null) return load();
@@ -71,7 +70,7 @@ async function undoRemove() {
     toast("元に戻しました");
   } catch (e) {
     lastRemoved ??= op;
-    showError(e);
+    showFailure("inbox", e);
   }
 }
 
@@ -102,21 +101,8 @@ function scheduleReload(failed: boolean) {
   }
 }
 
-// The text the inbox itself put in `#error` (the sync notice), so a later load or sync clears only that and not an error shown for something else.
-let inboxError: string | null = null;
-
-function showInboxError(e: unknown) {
-  showError(e);
-  inboxError = $("error").textContent;
-}
-
-function clearInboxError() {
-  if (inboxError !== null && !$("error").hidden && $("error").textContent === inboxError) $("error").hidden = true;
-  inboxError = null;
-}
-
 // Why the last load failed, drawn in `#inbox-state` (above the rows, which stay) until a load works; null when it worked.
-// It belongs to the list, not to `#error`, so it stays when another screen is shown.
+// It belongs to the list, so it stays when another screen is shown.
 let loadFailure: string | null = null;
 
 // What `#inbox-state` shows now, so that a redraw with nothing changed leaves the button (and its focus) alone.
@@ -190,21 +176,19 @@ export async function showKeptInbox() {
   if (currentScreen() === "mail") show("list");
 }
 
-// `background` is a retry of the sync round: it clears only the notice the inbox showed in `#error` itself.
 // The failure of the latest load is kept in `loadFailure` for the list, whichever screen is shown.
-export async function load(background = false) {
+export async function load() {
   const seq = ++loadSeq;
   loading++;
   // Whether this load failed; stays null when a newer load took over.
   let failed: boolean | null = null;
-  if (background) clearInboxError();
-  else $("error").hidden = true;
   drawInboxState();
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
     failed = Object.keys(inbox.failed).length > 0;
     loadFailure = failed ? Object.entries(inbox.failed).map(([a, m]) => `${a}: ${m}`).join("、") : null;
+    if (loadFailure !== null) logError("inbox", loadFailure);
     inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
@@ -215,6 +199,7 @@ export async function load(background = false) {
     if (seq === loadSeq) {
       failed = true;
       loadFailure = String(e);
+      logError("inbox", e);
     }
   } finally {
     loading--;
@@ -293,7 +278,7 @@ let syncing = false;
 // A load that is due (a failed one, or one asked for by a sync that needs a login) comes first: it may leave no history IDs to sync from.
 async function syncAll() {
   if (loading || document.hidden) return;
-  if (nextReload !== null && Date.now() >= nextReload) return load(true);
+  if (nextReload !== null && Date.now() >= nextReload) return load();
   if (syncing || historyIds.size === 0) return;
   syncing = true;
   const seq = loadSeq;
@@ -322,10 +307,9 @@ async function syncAll() {
   }
   if (failure) {
     syncFails++;
-    if (syncFails === 3) showInboxError(`自動同期に失敗しています: ${failure}`);
+    // Only the log tells of it, once the third round in a row has failed.
+    if (syncFails === 3) logError("inbox", `自動同期に失敗しています: ${failure}`);
   } else {
-    // The sync works again: the notice of the failures goes (only that one, not an error shown for something else).
-    if (syncFails >= 3) clearInboxError();
     syncFails = 0;
   }
 }

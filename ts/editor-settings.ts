@@ -5,7 +5,7 @@ import { $, onEnter, tag } from "./dom.js";
 import { hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { setAutosaveMs } from "./orca-editor.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // What Rust answered last, null until read.
 let settings: EditorSettings | null = null;
@@ -38,13 +38,12 @@ async function commit(input: HTMLInputElement) {
   const typed = input.valueAsNumber;
   if (saving || Number.isNaN(typed)) return render();
   saving = true;
-  $("error").hidden = true;
   render();
   try {
     settings = await invoke("editor_settings_set", { autosaveMs: Math.round(typed) });
     setAutosaveMs(settings.autosaveMs);
   } catch (e) {
-    showError(e);
+    showFailure("editor-settings", e);
   } finally {
     saving = false;
     render();
@@ -74,6 +73,6 @@ export function initEditorSettings() {
       setAutosaveMs(read.autosaveMs);
       render();
     },
-    (e) => showError(e),
+    (e) => logError("editor-settings", e),
   );
 }

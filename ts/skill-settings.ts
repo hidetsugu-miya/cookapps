@@ -5,7 +5,7 @@ import type { SkillScreen } from "./bindings/SkillScreen";
 import { $, tag } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { invoke } from "./ipc.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // The skills as last read, by name.
 let skills: Skill[] = [];
@@ -57,7 +57,7 @@ async function loadSkills() {
   try {
     list = await invoke("skill_list");
   } catch (e) {
-    return showError(e);
+    return logError("skill-settings", e);
   }
   if (seq !== listSeq) return;
   skills = list;
@@ -78,16 +78,15 @@ async function saveSkill() {
     description: $<HTMLTextAreaElement>("skill-description").value,
     instructions: $<HTMLTextAreaElement>("skill-instructions").value,
   };
-  $("error").hidden = true;
   // A save of an existing name replaces that skill, so a new skill with a taken name is stopped here too (Rust refuses it by `create` when this list was not read).
   const create = shown === "";
-  if (create && skills.some((s) => s.name === skill.name)) return showError(`スキル「${skill.name}」はもうあります`);
+  if (create && skills.some((s) => s.name === skill.name)) return showFailure("skill-settings", `スキル「${skill.name}」はもうあります`);
   busy = true;
   let saved: Skill;
   try {
     saved = await invoke("skill_save", { skill, create });
   } catch (e) {
-    return showError(e);
+    return showFailure("skill-settings", e);
   } finally {
     busy = false;
   }
@@ -98,11 +97,10 @@ async function saveSkill() {
 async function deleteSkill(name: string) {
   if (busy) return;
   busy = true;
-  $("error").hidden = true;
   try {
     await invoke("skill_delete", { name });
   } catch (e) {
-    return showError(e);
+    return showFailure("skill-settings", e);
   } finally {
     busy = false;
   }

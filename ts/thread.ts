@@ -17,7 +17,8 @@ import { bindReply, initReply, openReply, resetReply, type ReplyTarget } from ".
 import { mailCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
 import { makeTodo } from "./todo-add.js";
-import { show, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { show } from "./view.js";
 
 // The thread shown in the detail view and its list row (null for a thread opened from Todo that the list does not hold).
 export interface OpenThread {
@@ -184,7 +185,7 @@ async function markRead(account: string, id: string) {
       setReadState(r.t, r.li, true);
     }
   } catch (e) {
-    showError(e);
+    logError("thread", e);
   } finally {
     updateBadge();
   }
@@ -271,7 +272,7 @@ function needsLogin() {
 }
 
 // Asks Gmail again for a thread drawn from its held copy (`stamp` names that copy). The thread is drawn again only when Rust
-// answers one, which it does when the answer differs from the copy; a failure leaves the copy on screen and is shown where every error is.
+// answers one, which it does when the answer differs from the copy; a failure leaves the copy on screen and goes to the log only.
 async function refresh(target: ThreadTarget, stamp: number, seq: number) {
   const { account, id } = target;
   try {
@@ -284,7 +285,7 @@ async function refresh(target: ThreadTarget, stamp: number, seq: number) {
     if (r.unread) markRead(account, id);
   } catch (e) {
     if (seq !== openCount) return;
-    showError(e);
+    logError("thread", e);
   }
 }
 
@@ -304,7 +305,6 @@ export async function openThread(
   li: HTMLLIElement | null,
   origin: "mail" | "todo" = "mail",
 ) {
-  $("error").hidden = true;
   const seq = ++openCount;
   // Until the thread arrives nothing is open: no button acts on the thread that was open before.
   opened.current = null;
@@ -344,14 +344,13 @@ export async function openThread(
   } catch (e) {
     if (seq !== openCount) return;
     $("thread").removeAttribute("aria-busy");
-    // The loading body is gone once the messages replaced it: the error then goes where every error does.
+    // The loading body is gone once the messages replaced it: the failure then shows as a card.
     if (body.isConnected) body.replaceChildren(span("msg-fail", String(e)));
-    else showError(e);
+    else showFailure("thread", e);
   }
 }
 
 export function goBack() {
-  $("error").hidden = true;
   // A thread still loading is left: its answer is ignored.
   openCount++;
   loading.current = null;

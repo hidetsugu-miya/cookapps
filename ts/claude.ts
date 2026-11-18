@@ -19,7 +19,8 @@ import { updateAddMode } from "./todo-add.js";
 import { refreshTodoClaude } from "./todo-claude.js";
 import { refreshDraftChat } from "./todo-draft.js";
 import { promptRow, refreshPrompt } from "./todo-prompt.js";
-import { setClaudeReady, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { setClaudeReady } from "./view.js";
 
 // Whether Claude can be used (the method in use, A-4); null until checked.
 let claude: Claude | null = null;
@@ -144,11 +145,10 @@ function pickKey() {
 
 // Runs a change of the method or the key, then asks for the states again, so every row and the sidebar show what is now true.
 // A failure shows its error and the field stays open. A change that was made but left something undone answers it as text (the key was saved,
-// but Claude Code could not be shown to be logged out): the field closes and the text is shown as the error.
+// but Claude Code could not be shown to be logged out): the field closes and the text is shown as a failure card.
 async function changeConnection(change: () => Promise<string | null>) {
   if (changing) return;
   changing = true;
-  $("error").hidden = true;
   redrawConnection();
   let failed = false;
   let remaining: string | null = null;
@@ -156,13 +156,13 @@ async function changeConnection(change: () => Promise<string | null>) {
     remaining = await change();
   } catch (e) {
     failed = true;
-    showError(e);
+    showFailure("claude", e);
   }
   changing = false;
   await loadConnection();
   if (!failed) keyFormOpen = false;
   redrawConnection();
-  if (remaining) showError(remaining);
+  if (remaining) showFailure("claude", remaining);
 }
 
 // Takes the usable state (`claude_status`, or the `claude` of `claude_connection`): the sidebar's Claude avatar (only while Claude is usable), the settings card, and the Todo add field follow.
@@ -279,12 +279,11 @@ async function saveModel(purpose: Purpose, change: { model: Model } | { effort: 
   if (savingModel || modelSettings === null) return;
   savingModel = true;
   saves++;
-  $("error").hidden = true;
   for (const el of modelSelects()) el.disabled = true;
   try {
     modelSettings = await invoke("claude_model_settings_save", "model" in change ? { purpose, model: change.model } : { purpose, model: modelSettings[purpose].model, effort: change.effort });
   } catch (e) {
-    showError(e);
+    showFailure("claude", e);
   } finally {
     savingModel = false;
     syncModelSelects();
@@ -306,7 +305,7 @@ export async function loadModelSettings() {
   try {
     read = await invoke("claude_model_settings");
   } catch (e) {
-    return showError(e);
+    return logError("claude", e);
   }
   if (savingModel || saves !== started) return;
   modelSettings = read;
@@ -367,7 +366,7 @@ async function loadConnection() {
     if (read !== reads) return;
     reading = false;
     connectionError = String(e);
-    showError(e);
+    logError("claude", e);
     applyClaude({ state: "failed", message: String(e) });
   }
 }

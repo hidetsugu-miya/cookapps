@@ -13,7 +13,7 @@ import { confirmDelete } from "./hint.js";
 import { CHEVRON_SVG, CLOSE_SVG, DELETE_SVG, MORE_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // A worktree of a project, where it is (null: this machine).
 export interface LspPlace {
@@ -476,7 +476,7 @@ async function forget(name: string) {
   for (const place of places) {
     started.delete(keyOf(place.target, place.path, name));
     statuses.delete(keyOf(place.target, place.path, name));
-    invoke("lsp_stop", { environment: place.target, worktree: place.path, server: name }).catch(showError);
+    invoke("lsp_stop", { environment: place.target, worktree: place.path, server: name }).catch((e) => showFailure("orca-lsp", e));
   }
   statuses.delete(key);
   launches.delete(name);
@@ -652,7 +652,7 @@ export async function ensureServer(place: LspPlace, server: string) {
     if (status.state !== "stopped") started.set(key, here);
     else if (status.reason === "notStarted" && (await invoke("lsp_settings", { environment: place.target, project: place.project })).servers.find((s) => s.name === server)?.autoStart) await startServer(here);
   } catch (e) {
-    showError(e);
+    logError("orca-lsp", e);
   } finally {
     checking.delete(key);
   }
@@ -669,7 +669,7 @@ export function syncServers(gone: (target: string | null, path: string) => boole
         statuses.delete(key);
         if (pane?.target === place.target && pane?.path === place.path) drawState();
       })
-      .catch(showError);
+      .catch((e) => logError("orca-lsp", e));
   }
 }
 

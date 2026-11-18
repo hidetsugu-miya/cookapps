@@ -8,7 +8,7 @@ import { $, tag } from "./dom.js";
 import { hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { applyTerminalFont } from "./orca-terminal.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // The rows: the area, the name of its screen, and the place on the screen.
 const ROWS: [FontArea, string, string][] = [
@@ -133,14 +133,13 @@ async function choose(area: FontArea, familyChoice: string, size: number) {
   const family = ghostty ? held.family : familyChoice.startsWith(FAMILY) ? familyChoice.slice(FAMILY.length) : null;
   const focusId = idOf(area, area !== "mono" && familyChoice === familyValue(area, held) ? "size" : "family");
   saving = true;
-  $("error").hidden = true;
   // The selects wait; they are drawn again once, when the save has ended.
   for (const select of document.querySelectorAll<HTMLSelectElement>("#font-items select")) select.disabled = true;
   try {
     settings = await invoke("font_settings_set", { area, family, size, ghostty });
     apply(settings);
   } catch (e) {
-    showError(e);
+    showFailure("font-settings", e);
   } finally {
     saving = false;
     render();
@@ -176,13 +175,13 @@ export function initFontSettings() {
       apply(read);
       render();
     },
-    (e) => showError(e),
+    (e) => logError("font-settings", e),
   );
   invoke("font_families").then(
     (read) => {
       families = read;
       render();
     },
-    (e) => showError(e),
+    (e) => logError("font-settings", e),
   );
 }

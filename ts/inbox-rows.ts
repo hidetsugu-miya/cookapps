@@ -8,7 +8,8 @@ import { invoke } from "./ipc.js";
 import { openThread } from "./thread.js";
 import { makeTodo } from "./todo-add.js";
 import { toast } from "./toast.js";
-import { setNavCount, showError } from "./view.js";
+import { showFailure } from "./error-card.js";
+import { setNavCount } from "./view.js";
 
 // Threads being archived / trashed ("account/id"); a list reload or sync must not bring them back meanwhile.
 export const pending = new Set<string>();
@@ -77,7 +78,6 @@ async function pool<T>(items: T[], limit: number, run: (item: T) => Promise<void
 // Makes the threads of `list` read (or unread) in Gmail with `set_read`, one request each. The rows change first; a row whose request fails goes back and the failures are reported once.
 // The read box of a row stays disabled while its request is on its way, so that a sync leaves the row as it is (as for a single toggle). Returns the keys of the threads that were changed.
 async function markRows(list: { t: ThreadItem; li: HTMLLIElement }[], read: boolean) {
-  $("error").hidden = true;
   const boxes = list.map(({ t, li }) => {
     const box = li.querySelector<HTMLInputElement>(".read-box")!;
     box.disabled = true;
@@ -109,8 +109,8 @@ async function markRows(list: { t: ThreadItem; li: HTMLLIElement }[], read: bool
     },
   );
   updateBadge();
-  if (failed.length) showError(`${failed.length} 件を更新できませんでした: ${failed[0]}`);
-  if (relogin) load(true);
+  if (failed.length) showFailure("inbox-rows", `${failed.length} 件を更新できませんでした: ${failed[0]}`);
+  if (relogin) load();
   return done;
 }
 
@@ -163,7 +163,6 @@ export function setReadState(t: ThreadItem, li: HTMLLIElement, read: boolean) {
 
 // Updates UNREAD in Gmail; `control` is disabled while sending. On failure the row returns to its last known state.
 async function sendRead(t: ThreadItem, li: HTMLLIElement, read: boolean, control: HTMLInputElement) {
-  $("error").hidden = true;
   // The row moves to the other section, which drops the focus; keyboard users keep it on the control.
   const focused = document.activeElement === control;
   control.disabled = true;
@@ -173,7 +172,7 @@ async function sendRead(t: ThreadItem, li: HTMLLIElement, read: boolean, control
     setReadState(t, li, read);
   } catch (e) {
     setReadState(t, li, !t.unread);
-    showError(e);
+    showFailure("inbox-rows", e);
   } finally {
     control.disabled = false;
     if (focused && control.isConnected) control.focus();

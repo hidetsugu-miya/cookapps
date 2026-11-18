@@ -14,7 +14,8 @@ import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { initSplit } from "./split.js";
-import { show, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { show } from "./view.js";
 
 interface DatabaseState {
   expanded: boolean;
@@ -167,7 +168,7 @@ async function read(quiet: boolean): Promise<DatabaseProfileView[] | null> {
     if (!quiet || !same) draw();
     return list;
   } catch (e) {
-    if (seq === loadSeq && !quiet) showError(e);
+    if (seq === loadSeq && !quiet) logError("database", e);
     return null;
   }
 }
@@ -201,8 +202,8 @@ async function save(profile: DatabaseProfile, password: string) {
   if (profile.id !== "") await dropClosed();
   await load();
   if (failure === null) return;
-  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and the error is shown on the screen.
-  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showError(failure);
+  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and a failure card shows the error.
+  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showFailure("database", failure);
   throw failure;
 }
 
@@ -214,7 +215,7 @@ async function remove(profile: DatabaseProfileView, anchor: Element) {
     try {
       await invoke("database_profile_delete", { id: profile.id });
     } catch (e) {
-      showError(e);
+      showFailure("database", e);
     }
     await dropClosed();
     await load();
@@ -233,7 +234,7 @@ async function openConnection(profile: DatabaseProfileView) {
     const names = await invoke("database_connect", { id: profile.id });
     // The connection was deleted while it opened: Rust holds a session that no row shows.
     if (!profiles.some((p) => p.id === profile.id)) {
-      invoke("database_disconnect", { id: profile.id }).catch(showError);
+      invoke("database_disconnect", { id: profile.id }).catch((e) => logError("database", e));
       return;
     }
     if (connections.get(profile.id) !== c) return;
@@ -437,7 +438,7 @@ const actions: SideActions = {
     try {
       await invoke("database_disconnect", { id: profile.id });
     } catch (e) {
-      showError(e);
+      showFailure("database", e);
     }
     closing.delete(profile.id);
   },

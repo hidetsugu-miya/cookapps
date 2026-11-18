@@ -1,6 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForLog } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 // The read of the list at an interval (#866) put so far off that a spec that counts the reads of the list meets none of it.
@@ -96,10 +96,11 @@ describe("database", () => {
     expect(await names()).toEqual(["Example direct"]);
   });
 
-  it("shows the error of a read that fails, and no connection", async () => {
+  it("writes the error of a read that fails to the log, and shows no connection", async () => {
     await boot({ inbox: inbox(), database_profiles: { __e2e_reject__: "接続の一覧を読めません" } });
     await $("#nav-database").click();
-    await expect($("#error")).toHaveText("接続の一覧を読めません");
+    await waitForLog("接続の一覧を読めません");
+    await expect($(CARDS)).not.toExist();
     expect(await count("#database-side-feed .database-item")).toBe(0);
   });
 
@@ -242,7 +243,7 @@ describe("database: register", () => {
     await $("#database-form button[type=submit]").click();
     await waitForCalls(save);
     await expect($("#database-form")).not.toExist();
-    await expect($("#error")).toHaveText(message);
+    await expect($(CARD)).toHaveText(message);
     await waitForCount("#database-side-feed .database-item", 2);
     expect(await names()).toEqual(["Example direct", "Example new"]);
   });
@@ -635,7 +636,7 @@ describe("database: the list is read while the screen is shown", () => {
     const read = await mock("database_profiles", rejects("接続の一覧を読めません"));
     await waitForCalls(read, 2);
     expect(await names()).toEqual(["Example direct", "Example tunnel"]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 });
 
@@ -671,7 +672,7 @@ describe("database: delete", () => {
     await pickFromMenu("p1", 2);
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     await waitForCalls(del);
-    await expect($("#error")).toHaveText("パスワードを削除できません");
+    await expect($(CARD)).toHaveText("パスワードを削除できません");
     expect(await names()).toEqual(["Example direct", "Example tunnel"]);
   });
 
@@ -1414,7 +1415,7 @@ describe("database: tree", () => {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
       });
       await button("copy").click();
-      await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+      await expect($(CARD)).toHaveText(expect.stringContaining("denied"));
       await expect($(".toast")).not.toBeDisplayed();
       expect(await callsOf(command)).toEqual([]);
     });
@@ -2133,7 +2134,7 @@ describe("database: tree", () => {
     const closed = await mock("database_disconnect", rejects("接続を閉じられませんでした"));
     await pickFromMenu("p1", 2);
     await waitForCalls(closed);
-    await expect($("#error")).toHaveText("接続を閉じられませんでした");
+    await expect($(CARD)).toHaveText("接続を閉じられませんでした");
     expect(await keys()).toEqual(["p1", "p2"]);
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
   });

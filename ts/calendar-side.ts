@@ -7,7 +7,7 @@ import { avatarColor, initials } from "./format.js";
 import { CHEVRON_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // The calendars as last read, and whether that read is still good: a login or a removal of an account makes it stale.
 let choices: CalendarChoices | null = null;
@@ -77,7 +77,7 @@ function item(account: string, c: CalendarChoice) {
       onChanged();
     } catch (e) {
       box.checked = !shown;
-      showError(e);
+      showFailure("calendar-side", e);
     } finally {
       box.disabled = false;
       if (focused) box.focus({ preventScroll: true });

@@ -1,13 +1,13 @@
 // The comments of the task open in the Todo detail: the list with its authors and files, and the field that adds one, with a file if the user picked one.
 // They are not part of the task load: they are fetched when a task's detail is opened, and the section draws itself in place when an answer arrives.
 import type { Comment } from "./bindings/Comment";
-import { $, composing, isMac, tag } from "./dom.js";
+import { composing, isMac, tag } from "./dom.js";
 import { avatarColor, hostOf, initials } from "./format.js";
 import { CHEVRON_SVG, CLIP_SVG, CLOSE_SVG, FILE_SVG, SEND_SVG } from "./icons.js";
 import { invoke, invokeRaw, type Upload } from "./ipc.js";
 import { dueLabel, markdownHtml, todoState } from "./todo-data.js";
 import { loadTodo } from "./todo.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 // The header that carries the file's name to `todoist_upload`, percent-encoded (the body is the file's bytes alone).
@@ -157,7 +157,7 @@ function filePicker() {
     input!.value = "";
     const taskId = todoState.open;
     if (!file || !taskId) return;
-    if (file.size > MAX_FILE_BYTES) return showError("ファイルが大きすぎます（100 MB まで）");
+    if (file.size > MAX_FILE_BYTES) return showFailure("todo-comments", "ファイルが大きすぎます（100 MB まで）");
     const draft = draftOf(taskId);
     draft.file = file;
     draft.uploaded = null;
@@ -201,7 +201,6 @@ export function fetchOpenComments() {
 async function send(taskId: string) {
   const draft = draftOf(taskId);
   if ((!draft.text.trim() && !draft.file) || sending.has(taskId)) return;
-  $("error").hidden = true;
   sending.add(taskId);
   redraw(taskId, true);
   let tokenNeeded = false;
@@ -226,7 +225,7 @@ async function send(taskId: string) {
       if (view?.taskId === taskId) view.input.value = "";
     }
   } catch (e) {
-    showError(e);
+    showFailure("todo-comments", e);
   }
   sending.delete(taskId);
   redraw(taskId);

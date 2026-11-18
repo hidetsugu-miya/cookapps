@@ -1,8 +1,5 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
-import {
-  attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
-  copiedTexts, linkSpan, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
-} from "../support";
+import { attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf, copiedTexts, linkSpan, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS, CARD } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 const root = slackTs(60, 1);
@@ -1711,7 +1708,7 @@ describe("slack thread: asking Claude", () => {
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
     });
     await $(`${log} .diff-foot .text-btn:nth-of-type(2)`).click();
-    await expect($("#error")).toHaveText("Error: denied");
+    await expect($(CARD)).toHaveText("Error: denied");
     expect(await count(`${log} .diff-foot .text-btn`)).toBe(3);
   });
 

@@ -9,7 +9,7 @@ import { invoke } from "./ipc.js";
 import { setScreen, showPromptScreen } from "./nav.js";
 import { itemRow, settingsTab } from "./settings.js";
 import { toast } from "./toast.js";
-import { showError } from "./view.js";
+import { logError } from "./error-card.js";
 
 // The instructions as saved; null until read.
 let saved: TodoPrompt | null = null;
@@ -52,7 +52,7 @@ export async function loadPromptState() {
   try {
     saved = await invoke("claude_todo_prompt");
   } catch (e) {
-    return showError(e);
+    return logError("todo-prompt", e);
   }
   redrawPromptRow();
   refreshPrompt();

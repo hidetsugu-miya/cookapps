@@ -1,6 +1,4 @@
-import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, composerLayout, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText, openTodo,
-} from "../support";
+import { boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, composerLayout, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText, openTodo, CARD, CARDS } from "../support";
 
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
@@ -1367,7 +1365,7 @@ describe("todo: moving a task by its grip", () => {
     await waitForCalls(moveUnder);
     // The reload brings back what Todoist has: "Write report" at the top level and "Plan trip" closed.
     await waitForCount(ROWS, 2);
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
     expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Write report"), expect.stringContaining("Plan trip")]);
     expect(await marginsOf()).toEqual(["0px", "0px"]);
     await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "false");
@@ -1666,7 +1664,7 @@ describe("todo detail menu", () => {
     });
     await $(more).click();
     await $(`${items}:nth-child(2)`).click();
-    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("denied"));
     await expect($(".menu")).toExist();
     await expect($(".toast")).not.toBeDisplayed();
   });
@@ -1678,7 +1676,7 @@ describe("todo detail menu", () => {
     });
     await $(more).click();
     await $(`${items}:first-child`).click();
-    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("denied"));
     await expect($(".menu")).toExist();
     await expect($(".toast")).not.toBeDisplayed();
   });
@@ -2367,7 +2365,7 @@ describe("todo detail: moving a subtask", () => {
     await waitForCalls(moveUnder);
     // The reload brings back what Todoist has: both subtasks under "Plan trip".
     await waitForCount(SUBS, 2);
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
     await expect($("#todo-detail .subs")).toHaveText(expect.stringContaining("Pack bag"));
     await expect($("#todo-detail .subs")).toHaveText(expect.stringContaining("Book flights"));
   });
@@ -2378,7 +2376,7 @@ describe("todo detail: moving a subtask", () => {
     await pressSub("Pack bag", "unparent-row");
     await waitForCalls(move);
     await waitForCount(SUBS, 2);
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
     await expect($("#todo-detail .subs")).toHaveText(expect.stringContaining("Pack bag"));
   });
 });
@@ -2473,7 +2471,7 @@ describe("todo subtask being created", () => {
     await typeSub("Buy luggage");
     await waitForCalls(add);
     await waitForCount(creating, 0);
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
     await expect(subRowOf("Buy luggage")).not.toExist();
   });
 });
@@ -2685,7 +2683,7 @@ describe("todo detail comments", () => {
   it("shows a failed fetch in the section, not as the screen's error", async () => {
     await openReport(rejects("boom"));
     await expect($("#todo-detail .c-note.fail")).toHaveText(expect.stringContaining("boom"));
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await expect($(field)).toBeDisplayed();
   });
 
@@ -2808,7 +2806,7 @@ describe("todo detail comments", () => {
     await $(field).setValue("keep me");
     await $(sendButton).click();
     await waitForCalls(add);
-    await expect($("#error")).toHaveText(expect.stringContaining("add failed"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("add failed"));
     await expect($(field)).toHaveValue("keep me");
     await expect($(sendButton)).toBeEnabled();
     expect(await count(rows)).toBe(0);
@@ -2894,7 +2892,7 @@ describe("todo detail comments", () => {
     await pickFile("報告.txt", "hello");
     await $(sendButton).click();
     await waitForCalls("todoist_add_comment");
-    await expect($("#error")).toHaveText(expect.stringContaining("add failed"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("add failed"));
     const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "報告.txt", { date: today, time: "10:00" }, { fileName: "報告.txt", fileUrl: uploaded.file_url }));
     await $(sendButton).click();
     expect(await waitForCalls(add)).toEqual([{ taskId: "k1", content: "", attachment: uploaded }]);
@@ -2930,7 +2928,7 @@ describe("todo detail comments", () => {
     await pickFile("a.txt", "x");
     await $(sendButton).click();
     await waitForCalls(upload);
-    await expect($("#error")).toHaveText(expect.stringContaining("upload failed"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("upload failed"));
     expect(await callsOf(add)).toEqual([]);
     await expect($(field)).toHaveValue("keep me");
     await expect($(chip)).toHaveText(expect.stringContaining("a.txt"));
@@ -2941,7 +2939,7 @@ describe("todo detail comments", () => {
     await openReport([]);
     const upload = await mock("todoist_upload", uploaded);
     await pickFile("big.bin", "x", 100 * 1024 * 1024 + 1);
-    await expect($("#error")).toHaveText(expect.stringContaining("100 MB"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("100 MB"));
     await expect($(chip)).not.toBeDisplayed();
     expect(await callsOf(upload)).toEqual([]);
     await pickFile("edge.bin", "x", 100 * 1024 * 1024);
@@ -3150,7 +3148,7 @@ describe("todo detail labels", () => {
     await $(add).click();
     await $(input).setValue("x");
     await browser.keys("Enter");
-    await expect($("#error")).toHaveText(expect.stringContaining("ラベルの名前は 128 文字までです"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("ラベルの名前は 128 文字までです"));
     await waitForCount(chips, 0);
   });
 
@@ -3336,7 +3334,7 @@ describe("todo projects", () => {
     await waitForCalls(archive);
     // The reload brings back what Todoist has.
     await browser.waitUntil(async () => (await projectNames()).includes("Home"), { timeoutMsg: "Home did not come back" });
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
   });
 
@@ -3348,7 +3346,7 @@ describe("todo projects", () => {
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     await waitForCalls(del);
     await browser.waitUntil(async () => (await projectNames()).includes("Home"), { timeoutMsg: "Home did not come back" });
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
   });
 
@@ -3449,7 +3447,7 @@ describe("todo projects", () => {
     await $(`${MENU} > button:nth-child(1)`).click();
     await waitForCalls(move);
     await browser.waitUntil(async () => JSON.stringify(await projectLines()) === JSON.stringify([["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "0px"]]), { timeoutMsg: "the list did not come back" });
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
   });
 
   // T-8: dragging a project of the side list. The press is on the project's button (it has no grip), and the pointer moves over each of `over` before the release.
@@ -3538,6 +3536,6 @@ describe("todo projects", () => {
     await dragProject("p3", projectOf("p4"));
     await waitForCalls(move);
     await browser.waitUntil(async () => JSON.stringify(await projectLines()) === JSON.stringify(ORIGINAL), { timeoutMsg: "the list did not come back" });
-    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
   });
 });

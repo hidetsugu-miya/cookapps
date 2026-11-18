@@ -3,7 +3,7 @@
 import { composing, partMatcher, tag } from "./dom.js";
 import { CHEVRON_SVG, CLOSE_SVG, FOLDER_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 const HOME_SVG = svgOf('<path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/>');
 const UP_FOLDER_SVG = svgOf('<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>');
@@ -232,7 +232,7 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
       added();
     } catch (e) {
       close();
-      showError(e);
+      showFailure("orca-browse", e);
     }
   };
 

@@ -180,6 +180,19 @@ export const textsOf = (selector: string) =>
 export const waitForText = (selector: string, text: string) =>
   browser.waitUntil(async () => (await textsOf(selector)).some((t) => t.includes(text)), { timeoutMsg: `${selector} never showed "${text}"` });
 
+// The failure cards at the bottom right (A-28, ts/error-card.ts): the text of the newest card is the first match of `CARD`, and `CARDS` matches every card.
+export const CARD = "#error-cards .error-card-text";
+export const CARDS = "#error-cards .error-card";
+
+// What the app wrote to its log (the arguments of `log_write`: `{ level, source, message }`), in the order written. A failure of a sync or a read is only here; a failure of something the user did is a card and a line here.
+export const logged = async () => (await callsOf("log_write")) as { level: string; source: string; message: string }[];
+
+// Waits until a line of the log holds `text`, and returns the line.
+export async function waitForLog(text: string) {
+  await browser.waitUntil(async () => (await logged()).some((l) => l.message.includes(text)), { timeoutMsg: `the log never got "${text}"` });
+  return (await logged()).find((l) => l.message.includes(text))!;
+}
+
 export const waitForCount = (selector: string, n: number) =>
   browser.waitUntil(async () => (await count(selector)) === n, { timeoutMsg: `expected ${n} of ${selector}` });
 

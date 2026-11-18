@@ -39,7 +39,8 @@ import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
-import { copyText, setNavCount, show, showError } from "./view.js";
+import { showFailure } from "./error-card.js";
+import { copyText, setNavCount, show } from "./view.js";
 
 // The name of each status icon (its `aria-label`).
 export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
@@ -1179,7 +1180,7 @@ function runPaneOp(op: PaneOp | null) {
     const now = tabsOf(key);
     return { ids: now.map((t) => t.id), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
   };
-  syncPanes(place, key, tabs, op, () => draw(), showError);
+  syncPanes(place, key, tabs, op, () => draw(), (e) => showFailure("orca", e));
 }
 
 // Asks for the layout when the project's tabs are not the ones it was asked for with (the first time, and each time a tab came or went); only a read that worked says what the tabs are.
@@ -1239,7 +1240,7 @@ async function closeTab(tab: Tab) {
   try {
     await invoke("orca_close", { handle: tab.handle!, environment: tab.environment });
   } catch (e) {
-    showError(e);
+    showFailure("orca", e);
     closing.delete(tab.id);
     draw();
     // The terminal may be gone from Orca already: the list is read again, and the tab leaves only if the read no longer holds it.
@@ -1320,7 +1321,7 @@ async function start(kind: StartKind, worktree: OrcaWorktree) {
     }
     reread(target);
   } catch (e) {
-    showError(e);
+    showFailure("orca", e);
   } finally {
     busy = false;
     draw();
@@ -1455,11 +1456,11 @@ function initSearch() {
 }
 
 export function initOrca() {
-  initOrcaTerminal(showError);
+  initOrcaTerminal((e) => showFailure("orca", e));
   initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
-  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
+  initOrcaEditor({ changed: draw, error: (e) => showFailure("orca", e), definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
   initLsp({ changed: ({ target, project }) => resolveServers(target, project) });
   initDefinition({ open: openPlace });
   initOrcaFiles({ open: (relative) => openFile(relative), diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,

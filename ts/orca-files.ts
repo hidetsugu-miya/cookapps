@@ -18,7 +18,8 @@ import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { syncLsp } from "./orca-lsp.js";
 import { toast } from "./toast.js";
-import { copyText, showError } from "./view.js";
+import { showFailure } from "./error-card.js";
+import { copyText } from "./view.js";
 
 // The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}"). `branch` is the git branch of the worktree, which the heading makes a button (A-25), null where it stays text (a worktree the list does not hold, or one on no branch); `project` is the key of the project of the worktree.
 export interface FilesContext {
@@ -370,7 +371,7 @@ async function submitCreate() {
     if (creating === field) creating = null;
     version++;
     draw();
-    showError(e);
+    showFailure("orca-files", e);
   }
 }
 
@@ -433,7 +434,7 @@ async function move(here: FilesContext, from: string, to: string, folder: boolea
       await invoke("orca_file_move", { path: here.path, from, to, environment: here.target });
     } catch (e) {
       release(null);
-      if (mine === generation) showError(e);
+      if (mine === generation) showFailure("orca-files", e);
       return;
     }
     release(to);
@@ -592,12 +593,12 @@ async function download(here: FilesContext, relative: string) {
     const name = await invoke("orca_file_download", { path: here.path, relative, environment: here.target });
     if (name !== null) toast(`${name} をダウンロードしました`);
   } catch (e) {
-    showError(e);
+    showFailure("orca-files", e);
   }
 }
 
 // Opens the HTML file in the default browser of this PC (A-31): Rust serves the worktree and hands the address to the system, so nothing is said when it works (the browser comes to the front).
-const openInBrowser = (here: FilesContext, relative: string) => invoke("orca_file_open_in_browser", { path: here.path, relative, environment: here.target }).catch(showError);
+const openInBrowser = (here: FilesContext, relative: string) => invoke("orca_file_open_in_browser", { path: here.path, relative, environment: here.target }).catch((e) => showFailure("orca-files", e));
 
 // Deletes the files and folders for good (Orca's `files.delete`, which skips the Trash) once the confirmation has been answered. What is gone leaves the editor and the tree: a folder's reads are dropped, and the folders they were in are read again, side by side. Where one entry fails Rust stops there, so what was deleted before it is drawn as gone and the message is shown. A worktree that is not the tree's any more only closes the tabs.
 async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
@@ -606,11 +607,11 @@ async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
   try {
     answer = await invoke("orca_files_delete", { path: here.path, entries, environment: here.target });
   } catch (e) {
-    if (mine === generation) showError(e);
+    if (mine === generation) showFailure("orca-files", e);
     return;
   }
   // The message comes first: closing a tab may show another worktree's tree, which is a new tree.
-  if (mine === generation && answer.error !== null) showError(answer.error);
+  if (mine === generation && answer.error !== null) showFailure("orca-files", answer.error);
   gone(here, answer.deleted);
   if (mine !== generation) return;
   for (const { relative, folder } of answer.deleted) {

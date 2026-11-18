@@ -5,7 +5,7 @@ import { applySync } from "./inbox.js";
 import { invoke } from "./ipc.js";
 import { recipientRows } from "./mail-recipients.js";
 import { createRichEditor } from "./rich-editor.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 type Mode = keyof ReplyChoices;
 
@@ -75,7 +75,7 @@ export function openReply() {
       syncSend();
       if (!$("mail-reply").hidden) editor.focus();
     },
-    (e) => showError(`エディターを読み込めませんでした: ${e}`),
+    (e) => showFailure("mail-reply", `エディターを読み込めませんでした: ${e}`),
   );
 }
 
@@ -136,7 +136,7 @@ async function send() {
     discard();
     await reload(sent);
   } catch (e) {
-    showError(e);
+    showFailure("mail-reply", e);
   } finally {
     sending = false;
     syncSend();

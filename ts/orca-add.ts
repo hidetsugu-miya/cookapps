@@ -5,7 +5,7 @@ import { FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { openBrowseDialog } from "./orca-browse.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // Opens the popup under `anchor`. `environments` are the saved environments to choose from (the target, when it is one), after this Mac in the select; `added` runs after a folder was added, to read the list again.
 export function openAddProject(anchor: Element, environments: string[], added: () => void) {
@@ -36,7 +36,7 @@ export function openAddProject(anchor: Element, environments: string[], added: (
       // Rust opens the folder dialog and adds the folder picked; a cancelled dialog answers false.
       if (await invoke("orca_project_add_here")) added();
     } catch (e) {
-      showError(e);
+      showFailure("orca-add", e);
     }
   };
 

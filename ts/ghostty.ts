@@ -6,7 +6,7 @@ import { code, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { applyTerminalSettings } from "./orca-terminal.js";
 import { itemRow } from "./settings.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // The import held, null before the first one.
 let current: GhosttyImport | null = null;
@@ -50,13 +50,12 @@ function render() {
 async function importConfig() {
   if (importing) return;
   importing = true;
-  $("error").hidden = true;
   render();
   try {
     current = await invoke("ghostty_import");
     applyTerminalSettings(current.settings);
   } catch (e) {
-    showError(e);
+    showFailure("ghostty", e);
   } finally {
     importing = false;
     render();
@@ -88,6 +87,6 @@ export function initGhostty() {
       applyTerminalSettings(saved?.settings ?? null);
       render();
     },
-    (e) => showError(e),
+    (e) => logError("ghostty", e),
   );
 }

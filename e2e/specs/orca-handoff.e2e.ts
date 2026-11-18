@@ -1,48 +1,6 @@
 import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
-import {
-  boot,
-  callsOf,
-  claudeReady,
-  claudeSettings,
-  composerLayout,
-  count,
-  fire,
-  formationEntry,
-  formationList,
-  handoffSummary,
-  heightOf,
-  holds,
-  huge,
-  image,
-  inbox,
-  listedChild,
-  mock,
-  note,
-  onceId,
-  orcaOverview,
-  orcaRow,
-  orcaWorktree,
-  PNG,
-  rejects,
-  release,
-  rowOf,
-  slackLoad,
-  sendStream,
-  sendTerm,
-  slackThread,
-  slackTs,
-  streamList,
-  textsOf,
-  threadDetail,
-  threadLoaded,
-  threadMessage,
-  timeline,
-  timelineMessage,
-  todoData,
-  waitForCalls,
-  waitForCount,
-} from "../support";
+import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, rowOf, slackLoad, sendStream, sendTerm, slackThread, slackTs, streamList, textsOf, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
 
 // A waiting, a working and a done agent (all have a terminal), and a working one with no terminal. The pane lists none of them (it hands over to a new session only), but the Orca screen does.
 const sample = () => [
@@ -503,7 +461,7 @@ describe("orca handoff", () => {
       await branchRow("origin/feat/d").click();
       await waitForCalls("orca_branch_used");
       expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["origin/feat/d"]);
-      await expect($("#error")).not.toBeDisplayed();
+      await expect($(CARDS)).not.toExist();
     });
 
     it("goes back to 既定 with the first row of the list", async () => {

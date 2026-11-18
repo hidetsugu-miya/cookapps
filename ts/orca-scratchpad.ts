@@ -2,7 +2,7 @@
 import { composing, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
-import { showError } from "./view.js";
+import { showFailure } from "./error-card.js";
 
 // What the field starts with: its text before the extension is selected, so that typing replaces the name and keeps the extension.
 const START_NAME = "memo.md";
@@ -42,7 +42,7 @@ export function openScratchpad(anchor: Element, place: { path: string; environme
       opened(file);
     } catch (e) {
       // A failure keeps the popover (when it is still open) with the text.
-      showError(e);
+      showFailure("orca-scratchpad", e);
       busy = false;
       make.disabled = false;
     }

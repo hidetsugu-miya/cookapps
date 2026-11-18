@@ -1,6 +1,7 @@
-// Which part of the window is shown, the error line, and the counts on the sidebar buttons (and their sum on the Dock).
+// Which part of the window is shown, and the counts on the sidebar buttons (and their sum on the Dock).
 import { $ } from "./dom.js";
 import { setFooterCount } from "./footer.js";
+import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { toast } from "./toast.js";
 
@@ -62,18 +63,13 @@ export function show(view: View) {
   $("main").scrollTop = view === "list" ? listScroll : 0;
 }
 
-export function showError(e: unknown) {
-  $("error").textContent = String(e);
-  $("error").hidden = false;
-}
-
-// Writes `text` to the clipboard and says `done`; false (with the error shown) when it is refused.
+// Writes `text` to the clipboard and says `done`; false (with the failure shown as a card) when it is refused.
 // Call it straight from the click: nothing may be awaited before writeText, or WKWebView refuses it.
 export async function copyText(text: string, done: string) {
   try {
     await navigator.clipboard.writeText(text);
   } catch (e) {
-    showError(e);
+    showFailure("clipboard", e);
     return false;
   }
   toast(done);

@@ -19,7 +19,8 @@ import { loadedComments } from "./todo-comments.js";
 import { editingField, projectName, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
-import { copyText, showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
+import { copyText } from "./view.js";
 
 const TODO_REFRESH_MS = 10 * 1000;
 
@@ -165,7 +166,7 @@ export async function loadTodo(quiet = false, withDone = true) {
     if (quiet && same && !todoState.undrawn) return false;
     renderTodo();
   } catch (e) {
-    showError(e);
+    logError("todo", e);
   }
   return false;
 }
@@ -366,11 +367,10 @@ export function initTodo() {
     const token = input.value;
     // The token is never shown: the field is emptied as soon as it is read.
     input.value = "";
-    $("error").hidden = true;
     try {
       await invoke("todoist_save_token", { token });
     } catch (err) {
-      return showError(err);
+      return showFailure("todo", err);
     }
     // Only a rejected token says so; a failed load (network, 5xx) shows its own error.
     if (await loadTodo()) showTokenForm("トークンを確認できませんでした。もう一度入力してください");

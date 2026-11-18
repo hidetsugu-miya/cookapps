@@ -3,44 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import {
-  boot,
-  callsOf,
-  chooseAppearance,
-  chooseOption,
-  chooseTheme,
-  copiedTexts,
-  count,
-  fire,
-  fontSettings,
-  ghosttyImport,
-  holds,
-  huge,
-  image,
-  inbox,
-  isoDate,
-  mock,
-  note,
-  onceId,
-  orcaRow,
-  orcaTerminal,
-  orcaWorktree,
-  PNG,
-  rejects,
-  release,
-  rowOf as threadRowOf,
-  sendStream,
-  sendTerm,
-  setClock,
-  setDark,
-  stubClipboard,
-  terminalThemes,
-  textsOf,
-  threadDetail,
-  timers,
-  waitForCalls,
-  waitForCount,
-} from "../support";
+import { boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -589,7 +552,7 @@ describe("orca", () => {
     const start = await mock("orca_start", rejects("Worktree not found"));
     await plus("example-app", CLAUDE);
     await waitForCalls(start);
-    await expect($("#error")).toHaveText("Worktree not found");
+    await expect($(CARD)).toHaveText("Worktree not found");
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
     await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
@@ -597,7 +560,7 @@ describe("orca", () => {
     await pressPlus();
     await pickItem(TERMINAL);
     await waitForCalls(create);
-    await expect($("#error")).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    await expect($(CARD)).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
@@ -1475,8 +1438,8 @@ describe("orca: projects", () => {
     await waitForCalls(close);
     // The list is read again after the failure.
     await waitForCalls(overview);
-    await expect($("#error")).toBeDisplayed();
-    await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
+    await expect($(CARDS)).toBeDisplayed();
+    await expect($(CARD)).toHaveText("Orca が時間内に応答しませんでした");
     expect(await tabTitles()).toHaveLength(2);
     // The button works again.
     await expect(tabOf("orca:term_example-app_zsh").$(".orca-tab-close")).toBeEnabled();
@@ -1577,7 +1540,7 @@ describe("orca: projects", () => {
       await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
       await browser.keys(["l"]);
       await waitForCalls(input);
-      await expect($("#error")).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
+      await expect($(CARD)).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
     });
   });
 });
@@ -1674,7 +1637,7 @@ describe("orca: a saved environment's stream", () => {
     await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
     await browser.keys(["y"]);
     await waitForCalls(input);
-    await expect($("#error")).toHaveText("接続先につながっていません");
+    await expect($(CARD)).toHaveText("接続先につながっていません");
   });
 
   // The OSC 52 request of a program (the ESC ] 52 ; target ; base64 BEL), as Claude Code makes it for what its mouse selection covers.
@@ -1779,7 +1742,7 @@ describe("orca: a saved environment's stream", () => {
     await browser.waitUntil(async () => (await refusals()) > 0, { timeoutMsg: "the write was never tried" });
     await sendMark("done");
     expect(await refusals()).toBe(1);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     expect(await copyEvent()).toEqual({ data: { "text/plain": "held text" }, taken: true });
     expect(await copyEvent()).toEqual({ data: {}, taken: false });
   });
@@ -2277,7 +2240,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const attach = await mock("orca_attach_file", attachedNote("example-app"));
     const input = await mock("orca_terminal_input", null);
     await fire("drop", area, [huge]);
-    await expect($("#error")).toHaveText("ファイルは 20 MiB までです");
+    await expect($(CARD)).toHaveText("ファイルは 20 MiB までです");
     expect(await callsOf(attach)).toEqual([]);
     expect(await callsOf(input)).toEqual([]);
   });
@@ -2288,7 +2251,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const input = await mock("orca_terminal_input", null);
     await fire("paste", shown, [image()]);
     await waitForCalls(attach);
-    await expect($("#error")).toHaveText("SSH の接続先の worktree にはファイルを添付できません");
+    await expect($(CARD)).toHaveText("SSH の接続先の worktree にはファイルを添付できません");
     expect(await callsOf(input)).toEqual([]);
   });
 
@@ -2464,7 +2427,7 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     const open = await mock("orca_open_url", rejects("開けるのは http か https の URL だけです"));
     await clickOn("hosts", { metaKey: true });
     expect(await waitForCalls(open)).toEqual([{ url: "file:///etc/hosts" }]);
-    await expect($("#error")).toHaveText("開けるのは http か https の URL だけです");
+    await expect($(CARD)).toHaveText("開けるのは http か https の URL だけです");
   });
 });
 
@@ -2849,7 +2812,7 @@ describe("orca: split panes (A-17)", () => {
   it("keeps working with one pane of all the tabs when Rust cannot answer, and shows the message", async () => {
     await openOrca(overview(), { orca_panes: rejects("orca-panes.json を書けません"), orca_terminal_read: ["$"] });
     await project("example-app").click();
-    await expect($("#error")).toHaveText("orca-panes.json を書けません");
+    await expect($(CARD)).toHaveText("orca-panes.json を書けません");
     await waitForCount(".orca-pane", 1);
     expect(await paneTabs("p1")).toEqual(["Write the docs", "zsh", "bash"]);
   });
@@ -2905,7 +2868,7 @@ describe("orca: split panes (A-17)", () => {
       await openStudioSplit();
       await mock("orca_panes", rejects("orca-panes.json を書けません"));
       await sendStream(streamList(sample(), worktrees(), [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash"), orcaTerminal("example-app", "fish")]));
-      await expect($("#error")).toHaveText("orca-panes.json を書けません");
+      await expect($(CARD)).toHaveText("orca-panes.json を書けません");
       await waitForCount(".orca-pane", 1);
       expect(await paneTabs("p1")).toEqual(["Write the docs", "zsh", "bash", "fish"]);
     });
@@ -3273,7 +3236,7 @@ describe("orca: scratchpad (A-29)", () => {
     await expect($(".orca-edit-area")).toHaveValue("a note\n", { trim: false });
     await expect(pop()).not.toExist();
     await expect(selectedTab()).toHaveText(expect.stringContaining("notes.md"));
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("makes the file with the target the screen shows when the button 「作って開く」 is pressed", async () => {
@@ -3297,7 +3260,7 @@ describe("orca: scratchpad (A-29)", () => {
     expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: ".orca/scratchpad/memo.md", environment: null }]);
     await expect($(".orca-edit-area")).toHaveValue("old memo\n", { trim: false });
     await expect(pop()).not.toExist();
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("closes on Escape, on 「やめる」 and on a press outside, and makes nothing", async () => {
@@ -3344,7 +3307,7 @@ describe("orca: scratchpad (A-29)", () => {
     await field().setValue("a/b.md");
     await browser.keys("Enter");
     await waitForCalls(create);
-    await expect($("#error")).toHaveText("名前が正しくありません");
+    await expect($(CARD)).toHaveText("名前が正しくありません");
     await expect(pop()).toBeDisplayed();
     await expect(field()).toHaveValue("a/b.md");
     await expect(primary()).toBeEnabled();
@@ -3765,7 +3728,7 @@ describe("orca: add a project (A-38)", () => {
     await expect(pop()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
     await waitForCount("#orca-feed .orca-project", 5);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("reads nothing again when the folder dialog is cancelled", async () => {
@@ -3779,10 +3742,10 @@ describe("orca: add a project (A-38)", () => {
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
     expect(await count("#orca-feed .orca-project")).toBe(4);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
-  it("shows the failure of the add in the error line and does not read the list again", async () => {
+  it("shows the failure of the add on a card and does not read the list again", async () => {
     await openOrca();
     await waitForCount("#orca-feed .orca-project", 4);
     const here = await mock(HERE, rejects("Orca が時間内に応答しませんでした"));
@@ -3790,7 +3753,7 @@ describe("orca: add a project (A-38)", () => {
     await press();
     await pick().click();
     await waitForCalls(here);
-    await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
+    await expect($(CARD)).toHaveText("Orca が時間内に応答しませんでした");
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
     expect(await count("#orca-feed .orca-project")).toBe(4);
@@ -3845,7 +3808,7 @@ describe("orca: add a project (A-38)", () => {
     await browser.pause(300);
     expect(await callsOf(here)).toEqual([]);
     expect(await callsOf(added)).toEqual([]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("goes into a folder on a press of its row, and back by up, the trail and home", async () => {
@@ -3990,7 +3953,7 @@ describe("orca: add a project (A-38)", () => {
     expect(await waitForCalls(added)).toEqual([{ path: "/home/dev/workspace", environment: "Studio" }]);
     await expect(dialog()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("adds the folder the keys are on, in place of the one shown", async () => {
@@ -4004,14 +3967,14 @@ describe("orca: add a project (A-38)", () => {
     await expect(dialog()).not.toExist();
   });
 
-  it("shows the failure of the add in the error line, and reads the list no more", async () => {
+  it("shows the failure of the add on a card, and reads the list no more", async () => {
     await openOnStudio();
     await openDialog();
     const added = await mock(ADD, rejects("そのフォルダは追加できません"));
     const read = await mock("orca_overview", orcaOverview(sample(), [...worktrees(), orcaWorktree("example-new", "main")], studio));
     await pickFolder().click();
     await waitForCalls(added);
-    await expect($("#error")).toHaveText("そのフォルダは追加できません");
+    await expect($(CARD)).toHaveText("そのフォルダは追加できません");
     await expect(dialog()).not.toExist();
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
@@ -4040,7 +4003,7 @@ describe("orca: add a project (A-38)", () => {
       expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-add");
     }
     expect(await callsOf(added)).toEqual([]);
-    await expect($("#error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("closes on Escape and adds nothing", async () => {

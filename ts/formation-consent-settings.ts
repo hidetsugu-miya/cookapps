@@ -5,7 +5,7 @@ import { $, tag } from "./dom.js";
 import { code, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
-import { showError } from "./view.js";
+import { logError, showFailure } from "./error-card.js";
 
 // The consents as last read, and the PCs whose revocation is on its way (it stops the server there, which takes a while).
 let consents: FormationConsent[] = [];
@@ -21,12 +21,11 @@ function row(c: FormationConsent) {
   revoke.onclick = async () => {
     if (revoking.has(c.environment)) return;
     revoking.add(c.environment);
-    $("error").hidden = true;
     draw();
     try {
       consents = await invoke("formation_consent_revoke", { environment: c.environment });
     } catch (e) {
-      showError(e);
+      showFailure("formation-consent-settings", e);
     }
     revoking.delete(c.environment);
     draw();
@@ -47,7 +46,7 @@ export function showConsentCard() {
       consents = list;
       draw();
     },
-    (e) => showError(e),
+    (e) => logError("formation-consent-settings", e),
   );
 }
 
