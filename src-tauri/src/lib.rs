@@ -9,7 +9,10 @@ pub mod database;
 mod disk_cache;
 pub mod fonts;
 pub mod formation;
+pub mod formation_assets;
+pub mod formation_page;
 pub mod formation_remote;
+pub mod formation_reply;
 pub mod formation_server;
 pub mod ghostty;
 pub mod gmail;
@@ -45,6 +48,7 @@ mod slack_mrkdwn;
 pub mod ssh;
 pub mod todoist;
 pub mod update;
+pub mod yomiyasu_gate;
 
 use std::{sync::Mutex, time::Duration};
 
@@ -446,6 +450,8 @@ pub fn run() {
             formation::formation_create,
             formation::formation_delete,
             formation::formation_close_child,
+            formation_page::formation_page_read,
+            formation_reply::formation_page_answer,
             formation_remote::formation_consents,
             formation_remote::formation_consent,
             formation_remote::formation_consent_revoke,
