@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.87.0
+
+A-42: Orca 画面のエディタで `.html` のファイル（大文字と小文字は区別しない）を開くと、アプリの中でプレビュー表示する（#979）。見出しの右端に、ソース（`<>`）とプレビュー（目のアイコン）を切り替えるボタンが出て、ファイルはプレビューで開く。プレビューのあいだは「再読み込み」のボタンが出て、押すとファイルを読み直す。プレビューに切り替える前に、保存待ちの編集を保存する（保存が通らないときはソースを出す）。保存したサーバーの worktree のファイルも、このマシンの worktree のファイルも、同じように見られる。
+
 ## v0.86.0
 
 D-9: the work pane of the database screen has a strip of tabs under its header (#970). The first tab, 「オブジェクト」, is always there and shows the tables of the database pressed last, as the tab 「テーブル」 did. Pressing a table in the tree or in the table list opens it in a tab of its own, or selects its tab when it is open, and each tab keeps the records, the structure and the tab of the table (レコード, 構造 or SQL) that was selected. A tab closes with its close button, and the tabs of a connection or a database close when the connection is disconnected or the tree of the database is closed. The tabs are kept in memory only.
