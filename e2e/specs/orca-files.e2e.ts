@@ -11,6 +11,7 @@ import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaGitChange } from "../../ts/bindings/OrcaGitChange";
 import type { OrcaGitMark } from "../../ts/bindings/OrcaGitMark";
+import type { OrcaGitWorktree } from "../../ts/bindings/OrcaGitWorktree";
 import type { OrcaLocalBranch } from "../../ts/bindings/OrcaLocalBranch";
 import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
@@ -3170,6 +3171,102 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
     expect(await count("#orca-files-title button")).toBe(0);
     expect(await callsOf("orca_local_branches")).toEqual([]);
+  });
+
+  // The git worktrees of example-app (`orca_git_worktrees`): its own folder, which Orca lists, and one under `.claude/worktrees/` that only git has.
+  const gitWorktree = (path: string, gitBranch: string, gitOnly: boolean): OrcaGitWorktree => ({ path, name: path.split("/").at(-1) ?? "", gitBranch, gitOnly });
+  const GIT_ONLY = "/work/example-app/.claude/worktrees/work";
+  const gitWorktrees = () => [gitWorktree("/work/example-app", "feat/a", false), gitWorktree(GIT_ONLY, "feat/w", true)];
+  const worktreeRows = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>('.orca-dest-pop .orca-branch-row[data-kind="worktree"]')].map((b) => [
+        b.dataset.name,
+        b.querySelector(".orca-wt-branch")?.textContent ?? null,
+        b.querySelector(".orca-wt-git")?.textContent ?? null,
+        b.getAttribute("aria-current"),
+        b.querySelector(".orca-branch-mark") !== null,
+      ]),
+    );
+  const worktreePick = (name: string) => $(`.orca-dest-pop .orca-branch-row[data-kind="worktree"][data-name="${name}"]`);
+
+  it("puts the git worktrees of the project at the top of the list, with the branch of each, the mark git on the one Orca's list lacks and the check on the one the pane shows (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: gitWorktrees() });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    expect(await callsOf("orca_git_worktrees")).toEqual([{ repo: "proj_example-app", environment: null }]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["worktree", "ローカル", "リモート"]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["2", "3", "2"]);
+    expect(await worktreeRows()).toEqual([
+      ["example-app", "feat/a", null, "true", true],
+      ["work", "feat/w", "git", "false", false],
+    ]);
+    // The section is the first in the list, and the heading stays as it was.
+    expect(await browser.execute(() => document.querySelector(".orca-dest-pop .orca-dest-section")?.querySelector(".orca-dest-name")?.textContent)).toBe("worktree");
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+    // The filter narrows the worktrees by the folder and the branch.
+    await $(".orca-dest-pop input").setValue("feat/w");
+    await browser.waitUntil(async () => JSON.stringify(await shownRows('.orca-dest-pop .orca-branch-row[data-kind="worktree"]')) === JSON.stringify(["workfeat/wgit"]), { timeoutMsg: "the worktree rows were never narrowed" });
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  it("draws no worktree section when the project has none (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    expect(await callsOf("orca_git_worktrees")).toEqual([{ repo: "proj_example-app", environment: null }]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
+  });
+
+  it("says why in the worktree section when the read failed, and keeps the branches (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: rejects("worktree の一覧を読めません") });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["worktree", "ローカル", "リモート"]);
+    expect(await textsOf(".orca-dest-pop .empty.fail")).toEqual(["worktree の一覧を読めません"]);
+  });
+
+  it("shows the worktree picked in the file pane: its files are read with its path, and the heading is its own (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: gitWorktrees() });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    const files = await mock("orca_files_list", root());
+    await worktreePick("work").click();
+    await expect($(".orca-dest-pop")).not.toExist();
+    expect(await waitForCalls(files)).toEqual([{ path: GIT_ONLY, dir: "", ignored: false, environment: null }]);
+    await expect($("#orca-files-title")).toHaveText("example-app ・ work ・ feat/w");
+    await expect(branchButton()).toHaveText("feat/w");
+    // The tabs of the work pane stay, and nothing was switched.
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    // The list of the worktree that is shown has the check on it, and the branches are the ones of that worktree.
+    await mock("orca_local_branches", [local("feat/w", { current: true }), local("main")]);
+    await branchButton().click();
+    await waitForCount('.orca-dest-pop .orca-branch-row[data-kind="local"]', 2);
+    expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }, { path: GIT_ONLY, environment: null }]);
+    expect(await worktreeRows()).toEqual([
+      ["example-app", "feat/a", null, "false", false],
+      ["work", "feat/w", "git", "true", true],
+    ]);
+  });
+
+  it("keeps the picked worktree for the files opened in it, and goes back to the worktree of the tab when another tab is selected (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: gitWorktrees() });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    await worktreePick("work").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ work ・ feat/w");
+    await openA();
+    // The file is read in the picked worktree, and its tab keeps the pane on it.
+    expect(await callsOf("orca_file_read")).toEqual([{ path: GIT_ONLY, relative: "a.rs", environment: null }]);
+    await expect($("#orca-files-title")).toHaveText("example-app ・ work ・ feat/w");
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+  });
+
+  it("only closes the list when the worktree the pane shows is pressed (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: gitWorktrees() });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    const files = await mock("orca_files_list", root());
+    await worktreePick("example-app").click();
+    await expect($(".orca-dest-pop")).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(files)).toEqual([]);
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
   });
 
   it("switches to a remote branch with its name as Orca lists it (A-25)", async () => {

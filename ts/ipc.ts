@@ -71,6 +71,7 @@ import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import type { OrcaGitChange } from "./bindings/OrcaGitChange";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
+import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import type { OrcaLocalBranch } from "./bindings/OrcaLocalBranch";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
@@ -452,6 +453,8 @@ export interface Commands {
   orca_commit_files: { args: { path: string; commitId: string; environment: string | null }; result: OrcaCommitFiles };
   // A-27: the diff of the file `relative` in the commit `commitId` from `parentId` (none for the first commit), as the diff tab draws it (`oldRelative`: where a renamed file came from).
   orca_commit_file_diff: { args: { path: string; commitId: string; parentId: string | null; relative: string; oldRelative: string | null; environment: string | null }; result: OrcaFileDiff };
+  // A-25: the git worktrees of the project `repo` (`OrcaProject.key`): the ones Orca lists and, marked `gitOnly`, the ones only git has (Orca hides `.claude/worktrees/`). The file calls accept the path of a `gitOnly` one for a while after this.
+  orca_git_worktrees: { args: { repo: string; environment: string | null }; result: OrcaGitWorktree[] };
   // A-25: the local branches of the worktree at `path`, the current one first, each with whether another worktree has it checked out.
   orca_local_branches: { args: { path: string; environment: string | null }; result: OrcaLocalBranch[] };
   // A-25: the remote branches (at most 50) whose names hold `query`, of the project `repo` (`OrcaProject.key`) of the worktree at `path`. With an empty `query` the ones picked before come first, the newest first.

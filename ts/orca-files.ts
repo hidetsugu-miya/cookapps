@@ -8,6 +8,7 @@ import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import type { OrcaGitChange } from "./bindings/OrcaGitChange";
 import type { OrcaGitMark } from "./bindings/OrcaGitMark";
+import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete, confirmDeleteMany } from "./hint.js";
 import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG, SERVER_SVG } from "./icons.js";
@@ -83,7 +84,9 @@ const DRAG_OPEN_MS = 600;
 let redrawing = false;
 let openFile: (relative: string) => void = () => {};
 let openDiff: (relative: string) => void = () => {};
-let branchSwitched: () => void = () => {};
+let branchSwitched: (here: FilesContext, branch: string) => void = () => {};
+// Told that a worktree was picked in the list of branches (A-25): the screen shows it in this pane.
+let worktreePicked: (here: FilesContext, worktree: OrcaGitWorktree) => void = () => {};
 // Told that the list of Orca shows another branch for the worktree than the pane knew (a switch made outside the app): the tabs of its files are read again.
 let branchMoved: () => void = () => {};
 // The branch the app itself just switched the worktree to: the tree and the history were read for it then, so the list that shows it starts no second read.
@@ -810,12 +813,17 @@ function rows(dir: string, depth: number): HTMLElement[] {
 function openBranches(anchor: Element) {
   const here = context;
   if (here === null || here.branch === null) return;
-  openBranchDialog(anchor, { target: here.target, path: here.path, repo: here.project, branch: here.branch }, (branch) => {
-    switchedTo = branch;
-    void reload();
-    reloadHistory();
-    branchSwitched();
-  });
+  openBranchDialog(
+    anchor,
+    { target: here.target, path: here.path, repo: here.project, branch: here.branch },
+    (branch) => {
+      switchedTo = branch;
+      void reload();
+      reloadHistory();
+      branchSwitched(here, branch);
+    },
+    (worktree) => worktreePicked(here, worktree),
+  );
 }
 
 // Draws the heading: the name, and the git branch as a button when it has one. The branch is the end of the name when Orca's name of the worktree is the branch, else it follows the name.
@@ -892,10 +900,11 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: (here: FilesContext, branch: string) => void; picked: (here: FilesContext, worktree: OrcaGitWorktree) => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
+  worktreePicked = on.picked;
   branchMoved = on.moved;
   gone = on.deleted;
   hold = on.moving;

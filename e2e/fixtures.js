@@ -95,6 +95,8 @@ const answers = {
   orca_files_changes: [],
   // A-25: the pick of a remote branch is remembered by Rust; a spec that checks it, or its failure, mocks `orca_branch_used`.
   orca_branch_used: null,
+  // A-25: the git worktrees of the list of branches; none by default, so the list draws no worktree section.
+  orca_git_worktrees: [],
   // A-20: the fonts of the screens are read at the start (the first values), and this Mac has three families; a spec that presses a select mocks `font_settings_set`.
   font_settings: {
     app: { family: null, size: 14, ghostty: false },

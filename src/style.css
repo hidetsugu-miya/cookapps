@@ -1338,6 +1338,10 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-pop .orca-branch-row:disabled:hover { background: transparent; }
 .orca-dest-pop .orca-branch-mark { flex: none; display: flex; color: var(--accent); }
 .orca-branch-mark svg { width: 14px; height: 14px; }
+/* The rows of the git worktrees at the top of the list of branches (A-25): the branch it is on, a `git` chip for one that Orca's list lacks, and the check mark of the one the pane shows. */
+.orca-dest-pop .orca-wt-tail { flex: none; display: flex; align-items: center; gap: 6px; max-width: 60%; }
+.orca-dest-pop .orca-wt-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.orca-dest-pop .orca-wt-git { flex: none; }
 /* The headings of the list of branches (A-25) stay at the top of the list while its rows scroll; each is inside its own section, so the next one takes its place. */
 .orca-dest-section + .orca-dest-section { margin-top: 6px; }
 .orca-dest-sec { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; margin: 0; padding: 4px 10px; border-radius: 6px; background: var(--soft); color: var(--accent-text); font-size: calc(13px * var(--fs)); font-weight: 700; }

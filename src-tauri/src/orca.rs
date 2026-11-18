@@ -32,6 +32,8 @@ pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKTREE_LIMIT: &str = "200";
 /// How long a worktree confirmed against the target's list is believed without asking the CLI again (A-18).
 const HOST_TTL: Duration = Duration::from_secs(60);
+/// How long a git worktree that Orca's list lacks (A-25) stays accepted after the last call that used it: each use renews it, so the file pane keeps reading it while it is shown.
+const GIT_TTL: Duration = Duration::from_secs(30 * 60);
 /// How long the launch that follows `create_worktree` may rely on its checks (A-9).
 const MADE_TTL: Duration = Duration::from_secs(60);
 /// Characters of a post (a send or the first prompt of a launch).
@@ -728,7 +730,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
 }
 
 /// The git branch of a worktree of `orca worktree ps`: its `branch` (`refs/heads/{name}`) without the prefix; empty for a detached HEAD, a missing `branch` or a ref that is not a local branch.
-fn git_branch_of(worktree: &Value) -> String {
+pub(crate) fn git_branch_of(worktree: &Value) -> String {
     text_of(worktree, "branch")
         .and_then(|b| b.strip_prefix("refs/heads/"))
         .unwrap_or_default()
@@ -1449,6 +1451,7 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
             }
         };
         worktree_hosts().retain_environments(&environments);
+        git_worktrees().retain_environments(&environments);
         match resolve_target(&saved, &environments) {
             Ok(target) => (target, environments, true, Some(early)),
             Err(message) => return failed_overview(message, saved_name(&saved), environments),
@@ -1780,8 +1783,99 @@ fn worktree_confirmation(
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     let ps = ps.map_err(message_of)?;
-    check_worktree(&worktrees_of(&ps), path)?;
-    confirmed_of(&ps, path).ok_or_else(|| "Orca が worktree のホストを答えませんでした".into())
+    confirm_in(&ps, &mut git_worktrees(), environment, path, Instant::now())
+}
+
+/// The `hostId` and the project key of the worktree at `path`: of Orca's list `ps` when it holds the path, else of the git worktrees of A-25 that the list of branches read for the target (`git`), else the refusal of a path that is in neither.
+fn confirm_in(
+    ps: &Value,
+    git: &mut GitWorktrees,
+    environment: Option<&str>,
+    path: &str,
+    now: Instant,
+) -> Result<(String, String), String> {
+    if let Err(refusal) = check_worktree(&worktrees_of(ps), path) {
+        return git.touch(environment, path, now).ok_or(refusal);
+    }
+    confirmed_of(ps, path).ok_or_else(|| "Orca が worktree のホストを答えませんでした".into())
+}
+
+/// The git worktrees of a repository that Orca's list lacks (`worktree.detectedList` finds them, A-25), which the file pane may show: the file calls accept their path as they accept a path of the list. An entry is for one path of one target, holds the `hostId` and the project key Orca named, is believed for `GIT_TTL` after its last use, and leaves when the environment is no longer a saved one.
+#[derive(Default)]
+pub(crate) struct GitWorktrees {
+    entries: HashMap<(Option<String>, String), (String, String, Instant)>,
+}
+
+impl GitWorktrees {
+    fn put(
+        &mut self,
+        environment: Option<&str>,
+        path: &str,
+        host_id: &str,
+        project: &str,
+        now: Instant,
+    ) {
+        self.entries.insert(
+            WorktreeHosts::key(environment, path),
+            (host_id.to_owned(), project.to_owned(), now),
+        );
+    }
+
+    /// The `hostId` and the project of `path` of the target when it is held and not older than `GIT_TTL`; the use renews it.
+    fn touch(
+        &mut self,
+        environment: Option<&str>,
+        path: &str,
+        now: Instant,
+    ) -> Option<(String, String)> {
+        let entry = self
+            .entries
+            .get_mut(&WorktreeHosts::key(environment, path))?;
+        if now.saturating_duration_since(entry.2) >= GIT_TTL {
+            self.entries.remove(&WorktreeHosts::key(environment, path));
+            return None;
+        }
+        entry.2 = now;
+        Some((entry.0.clone(), entry.1.clone()))
+    }
+
+    fn retain_environments(&mut self, saved: &[String]) {
+        self.entries
+            .retain(|(env, _), _| env.as_ref().is_none_or(|name| saved.contains(name)));
+    }
+}
+
+fn git_worktrees() -> std::sync::MutexGuard<'static, GitWorktrees> {
+    static GIT: OnceLock<Mutex<GitWorktrees>> = OnceLock::new();
+    GIT.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Holds a git worktree that the list of branches read (A-25), so that the file calls accept its path.
+pub(crate) fn remember_git_worktree(
+    environment: Option<&str>,
+    path: &str,
+    host_id: &str,
+    project: &str,
+) {
+    git_worktrees().put(environment, path, host_id, project, Instant::now());
+}
+
+/// The paths of the worktrees of Orca's list of the target that belong to `project` (`OrcaProject::key`), read just now; the project must be one of the list. These are the worktrees that Orca shows, as against the ones git alone has (A-25).
+pub(crate) fn listed_paths_of_project(
+    project: &str,
+    environment: Option<&str>,
+) -> Result<Vec<String>, String> {
+    check_listed(environment)?;
+    let (ps, _) = read_lists(environment, false);
+    let ps = ps.map_err(message_of)?;
+    check_project(&ps, project)?;
+    Ok(worktrees_of(&ps)
+        .into_iter()
+        .filter(|w| w.project_key == project)
+        .map(|w| w.path)
+        .collect())
 }
 
 /// The worktrees that were confirmed to be in a target's list, with their `hostId` and project key, so that the files of A-18 do not start `orca worktree ps` at every read of a folder.
@@ -3453,6 +3547,64 @@ mod tests {
             hosts.get(None, "/work/b", t0).map(|c| c.0).as_deref(),
             Some("ssh:lab")
         );
+    }
+
+    #[test]
+    fn a_git_worktree_is_accepted_until_it_is_not_used_for_a_while_and_each_use_renews_it() {
+        let t0 = Instant::now();
+        let mut git = GitWorktrees::default();
+        git.put(None, "/work/g", "local", "repo", t0);
+        let near = t0 + GIT_TTL - Duration::from_secs(1);
+        assert_eq!(
+            git.touch(None, "/work/g", near),
+            Some(("local".to_owned(), "repo".to_owned()))
+        );
+        // The use at `near` renewed it.
+        assert!(git
+            .touch(None, "/work/g", near + GIT_TTL - Duration::from_secs(1))
+            .is_some());
+        let mut git = GitWorktrees::default();
+        git.put(None, "/work/g", "local", "repo", t0);
+        assert_eq!(git.touch(None, "/work/g", t0 + GIT_TTL), None);
+        // Once it expired it is gone, and the target and the path are compared exactly.
+        assert_eq!(git.touch(None, "/work/g", t0), None);
+        git.put(None, "/work/g", "local", "repo", t0);
+        assert_eq!(git.touch(Some("Studio"), "/work/g", t0), None);
+        assert_eq!(git.touch(None, "/work/g/", t0), None);
+    }
+
+    #[test]
+    fn a_git_worktree_of_an_environment_that_is_no_longer_saved_is_dropped() {
+        let t0 = Instant::now();
+        let mut git = GitWorktrees::default();
+        git.put(None, "/work/g", "local", "repo", t0);
+        git.put(Some("Studio"), "/work/g", "env-1", "repo", t0);
+        git.put(Some("Lab"), "/work/g", "env-2", "repo", t0);
+        git.retain_environments(&["Studio".to_owned()]);
+        assert!(git.touch(None, "/work/g", t0).is_some());
+        assert!(git.touch(Some("Studio"), "/work/g", t0).is_some());
+        assert_eq!(git.touch(Some("Lab"), "/work/g", t0), None);
+    }
+
+    #[test]
+    fn the_list_comes_first_and_a_git_worktree_stands_in_for_a_path_it_lacks() {
+        let t0 = Instant::now();
+        let ps = json!({"worktrees": [
+            {"path": "/work/a", "hostId": "local", "repoId": "repo-1"}
+        ]});
+        let mut git = GitWorktrees::default();
+        git.put(None, "/work/g", "local", "repo-1", t0);
+        git.put(None, "/work/a", "other", "other", t0);
+        assert_eq!(
+            confirm_in(&ps, &mut git, None, "/work/a", t0),
+            Ok(("local".to_owned(), "repo-1".to_owned()))
+        );
+        assert_eq!(
+            confirm_in(&ps, &mut git, None, "/work/g", t0),
+            Ok(("local".to_owned(), "repo-1".to_owned()))
+        );
+        assert!(confirm_in(&ps, &mut git, None, "/work/none", t0).is_err());
+        assert!(confirm_in(&ps, &mut git, Some("Studio"), "/work/g", t0).is_err());
     }
 
     #[test]

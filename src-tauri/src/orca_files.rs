@@ -37,7 +37,10 @@ use ts_rs::TS;
 use crate::{
     accounts::write_atomic,
     auth::config_dir,
-    orca::{forget_worktree_host, worktree_host, worktree_host_cached},
+    orca::{
+        forget_worktree_host, git_branch_of, listed_paths_of_project, remember_git_worktree,
+        text_of, worktree_host, worktree_host_cached,
+    },
     orca_attach::{worktree_params, Rpc},
     orca_diff::{diff_rows, lines_of, OrcaDiffChange, OrcaDiffRow},
     orca_icon::file_icon,
@@ -83,6 +86,7 @@ pub(crate) const NOT_FOUND: &str = "ファイルが見つかりません";
 pub(crate) const NOT_UTF8: &str = "UTF-8 ではないファイルは開けません";
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 const NOT_BRANCHES: &str = "ブランチの一覧を読めません";
+const NOT_WORKTREES: &str = "worktree の一覧を読めません";
 const NOT_SWITCHED: &str = "ブランチを切り替えた結果を読めません";
 const UPDATE_ORCA: &str =
     "この Orca は、ブランチの切り替えに対応していません。Orca を更新してください";
@@ -215,6 +219,20 @@ pub struct OrcaLocalBranch {
 pub struct OrcaRemoteBranch {
     pub name: String,
     pub local_name: String,
+}
+
+/// A git worktree of a repository, for the worktree section of the list of branches (A-25). `git_only` marks one that Orca's own list lacks: it is a worktree of git that Orca hides (such as one under `.claude/worktrees/`) or does not know.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaGitWorktree {
+    pub path: String,
+    /// The name of its folder.
+    pub name: String,
+    /// The git branch it is on (without `refs/heads/`; empty for a detached HEAD).
+    pub git_branch: String,
+    pub git_only: bool,
 }
 
 /// A switch that landed: the branch the worktree is on now, and Orca's `warning` when the switch worked but a step after it did not (a hook that failed, a file another program holds open).
@@ -1474,6 +1492,63 @@ pub(crate) async fn remote_branches(
     parse_remote_branches(&answer)
 }
 
+/// A worktree of `worktree.detectedList` with the `hostId` Orca named for it, which the file calls need (the worktree of a repository of this machine is `local`).
+#[derive(Debug, PartialEq)]
+struct DetectedWorktree {
+    worktree: OrcaGitWorktree,
+    host_id: String,
+}
+
+/// The name of the folder of `path`: its last part, without a trailing `/`.
+fn folder_name(path: &str) -> &str {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+}
+
+/// The worktrees of an answer of `worktree.detectedList` (`{worktrees: [{path, branch, hostId, isBare}]}`), in Orca's order. A worktree with no path, a bare one and one on an SSH host are left out. `git_only` is true for the path that `listed` (the paths of Orca's own list for the repository) lacks.
+fn parse_git_worktrees(result: &Value, listed: &[String]) -> Result<Vec<DetectedWorktree>, String> {
+    let list = result["worktrees"].as_array().ok_or(NOT_WORKTREES)?;
+    Ok(list
+        .iter()
+        .filter(|w| w["isBare"] != true)
+        .filter_map(|w| {
+            let path = text_of(w, "path")?.trim_end_matches('/');
+            let host_id = text_of(w, "hostId").unwrap_or("local");
+            if path.is_empty() || host_id.starts_with("ssh:") {
+                return None;
+            }
+            Some(DetectedWorktree {
+                worktree: OrcaGitWorktree {
+                    path: path.to_owned(),
+                    name: folder_name(path).to_owned(),
+                    git_branch: git_branch_of(w),
+                    git_only: !listed.iter().any(|l| l.trim_end_matches('/') == path),
+                },
+                host_id: host_id.to_owned(),
+            })
+        })
+        .collect())
+}
+
+/// The arguments of `worktree.detectedList`: the repository by its id (`id:`, so that a name or a path never matches).
+fn detected_params(repo: &str) -> Value {
+    json!({"repo": format!("id:{repo}")})
+}
+
+async fn git_worktrees(
+    rpc: &mut impl Rpc,
+    repo: &str,
+    listed: &[String],
+) -> Result<Vec<DetectedWorktree>, String> {
+    let answer = rpc
+        .call("worktree.detectedList", detected_params(repo))
+        .await
+        .map_err(branch_reason)?;
+    parse_git_worktrees(&answer, listed)
+}
+
 /// The id of a repository (`OrcaProject::key`) that Orca may be asked for: not blank, not an SSH host's (`ssh:`), no control character, and not longer than `MAX_REPO`.
 fn check_repo(repo: &str) -> Result<(), String> {
     if repo.is_empty()
@@ -2077,6 +2152,33 @@ pub async fn orca_local_branches(
         local_branches(&mut connection, &path).await
     };
     forgetting(asked.await, &path, environment.as_deref())
+}
+
+/// The git worktrees of the repository `repo` (`OrcaProject::key`) of the target, for the worktree section of the list of branches (A-25): those of Orca's list and those of git that Orca's list lacks (`git_only`). The repository must be one of the target's list, read just now. The ones git alone has are held for a while, so that the file calls of the pane accept their path (`remember_git_worktree`).
+#[tauri::command]
+pub async fn orca_git_worktrees(
+    repo: String,
+    environment: Option<String>,
+) -> Result<Vec<OrcaGitWorktree>, String> {
+    check_repo(&repo)?;
+    check_environment(environment.as_deref())?;
+    let (asked_repo, asked_environment) = (repo.clone(), environment.clone());
+    let listed = tokio::task::spawn_blocking(move || {
+        listed_paths_of_project(&asked_repo, asked_environment.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let mut connection = Connection::open(environment.clone()).await?;
+    let found = git_worktrees(&mut connection, &repo, &listed).await?;
+    for one in found.iter().filter(|d| d.worktree.git_only) {
+        remember_git_worktree(
+            environment.as_deref(),
+            &one.worktree.path,
+            &one.host_id,
+            &repo,
+        );
+    }
+    Ok(found.into_iter().map(|d| d.worktree).collect())
 }
 
 /// The remote branches whose names hold `query`, at most 50, of the repository `repo` (`OrcaProject::key`) of the worktree at `path`. The worktree must be one of the target's list, as for the list, and `repo` its project.
@@ -3464,6 +3566,94 @@ mod tests {
         for bad in ["a\nb", "a\0b", &"a".repeat(MAX_QUERY + 1)] {
             assert!(check_query(bad).is_err(), "{bad:?}");
         }
+    }
+
+    fn detected_answer() -> Value {
+        json!({
+            "repoId": "repo-1",
+            "authoritative": true,
+            "worktrees": [
+                {"path": "/work/app", "branch": "refs/heads/main", "hostId": "local", "isMainWorktree": true},
+                {"path": "/work/app/.claude/worktrees/work/", "branch": "refs/heads/feat/a", "hostId": "local"},
+                {"path": "/work/app/.claude/worktrees/old", "hostId": "local"},
+                {"path": "/work/app/bare", "branch": "refs/heads/x", "isBare": true},
+                {"path": "/remote/app", "branch": "refs/heads/main", "hostId": "ssh:lab"},
+                {"branch": "refs/heads/nopath"},
+                {"path": "/work/app/odd", "branch": "refs/remotes/origin/x"}
+            ]
+        })
+    }
+
+    #[test]
+    fn the_git_worktrees_that_orcas_list_lacks_are_marked() {
+        let listed = vec!["/work/app".to_owned(), "/work/odd".to_owned()];
+        let found = parse_git_worktrees(&detected_answer(), &listed).unwrap();
+        let shown: Vec<_> = found
+            .iter()
+            .map(|d| {
+                (
+                    d.worktree.name.as_str(),
+                    d.worktree.git_branch.as_str(),
+                    d.worktree.git_only,
+                    d.host_id.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("app", "main", false, "local"),
+                ("work", "feat/a", true, "local"),
+                ("old", "", true, "local"),
+                ("odd", "", true, "local"),
+            ]
+        );
+        // The trailing `/` of a path is dropped, so that it matches the list's.
+        assert_eq!(found[1].worktree.path, "/work/app/.claude/worktrees/work");
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_make_a_listed_worktree_git_only() {
+        let listed = vec!["/work/app/.claude/worktrees/work/".to_owned()];
+        let found = parse_git_worktrees(&detected_answer(), &listed).unwrap();
+        assert!(!found[1].worktree.git_only);
+        assert!(found[0].worktree.git_only);
+    }
+
+    #[test]
+    fn an_answer_with_no_worktrees_is_refused_and_an_empty_one_is_empty() {
+        assert_eq!(
+            parse_git_worktrees(&json!({}), &[]).unwrap_err(),
+            NOT_WORKTREES
+        );
+        assert!(parse_git_worktrees(&json!({"worktrees": []}), &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_git_worktrees_are_asked_of_the_repository_by_its_id() {
+        let mut orca = fake(vec![("worktree.detectedList", Ok(detected_answer()))]);
+        let found = git_worktrees(&mut orca, "repo-1", &[]).await.unwrap();
+        assert_eq!(found.len(), 4);
+        assert_eq!(
+            orca.calls,
+            [(
+                "worktree.detectedList".to_owned(),
+                json!({"repo": "id:repo-1"})
+            )]
+        );
+        let mut orca = fake(vec![(
+            "worktree.detectedList",
+            Err((
+                "Orca がエラーを返しました（repo_not_found）",
+                "repo_not_found",
+            )),
+        )]);
+        assert_eq!(
+            git_worktrees(&mut orca, "gone", &[]).await.unwrap_err(),
+            "プロジェクトが見つかりません"
+        );
     }
 
     #[test]
