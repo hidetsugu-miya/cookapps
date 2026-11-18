@@ -215,8 +215,10 @@ describe("footer", () => {
         await mock("slack_timeline", timeline([], { refreshSecs: 1 }));
         await waitForText("#footer-bell .footer-count", "1");
         await expect($("#unread-pane")).toBeDisplayed();
-        // The mail is read on the list: the count reaches 0.
+        // The mail is read on the list: the count reaches 0. set_read answers, or the row goes back and so does the count.
+        const setRead = await mock("set_read", true);
         await browser.execute(() => document.querySelector<HTMLInputElement>("#unread-threads .read-box")!.click());
+        expect(await waitForCalls(setRead)).toEqual([{ account, id: "t1", read: true }]);
         await expect($("#unread-pane")).not.toBeDisplayed();
       });
 
