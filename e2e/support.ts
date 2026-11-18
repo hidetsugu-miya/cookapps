@@ -762,7 +762,7 @@ function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaT
 export const formationChild = (name: string, state: FormationState, extra: Partial<FormationChild> & { minutes?: number } = {}): FormationChild => {
   const { minutes = 2, ...rest } = extra;
   const planned = state === "planned";
-  return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", created: true, ...rest };
+  return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", agent: "claude", created: true, ...rest };
 };
 
 // A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca; `extra` gives those of a saved environment, with its `environment`), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state; `waiting: true` in `extra` is a leader that waits for input (#915).

@@ -1172,6 +1172,7 @@ mod tests {
             name: name.to_owned(),
             repo: "repo".to_owned(),
             environment: "pc".to_owned(),
+            agent: formation::FormationAgent::Claude,
             launch: None,
         }
     }

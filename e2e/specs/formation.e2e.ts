@@ -659,6 +659,13 @@ describe("orchestration mode: the view of the flow", () => {
     expect(head.bottom).toBeLessThanOrEqual(term.top + 1);
   });
 
+  it("marks a Codex child by its agent in its tab, where a Claude Code child has its effort, and on its card", async () => {
+    await openSession([formationChild("api-update", "working"), formationChild("review-codex", "working", { agent: "codex" })]);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-effort")).toEqual(["medium", "codex"]);
+    expect(await textsOf("#formation-flow-list .formation-card-agent")).toEqual(["codex"]);
+    expect(await textsOf("#formation-flow-list .formation-card-name")).toEqual(["api-update", "review-codex"]);
+  });
+
   it("draws a planned child's tab dashed and not pressed, and a done child's with a ✓ and a ×", async () => {
     await openSession([formationChild("a-update", "planned"), formationChild("b-update", "done"), formationChild("c-update", "done", { handle: null })]);
     const planned = '#formation-tabs-mates .formation-tab[data-state="planned"]';

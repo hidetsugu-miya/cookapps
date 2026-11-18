@@ -1074,7 +1074,7 @@ button.formation-card { cursor: pointer; }
 .formation-card-row + .formation-card-row { justify-content: flex-start; gap: 6px; }
 .formation-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); font-weight: 700; }
 .formation-card[data-state="planned"] .formation-card-name { color: var(--muted); font-weight: 600; }
-.formation-card-role { flex: none; padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); font-size: calc(10.5px * var(--fs)); line-height: 17px; }
+.formation-card-role, .formation-card-agent { flex: none; padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); font-size: calc(10.5px * var(--fs)); line-height: 17px; }
 .formation-card-time { flex: none; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: calc(11px * var(--fs)); }
 .formation-card-state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: calc(11px * var(--fs)); font-weight: 700; white-space: nowrap; }
 .formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }

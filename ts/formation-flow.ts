@@ -279,6 +279,7 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   const row = span("formation-card-row", "");
   const name = span("formation-card-name", c.name);
   row.append(name);
+  if (c.agent === "codex") row.append(span("formation-card-agent", c.agent));
   const time = planned ? "" : elapsed(c.atMs, now, c.state === "done");
   if (time !== "") row.append(tag("time", "formation-card-time", time));
   const line = span("formation-card-row", "");
@@ -319,7 +320,8 @@ function tab(c: FormationChild): HTMLSpanElement {
   const mark = span("formation-tab-mark", MARKS[c.state]);
   mark.setAttribute("aria-hidden", "true");
   const name = span("formation-tab-name", c.name);
-  const label = [mark, name, span("formation-tab-effort", EFFORT)];
+  // A Codex child has no effort: its chip names the agent instead.
+  const label = [mark, name, span("formation-tab-effort", c.agent === "codex" ? c.agent : EFFORT)];
   if (c.handle !== null) {
     const main = tag("button", "formation-tab-main");
     main.type = "button";
@@ -342,7 +344,7 @@ function tab(c: FormationChild): HTMLSpanElement {
 // The tabs of the children, drawn again in place only when what they show changed; the leader's tab is always there.
 function drawTabs() {
   $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null));
-  const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.handle !== null])]);
+  const key = JSON.stringify([selected, [...closing], children.map((c) => [c.name, c.state, c.handle !== null, c.agent])]);
   if (key === tabsKey) return;
   tabsKey = key;
   const box = $("formation-tabs-mates");

@@ -71,7 +71,7 @@ const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
 const STEP_PLUGIN: &str = "プラグインの書き出し";
-const STEP_IDLE: &str = "claude の立ち上がり待ち";
+const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
@@ -175,6 +175,17 @@ pub fn migrate_legacy(config: &Path) -> Result<(), String> {
 
 // ---- the record ----
 
+/// The agent that runs a child: Claude Code (the default) or Codex (A-41). SendMessage reaches only a Claude Code, so a Codex child hands its result over in a file (`formation_claude.md`).
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "lowercase")]
+pub enum FormationAgent {
+    #[default]
+    Claude,
+    Codex,
+}
+
 /// One child of the orchestrator, in the order it was planned or launched, as `formations/{name}/children.json` holds it (`{"children": [...]}`, camelCase).
 /// A planned child has only `name`, `repo` and `environment`; a launched one also has the fields of `Launch`, so it is told apart by `launch` (in the JSON: by the `handle`).
 /// Launching a planned child replaces its entry in place.
@@ -187,6 +198,9 @@ pub struct Child {
     /// The Orca it runs in: `local` (this Mac) or a saved environment's name. An entry written before the environment was kept has none, and is this Mac's.
     #[serde(default = "local_environment")]
     pub environment: String,
+    /// The agent it runs (`claude` or `codex`). An entry written before the field was kept has none, and is a Claude Code.
+    #[serde(default)]
+    pub agent: FormationAgent,
     #[serde(flatten)]
     pub launch: Option<Launch>,
 }
@@ -324,6 +338,9 @@ pub struct PlannedChild {
     pub environment: String,
     /// The repository: its name in `orca repo list` of that environment.
     pub repo: String,
+    /// The agent the child will run: `claude` (the default) or `codex`. A Codex child cannot be reached by SendMessage: its result goes in a file.
+    #[serde(default)]
+    pub agent: FormationAgent,
 }
 
 /// The record with the planned children put in: one of the same name that is only planned is replaced in place, a new one goes to the end. A name that is already launched is refused, and nothing is changed.
@@ -336,6 +353,7 @@ fn with_planned(mut children: Vec<Child>, planned: &[PlannedChild]) -> Result<Ve
             name: p.name.clone(),
             repo: p.repo.clone(),
             environment: p.environment.clone(),
+            agent: p.agent,
             launch: None,
         };
         match children.iter_mut().find(|c| c.name == p.name) {
@@ -944,13 +962,15 @@ fn wait_satisfied(result: &Value) -> bool {
 }
 
 /// The answer of `terminal send --wait-submit` says the turn started. A reply with no receipt (an Orca that cannot tell) is taken as it is.
-fn check_submitted(result: &Value) -> Result<(), String> {
+fn check_submitted(result: &Value, agent: FormationAgent) -> Result<(), String> {
     if result["send"]["accepted"] != true {
         return Err("Orca が指示を受け付けませんでした".into());
     }
-    let started = result["send"]["prompt"]["stages"]
-        .as_array()
-        .is_none_or(|stages| stages.iter().any(|s| s == "turn_started"));
+    // Only Claude Code's start of a turn is known to Orca by `turn_started`; Codex is taken as it has accepted the text.
+    let started = agent == FormationAgent::Codex
+        || result["send"]["prompt"]["stages"]
+            .as_array()
+            .is_none_or(|stages| stages.iter().any(|s| s == "turn_started"));
     if started {
         Ok(())
     } else {
@@ -1035,17 +1055,24 @@ fn all_terminals_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["terminal", "list", "--json"]), environment)
 }
 
-/// The command of the child's terminal: Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space). The name was checked, so the rest of the command line holds nothing a shell would read.
-fn child_command(name: &str, plugin_dir: &Path) -> String {
-    format!(
-        "claude -n {name} --permission-mode auto --effort medium --plugin-dir {}",
-        crate::claude_code::sh_quote(&plugin_dir.to_string_lossy())
-    )
+/// The command of a Codex child's terminal (A-41): its sandbox lets it write in the worktree, and it never stops to ask (no `-n`: its title is the name that Orca gives the terminal, and no plugin: it reads the prompt alone).
+const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval never";
+
+/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space). The name was checked, so the rest of the command line holds nothing a shell would read.
+fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path) -> String {
+    match agent {
+        FormationAgent::Claude => format!(
+            "claude -n {name} --permission-mode auto --effort medium --plugin-dir {}",
+            crate::claude_code::sh_quote(&plugin_dir.to_string_lossy())
+        ),
+        FormationAgent::Codex => CODEX_COMMAND.to_owned(),
+    }
 }
 
 /// The child's terminal: titled with its name, and running `child_command`.
 fn terminal_create_args(
     path: &str,
+    agent: FormationAgent,
     name: &str,
     plugin_dir: &Path,
     environment: &str,
@@ -1056,7 +1083,7 @@ fn terminal_create_args(
         "--title".into(),
         name.into(),
         "--command".into(),
-        child_command(name, plugin_dir),
+        child_command(agent, name, plugin_dir),
         "--json".into(),
     ]);
     on(args, environment)
@@ -1512,6 +1539,7 @@ pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<V
                 .name
                 .clone(),
             environment: environment.clone(),
+            agent: child.agent,
         });
     }
     let children = update(config, formation, |old| with_planned(old, &planned))?;
@@ -1649,6 +1677,7 @@ fn make_worktree(
 /// Launches a child: a terminal with `claude -n {name}` and the plugin of A-41 (`--plugin-dir`, written first) in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
 /// With no `place.folder` the worktree is made here in the repository of the environment (`create_worktree`: Orca's RPC, not its CLI), on `place.branch` (or on the branch Orca names, when there is none): a branch that the repository has is opened as it is, one that only `origin` has is taken from there, and a new one starts from `place.base`. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
 /// With `place.folder` nothing is made: the folder must be the repository's own folder or a worktree of it that `orca worktree ps` lists (`folder_in`), and the child works there. The record says that tsunagiai did not make it (`Launch::created`), so that no close removes it.
+#[allow(clippy::too_many_arguments)]
 pub fn launch(
     config: &Path,
     formation: &str,
@@ -1656,6 +1685,7 @@ pub fn launch(
     repo: &str,
     name: &str,
     place: Place<'_>,
+    agent: Option<FormationAgent>,
     prompt: &str,
 ) -> Result<Value, Refusal> {
     check_name(formation)?;
@@ -1663,12 +1693,17 @@ pub fn launch(
     check_child_name(config, formation, name)?;
     let target = target_of(place)?;
     let prompt = check_prompt(prompt)?;
-    if is_launched(&read_record(config, formation)?, name) {
+    let record = read_record(config, formation)?;
+    if is_launched(&record, name) {
         return Err(already_launched(name).into());
     }
-    // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree.
-    let plugin_dir = crate::formation_assets::write_plugin(config)
-        .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?;
+    let agent = agent_for(agent, &record, name);
+    // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
+    let plugin_dir = match agent {
+        FormationAgent::Claude => crate::formation_assets::write_plugin(config)
+            .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
+        FormationAgent::Codex => PathBuf::new(),
+    };
     let environment = chosen_environment(&mut None, environment)?;
     let environment = environment.as_str();
     let list = repos(environment)?;
@@ -1706,13 +1741,20 @@ pub fn launch(
             refusal.with("folder", path.as_str())
         }
     };
-    let made = orca::write(&terminal_create_args(&path, name, &plugin_dir, environment))
-        .map_err(|e| kept(STEP_TERMINAL, e))?;
+    let made = orca::write(&terminal_create_args(
+        &path,
+        agent,
+        name,
+        &plugin_dir,
+        environment,
+    ))
+    .map_err(|e| kept(STEP_TERMINAL, e))?;
     let (handle, pane_key) = created_terminal_of(&made).map_err(|e| kept(STEP_TERMINAL, e))?;
     let child = Child {
         name: name.to_owned(),
         repo: repo.name.clone(),
         environment: environment.to_owned(),
+        agent,
         launch: Some(Launch {
             path: path.clone(),
             branch: branch.clone(),
@@ -1737,15 +1779,16 @@ pub fn launch(
         .and_then(|result| {
             wait_satisfied(&result)
                 .then_some(())
-                .ok_or_else(|| "claude が時間内に入力待ちになりませんでした".to_owned())
+                .ok_or_else(|| idle_refusal(agent))
         });
     idle.map_err(|e| recorded(STEP_IDLE, e))?;
     orca::write(&terminal_send_args(&handle, &prompt, environment))
-        .and_then(|result| check_submitted(&result))
+        .and_then(|result| check_submitted(&result, agent))
         .map_err(|e| recorded(STEP_SEND, e))?;
     Ok(json!({
         "name": name,
         "environment": environment,
+        "agent": agent,
         "repo": repo.name,
         "path": path,
         "branch": branch,
@@ -1754,6 +1797,23 @@ pub fn launch(
         "created": created,
         "closedShells": closed,
     }))
+}
+
+/// The agent a launch runs: the one asked for, else the one the child was planned with, else Claude Code.
+fn agent_for(asked: Option<FormationAgent>, record: &[Child], name: &str) -> FormationAgent {
+    asked
+        .or_else(|| record.iter().find(|c| c.name == name).map(|c| c.agent))
+        .unwrap_or_default()
+}
+
+/// Why the child did not wait for input in time: for Codex the program may be missing on that PC (the terminal is made, and its shell says `command not found`), which the owner can fix.
+fn idle_refusal(agent: FormationAgent) -> String {
+    match agent {
+        FormationAgent::Claude => "claude が時間内に入力待ちになりませんでした".to_owned(),
+        FormationAgent::Codex => {
+            "codex が時間内に入力待ちになりませんでした。codex がこの PC に入っていて、ログイン済みか確かめてください".to_owned()
+        }
+    }
 }
 
 /// Whether a row of `orca worktree ps` is the repository `repo`'s: told by the `repoId` of the row, or by its `repo` name when the row has no id.
@@ -3029,6 +3089,8 @@ pub struct FormationChild {
     pub handle: Option<String>,
     /// The Orca the child runs in: `local` (this Mac) or the name of a saved environment, as the record holds it (a launched child's is the name `orca environment list` gives, also when the record has its id). The screen reads and types into the terminal in that Orca.
     pub environment: String,
+    /// The agent it runs: its tab and card carry a mark for Codex.
+    pub agent: FormationAgent,
     /// Whether tsunagiai made the child's worktree. A child that works in a folder that was there (`formation_launch` with `folder`) has `false`: closing it removes nothing but its terminal and its entry. A planned child has `true`.
     pub created: bool,
 }
@@ -3074,6 +3136,7 @@ fn child_row(child: &Child, environment: &str, ps: Option<&Value>) -> FormationC
         tool_name: None,
         handle: None,
         environment: environment.to_owned(),
+        agent: child.agent,
         created: child.launch.as_ref().is_none_or(|launch| launch.created),
     };
     let Some(launch) = &child.launch else {
@@ -4232,6 +4295,7 @@ mod tests {
             name: name.into(),
             repo: repo.into(),
             environment: LOCAL.into(),
+            agent: FormationAgent::Claude,
             launch: None,
         }
     }
@@ -4277,6 +4341,7 @@ mod tests {
             name: name.into(),
             environment: LOCAL.into(),
             repo: repo.into(),
+            agent: FormationAgent::Claude,
         }
     }
 
@@ -4697,6 +4762,7 @@ mod tests {
                 "r",
                 taken,
                 on_branch("feature/a"),
+                None,
                 "go",
             )
             .unwrap_err();
@@ -4716,6 +4782,7 @@ mod tests {
                 "r",
                 "n",
                 on_branch("feature/a"),
+                None,
                 "go"
             )
             .is_err());
@@ -4817,14 +4884,14 @@ mod tests {
         assert_eq!(
             doc["children"][0],
             json!({
-                "name": "a", "repo": "agents", "environment": "local", "path": "/work/a", "branch": "user/a",
+                "name": "a", "repo": "agents", "environment": "local", "agent": "claude", "path": "/work/a", "branch": "user/a",
                 "handle": "term_a", "paneKey": "tab-a:leaf", "launchedAt": 1_700_000_000_000_u64, "created": true,
                 "branchMade": true
             })
         );
         assert_eq!(
             doc["children"][1],
-            json!({"name": "b", "repo": "web", "environment": "local"})
+            json!({"name": "b", "repo": "web", "environment": "local", "agent": "claude"})
         );
         assert!(!dir(&config, F).join("children.json.tmp").exists());
         std::fs::remove_dir_all(&config).unwrap();
@@ -5103,17 +5170,19 @@ mod tests {
     #[test]
     fn a_send_is_done_when_the_turn_started() {
         let ok = json!({"send": {"accepted": true, "prompt": {"stages": ["input_accepted", "turn_started"]}}});
-        assert!(check_submitted(&ok).is_ok());
+        assert!(check_submitted(&ok, FormationAgent::Claude).is_ok());
         // An Orca that gives no receipt is taken as accepted.
-        assert!(check_submitted(&json!({"send": {"accepted": true}})).is_ok());
+        assert!(
+            check_submitted(&json!({"send": {"accepted": true}}), FormationAgent::Claude).is_ok()
+        );
         let not_started =
             json!({"send": {"accepted": true, "prompt": {"stages": ["input_accepted"]}}});
-        assert!(check_submitted(&not_started)
+        assert!(check_submitted(&not_started, FormationAgent::Claude)
             .unwrap_err()
             .contains("確認できません"));
         for refused in [json!({"send": {"accepted": false}}), json!({}), Value::Null] {
             assert!(
-                check_submitted(&refused)
+                check_submitted(&refused, FormationAgent::Claude)
                     .unwrap_err()
                     .contains("受け付けません"),
                 "{refused}"
@@ -5167,7 +5236,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            terminal_create_args("/w/a", "web-2", Path::new("/c/formation-plugin"), "local"),
+            terminal_create_args(
+                "/w/a",
+                FormationAgent::Claude,
+                "web-2",
+                Path::new("/c/formation-plugin"),
+                "local"
+            ),
             [
                 "terminal",
                 "create",
@@ -5247,16 +5322,93 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_child_is_started_with_its_sandbox_and_no_plugin_or_name_flag() {
+        let plugin = Path::new("/c/formation-plugin");
+        let command = child_command(FormationAgent::Codex, "web-2", plugin);
+        assert_eq!(
+            command,
+            "codex --sandbox workspace-write --ask-for-approval never"
+        );
+        assert!(!command.contains("--plugin-dir") && !command.contains(" -n "));
+        let args = terminal_create_args("/w/a", FormationAgent::Codex, "web-2", plugin, "local");
+        // Its title is the child's name, and its command is the one above.
+        let at = |flag: &str| args.iter().position(|a| a == flag).unwrap();
+        assert_eq!(args[at("--title") + 1], "web-2");
+        assert_eq!(args[at("--command") + 1], command);
+    }
+
+    #[test]
+    fn a_codex_send_needs_only_the_acceptance_of_orca() {
+        let queued = json!({"send": {"accepted": true, "prompt": {"stages": ["input_accepted"]}}});
+        assert!(check_submitted(&queued, FormationAgent::Codex).is_ok());
+        assert!(check_submitted(&queued, FormationAgent::Claude).is_err());
+        assert!(
+            check_submitted(&json!({"send": {"accepted": false}}), FormationAgent::Codex).is_err()
+        );
+    }
+
+    #[test]
+    fn the_agent_is_the_one_asked_for_else_the_planned_one_else_claude() {
+        let mut codex = planned("c", "r");
+        codex.agent = FormationAgent::Codex;
+        let record = [planned("p", "r"), codex];
+        assert_eq!(agent_for(None, &record, "p"), FormationAgent::Claude);
+        assert_eq!(agent_for(None, &record, "c"), FormationAgent::Codex);
+        assert_eq!(agent_for(None, &record, "new"), FormationAgent::Claude);
+        assert_eq!(
+            agent_for(Some(FormationAgent::Claude), &record, "c"),
+            FormationAgent::Claude
+        );
+        assert_eq!(
+            agent_for(Some(FormationAgent::Codex), &record, "new"),
+            FormationAgent::Codex
+        );
+    }
+
+    #[test]
+    fn the_agent_of_a_child_is_recorded_and_an_old_record_is_a_claude_code() {
+        let config = temp_dir("agent-record");
+        formation_of_children(&config, F, &[]);
+        let mut wanted_codex = wanted("c", "r");
+        wanted_codex.agent = FormationAgent::Codex;
+        let children = update(&config, F, |old| {
+            with_planned(old, &[wanted("p", "r"), wanted_codex])
+        })
+        .unwrap();
+        assert_eq!(
+            children.iter().map(|c| c.agent).collect::<Vec<_>>(),
+            [FormationAgent::Claude, FormationAgent::Codex]
+        );
+        let kept = read_children(&config, F);
+        assert_eq!(kept[1].agent, FormationAgent::Codex);
+        // A launched Codex child keeps its agent through the file, and the screen's row has it.
+        let mut launched_codex = launched("l", "r");
+        launched_codex.agent = FormationAgent::Codex;
+        write_children(&config, F, &[launched_codex.clone()]).unwrap();
+        assert_eq!(read_children(&config, F), [launched_codex.clone()]);
+        assert_eq!(
+            child_row(&launched_codex, LOCAL, None).agent,
+            FormationAgent::Codex
+        );
+        // A record from before the field was kept has no agent.
+        let old: Child = serde_json::from_value(json!({"name": "a", "repo": "r"})).unwrap();
+        assert_eq!(old.agent, FormationAgent::Claude);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn the_command_of_a_child_passes_the_plugin_folder_as_one_quoted_word() {
         assert_eq!(
-            child_command("web-2", Path::new("/c/formation-plugin")),
+            child_command(FormationAgent::Claude, "web-2", Path::new("/c/formation-plugin")),
             "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin'"
         );
         // A folder with a space or a quote stays one word.
-        assert!(
-            child_command("web-2", Path::new("/c/it's here/formation-plugin"))
-                .ends_with(r"--plugin-dir '/c/it'\''s here/formation-plugin'")
-        );
+        assert!(child_command(
+            FormationAgent::Claude,
+            "web-2",
+            Path::new("/c/it's here/formation-plugin")
+        )
+        .ends_with(r"--plugin-dir '/c/it'\''s here/formation-plugin'"));
     }
 
     #[test]
@@ -5268,6 +5420,7 @@ mod tests {
             terminal_list_args("/w/a", environment),
             terminal_create_args(
                 "/w/a",
+                FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
                 environment,
@@ -5675,10 +5828,21 @@ mod tests {
             "r",
             "Bad Name",
             on_branch("feature/a"),
+            None,
             "go"
         )
         .is_err());
-        assert!(launch(&config, F, "local", "r", "ok", on_branch("feature/a"), "").is_err());
+        assert!(launch(
+            &config,
+            F,
+            "local",
+            "r",
+            "ok",
+            on_branch("feature/a"),
+            None,
+            ""
+        )
+        .is_err());
         // The branch and the folder are checked before Orca is asked, and nothing is recorded.
         for (place, word) in [
             (on_branch("a b"), "branch"),
@@ -5695,13 +5859,23 @@ mod tests {
                 "一緒に",
             ),
         ] {
-            let err = launch(&config, F, "local", "r", "ok", place, "go").unwrap_err();
+            let err = launch(&config, F, "local", "r", "ok", place, None, "go").unwrap_err();
             assert!(err.error.contains(word), "{place:?}: {}", err.error);
             assert!(err.step.is_none(), "{place:?}");
         }
         assert!(read_children(&config, F).is_empty());
         write_children(&config, F, &[launched("ok", "r")]).unwrap();
-        let err = launch(&config, F, "local", "r", "ok", on_branch("feature/a"), "go").unwrap_err();
+        let err = launch(
+            &config,
+            F,
+            "local",
+            "r",
+            "ok",
+            on_branch("feature/a"),
+            None,
+            "go",
+        )
+        .unwrap_err();
         assert!(answer(Err(err)).contains("もう起動してあります"));
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -6191,6 +6365,25 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_child_takes_its_state_from_its_agent_row_as_a_claude_child_does() {
+        let mut codex = launched("c", "r1");
+        codex.agent = FormationAgent::Codex;
+        codex.launch.as_mut().unwrap().pane_key = "tab:c".into();
+        for (state, expected) in [
+            ("working", FormationState::Working),
+            ("waiting", FormationState::Waiting),
+            ("done", FormationState::Done),
+        ] {
+            let mut row = agent("tab:c", state, None);
+            row["agentType"] = json!("codex");
+            let rows = rows_of(std::slice::from_ref(&codex), &ps_of(vec![row]));
+            assert_eq!(rows[0].state, expected, "{state}");
+            assert_eq!(rows[0].agent, FormationAgent::Codex);
+            assert_eq!(rows[0].handle.as_deref(), Some("term_c"));
+        }
+    }
+
+    #[test]
     fn every_state_of_orca_maps_to_the_state_of_the_screen() {
         use FormationState::{Done, Waiting, Working};
         let cases = [
@@ -6269,6 +6462,7 @@ mod tests {
                 tool_name: None,
                 handle: None,
                 environment: LOCAL.into(),
+                agent: FormationAgent::Claude,
                 created: true,
             }]
         );
@@ -6546,7 +6740,7 @@ mod tests {
         let mut child = wanted("a", "x");
         child.environment = String::new();
         assert!(plan(&config, F, &[child]).is_err());
-        assert!(launch(&config, F, "", "x", "a", on_branch("feature/a"), "go").is_err());
+        assert!(launch(&config, F, "", "x", "a", on_branch("feature/a"), None, "go").is_err());
         assert!(read_children(&config, F).is_empty());
     }
 
@@ -11209,6 +11403,7 @@ mod tests {
             "r",
             "ok",
             on_branch("feature/a"),
+            None,
             "go",
         )
         .unwrap_err();
