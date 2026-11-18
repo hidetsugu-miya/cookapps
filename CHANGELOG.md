@@ -3,6 +3,26 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.84.4
+
+A-34: a project has one language server for each language, and the app finds them from the project (#974). The servers of the language table are looked for in the place the server runs in (a compose service that mounts the worktree, else the host): ruby-lsp for Ruby, rust-analyzer for Rust, typescript-language-server for TypeScript and JavaScript, gopls for Go, and pyright or pylsp for Python. A server saved with no `command` follows what the app finds, and the settings saved by an older version are read as one server for each language.
+
+A-34: the 言語サーバー part of the file pane shows a card for each language (#975). The card has the language's icon and name, the state, and a line 「{server} ・ {where it runs}」; its menu has 「再起動」, 「止める」, 「削除」 and 「手で直す」, which opens the fields. The languages that the app finds in the worktree and that have no server are cards of dotted line, with 「使う」 and 「使わない」, 「サーバーがありません」 with 「Claude に頼む」, or 「コンテナを起動」. 「止める」 keeps a stopped server stopped until it is restarted.
+
+A-34, A-36: the ✦ at the heading of the 言語サーバー part, and 「Claude に頼む」 on a card, open Claude Code under the cards, which looks into the worktree and sets the servers up through `tsunagiai-mcp` (#976). Every write asks you in the terminal.
+
+A-1, A-34: the tools `lsp_server_save` and `lsp_server_delete` of `tsunagiai-mcp` take `language` instead of `name`, and `lsp_settings` answers one server for each language (#974). A `command` that is left out is found by the app.
+
+A-19: the search of the Orca list is a magnifier at the right end of the row 「プロジェクト」 (#967). Pressing it, or Cmd+J, turns the row into the search field without moving the list, and the field closes again when it is empty and loses the focus.
+
+A-18: a file row of the Orca file pane has an icon for its kind, JetBrains' icons (Apache License 2.0), instead of the same sheet for every file (#965).
+
+D-1, D-8: a connection that Claude Code saves through `tsunagiai-mcp` is in the list of the database screen within about 2 seconds, and the open edit pane takes its fields (#866).
+
+A-28: the line under the header is gone (#431). A failure of something you did shows a card at the bottom right, with 「ログを見る」 and a close button, and every failure is written to the log, which the 「ログ」 tab of the settings shows. A login that must be done again shows a card with 「再ログイン」.
+
+A-37: the wording of the skill and the agent that the plugin of the teammates holds was corrected (#968).
+
 ## v0.84.3
 
 A-34: a project can have several language servers (#958). Each server has a name, the languages it takes, how it starts, and whether it starts by itself, and a definition is asked of the server that takes the language of the file. A project with nothing saved has ruby-lsp, which takes Ruby, as before. The settings saved by an older version are read as that ruby-lsp.
