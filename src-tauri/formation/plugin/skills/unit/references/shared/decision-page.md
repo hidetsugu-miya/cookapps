@@ -9,12 +9,13 @@ This file says how.
 
 ## Steps
 
-1. **Settle the items.** They are the questions or findings the procedure passes you. Do not change an item's number, options or recommendation, do not add one, and do not merge two. The recommended option of a question is the first, `A`.
+1. **Settle the items.** They are the questions or findings the procedure passes you. Do not change an item's number, options or recommendation, do not add one, and do not merge two. The one exception is a refused duplicate number (step 6). The recommended option of a question is the first, `A`.
 2. **Read the latest state.** Facts about a deliverable come from its state on disk now, read with `jq` ([deliverable-writing](deliverable-writing.md)). State nothing that the deliverables, the items and the cited files do not state.
 3. **Write the page JSON** to `{case root}/records/{unit}/page-{nn}.json`, with `nn` two digits, one more than the last page of the unit (`01` for the first). Make the folder if needed. The page is a record of the unit: it stays, and it is committed with the unit's other records ([branch-and-pr](branch-and-pr.md)). Pages are not committed before they are answered.
 4. **Polish the text.** Launch the `feature-dev:prose-polisher` agent with every Japanese text the page shows as `sections` (one section for each text, headed by its place in the page), `body_only` `true`, and as `materials` the deliverable files and the items the texts rest on. Write each returned draft into the page as it stands, line by line. The leader's page tool refuses a Japanese line that is not in the final draft of a recorded polishing run, so polish first, then write the page from the drafts, and do not edit a line by hand afterwards. Do not polish the texts that the page copies from a source (a path, a quoted line of code).
 5. **Send** `PAGE {absolute path}` to the leader, and stop.
 6. **When `PAGE-REFUSED {absolute path}` comes**, its lines are the violations. Fix the page. When a line was refused as unpolished, polish the Japanese of the page again, those lines included, in one run of yomiyasu (step 4). Then send `PAGE` again. When a violation names a `ref` that it cannot resolve, name that element by its index in the array (`requirement.json#/requirements/2`) instead of its `id`.
+   When a violation is a number that two cards share (`同じ番号のカードがもう一枚あります`), two items of different rounds have met on one page (for example the `MF-1` still open from an earlier round and an `MF-1` of a later one, or two `CX-n` of different reviews). Add the mark of the round in which it was raised to the number of each later card, `{number}-r{round}` (`MF-1-r2`; `r2` when no round is known), so that every number on the page is unique. Change nothing else of the card, and do not merge the two cards. Then send `PAGE` again.
 7. **When `REPLY` comes**, read it as "Reading the reply" below.
 
 ## The page
@@ -143,7 +144,7 @@ The reply is text that the page assembled from the owner's answers, in page orde
   | `code-review` | この変更を承認します | 修正を依頼します |
 
   The page derives it from the answers: the Revise line while a revision choice is chosen (`fix` on `must-fix` and on `review-must-fix`), the Approve line otherwise.
-- A card block has the card's `number` and `title` as they are. Its answer line is `{key}. {label}` for a lettered option, or the reply text of a fixed choice: `調べてから決めて`, `その他`, `指摘のとおり修正する`, `今回は対応しない`, `承認`, `却下`, `保留`, `残す`, `不要`, `修正して再レビューする`, `現状で完了する`. A card with free text only has no answer line. The `補足` line is the owner's free text, when there is any.
+- A card block has the card's `number` and `title` as they are. A number with a round mark (`MF-1-r2`, step 6) names the item `MF-1` of that round: read the answer for that item, not for the earlier card of the same number. Its answer line is `{key}. {label}` for a lettered option, or the reply text of a fixed choice: `調べてから決めて`, `その他`, `指摘のとおり修正する`, `今回は対応しない`, `承認`, `却下`, `保留`, `残す`, `不要`, `修正して再レビューする`, `現状で完了する`. A card with free text only has no answer line. The `補足` line is the owner's free text, when there is any.
 - A card with no block is unanswered.
 
 Read each block by its card:

@@ -48,6 +48,8 @@ On `REPLY`, read it as "Reading the reply" of [decision-page](../shared/decision
 | `RC-n` named in the free text | `adopted`, and it joins the rework set |
 | `RC-n` not named | `deferred` |
 
+A number with a round mark (`MF-1-r2`; [decision-page](../shared/decision-page.md), step 6) names the finding `MF-1` of that round, the one in that round's `review-{nn}.md`: put its answer on that finding, and keep the ledger's own id as it is. The mark is only for the page.
+
 A reply that asks only for a clearer explanation, or asks a question about the change, is answered by a new page of the same material, with `previous_reply` ([decision-page](../shared/decision-page.md), the end of "Reading the reply").
 
 Commit the case root now, in the docs worktree: the page, `ledger.md` and `case.json` as they stand, with a message that says the page was answered ([branch-and-pr](../shared/branch-and-pr.md), "Commit the case root").
