@@ -3,7 +3,7 @@
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
-// A file of a Ruby worktree asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the file pane. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
+// A file whose language a language server takes asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the definition tab under the pane of the editor. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
 // The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
@@ -38,6 +38,8 @@ interface EditorFile {
   outside: boolean;
   // The language Rust named for the file (A-21), once it is read.
   language: string;
+  // The server of the project that takes that language (A-34), found once the file is read: none asks nothing. For a file outside the worktree, the server that gave it.
+  server: string | null;
   // The place the screen asked to go to (a definition), kept until the text is shown: the line from 0 and the character in UTF-16 units.
   jump: { line: number; character: number } | null;
   // The text of the read (null until it is read), whether the file has CRLF, and the signature of what the disk held then; a save that went through brings the signature up to date.
@@ -483,24 +485,22 @@ function setMode(f: EditorFile, mode: "rich" | "source") {
   }
 }
 
-// The server that takes `ruby`, the language of the files that ask for a definition (A-34); none is an error in Japanese.
-async function serverOf(f: EditorFile) {
-  const server = await invoke("lsp_server_for", { environment: f.target, project: f.project, language: "ruby" });
-  if (server === null) throw new Error("Ruby を受け持つ言語サーバーがありません");
-  return server;
+// The server that gave a file outside the worktree (A-34); none is an error in Japanese.
+function serverOf(f: EditorFile) {
+  if (f.server === null) throw new Error("言語サーバーがありません");
+  return f.server;
 }
 
 async function load(f: EditorFile) {
   try {
     const text = f.outside
-      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: await serverOf(f), path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
+      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: serverOf(f), path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
       : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.edits++;
     f.highlight = text.highlight;
     f.language = text.language;
-    f.markdown = text.language === "markdown";
-    paint(f);
+    f.markdown = text.language === "markdown";    paint(f);
     numberLines(f, f.area.value);
     f.crlf = text.crlf;
     f.signature = text.signature;
@@ -509,6 +509,8 @@ async function load(f: EditorFile) {
     setMode(f, f.mode);
     // A Ruby file of a worktree starts its language server (A-34); a file outside the worktree belongs to a server that is there already.
     if (f.language === "ruby" && !f.outside) ruby(f.target, f.project, f.path);
+    // The server that takes the file's language is looked for once the text is shown; with none the Command key and the right button ask nothing.
+    if (!f.outside) void invoke("lsp_server_for", { environment: f.target, project: f.project, language: f.language }).then((server) => (f.server = server), () => {});
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -576,7 +578,7 @@ async function askDefinition(f: EditorFile, x: number, y: number) {
   try {
     const word = await invoke("lsp_word", { line: text.slice(lineStart, end === -1 ? undefined : end), character });
     if (word === null) return;
-    definition({ target: f.target, project: f.project, path: f.path, server: await serverOf(f), relative: f.relative, text, line, character, word });
+    if (f.server !== null) definition({ target: f.target, project: f.project, path: f.path, server: f.server, relative: f.relative, text, line, character, word, tab: f.id });
   } catch (e) {
     fail(e);
   }
@@ -654,7 +656,7 @@ async function reread(f: EditorFile) {
   }
 }
 
-function create(id: string, target: string | null, project: string, path: string, relative: string, outside: boolean): EditorFile {
+function create(id: string, target: string | null, project: string, path: string, relative: string, outside: boolean, server: string | null): EditorFile {
   const el = tag("div", "orca-edit");
   el.dataset.file = id;
   const head = tag("div", "orca-edit-head");
@@ -712,7 +714,7 @@ function create(id: string, target: string | null, project: string, path: string
   richBand.hidden = true;
   rich.append(richBand);
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => {
     f.edits++;
     typed(f);
@@ -735,7 +737,7 @@ function create(id: string, target: string | null, project: string, path: string
   rich.addEventListener("focusin", () => placeRichBand(f));
   rich.addEventListener("focusout", () => placeRichBand(f));
   area.oncontextmenu = (e) => {
-    if (!e.metaKey || f.outside || f.read !== "ready" || f.language !== "ruby" || f.body.hidden) return;
+    if (!e.metaKey || f.outside || f.read !== "ready" || f.server === null || f.body.hidden) return;
     e.preventDefault();
     void askDefinition(f, e.clientX, e.clientY);
   };
@@ -758,14 +760,14 @@ function create(id: string, target: string | null, project: string, path: string
   return f;
 }
 
-// Opens the file as a tab of the project and gives its id (with `outside`, a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
-export function openFile(target: string | null, project: string, path: string, relative: string, outside = false) {
-  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.outside === outside);
+// Opens the file as a tab of the project and gives its id (with `outside`, the server that gave a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
+export function openFile(target: string | null, project: string, path: string, relative: string, outside: string | null = null) {
+  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.outside === (outside !== null));
   if (open) {
     open.wantFocus = true;
     return open.id;
   }
-  const f = create(`file:${++lastId}`, target, project, path, relative, outside);
+  const f = create(`file:${++lastId}`, target, project, path, relative, outside !== null, outside);
   files.set(f.id, f);
   void load(f);
   return f.id;

@@ -1,9 +1,8 @@
-// The definition of the file pane of the Orca screen (A-34): the places of the definition of the name that was pressed in the editor with the Command key and the right button. Rust asks the language server (`lsp_definition`) and decides how each place is drawn (`lsp_places`); this module draws the heading (the name and the count), the rows, and the lines around the definition of an open row, and gives the screen a place to open as a tab.
-// The list belongs to one worktree of one target: another worktree clears it, and an answer that comes late for an older question (or for a row that is gone) is dropped. Nothing is kept outside memory, and nothing is read until the owner asks or opens a row. A file inside the worktree is read by `orca_file_read` and one outside it by `lsp_read_outside`, both only for the lines shown.
+// The definition tab of the Orca screen (A-34): the places of the definition of the name that was pressed in the editor with the Command key and the right button, as a tab of the work pane (A-17) under the pane of the editor. Rust asks the language server (`lsp_definition`) and decides how each place is drawn (`lsp_places`); this module draws the heading (the name and the count), a row for each place with the lines around its definition, and gives the screen a place to open as a tab of the editor.
+// A project has one such tab, whatever is pressed: the next press puts its answer in the tab that is open, and an answer that comes late for an older question (or for a tab that was closed) is dropped. The tab is kept in memory only, by target and project, as the tabs of the diffs are (its id is `definition:{n}`). Every place is read for its lines at once, a few at a time: a file inside the worktree by `orca_file_read` and one outside it by `lsp_read_outside`, only for the lines shown.
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspPlace } from "./bindings/LspPlace";
-import { $, tag } from "./dom.js";
-import { CHEVRON_SVG, OPEN_SVG } from "./icons.js";
+import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 
 // The question: the worktree and its file as the editor holds it now (`text`), the place in it (`line` from 0 and `character` in UTF-16 units, as the server counts), and the name that is there.
@@ -18,10 +17,25 @@ export interface DefinitionQuery {
   line: number;
   character: number;
   word: string;
+  // The tab of the editor the question came from: a place opens in the pane that holds it.
+  tab: string;
 }
 
-// The lines drawn before and after the line of the definition.
+// The place of a definition that the screen opens as a tab of the editor, and what it needs of the question.
+export interface DefinitionOpen {
+  // The definition tab that holds the place.
+  definition: string;
+  query: DefinitionQuery;
+  // The path from the worktree, or the server's absolute path for a place outside it.
+  path: string;
+  outside: boolean;
+  line: number;
+  character: number;
+}
+
+// The lines drawn before and after the line of the definition, and how many places are read at once.
 const AROUND = 3;
+const READS = 4;
 
 // What was read of the lines around the definition of a row: `first` is the number (from 1) of the first line drawn, and `hit` the number of the line of the definition.
 interface Preview {
@@ -35,18 +49,30 @@ interface Preview {
 interface Row {
   location: LspLocation;
   place: LspPlace;
-  open: boolean;
-  preview: Preview | null;
+  preview: Preview;
+  body: HTMLElement;
 }
 
-let query: DefinitionQuery | null = null;
-let phase: "idle" | "loading" | "ready" | "failed" = "idle";
-let error: string | null = null;
-let rows: Row[] = [];
-// A new question (or another worktree) ends the reads of the old one.
-let generation = 0;
-let openInside: (relative: string, line: number, character: number) => void = () => {};
-let openOutside: (path: string, line: number, character: number) => void = () => {};
+export interface DefinitionTab {
+  id: string;
+  target: string | null;
+  project: string;
+  query: DefinitionQuery;
+  phase: "loading" | "ready" | "failed";
+  error: string | null;
+  rows: Row[];
+  // Counts the questions, so that an answer of an earlier one than the last is dropped.
+  seq: number;
+  // The scroll of the list, which a tab taken out of the page and put back keeps.
+  scroll: number;
+  el: HTMLElement;
+  head: HTMLElement;
+  list: HTMLElement;
+}
+
+const tabs = new Map<string, DefinitionTab>();
+let lastId = 0;
+let open: (place: DefinitionOpen) => void = () => {};
 
 function note(text: string, fail = false) {
   return tag("p", `orca-file-note${fail ? " fail" : ""}`, text);
@@ -58,17 +84,16 @@ function loading() {
   return line;
 }
 
-function head() {
-  const box = $("orca-definition-head");
-  if (query === null) return box.replaceChildren();
-  const parts = [tag("span", "orca-def-word", query.word)];
-  if (phase === "ready") parts.push(tag("span", "orca-def-count", `${rows.length} 件`));
-  box.replaceChildren(...parts);
+function drawHead(d: DefinitionTab) {
+  const parts = [tag("span", "orca-def-word", d.query.word)];
+  if (d.phase === "ready") parts.push(tag("span", "orca-def-count", `${d.rows.length} 件`));
+  d.head.replaceChildren(...parts);
 }
 
-function previewNode(preview: Preview) {
-  if (preview.read === "loading") return loading();
-  if (preview.error !== null) return note(preview.error, true);
+function drawPreview(row: Row) {
+  const preview = row.preview;
+  if (preview.read === "loading") return row.body.replaceChildren(loading());
+  if (preview.error !== null) return row.body.replaceChildren(note(preview.error, true));
   const code = tag("div", "orca-def-code");
   preview.lines.forEach((text, i) => {
     const line = tag("div", "orca-def-line");
@@ -78,120 +103,148 @@ function previewNode(preview: Preview) {
     line.append(tag("span", "orca-def-n", String(n)), tag("span", "orca-def-text", text));
     code.append(line);
   });
-  return code;
+  row.body.replaceChildren(code);
 }
 
-function rowNode(row: Row, index: number) {
+function rowNode(d: DefinitionTab, row: Row, index: number) {
   const box = tag("div", "orca-def");
   box.dataset.index = String(index);
   const bar = tag("div", "orca-def-row");
-  const toggle = tag("button", "orca-def-toggle");
-  toggle.type = "button";
-  toggle.setAttribute("aria-expanded", String(row.open));
-  const chevron = tag("span", "orca-def-chevron");
-  chevron.innerHTML = CHEVRON_SVG;
   const names = tag("span", "orca-def-names");
-  names.append(tag("span", "orca-def-file", `${row.place.file}:${row.place.line}`), tag("span", "orca-def-place", row.place.place));
-  toggle.append(chevron, names);
-  toggle.title = row.location.path;
-  toggle.onclick = () => toggleRow(row);
-  bar.append(toggle);
-  if (row.place.outside) bar.append(tag("span", "orca-def-gem", "gem"));
-  const open = tag("button", "icon-btn orca-def-open");
-  open.type = "button";
-  open.setAttribute("aria-label", "タブで開く");
-  open.innerHTML = OPEN_SVG;
-  open.onclick = () => (row.location.outside ? openOutside : openInside)(row.location.path, row.location.line, row.location.character);
-  bar.append(open);
-  box.append(bar);
-  if (row.open && row.preview !== null) box.append(previewNode(row.preview));
+  names.title = row.location.path;
+  const { place } = row;
+  names.append(tag("span", "orca-def-file", `${row.location.outside ? place.file : row.location.path}:${place.line}`));
+  if (row.location.outside) names.append(tag("span", "orca-def-place", place.place));
+  bar.append(names);
+  if (row.location.outside) bar.append(tag("span", "orca-def-gem", "gem"));
+  const button = tag("button", "text-btn orca-def-open", "開く");
+  button.type = "button";
+  button.onclick = () => open({ definition: d.id, query: d.query, path: row.location.path, outside: row.location.outside, line: row.location.line, character: row.location.character });
+  bar.append(button);
+  box.append(bar, row.body);
   return box;
 }
 
-// Draws the heading and the list, keeping the scroll of the list and the focus of its buttons.
-function draw() {
-  head();
-  const list = $("orca-definition-list");
-  const top = list.scrollTop;
-  const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("#orca-definition-list .orca-def");
-  const kind = document.activeElement?.classList.contains("orca-def-open") ? ".orca-def-open" : ".orca-def-toggle";
+// Draws the heading and the list of the tab.
+function draw(d: DefinitionTab) {
+  drawHead(d);
   const parts: HTMLElement[] = [];
-  if (phase === "loading") parts.push(loading());
-  else if (phase === "failed" && error !== null) parts.push(note(error, true));
-  else if (phase === "ready" && rows.length === 0) parts.push(note("定義はありません"));
-  parts.push(...rows.map(rowNode));
-  list.replaceChildren(...parts);
-  list.scrollTop = top;
-  if (focused) list.querySelector<HTMLElement>(`.orca-def[data-index="${focused.dataset.index}"] ${kind}`)?.focus({ preventScroll: true });
+  if (d.phase === "loading") parts.push(loading());
+  else if (d.phase === "failed" && d.error !== null) parts.push(note(d.error, true));
+  else if (d.phase === "ready" && d.rows.length === 0) parts.push(note("定義はありません"));
+  parts.push(...d.rows.map((row, i) => rowNode(d, row, i)));
+  d.list.replaceChildren(...parts);
 }
 
-// Reads the lines around the definition of the row.
-async function readPreview(row: Row) {
-  const here = query;
-  if (here === null) return;
-  const mine = generation;
+// Reads the lines around the definition of the row, and draws them in the row. An answer for an older question, or for a tab that was closed, is dropped.
+async function readPreview(d: DefinitionTab, row: Row, seq: number) {
+  const q = d.query;
   const hit = row.location.line + 1;
-  row.preview = { read: "loading", first: hit, hit, lines: [], error: null };
-  draw();
   let next: Preview;
   try {
     const text = row.location.outside
-      ? (await invoke("lsp_read_outside", { environment: here.target, project: here.project, worktree: here.path, server: here.server, path: row.location.path })).text
-      : (await invoke("orca_file_read", { path: here.path, relative: row.location.path, environment: here.target })).content;
+      ? (await invoke("lsp_read_outside", { environment: q.target, project: q.project, worktree: q.path, server: q.server, path: row.location.path })).text
+      : (await invoke("orca_file_read", { path: q.path, relative: row.location.path, environment: q.target })).content;
     const all = text.split("\n").map((l) => l.replace(/\r$/, ""));
     const from = Math.max(0, hit - 1 - AROUND);
     next = { read: "ready", first: from + 1, hit, lines: all.slice(from, Math.min(all.length, hit + AROUND)), error: null };
   } catch (e) {
     next = { read: "failed", first: hit, hit, lines: [], error: String(e) };
   }
-  if (mine !== generation) return;
+  if (seq !== d.seq) return;
   row.preview = next;
-  draw();
+  drawPreview(row);
 }
 
-function toggleRow(row: Row) {
-  row.open = !row.open;
-  if (row.open && row.preview === null) void readPreview(row);
-  else draw();
+// Reads the places of the tab, `READS` at a time.
+async function readPreviews(d: DefinitionTab, seq: number) {
+  const queue = [...d.rows];
+  const worker = async () => {
+    for (let row = queue.shift(); row !== undefined && seq === d.seq; row = queue.shift()) await readPreview(d, row, seq);
+  };
+  await Promise.all(Array.from({ length: Math.min(READS, queue.length) }, worker));
 }
 
-// Asks the server for the definition of the name of `q` and draws the places it gives; one place is opened at once. A refusal or a failure of the server is drawn as Rust words it.
-export async function askDefinition(q: DefinitionQuery) {
-  const mine = ++generation;
-  query = q;
-  phase = "loading";
-  error = null;
-  rows = [];
-  draw();
+// Asks the server for the definition of the name of the question and draws the places it gives. A refusal or a failure of the server is drawn as Rust words it.
+async function ask(d: DefinitionTab) {
+  const seq = ++d.seq;
+  const q = d.query;
+  d.phase = "loading";
+  d.error = null;
+  d.rows = [];
+  draw(d);
   try {
     const locations = await invoke("lsp_definition", { environment: q.target, worktree: q.path, server: q.server, relative: q.relative, text: q.text, line: q.line, character: q.character });
-    if (mine !== generation) return;
+    if (seq !== d.seq) return;
     const places = locations.length === 0 ? [] : await invoke("lsp_places", { locations });
-    if (mine !== generation) return;
-    rows = locations.map((location, i) => ({ location, place: places[i], open: locations.length === 1, preview: null }));
-    phase = "ready";
-    draw();
-    if (rows.length === 1) void readPreview(rows[0]);
+    if (seq !== d.seq) return;
+    d.rows = locations.map((location, i) => {
+      const row: Row = { location, place: places[i], preview: { read: "loading", first: 1, hit: 1, lines: [], error: null }, body: tag("div", "orca-def-body") };
+      drawPreview(row);
+      return row;
+    });
+    d.phase = "ready";
+    draw(d);
+    void readPreviews(d, seq);
   } catch (e) {
-    if (mine !== generation) return;
-    phase = "failed";
-    error = String(e);
-    draw();
+    if (seq !== d.seq) return;
+    d.phase = "failed";
+    d.error = String(e);
+    draw(d);
   }
 }
 
-// Follows the pane: the worktree it shows (null: none). Another worktree clears the list.
-export function syncDefinition(next: { target: string | null; path: string } | null) {
-  if (query === null || (next !== null && next.path === query.path && next.target === query.target)) return;
-  generation++;
-  query = null;
-  phase = "idle";
-  error = null;
-  rows = [];
-  draw();
+function create(id: string, q: DefinitionQuery): DefinitionTab {
+  const el = tag("div", "orca-definition");
+  el.dataset.definition = id;
+  const head = tag("div", "orca-edit-head orca-definition-head");
+  const list = tag("div", "orca-definition-list");
+  el.append(head, list);
+  const d: DefinitionTab = { id, target: q.target, project: q.project, query: q, phase: "loading", error: null, rows: [], seq: 0, scroll: 0, el, head, list };
+  list.onscroll = () => {
+    d.scroll = list.scrollTop;
+  };
+  return d;
 }
 
-export function initDefinition(on: { inside: (relative: string, line: number, character: number) => void; outside: (path: string, line: number, character: number) => void }) {
-  openInside = on.inside;
-  openOutside = on.outside;
+// Asks for the definition of the question in the tab of its project (made when there is none), and gives the tab and whether it was made now.
+export function openDefinition(q: DefinitionQuery) {
+  const held = [...tabs.values()].find((d) => d.target === q.target && d.project === q.project);
+  const d = held ?? create(`definition:${++lastId}`, q);
+  d.query = q;
+  d.scroll = 0;
+  d.list.scrollTop = 0;
+  tabs.set(d.id, d);
+  void ask(d);
+  return { tab: d, created: held === undefined };
+}
+
+// The definition tab of the project (at most one).
+export const definitionsOf = (target: string | null, project: string) => [...tabs.values()].filter((d) => d.target === target && d.project === project);
+
+// Whether a definition tab asked about the worktree at `path` is open in any project (A-34: a tab of the worktree).
+export const hasDefinitionIn = (target: string | null, path: string) => [...tabs.values()].some((d) => d.target === target && d.query.path === path);
+
+export function closeDefinition(id: string) {
+  const d = tabs.get(id);
+  if (!d) return;
+  d.seq++;
+  d.el.remove();
+  tabs.delete(id);
+}
+
+// Shows each tab of `placements` in its host element and takes every other tab out of the page (it keeps its rows and its scroll).
+export function showDefinitions(placements: { id: string; host: HTMLElement }[]) {
+  const shown = new Set(placements.map((p) => p.id));
+  for (const [id, d] of tabs) if (!shown.has(id)) d.el.remove();
+  for (const { id, host } of placements) {
+    const d = tabs.get(id);
+    if (!d || d.el.parentElement === host) continue;
+    host.replaceChildren(d.el);
+    d.list.scrollTop = d.scroll;
+  }
+}
+
+export function initDefinition(on: { open: (place: DefinitionOpen) => void }) {
+  open = on.open;
 }

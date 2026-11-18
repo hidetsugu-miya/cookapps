@@ -1385,34 +1385,27 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-hfile-n { flex: none; display: flex; gap: 4px; font-size: calc(11.5px * var(--fs)); }
 .orca-hfile-add { color: var(--ins); }
 .orca-hfile-del { color: var(--del); }
-/* The definition of the file pane (A-34): the heading with the name and the count, and a row for each place, which opens to the lines around the definition. */
-#orca-definition { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#orca-definition-head { flex: none; display: flex; align-items: center; gap: 6px; height: calc(32px * var(--fs)); box-sizing: border-box; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); }
-#orca-definition-head:empty { display: none; }
+/* The language server of the file pane (A-34), and the definition tab of the work pane (A-34): the heading with the name and the count, and a row for each place with the lines around its definition, all open. */
+#orca-server { flex: 1; min-height: 0; overflow: auto; }
+.orca-definition { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.orca-definition-head { gap: 6px; font-size: calc(13px * var(--fs)); }
 .orca-def-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-weight: 600; }
 .orca-def-count { flex: none; color: var(--muted); }
-#orca-definition-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
-#orca-definition-list .pending { margin: 4px; }
+.orca-definition-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
+.orca-definition-list .pending { margin: 4px; }
 .orca-def { border-bottom: 1px solid var(--line); }
-.orca-def-row { display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 0; }
-.orca-def-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
-.orca-def-toggle:hover, .orca-def-toggle[aria-expanded="true"] { background: var(--hover); }
-.orca-def-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-def-chevron { flex: none; display: flex; color: var(--muted); }
-.orca-def-chevron svg { width: 12px; height: 12px; stroke-width: 2.5; }
-.orca-def-toggle[aria-expanded="true"] .orca-def-chevron svg { transform: rotate(90deg); }
-.orca-def-names { min-width: 0; display: flex; flex-direction: column; }
+.orca-def-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px 4px 8px; }
+.orca-def-names { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: calc(12.5px * var(--fs)); }
 .orca-def-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .orca-def-place { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(11.5px * var(--fs)); color: var(--muted); }
 .orca-def-gem, .orca-tab-gem { flex: none; padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); font-size: calc(11px * var(--fs)); line-height: 18px; }
-.orca-def-open { flex: none; width: 26px; height: 26px; border: 1px solid var(--chip-line); background: var(--surface); color: var(--accent); }
-.orca-def-open svg { width: 14px; height: 14px; }
+.orca-def-open { flex: none; height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 .orca-def-code { overflow-x: auto; padding: 6px 0; background: var(--code); font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: calc(11.5px * var(--fs)); line-height: 18px; }
 .orca-def-line { display: flex; width: max-content; min-width: 100%; white-space: pre; }
 .orca-def-line[data-hit="true"] { background: var(--effort-high-bg); }
 .orca-def-n { flex: none; width: 30px; padding-right: 6px; box-sizing: border-box; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; }
 .orca-def-text { padding: 0 8px; }
-#orca-lsp { flex: none; display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 10px 12px 12px; border-top: 1px solid var(--chip-line); background: var(--bar); font-size: calc(12px * var(--fs)); }
+#orca-lsp { flex: none; display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 10px 12px 12px; background: var(--bar); font-size: calc(12px * var(--fs)); }
 #orca-lsp-head { display: flex; align-items: center; gap: 8px; }
 #orca-lsp-title { font-weight: 600; }
 #orca-lsp-state { margin-left: auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); white-space: nowrap; }

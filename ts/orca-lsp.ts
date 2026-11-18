@@ -1,4 +1,4 @@
-// The language server of the Orca screen (A-34): the state of a language server for a worktree and its settings, shown under the definition in the file pane, and when it is started and stopped. A repository has any number of servers, each with a name; the pane shows and edits the first one of the settings, and a Ruby file asks Rust for the server that takes `ruby` (`lsp_server_for`).
+// The language server of the Orca screen (A-34): the state of a language server for a worktree and its settings, shown in the file pane, and when it is started and stopped. A repository has any number of servers, each with a name; the pane shows and edits the first one of the settings, and a Ruby file asks Rust for the server that takes `ruby` (`lsp_server_for`).
 // Rust starts, keeps and stops the process (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of its state (the event `lsp-status`), reads how it is started from the worktree (`lsp_launch`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
 // A Ruby file opened in the editor starts the server of `ruby` of its worktree when the settings say 「自動で起動」 (`ensureServer`); a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
 import type { LspLaunch } from "./bindings/LspLaunch";
@@ -308,7 +308,7 @@ export function syncServers(gone: (target: string | null, path: string) => boole
 
 // ---- the pane ----
 
-// Follows the file pane: the worktree it shows (null: none) and whether the definition is what it shows. The settings and the way of starting are read when the part is shown, for the worktree that is shown.
+// Follows the file pane: the worktree it shows (null: none) and whether the language server is what it shows. The settings and the way of starting are read when the part is shown, for the worktree that is shown.
 export function syncLsp(next: LspPlace | null, visible: boolean) {
   const same = next?.path === pane?.path && next?.target === pane?.target && next?.project === pane?.project;
   if (!same) {

@@ -6,10 +6,12 @@ import type { LspServerSettings } from "../../ts/bindings/LspServerSettings";
 import type { LspStatus } from "../../ts/bindings/LspStatus";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { PaneLayout } from "../../ts/bindings/PaneLayout";
+import type { PaneNode } from "../../ts/bindings/PaneNode";
 import { callsOf, count, emitEvent, holds, mock, onceId, orcaWorktree, rejects, release, textsOf, timers, waitForCalls, waitForCount } from "../support";
-import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, showAgain, studio, tabTitles, worktrees } from "../orca-support";
+import { claudeTab, filesToggle, openOrca, orcaOverview, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
-// A-34: the definition in the file pane, and the editor's Command and right button. Rust asks ruby-lsp, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, and how it draws the answers and opens them. The language server under the definition is checked below too: its state and settings, and when it is started and stopped.
+// A-34: the definition tab under the pane of the editor, and the editor's Command and right button. Rust asks the language server, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, how it splits the work pane, and how it draws the answers and opens them. The language server in the file pane is checked below too: its state and settings, and when it is started and stopped.
 describe("orca: definition (A-34)", () => {
   const dirOf = (entries: [string, boolean][]): OrcaDir => ({ entries: entries.map(([name, isDirectory]) => ({ name, path: name, isDirectory, ignored: false })), total: entries.length });
   const root = () =>
@@ -29,6 +31,13 @@ describe("orca: definition (A-34)", () => {
   const otherPlace: LspPlace = { file: "channel_generator.rb", line: 3, place: "actioncable 8.1.4.1 / lib/rails/generators/channel", outside: true };
   // A file of `n` lines, "row 1" to "row n".
   const rows = (n: number) => `${Array.from({ length: n }, (_, i) => `row ${i + 1}`).join("\n")}\n`;
+
+  // The layouts that `orca_panes` answers: the pane of the editor (p1) with the tabs given, and the definition tab alone in the pane below it (p2).
+  const claude = claudeTab("example-app");
+  const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
+  const below = (top: string[], selected: string, focus = "p2"): PaneLayout => ({ root: { kind: "split", direction: "column", children: [pane("p1", top, selected), pane("p2", ["definition:1"])], sizes: [0.5, 0.5] }, focus });
+  const moves = async () => (await callsOf("orca_panes")).map((c) => (c as { op: { kind: string } | null }).op).filter((op) => op?.kind === "move");
+  const ops = async (kind: string) => (await callsOf("orca_panes")).map((c) => (c as { op: { kind: string } | null }).op).filter((op) => op?.kind === kind);
 
   // The app with the example-app project selected, the file pane open (`shown`) and its root read. The clock of the list is made very slow, so that no read of the open file comes between a press and the check of its result.
   async function openFiles(shown = true) {
@@ -90,54 +99,57 @@ describe("orca: definition (A-34)", () => {
   // The offset of the 'i' of "Rails" in the source: the third character of the name.
   const onRails = () => source.indexOf("Rails") + 2;
 
-  // The three places, answered for the press on "Rails".
+  // The three places, answered for the press on "Rails", and what their lines are read from: a file of the worktree of 12 lines, and the two gems of 30.
   async function answer(locations: LspLocation[] = [inside, gem, other], places: LspPlace[] = [insidePlace, gemPlace, otherPlace]) {
     await mock("lsp_word", "Rails");
     await mock("lsp_definition", locations);
     await mock("lsp_places", places);
+    await mock("orca_file_read", text(rows(12)));
+    await mock("lsp_read_outside", { path: gem.path, text: rows(30) });
   }
-  // Opens a.rb, answers (`read` is what the lines of an open row are read from), and presses on "Rails" with the Command key.
-  async function define(locations?: LspLocation[], places?: LspPlace[], shown = true, read?: OrcaFileText) {
+  // Opens a.rb, answers, makes `orca_panes` answer the split with the definition tab below, and presses on "Rails" with the Command key.
+  async function define(locations?: LspLocation[], places?: LspPlace[], shown = true) {
     await openFiles(shown);
     await openFileWith("a.rb", text(source));
     await answer(locations, places);
-    if (read) await mock("orca_file_read", read);
+    await mock("orca_panes", below([claude, "file:1"], "file:1"));
     await contextAt(onRails());
+    await expect(tabOf("definition:1")).toBeExisting();
   }
   // Where the caret is in `content` for the line from 0 and the character.
   const caretOf = (content: string, line: number, character: number) => content.split("\n").slice(0, line).reduce((n, l) => n + l.length + 1, 0) + character;
   const caret = () => browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.selectionStart);
 
   const mode = (label: string) => $(`#orca-files-bar [aria-label="${label}"]`);
-  const defRow = (n: number) => $(`#orca-definition-list .orca-def[data-index="${n}"]`);
-  const lineTexts = (n: number) => textsOf(`#orca-definition-list .orca-def[data-index="${n}"] .orca-def-line`);
-  // The page's own press of the button of a row: the open button of the row `n`, or its toggle.
-  const press = (n: number, button: "toggle" | "open") =>
+  const defRow = (n: number) => $(`.orca-definition .orca-def[data-index="${n}"]`);
+  const lineTexts = (n: number) => textsOf(`.orca-definition .orca-def[data-index="${n}"] .orca-def-line`);
+  // The page's own press of the open button of the row `n`.
+  const press = (n: number) =>
     browser.execute(
-      (i, which, once) => {
+      (i, once) => {
         if (!window.__e2e_once__(once)) return;
-        document.querySelector<HTMLElement>(`#orca-definition-list .orca-def[data-index="${i}"] .orca-def-${which}`)!.click();
+        document.querySelector<HTMLElement>(`.orca-definition .orca-def[data-index="${i}"] .orca-def-open`)!.click();
       },
       n,
-      button,
       onceId(),
     );
 
-  it("asks where the mouse is, not the caret, with the text of the editor, and switches the pane to the definition (A-34)", async () => {
+  it("asks where the mouse is, not the caret, with the text of the editor, and opens the definition tab without changing the file pane (A-34)", async () => {
     await openFiles();
     await openFileWith("a.rb", text(source));
     await answer();
+    await mock("orca_panes", below([claude, "file:1"], "file:1"));
     // The caret is at the start; the press is on "Rails" (line 2, character 6).
     await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(0, 0));
     await contextAt(onRails());
     expect(await waitForCalls("lsp_word")).toEqual([{ line: "    Rails.logger.info(x)", character: 6 }]);
     expect(await waitForCalls("lsp_definition")).toEqual([{ environment: null, worktree, server: "ruby-lsp", relative: "a.rb", text: source, line: 2, character: 6 }]);
     expect(await prevented()).toBe(true);
-    await expect($("#orca-definition")).toBeDisplayed();
-    await expect(mode("定義")).toHaveAttribute("aria-pressed", "true");
-    await expect(mode("ファイル")).toHaveAttribute("aria-pressed", "false");
-    await expect($("#orca-files-tree")).not.toBeDisplayed();
-    await expect($("#orca-history")).not.toBeDisplayed();
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("定義 ・ Rails");
+    await expect($('.orca-tab[data-definition="true"] .orca-file-tab-ic svg')).toBeExisting();
+    await expect($("#orca-files-tree")).toBeDisplayed();
+    await expect(mode("ファイル")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#orca-server")).not.toBeDisplayed();
   });
 
   it("sends the text that is typed and not saved yet, and a place in a later line and character (A-34)", async () => {
@@ -163,113 +175,164 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf("lsp_word")).toEqual([{ line: "x = Rails", character: 8 }]);
   });
 
-  it("shows the file pane when it was hidden, with the definition of the press (A-34)", async () => {
+  it("splits the work pane below the pane of the editor for a new definition tab, and shows it there (A-34, A-17)", async () => {
+    await define();
+    expect(await moves()).toEqual([{ kind: "move", tab: "definition:1", pane: "p1", edge: "bottom" }]);
+    expect((await callsOf("orca_panes")).at(0)).toMatchObject({ tabs: [claude, "file:1", "definition:1"] });
+    await waitForCount(".orca-pane", 2);
+    await expect($('.orca-pane[data-pane="p2"] .orca-definition')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p1"] .orca-edit-area')).toBeDisplayed();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rb", "定義 ・ Rails"]);
+  });
+
+  it("shows the definition tab with the file pane hidden, and leaves the file pane hidden (A-34)", async () => {
     await define(undefined, undefined, false);
-    await expect($("#orca-files")).toBeDisplayed();
-    await expect($("#orca-definition")).toBeDisplayed();
-    await expect(mode("定義")).toHaveAttribute("aria-pressed", "true");
-    await waitForCount("#orca-definition-list .orca-def", 3);
+    await expect($("#orca-files")).not.toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p2"] .orca-definition')).toBeDisplayed();
   });
 
-  it("draws the name and the count, and a row for each place with its file and line, its place, the gem mark and the open button, all closed when there are several (A-34)", async () => {
+  it("draws the name and the count, and a row for each place with its path and line, its place, the gem mark and the open button (A-34)", async () => {
     await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
-    expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails", "3 件"]);
-    expect(await textsOf("#orca-definition-list .orca-def-file")).toEqual(["rails_ext.rb:7", "rails.rb:19", "channel_generator.rb:3"]);
-    expect(await textsOf("#orca-definition-list .orca-def-place")).toEqual(["app/lib", "railties 8.1.4.1 / lib", "actioncable 8.1.4.1 / lib/rails/generators/channel"]);
-    expect(await textsOf("#orca-definition-list .orca-def-gem")).toEqual(["gem", "gem"]);
-    expect(await count('#orca-definition-list .orca-def[data-index="0"] .orca-def-gem')).toBe(0);
-    expect(await count('#orca-definition-list .orca-def-open[aria-label="タブで開く"]')).toBe(3);
-    expect(await count('#orca-definition-list .orca-def-toggle[aria-expanded="false"]')).toBe(3);
-    expect(await count("#orca-definition-list .orca-def-code")).toBe(0);
+    await waitForCount(".orca-definition .orca-def", 3);
+    expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails", "3 件"]);
+    expect(await textsOf(".orca-definition .orca-def-file")).toEqual(["app/lib/rails_ext.rb:7", "rails.rb:19", "channel_generator.rb:3"]);
+    expect(await textsOf(".orca-definition .orca-def-place")).toEqual(["railties 8.1.4.1 / lib", "actioncable 8.1.4.1 / lib/rails/generators/channel"]);
+    expect(await textsOf(".orca-definition .orca-def-gem")).toEqual(["gem", "gem"]);
+    expect(await count('.orca-definition .orca-def[data-index="0"] .orca-def-gem')).toBe(0);
+    expect(await textsOf(".orca-definition .orca-def-open")).toEqual(["開く", "開く", "開く"]);
+    expect(await count(".orca-definition .orca-def-toggle")).toBe(0);
     expect(await callsOf("lsp_places")).toEqual([{ locations: [inside, gem, other] }]);
-    expect(await callsOf("lsp_read_outside")).toEqual([]);
   });
 
-  it("opens the only place at once, and reads its lines (A-34)", async () => {
-    await define([inside], [insidePlace], true, text(rows(12)));
-    await waitForCount("#orca-definition-list .orca-def", 1);
-    await expect($('#orca-definition-list .orca-def-toggle[aria-expanded="true"]')).toBeDisplayed();
-    await waitForCount("#orca-definition-list .orca-def-line", 7);
-    expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails", "1 件"]);
-    expect(await callsOf("orca_file_read")).toEqual([{ path: worktree, server: "ruby-lsp", relative: "app/lib/rails_ext.rb", environment: null }]);
-  });
-
-  it("opens a row to the three lines before and after the definition, marks its line, and closes it without reading again (A-34)", async () => {
+  it("opens every row from the start and reads each place once, a file of the worktree and a file outside it each in its own way (A-34)", async () => {
     await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
-    const read = await mock("orca_file_read", text(rows(12), "ruby"));
-    await defRow(0).$(".orca-def-toggle").click();
-    await waitForCount("#orca-definition-list .orca-def-line", 7);
+    await waitForCount(".orca-definition .orca-def-line", 20);
     expect(await lineTexts(0)).toEqual(["4row 4", "5row 5", "6row 6", "7row 7", "8row 8", "9row 9", "10row 10"]);
-    expect(await textsOf('#orca-definition-list .orca-def-line[data-hit="true"]')).toEqual(["7row 7"]);
-    expect(await callsOf(read)).toEqual([{ path: worktree, server: "ruby-lsp", relative: "app/lib/rails_ext.rb", environment: null }]);
-    await defRow(0).$(".orca-def-toggle").click();
-    await expect($('#orca-definition-list .orca-def-toggle[aria-expanded="true"]')).not.toExist();
-    expect(await count("#orca-definition-list .orca-def-code")).toBe(0);
-    await defRow(0).$(".orca-def-toggle").click();
-    await waitForCount("#orca-definition-list .orca-def-line", 7);
-    expect(await callsOf(read)).toHaveLength(1);
+    expect(await lineTexts(1)).toEqual(["16row 16", "17row 17", "18row 18", "19row 19", "20row 20", "21row 21", "22row 22"]);
+    // A place near the start of its file is drawn from the first line.
+    expect(await lineTexts(2)).toEqual(["1row 1", "2row 2", "3row 3", "4row 4", "5row 5", "6row 6"]);
+    expect(await textsOf('.orca-definition .orca-def-line[data-hit="true"]')).toEqual(["7row 7", "19row 19", "3row 3"]);
+    expect(await callsOf("orca_file_read")).toEqual([{ path: worktree, relative: "app/lib/rails_ext.rb", environment: null }]);
+    expect(await callsOf("lsp_read_outside")).toEqual([
+      { environment: null, project: "proj_example-app", worktree, server: "ruby-lsp", path: gem.path },
+      { environment: null, project: "proj_example-app", worktree, server: "ruby-lsp", path: other.path },
+    ]);
   });
 
-  it("reads the lines of a place outside the worktree with the worktree and the path the server gave, and draws the start of a file from its first line (A-34)", async () => {
-    await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
-    const read = await mock("lsp_read_outside", { path: other.path, text: rows(30) });
-    await defRow(2).$(".orca-def-toggle").click();
-    await waitForCount("#orca-definition-list .orca-def-line", 6);
-    expect(await callsOf(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, server: "ruby-lsp", path: other.path }]);
-    expect(await lineTexts(2)).toEqual(["1row 1", "2row 2", "3row 3", "4row 4", "5row 5", "6row 6"]);
-    expect(await textsOf('#orca-definition-list .orca-def-line[data-hit="true"]')).toEqual(["3row 3"]);
-    expect(await callsOf("orca_file_read")).toHaveLength(1);
+  it("opens the only place at once too, with its count (A-34)", async () => {
+    await define([inside], [insidePlace]);
+    await waitForCount(".orca-definition .orca-def-line", 7);
+    expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails", "1 件"]);
   });
 
   it("says why the lines of a row cannot be shown, in the row, and the other rows stay (A-34)", async () => {
-    await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
+    await openFiles();
+    await openFileWith("a.rb", text(source));
+    await answer();
     await mock("lsp_read_outside", rejects("ファイルを読めません"));
-    await defRow(1).$(".orca-def-toggle").click();
+    await mock("orca_panes", below([claude, "file:1"], "file:1"));
+    await contextAt(onRails());
     await expect(defRow(1).$(".orca-file-note.fail")).toHaveText("ファイルを読めません");
-    expect(await count("#orca-definition-list .orca-def")).toBe(3);
+    await expect(defRow(2).$(".orca-file-note.fail")).toHaveText("ファイルを読めません");
+    await waitForCount(".orca-definition .orca-def-line", 7);
+    expect(await count(".orca-definition .orca-def")).toBe(3);
   });
 
-  it("opens a place in the worktree as an editor tab, with the caret at its line (A-34)", async () => {
+  it("puts the next definition in the same tab, wherever it is, and splits nothing again (A-34)", async () => {
     await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
+    await waitForCount(".orca-definition .orca-def", 3);
+    await mock("lsp_definition", [gem]);
+    await mock("lsp_places", [gemPlace]);
+    await mock("lsp_word", "logger");
+    const before = (await moves()).length;
+    await contextAt(source.indexOf(".logger") + 3);
+    await waitForCount(".orca-definition .orca-def", 1);
+    expect(await textsOf(".orca-definition-head > span")).toEqual(["logger", "1 件"]);
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("定義 ・ logger");
+    expect(await count('.orca-tab[data-definition="true"]')).toBe(1);
+    expect(await moves()).toHaveLength(before);
+  });
+
+  it("selects the tab when the pressed pane shows another tab of the project, in the pane it is in (A-34)", async () => {
+    await define();
+    await waitForCount(".orca-definition .orca-def", 3);
+    // The focus goes back to the pane of the editor, which shows the definition tab nowhere.
+    await mock("orca_panes", below([claude, "file:1"], "file:1", "p1"));
+    await tabOf("file:1").$(".orca-tab-btn").click();
+    await expect($('.orca-pane[data-pane="p1"] .orca-edit-area')).toBeDisplayed();
+    await contextAt(onRails());
+    expect(await waitForCalls("lsp_definition", 2)).toHaveLength(2);
+    expect(await ops("select")).toEqual(expect.arrayContaining([{ kind: "select", tab: "definition:1" }]));
+    expect(await moves()).toEqual([]);
+    expect(await count('.orca-tab[data-definition="true"]')).toBe(1);
+  });
+
+  it("drops the answer of an older question, and draws the spinner while one is awaited (A-34)", async () => {
+    await openFiles();
+    await openFileWith("a.rb", text(source));
+    await answer();
+    await mock("lsp_definition", holds);
+    await mock("orca_panes", below([claude, "file:1"], "file:1"));
+    await contextAt(onRails());
+    await waitForCalls("lsp_definition");
+    await expect($(".orca-definition .pending")).toBeDisplayed();
+    expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails"]);
+    await contextAt(onRails());
+    await waitForCalls("lsp_definition", 2);
+    await mock("lsp_places", [gemPlace]);
+    await release("lsp_definition", [inside]);
+    await release("lsp_definition", [gem]);
+    await waitForCount(".orca-definition .orca-def", 1);
+    expect(await textsOf(".orca-definition .orca-def-file")).toEqual(["rails.rb:19"]);
+    expect(await callsOf("lsp_places")).toEqual([{ locations: [gem] }]);
+  });
+
+  it("closes with its button, and the pane it was alone in closes with it (A-34, A-17)", async () => {
+    await define();
+    await waitForCount(".orca-definition .orca-def", 3);
+    await mock("orca_panes", { root: pane("p1", [claude, "file:1"], "file:1"), focus: "p1" });
+    await tabOf("definition:1").$(".orca-tab-close").click();
+    await expect(tabOf("definition:1")).not.toExist();
+    await waitForCount(".orca-pane", 1);
+    expect(await count(".orca-definition")).toBe(0);
+  });
+
+  it("opens a place in the worktree as an editor tab in the pane of the editor, with the caret at its line (A-34)", async () => {
+    await define();
+    await waitForCount(".orca-definition .orca-def", 3);
     const read = await mock("orca_file_read", text(rows(40), "ruby"));
-    await press(0, "open");
-    expect(await waitForCalls(read)).toEqual([{ path: worktree, server: "ruby-lsp", relative: "app/lib/rails_ext.rb", environment: null }]);
+    await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
+    await press(0);
+    expect(await waitForCalls(read)).toEqual([{ path: worktree, relative: "app/lib/rails_ext.rb", environment: null }]);
+    expect(await moves()).toEqual([{ kind: "move", tab: "file:2", pane: "p1", edge: "center" }]);
     await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
-    expect(await tabTitles()).toEqual(expect.arrayContaining(["a.rb", "rails_ext.rb"]));
+    expect(await tabTitles()).toEqual(expect.arrayContaining(["a.rb", "rails_ext.rb", "定義 ・ Rails"]));
     await expect($(".orca-edit-path")).toHaveText("app/lib/rails_ext.rb");
+    await expect($('.orca-pane[data-pane="p1"] .orca-edit-area')).toBeDisplayed();
     await browser.waitUntil(async () => (await caret()) === caretOf(rows(40), 6, 2), { timeoutMsg: "the caret never went to the line of the definition" });
     expect(await count(".orca-tab-gem")).toBe(0);
   });
 
-  it("goes to the line of a file that is open already, in its own tab (A-34)", async () => {
-    await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
-    await mock("orca_file_read", text(rows(40), "ruby"));
-    await press(0, "open");
-    await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
-    await browser.waitUntil(async () => (await caret()) === caretOf(rows(40), 6, 2));
-    // The caret leaves the line, and the tab of the first file is selected; the same open selects the tab again, with the caret back at the line.
-    await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(0, 0));
-    await $$('.orca-tab[data-file="true"] [role="tab"]')[0].click();
+  it("selects a file that is open already where it is, and goes to the line in it (A-34)", async () => {
+    await define([{ path: "a.rb", outside: false, line: 2, character: 4 }], [{ file: "a.rb", line: 3, place: ".", outside: false }]);
+    await waitForCount(".orca-definition .orca-def", 1);
+    await mock("orca_panes", below([claude, "file:1"], "file:1", "p1"));
+    await press(0);
     await expect($(".orca-edit-area")).toHaveValue(source, { trim: false });
-    await press(0, "open");
-    await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
-    await browser.waitUntil(async () => (await caret()) === caretOf(rows(40), 6, 2), { timeoutMsg: "the caret never went back to the line" });
-    expect(await count('.orca-tabs [data-file="true"]')).toBe(2);
+    expect(await moves()).toEqual([]);
+    expect(await ops("select")).toEqual([{ kind: "select", tab: "file:1" }]);
+    await browser.waitUntil(async () => (await caret()) === caretOf(source, 2, 4), { timeoutMsg: "the caret never went to the line" });
+    expect(await count('.orca-tabs [data-file="true"]')).toBe(1);
   });
 
   it("opens a place outside the worktree as a read only tab with a lock and gem, read by lsp_read_outside, and saves nothing (A-34)", async () => {
     await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
+    await waitForCount(".orca-definition .orca-def", 3);
     const rails = rows(30);
     const read = await mock("lsp_read_outside", { path: gem.path, text: rails });
     const write = await mock("orca_file_write", { state: "saved", signature: "sig-2" });
-    await press(1, "open");
+    await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
+    await press(1);
     expect(await waitForCalls(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, server: "ruby-lsp", path: gem.path }]);
     await expect($(".orca-edit-area")).toHaveValue(rails, { trim: false });
     await expect($(".orca-edit-area")).toHaveAttribute("readonly");
@@ -293,17 +356,18 @@ describe("orca: definition (A-34)", () => {
     await openFileWith("a.rb", text(source));
     await answer();
     await mock("lsp_definition", rejects("言語サーバーがまだ準備できていません"));
+    await mock("orca_panes", below([claude, "file:1"], "file:1"));
     await contextAt(onRails());
-    await expect($("#orca-definition-list .orca-file-note.fail")).toHaveText("言語サーバーがまだ準備できていません");
-    expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails"]);
-    expect(await count("#orca-definition-list .orca-def")).toBe(0);
+    await expect($(".orca-definition .orca-file-note.fail")).toHaveText("言語サーバーがまだ準備できていません");
+    expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails"]);
+    expect(await count(".orca-definition .orca-def")).toBe(0);
     expect(await callsOf("lsp_places")).toEqual([]);
   });
 
   it("says there is no definition when the server gives none (A-34)", async () => {
     await define([], []);
-    await expect($("#orca-definition-list .orca-file-note")).toHaveText("定義はありません");
-    expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails", "0 件"]);
+    await expect($(".orca-definition .orca-file-note")).toHaveText("定義はありません");
+    expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails", "0 件"]);
     expect(await callsOf("lsp_places")).toEqual([]);
   });
 
@@ -316,11 +380,11 @@ describe("orca: definition (A-34)", () => {
     expect(await prevented()).toBe(false);
     expect(await callsOf("lsp_word")).toEqual([]);
     expect(await callsOf("lsp_definition")).toEqual([]);
-    await expect($("#orca-definition")).not.toBeDisplayed();
+    expect(await count(".orca-definition")).toBe(0);
     await expect($("#orca-files-tree")).toBeDisplayed();
   });
 
-  it("asks for nothing where the mouse is on no name or past the end of a line, and keeps the pane as it is (A-34)", async () => {
+  it("asks for nothing where the mouse is on no name or past the end of a line, and opens no tab (A-34)", async () => {
     await openFiles();
     await openFileWith("a.rb", text(source));
     await answer();
@@ -334,11 +398,12 @@ describe("orca: definition (A-34)", () => {
     await waitForCalls("lsp_word");
     await browser.pause(300);
     expect(await callsOf("lsp_definition")).toEqual([]);
-    await expect($("#orca-definition")).not.toBeDisplayed();
+    expect(await count('.orca-tab[data-definition="true"]')).toBe(0);
   });
 
-  it("asks for nothing in a file that is not Ruby (A-34)", async () => {
+  it("asks for nothing in a file whose language no server takes, and leaves the default menu (A-34)", async () => {
     await openFiles();
+    await mock("lsp_server_for", null);
     await openFileWith("notes.txt", text("Rails is here\n", "plaintext", null));
     await answer();
     await contextAt(2);
@@ -346,26 +411,35 @@ describe("orca: definition (A-34)", () => {
     expect(await prevented()).toBe(false);
     expect(await callsOf("lsp_word")).toEqual([]);
     expect(await callsOf("lsp_definition")).toEqual([]);
+    expect(await callsOf("lsp_server_for")).toEqual([{ environment: null, project: "proj_example-app", language: "plaintext" }]);
   });
 
-  it("keeps the list when the pane is switched to the files and back, and asks again at the next press (A-34)", async () => {
+  it("asks the server that takes the language of a file that is not Ruby (A-34)", async () => {
+    await openFiles();
+    await mock("lsp_server_for", "typescript-language-server");
+    await openFileWith("notes.txt", text("const x = Rails;\n", "typescript", null));
+    await answer();
+    await mock("orca_panes", below([claude, "file:1"], "file:1"));
+    await contextAt(11);
+    expect(await waitForCalls("lsp_definition")).toEqual([{ environment: null, worktree, server: "typescript-language-server", relative: "notes.txt", text: "const x = Rails;\n", line: 0, character: 11 }]);
+    expect(await callsOf("lsp_server_for")).toEqual([{ environment: null, project: "proj_example-app", language: "typescript" }]);
+    expect(await prevented()).toBe(true);
+    await expect(tabOf("definition:1")).toBeExisting();
+  });
+
+  it("keeps the definition tab when the part of the file pane is switched to the language server and back (A-34)", async () => {
     await define();
-    await waitForCount("#orca-definition-list .orca-def", 3);
+    await waitForCount(".orca-definition .orca-def", 3);
+    await mode("言語サーバー").click();
+    await expect($("#orca-server")).toBeDisplayed();
+    await expect($("#orca-files-tree")).not.toBeDisplayed();
     await mode("ファイル").click();
     await expect($("#orca-files-tree")).toBeDisplayed();
-    await expect($("#orca-definition")).not.toBeDisplayed();
-    await mode("定義").click();
-    await expect($("#orca-definition")).toBeDisplayed();
-    expect(await count("#orca-definition-list .orca-def")).toBe(3);
+    expect(await count(".orca-definition .orca-def")).toBe(3);
     expect(await callsOf("lsp_definition")).toHaveLength(1);
-    await mock("lsp_definition", [gem]);
-    await mock("lsp_places", [gemPlace]);
-    await mock("lsp_read_outside", { path: gem.path, text: rows(30) });
-    await contextAt(onRails());
-    await waitForCount("#orca-definition-list .orca-def", 1);
-    expect(await textsOf("#orca-definition-head > span")).toEqual(["Rails", "1 件"]);
   });
-  // ---- the language server under the definition ----
+
+  // ---- the language server in the file pane ----
 
   const repo = "proj_example-app";
   // The settings of a repository with nothing saved: the one server, ruby-lsp, taking Ruby. `extra` changes the repository (`environment`, `sshHost`) or that server (the rest).
@@ -401,19 +475,19 @@ describe("orca: definition (A-34)", () => {
       onceId(),
     );
   const stateText = () => $("#orca-lsp-state-text");
-  // The file pane open on the definition, with what Rust reads for the worktree given.
+  // The file pane open on the language server, with what Rust reads for the worktree given.
   async function showServer(launch: LspLaunch | { __e2e_reject__: string } = composeLaunch(), settings = unset(), state = status("running")) {
     await openFiles();
     await mock("lsp_settings", settings);
     await mock("lsp_launch", launch);
     await mock("lsp_status", state);
-    await mode("定義").click();
+    await mode("言語サーバー").click();
     await expect($("#orca-lsp")).toBeDisplayed();
     await waitForCalls("lsp_launch");
   }
   const worktreeArgs = { environment: null, project: repo, worktree, server: "ruby-lsp" };
 
-  it("draws the state, the way the server is started and the settings under the definition, and reads them once (A-34)", async () => {
+  it("draws the state, the way the server is started and the settings in the file pane, and reads them once (A-34)", async () => {
     await showServer(composeLaunch(), unset({ autoStart: false }));
     await expect(stateText()).toHaveText("ruby-lsp 動作中");
     await expect($("#orca-lsp-dot")).toHaveAttribute("data-state", "running");
@@ -432,14 +506,14 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf("ssh_hosts")).toEqual([]);
   });
 
-  it("reads nothing while the definition is not what the pane shows (A-34)", async () => {
+  it("reads nothing while the language server is not what the pane shows (A-34)", async () => {
     await openFiles();
     const settings = await mock("lsp_settings", unset());
     const launch = await mock("lsp_launch", composeLaunch());
     await browser.pause(300);
     expect(await callsOf(settings)).toEqual([]);
     expect(await callsOf(launch)).toEqual([]);
-    await mode("定義").click();
+    await mode("言語サーバー").click();
     await waitForCalls(launch);
   });
 
@@ -563,7 +637,7 @@ describe("orca: definition (A-34)", () => {
     await mock("lsp_settings", unset({ environment: "Studio", sshHost: "dev" }));
     await mock("lsp_launch", composeLaunch());
     await mock("ssh_hosts", ["dev", "build"]);
-    await mode("定義").click();
+    await mode("言語サーバー").click();
     await expect($("#orca-lsp-ssh-row")).toBeDisplayed();
     expect(await textsOf("#orca-lsp-ssh option")).toEqual(["", "dev", "build"]);
     await expect($("#orca-lsp-ssh")).toHaveValue("dev");
@@ -586,7 +660,7 @@ describe("orca: definition (A-34)", () => {
     await mock("lsp_settings", unset({ environment: "Studio", sshHost: "gone" }));
     await mock("lsp_launch", composeLaunch());
     await mock("ssh_hosts", ["dev"]);
-    await mode("定義").click();
+    await mode("言語サーバー").click();
     expect(await textsOf("#orca-lsp-ssh option")).toEqual(["", "dev", "gone"]);
     await expect($("#orca-lsp-ssh")).toHaveValue("gone");
   });
@@ -684,9 +758,10 @@ describe("orca: definition (A-34)", () => {
   it("asks once for a worktree, not for each Ruby file (A-34)", async () => {
     await define();
     await waitForCalls("lsp_start");
-    await waitForCount("#orca-definition-list .orca-def", 3);
+    await waitForCount(".orca-definition .orca-def", 3);
     await mock("orca_file_read", text(rows(40), "ruby"));
-    await press(0, "open");
+    await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
+    await press(0);
     await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
     await browser.pause(300);
     expect(await callsOf("lsp_start")).toEqual([worktreeArgs]);
