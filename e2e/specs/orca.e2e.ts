@@ -2891,7 +2891,8 @@ describe("orca: split panes (A-17)", () => {
       await openStudioSplit();
       const calls = await waitForCalls("orca_stream_terminal", 2);
       const viewport = await mock("orca_stream_viewport", null);
-      await dragDivider(0.2);
+      // The list narrows from 19% to 15%, so the panes widen.
+      await dragDivider(0.15);
       const sent = await waitForCalls(viewport, 2);
       expect(sent.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
       expect(viewportOf(sent[0]).cols).toBeGreaterThan(viewportOf(calls[0]).cols);
