@@ -754,6 +754,31 @@ describe("orca", () => {
     expect(await count("#orca-feed .orca-project")).toBe(4);
   });
 
+  it("draws the terminal with the WebGL renderer without an error, and goes back to the DOM renderer when the context is lost", async () => {
+    await openOrca();
+    // The E2E build keeps the DOM renderer for the other specs; this one turns WebGL on before the terminal is made.
+    await browser.execute(() => {
+      const w = window as unknown as { __e2e_webgl__: boolean; __webgl_errors__: string[] };
+      w.__e2e_webgl__ = true;
+      w.__webgl_errors__ = [];
+      window.addEventListener("error", (e) => w.__webgl_errors__.push(e.message));
+    });
+    const errors = () => browser.execute(() => (window as unknown as { __webgl_errors__: string[] }).__webgl_errors__);
+    await mock("orca_terminal_read", ["$ first frame"]);
+    await select("example-app");
+    const box = ".orca-term .orca-term-box:not([hidden])";
+    await expect($(`${box} .xterm-screen canvas:not(.xterm-link-layer)`)).toExist();
+    expect(await count(`${box} .xterm-rows`)).toBe(0);
+    expect(await errors()).toEqual([]);
+    // The GPU takes the context away: xterm.js draws with the DOM renderer again, and the screen is still there.
+    await browser.execute((selector) => {
+      document.querySelector<HTMLCanvasElement>(selector)!.getContext("webgl2")!.getExtension("WEBGL_lose_context")!.loseContext();
+    }, `${box} .xterm-screen canvas:not(.xterm-link-layer)`);
+    await browser.waitUntil(async () => (await count(`${box} .xterm-rows`)) === 1, { timeout: 10000, timeoutMsg: "the DOM renderer never came back" });
+    await browser.waitUntil(async () => (await screenText()).includes("first frame"), { timeoutMsg: "the screen was lost with the context" });
+    expect(await errors()).toEqual([]);
+  });
+
   it("keeps the selection through a read in the background, and does not start the terminal again", async () => {
     await openOrca();
     await mock("orca_terminal_read", ["$ first frame"]);
