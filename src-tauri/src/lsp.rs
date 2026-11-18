@@ -647,11 +647,8 @@ fn clean(settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
     })
 }
 
-/// Saves `settings` in the place of its key, or drops that entry when they are the unset ones, and answers what was saved.
-fn set_settings(dir: &Path, settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
-    let settings = clean(settings)?;
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut store = load(dir)?;
+/// Saves `settings` (already cleaned) in the place of its key of `store`, or drops that entry when they are the unset ones, and answers what was saved.
+fn put(dir: &Path, mut store: Store, settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
     let at = store
         .repositories
         .iter()
@@ -669,6 +666,95 @@ fn set_settings(dir: &Path, settings: LspRepoSettings) -> Result<LspRepoSettings
         save(dir, &store)?;
     }
     Ok(settings)
+}
+
+/// Saves `settings` in the place of its key, or drops that entry when they are the unset ones, and answers what was saved.
+fn set_settings(dir: &Path, settings: LspRepoSettings) -> Result<LspRepoSettings, String> {
+    let settings = clean(settings)?;
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    put(dir, load(dir)?, settings)
+}
+
+/// Changes the settings of the project `project` of `environment` (the saved ones, else the unset ones) with `change`, and saves them as `set_settings` does, the read and the write under one lock so that two changes do not lose each other.
+fn change_settings(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+    change: impl FnOnce(&mut LspRepoSettings) -> Result<(), String>,
+) -> Result<LspRepoSettings, String> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let store = load(dir)?;
+    let mut settings = store
+        .repositories
+        .iter()
+        .find(|r| r.environment.as_deref() == environment && r.project == project)
+        .cloned()
+        .unwrap_or_else(|| LspRepoSettings::unset(environment, project));
+    change(&mut settings)?;
+    put(dir, store, clean(settings)?)
+}
+
+/// The settings of the project `project` of `environment` (`None`: this machine) for `tsunagiai-mcp` (A-34): the saved ones, else the unset ones, after the key is checked as a save checks it.
+pub fn read_settings(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+) -> Result<LspRepoSettings, String> {
+    if let Some(environment) = environment {
+        check_text("接続先", environment)?;
+    }
+    check_text("プロジェクト", project)?;
+    settings_of(dir, environment, project)
+}
+
+/// Saves `server` among the servers of the project `project` of `environment` for `tsunagiai-mcp` (A-34): it takes the place of the server of the same name (trimmed), or is put after the others. Every check of a save applies to the whole result, so a language that another server takes is refused. Answers the settings as saved.
+pub fn save_server(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+    mut server: LspServerSettings,
+) -> Result<LspRepoSettings, String> {
+    server.name = server.name.trim().to_owned();
+    change_settings(dir, environment, project, |settings| {
+        match settings.servers.iter().position(|s| s.name == server.name) {
+            Some(at) => settings.servers[at] = server,
+            None => settings.servers.push(server),
+        }
+        Ok(())
+    })
+}
+
+/// Deletes the server named `name` (trimmed) from the project `project` of `environment` for `tsunagiai-mcp` (A-34); a name that is not there is an error. Answers the settings as saved.
+pub fn delete_server(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+    name: &str,
+) -> Result<LspRepoSettings, String> {
+    let name = name.trim();
+    check_server(name)?;
+    change_settings(dir, environment, project, |settings| {
+        let at = settings
+            .servers
+            .iter()
+            .position(|s| s.name == name)
+            .ok_or_else(|| format!("サーバー「{name}」はありません"))?;
+        settings.servers.remove(at);
+        Ok(())
+    })
+}
+
+/// Sets the `ssh_host` of the project `project` of `environment` for `tsunagiai-mcp` (A-34), or takes it off when it is none or empty. Answers the settings as saved.
+pub fn set_ssh_host(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+    ssh_host: Option<String>,
+) -> Result<LspRepoSettings, String> {
+    change_settings(dir, environment, project, |settings| {
+        settings.ssh_host = ssh_host;
+        Ok(())
+    })
 }
 
 // ---- the commands ----
@@ -1849,6 +1935,146 @@ mod tests {
             Some("one")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---- the tools of tsunagiai-mcp ----
+
+    #[test]
+    fn a_server_is_added_to_the_unset_settings_and_one_of_the_same_name_is_replaced_in_its_place() {
+        let dir = temp_dir("tool-save");
+        let added = save_server(&dir, None, "repo-1", typescript()).unwrap();
+        assert_eq!(
+            added.servers,
+            vec![LspServerSettings::ruby_lsp(), typescript()]
+        );
+        assert_eq!(read_settings(&dir, None, "repo-1").unwrap(), added);
+        let changed = LspServerSettings {
+            command: Some("tsserver".into()),
+            ..typescript()
+        };
+        let replaced = save_server(&dir, None, "repo-1", changed.clone()).unwrap();
+        assert_eq!(
+            replaced.servers,
+            vec![LspServerSettings::ruby_lsp(), changed]
+        );
+        // The name is trimmed before it is matched, so a padded one is the same server.
+        let padded = LspServerSettings {
+            name: " ts ".into(),
+            ..typescript()
+        };
+        let again = save_server(&dir, None, "repo-1", padded).unwrap();
+        assert_eq!(
+            again.servers,
+            vec![LspServerSettings::ruby_lsp(), typescript()]
+        );
+        // The other repositories are as they were.
+        assert_eq!(
+            read_settings(&dir, Some("srv"), "repo-1").unwrap(),
+            LspRepoSettings::unset(Some("srv"), "repo-1")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_server_the_checks_refuse_is_refused_and_nothing_is_written() {
+        let dir = temp_dir("tool-refuse");
+        let ruby = |name: &str| LspServerSettings {
+            name: name.into(),
+            ..LspServerSettings::ruby_lsp()
+        };
+        // ruby belongs to ruby-lsp of the unset settings already.
+        assert!(save_server(&dir, None, "repo-1", ruby("solargraph")).is_err());
+        for bad in [
+            LspServerSettings {
+                languages: vec![],
+                ..typescript()
+            },
+            LspServerSettings {
+                languages: vec!["not-a-language".into()],
+                ..typescript()
+            },
+            LspServerSettings {
+                name: String::new(),
+                ..typescript()
+            },
+            LspServerSettings {
+                mount: Some("relative".into()),
+                ..typescript()
+            },
+        ] {
+            assert!(
+                save_server(&dir, None, "repo-1", bad.clone()).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(save_server(&dir, None, "", typescript()).is_err());
+        assert!(!dir.join("lsp-settings.json").exists());
+        // The server of the name is replaced, so ruby-lsp may be given other settings that keep ruby.
+        let other = LspServerSettings {
+            auto_start: false,
+            ..ruby("ruby-lsp")
+        };
+        let replaced = save_server(&dir, None, "repo-1", other.clone()).unwrap();
+        assert_eq!(replaced.servers, vec![other]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_server_is_deleted_by_its_name_and_a_name_that_is_not_there_is_an_error() {
+        let dir = temp_dir("tool-delete");
+        save_server(&dir, None, "repo-1", typescript()).unwrap();
+        let left = delete_server(&dir, None, "repo-1", " ts ").unwrap();
+        assert_eq!(left.servers, vec![LspServerSettings::ruby_lsp()]);
+        assert!(delete_server(&dir, None, "repo-1", "ts").is_err());
+        assert!(delete_server(&dir, None, "repo-1", "").is_err());
+        // The unset settings hold ruby-lsp, which can be deleted; none is kept as none.
+        let none = delete_server(&dir, None, "repo-1", "ruby-lsp").unwrap();
+        assert_eq!(none.servers, vec![]);
+        assert_eq!(read_settings(&dir, None, "repo-1").unwrap().servers, vec![]);
+        // Nothing of another repository is touched.
+        assert!(delete_server(&dir, Some("srv"), "repo-1", "ts").is_err());
+        assert_eq!(
+            read_settings(&dir, Some("srv"), "repo-1").unwrap(),
+            LspRepoSettings::unset(Some("srv"), "repo-1")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_ssh_host_is_set_and_taken_off_with_the_servers_kept() {
+        let dir = temp_dir("tool-ssh");
+        save_server(&dir, Some("srv"), "repo-1", typescript()).unwrap();
+        let set = set_ssh_host(&dir, Some("srv"), "repo-1", Some(" dev ".into())).unwrap();
+        assert_eq!(set.ssh_host.as_deref(), Some("dev"));
+        assert_eq!(
+            set.servers,
+            vec![LspServerSettings::ruby_lsp(), typescript()]
+        );
+        for bad in ["-oProxyCommand=x", "a b", "a\nb"] {
+            assert!(
+                set_ssh_host(&dir, Some("srv"), "repo-1", Some(bad.into())).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(read_settings(&dir, Some("srv"), "repo-1").unwrap(), set);
+        for empty in [None, Some(String::new()), Some("  ".into())] {
+            let off = set_ssh_host(&dir, Some("srv"), "repo-1", empty).unwrap();
+            assert_eq!(off.ssh_host, None);
+            assert_eq!(off.servers, set.servers);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_key_of_a_read_is_checked_as_the_key_of_a_save_is() {
+        let dir = temp_dir("tool-key");
+        assert!(read_settings(&dir, None, "").is_err());
+        assert!(read_settings(&dir, Some(""), "repo-1").is_err());
+        assert!(read_settings(&dir, None, "a\nb").is_err());
+        assert_eq!(
+            read_settings(&dir, None, "repo-1").unwrap(),
+            LspRepoSettings::unset(None, "repo-1")
+        );
     }
 
     // ---- the whole decision for a worktree ----

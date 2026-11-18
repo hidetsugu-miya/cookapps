@@ -16,6 +16,7 @@ use tsunagiai_lib::{
     database::{self, script::Scripts, DatabaseProfile, Keychain},
     formation::{self, FormationAgent, PlannedChild},
     formation_page, formation_server, gmail, identity,
+    lsp::{self, LspServerSettings},
 };
 
 fn relogin(account: &str) -> String {
@@ -85,6 +86,83 @@ impl DbProfileSaveArgs {
 struct DbTestArgs {
     /// The `id` of a saved connection (from `db_profiles` or `db_profile_save`). Its saved password is used.
     id: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LspRepoArgs {
+    /// Where the project is: `local` for this Mac, else the name of a saved environment of Orca (`orca environment list`).
+    environment: String,
+    /// The project: the id of its repository in Orca (`repoId` of `orca worktree ps`, `id` of `orca repo list`).
+    project: String,
+}
+
+/// One language server of a project, as `lsp_settings` answers it (the same names, in camel case).
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct LspServerArgs {
+    /// The name of the server, unique in the project, at most 64 characters. A server of this name is replaced as a whole, else this one is added.
+    name: String,
+    /// The languages it takes, at least one: the language names of the Orca editor's colors (A-21), such as `ruby`, `typescript`, `javascript`, `python`, `go` and `rust`. A language belongs to one server of a project.
+    languages: Vec<String>,
+    /// Whether the app starts it by itself when a file of its languages is opened.
+    auto_start: bool,
+    /// The command that starts the server, a shell statement that `/bin/sh -c` runs in the worktree (inside the compose service, when the server runs in one), speaking LSP on its standard input and output. Leave it out for the way that the app decides (only ruby-lsp has one).
+    #[serde(default)]
+    command: Option<String>,
+    /// The absolute path that the worktree has where the server runs (inside the container). Leave it out for the path that the app decides.
+    #[serde(default)]
+    mount: Option<String>,
+    /// The docker compose service that mounts the worktree, to run the server in. Leave it out for the one the app decides.
+    #[serde(default)]
+    service: Option<String>,
+}
+
+impl From<LspServerArgs> for LspServerSettings {
+    fn from(a: LspServerArgs) -> Self {
+        Self {
+            name: a.name,
+            languages: a.languages,
+            auto_start: a.auto_start,
+            command: a.command,
+            mount: a.mount,
+            service: a.service,
+        }
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LspServerSaveArgs {
+    /// Where the project is: `local` for this Mac, else the name of a saved environment of Orca (`orca environment list`).
+    environment: String,
+    /// The project: the id of its repository in Orca (`repoId` of `orca worktree ps`, `id` of `orca repo list`).
+    project: String,
+    /// The server to save.
+    server: LspServerArgs,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LspServerDeleteArgs {
+    /// Where the project is: `local` for this Mac, else the name of a saved environment of Orca (`orca environment list`).
+    environment: String,
+    /// The project: the id of its repository in Orca (`repoId` of `orca worktree ps`, `id` of `orca repo list`).
+    project: String,
+    /// The name of the server to delete.
+    name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LspSshHostArgs {
+    /// Where the project is: `local` for this Mac, else the name of a saved environment of Orca (`orca environment list`).
+    environment: String,
+    /// The project: the id of its repository in Orca (`repoId` of `orca worktree ps`, `id` of `orca repo list`).
+    project: String,
+    /// A Host of `~/.ssh/config` of this Mac, through which the worktrees of a saved environment are reached. An empty text takes it off.
+    ssh_host: String,
+}
+
+/// The environment of a tool of the language servers as the settings key it: this Mac is none, which is how the app saves it.
+fn lsp_environment(environment: &str) -> Option<&str> {
+    (environment != formation::LOCAL).then_some(environment)
 }
 
 /// The error of a port in use before the script, with the way out that only the app can be told of: `db_test` cannot know that tsunagiai holds the port with its own open connection (D-8).
@@ -224,7 +302,7 @@ impl Tsunagiai {
     }
 }
 
-/// The tools the orchestrator keeps of the ones every client has: the reads only. It runs in the `auto` permission mode, so a tool that writes (trash, archive, set_read, and a connection that runs a script) would run with no question to the owner, which the panes of A-36 ask each time (#722).
+/// The tools the orchestrator keeps of the ones every client has: the reads of mail, calendar and the database connections only. It runs in the `auto` permission mode, so a tool that writes (trash, archive, set_read, a connection that runs a script, and the command of a language server, A-34) would run with no question to the owner, which the panes of A-36 ask each time (#722). The language server tools, `lsp_settings` too, are not kept.
 const FORMATION_KEPT_TOOLS: [&str; 4] = ["list_inbox", "get_thread", "list_events", "db_profiles"];
 
 /// The tools this server offers: the formation tools (A-37) only to the orchestrator, which starts it with `--formation {name}`, and to it only the read tools besides (`FORMATION_KEPT_TOOLS`). Launching a Claude Code in auto mode must not be offered to every MCP client (Claude Desktop, the database pane).
@@ -418,6 +496,81 @@ impl Tsunagiai {
         let profile = a.into_profile();
         let saved = tokio::task::spawn_blocking(move || {
             database::save_without_password(&dir, &Keychain, profile)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        json(&saved)
+    }
+
+    #[tool(
+        description = "Read the language servers of a project of the Orca screen (A-34): {environment, project, sshHost, servers: [{name, languages, autoStart, command, mount, service}]}. A project with nothing saved has ruby-lsp, which takes ruby and starts by itself. command, mount and service are left out when the app decides them. Not offered to the orchestrator.",
+        annotations(read_only_hint = true)
+    )]
+    async fn lsp_settings(&self, Parameters(a): Parameters<LspRepoArgs>) -> Result<String, String> {
+        let dir = self.dir.clone();
+        let settings = tokio::task::spawn_blocking(move || {
+            lsp::read_settings(&dir, lsp_environment(&a.environment), &a.project)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        json(&settings)
+    }
+
+    #[tool(
+        description = "Save one language server of a project of the Orca screen (A-34): the server of the same name is replaced as a whole (a setting left out is not kept), else this one is added after the others. languages are the language names of the Orca editor's colors (A-21: ruby, typescript, javascript, python, go, rust and the like), and a language belongs to one server of a project, so one that another server takes is refused. command is a shell statement that /bin/sh -c runs in the worktree of the project (inside the compose service when the server runs in one), and must speak LSP on its standard input and output; the app runs it as written when a file of the languages is opened. A project with nothing saved has ruby-lsp, which takes ruby: to use another server for ruby, replace ruby-lsp or delete it first. Answers the settings of the project as saved, as lsp_settings does.",
+        annotations(destructive_hint = true)
+    )]
+    async fn lsp_server_save(
+        &self,
+        Parameters(a): Parameters<LspServerSaveArgs>,
+    ) -> Result<String, String> {
+        let dir = self.dir.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            lsp::save_server(
+                &dir,
+                lsp_environment(&a.environment),
+                &a.project,
+                a.server.into(),
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        json(&saved)
+    }
+
+    #[tool(
+        description = "Delete the language server of that name from a project of the Orca screen (A-34). A name that the project does not have is an error. Answers the settings of the project as saved, as lsp_settings does.",
+        annotations(destructive_hint = true)
+    )]
+    async fn lsp_server_delete(
+        &self,
+        Parameters(a): Parameters<LspServerDeleteArgs>,
+    ) -> Result<String, String> {
+        let dir = self.dir.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            lsp::delete_server(&dir, lsp_environment(&a.environment), &a.project, &a.name)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        json(&saved)
+    }
+
+    #[tool(
+        description = "Set the ssh host of a project of the Orca screen (A-34): a Host of ~/.ssh/config of this Mac, through which the worktrees of a saved environment are read and its servers are started. An empty text takes it off. The servers are kept. Answers the settings of the project as saved, as lsp_settings does.",
+        annotations(destructive_hint = true)
+    )]
+    async fn lsp_repo_ssh_host_set(
+        &self,
+        Parameters(a): Parameters<LspSshHostArgs>,
+    ) -> Result<String, String> {
+        let dir = self.dir.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            lsp::set_ssh_host(
+                &dir,
+                lsp_environment(&a.environment),
+                &a.project,
+                Some(a.ssh_host),
+            )
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -659,10 +812,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        db_test_answer, formation_arg, formation_start_arg, project_args, router,
+        db_test_answer, formation_arg, formation_start_arg, lsp_environment, project_args, router,
         DbProfileSaveArgs, FormationAgent, FormationFilesArgs, FormationGitArgs,
         FormationLaunchArgs, FormationPlanArgs, FormationReadArgs, FormationWorktreesArgs,
-        Tsunagiai,
+        LspServerArgs, LspServerSaveArgs, LspServerSettings, LspSshHostArgs, Tsunagiai,
     };
 
     #[test]
@@ -740,6 +893,72 @@ mod tests {
         assert_eq!(hints("db_profiles").read_only_hint, Some(true));
     }
 
+    #[test]
+    fn the_tools_of_the_language_servers_ask_for_a_check_when_they_write() {
+        let tools = Tsunagiai::tool_router().list_all();
+        let hints = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.annotations.clone())
+                .unwrap_or_else(|| panic!("{name} has no annotations"))
+        };
+        assert_eq!(hints("lsp_settings").read_only_hint, Some(true));
+        assert_eq!(hints("lsp_settings").destructive_hint, None);
+        for write in [
+            "lsp_server_save",
+            "lsp_server_delete",
+            "lsp_repo_ssh_host_set",
+        ] {
+            assert_eq!(hints(write).destructive_hint, Some(true), "{write}");
+            assert_eq!(hints(write).read_only_hint, None, "{write}");
+        }
+        let text = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.description.clone())
+                .unwrap_or_default()
+                .to_string()
+        };
+        for must in ["A-21", "/bin/sh -c"] {
+            assert!(text("lsp_server_save").contains(must), "{must}");
+        }
+    }
+
+    #[test]
+    fn the_arguments_of_the_language_server_tools_leave_a_server_with_what_the_app_decides() {
+        let server =
+            serde_json::json!({"name": "ts", "languages": ["typescript"], "autoStart": false});
+        let save = serde_json::from_value::<LspServerSaveArgs>(
+            serde_json::json!({"environment": "local", "project": "r1", "server": server}),
+        )
+        .unwrap();
+        assert_eq!(lsp_environment(&save.environment), None);
+        let settings = LspServerSettings::from(save.server);
+        assert_eq!(settings.name, "ts");
+        assert!(!settings.auto_start);
+        assert_eq!(settings.command, None);
+        assert_eq!(lsp_environment("work"), Some("work"));
+        for missing in ["name", "languages", "autoStart"] {
+            let mut value = server.clone();
+            value.as_object_mut().unwrap().remove(missing);
+            assert!(
+                serde_json::from_value::<LspServerArgs>(value).is_err(),
+                "{missing}"
+            );
+        }
+        for missing in ["environment", "project", "ssh_host"] {
+            let mut value =
+                serde_json::json!({"environment": "local", "project": "r1", "ssh_host": ""});
+            value.as_object_mut().unwrap().remove(missing);
+            assert!(
+                serde_json::from_value::<LspSshHostArgs>(value).is_err(),
+                "{missing}"
+            );
+        }
+    }
+
     fn tool_names(formation: bool) -> Vec<String> {
         let mut names: Vec<String> = router(formation)
             .list_all()
@@ -765,7 +984,7 @@ mod tests {
         ];
         let without = tool_names(false);
         let with = tool_names(true);
-        assert_eq!(without.len(), 9);
+        assert_eq!(without.len(), 13);
         for name in formation {
             assert!(!without.iter().any(|n| n == name), "{name}");
             assert!(with.iter().any(|n| n == name), "{name}");
@@ -789,7 +1008,17 @@ mod tests {
                 "list_inbox"
             ]
         );
-        for write in ["archive", "set_read", "trash", "db_profile_save", "db_test"] {
+        for write in [
+            "archive",
+            "set_read",
+            "trash",
+            "db_profile_save",
+            "db_test",
+            "lsp_settings",
+            "lsp_server_save",
+            "lsp_server_delete",
+            "lsp_repo_ssh_host_set",
+        ] {
             assert!(without.iter().any(|n| n == write), "{write}");
             assert!(!with.iter().any(|n| n == write), "{write}");
         }
