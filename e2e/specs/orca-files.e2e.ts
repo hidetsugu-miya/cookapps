@@ -1101,10 +1101,13 @@ describe("orca: files and editor (A-18)", () => {
     await mock("orca_files_list", dirOf("src", [["lib", true], ["gen.rs", false]]));
     await row("src").click();
     await waitForCount("#orca-files-tree .orca-file", 6);
-    const marks = await mock("orca_files_changes", [change("src/gen.rs", "new")]);
+    // The mock of the list answers every folder alike: the root and `src` both read the entries of the root, so one call holds them twice, once for each folder that was read.
+    await mock("orca_files_list", root());
+    const marks = await mock("orca_files_changes", [change("a.rs", "changed")]);
     await focusBack();
-    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log", "src/lib", "src/gen.rs"], environment: null }]);
-    await browser.waitUntil(async () => (await gitLook("src/gen.rs")).change === "new", { timeoutMsg: "the change mark never came" });
+    const rootPaths = ["src", "target", "a.rs", "b.log"];
+    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: [...rootPaths, ...rootPaths], environment: null }]);
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === "changed", { timeoutMsg: "the change mark never came" });
     await browser.pause(300);
     expect(await callsOf(marks)).toHaveLength(1);
   });
