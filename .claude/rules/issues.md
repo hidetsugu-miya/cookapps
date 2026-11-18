@@ -66,7 +66,7 @@ Bad:  #13 is 2,000 lines -> point:8
 
 `urgency:high` is put on an issue by the owner, or by an agent that follows the owner's instruction ("urgent", "top priority", "as soon as possible"). An agent never adds it on its own judgment (at the owner's instruction, 2026-11-06; Discussion #136).
 It replaces `release:now`, which is retired: nothing reads `release:now` any more.
-An urgent issue goes ahead of every issue that is not urgent. Its release still waits for the owner's merge of the Release PR, and the agent that prepares the Release PR tells the owner at once with a push notification (at the owner's instruction, 2026-11-09; Discussion #293).
+An urgent issue goes ahead of every issue that is not urgent. Its release still waits for the merge of the Release PR: the night run merges it in the same run, and in a session the agent that prepares the Release PR tells the owner at once with a push notification, because the owner merges it (at the owner's instruction, 2026-11-09; Discussion #293, and 2026-11-19 for the night run).
 Urgency is about time; how much the issue matters is `importance:*`, which is a separate axis.
 
 ```text

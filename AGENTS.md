@@ -167,7 +167,7 @@ Before a push, `pre-git.sh` checks that both records exist for HEAD, unless only
 
 ## CI
 
-The release is `.github/workflows/release.yml`, and only a pushed tag `v*` and the owner's merge of the Release PR (a closed pull request from `release/next` into main, merged by the repository's owner) start it (at the owner's instruction, 2026-11-09; #303); the merge is tagged and released in the run that it starts, and the next agent to act watches that run through (`.claude/skills/release/SKILL.md`).
+The release is `.github/workflows/release.yml`, and only a pushed tag `v*` and the merge of the Release PR (a closed pull request from `release/next` into main, merged by the repository's owner: the owner in a session, or the night run, which merges with the owner's account) start it (at the owner's instruction, 2026-11-09; #303, and 2026-11-19 for the night run); the merge is tagged and released in the run that it starts, and the agent that merged it (the night run) or the next agent to act watches that run through (`.claude/skills/release/SKILL.md`).
 Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions (`.claude/rules/testing.md`), so a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
 A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 

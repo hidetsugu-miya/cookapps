@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; .claude/skills/release/SKILL.md for the release).
+"""Orders the open issues of tsunagiai, and tells a run what to start and what waits for the release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; .claude/skills/release/SKILL.md for the release).
 
 Usage:
   plan-release.py snapshot
@@ -20,7 +20,7 @@ A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST iss
 It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes `solo` and `session` when they are missing,
 creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
 a failure stops it with the numbers made, and a second run keeps the parts that are already open sub-issues of the issue under the same title. With no parts it only puts the label `whole` on the issue (a big issue kept as one).
-`release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
+`release` prints the changes that wait for the merge of the Release PR, the Release PR,
 the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the parents (a parent is a feature, not a version) whose sub-issues are all closed and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
@@ -456,7 +456,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
     An issue with needs:owner, and one with an open blocker, are left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
     (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (.claude/skills/ship/SKILL.md, "Rules"): it may bundle issues of any units.
-    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included); the night run only.
+    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the merge of its Release PR, and nothing new begins before it (the rest of its unit included); the night run only.
     `waiting` are the changes that wait for the release. A parent is in none of the lists: its parts are.
     """
     position = plan_positions(plan)
@@ -498,7 +498,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
         else:
             startable.append(i)
     if night and any(solo(i) for i in waiting):
-        out["stop"] = "a point:8 change (or a part of one, labelled solo) waits for the owner to merge the Release PR; start nothing new"
+        out["stop"] = "a point:8 change (or a part of one, labelled solo) waits until its Release PR is merged; start nothing new"
         return out
     startable.sort(key=start_key)
     out["start"] = [brief(i) for i in startable]
@@ -511,7 +511,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
 def release_facts(issues, release_pr, last_tag):
     """The figures a run needs to prepare the Release PR.
     `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
-    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; the run tells the owner at once.
+    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; a session tells the owner at once; the night run merges the Release PR itself.
     `minor`: a change adds a requirement ID (.claude/skills/release/SKILL.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
     changes = release_changes(issues)
     labels = (release_pr or {}).get("labels", [])
@@ -531,7 +531,7 @@ def release_facts(issues, release_pr, last_tag):
 
 
 def with_tag_due(facts, due):
-    """Adds `tag_due` to the facts. While a tag is due (the owner has merged the Release PR and the tag is not made), what is counted from the last tag is the merged Release PR itself,
+    """Adds `tag_due` to the facts. While a tag is due (the Release PR has been merged and the tag is not made), what is counted from the last tag is the merged Release PR itself,
     so `changes`, `urgent`, `solo`, `minor` and `version` are emptied: the tag comes first, and `release` runs again after it."""
     facts["tag_due"] = due
     if due:

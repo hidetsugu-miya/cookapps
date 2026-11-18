@@ -38,7 +38,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - A candidate that is a bug follows "File a bug only after reproducing it" (`issues.md`); if it does not reproduce, drop it.
    - Drop a candidate out of scope, and a refactoring that would change behavior.
 7. **Sort the kept candidates.**
-   - **Issue for the owner:** the candidate matches any of these (Discussion #160, second version), or it comes from `ux-scout`: it changes what the owner sees or uses into a form `requirements/` does not describe; it changes or removes a rule marked "at the owner's instruction"; it loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the rule that the owner merges the Release PR); or two or more options remain that primary sources and a prototype cannot settle.
+   - **Issue for the owner:** the candidate matches any of these (Discussion #160, second version), or it comes from `ux-scout`: it changes what the owner sees or uses into a form `requirements/` does not describe; it changes or removes a rule marked "at the owner's instruction"; it loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the rule of who merges the Release PR); or two or more options remain that primary sources and a prototype cannot settle.
    - **Issue decided by the AI:** every other candidate (a bug fix, a refactoring that keeps behavior, a statement that no longer matches the code or the requirements, a change that strengthens a gate). Say in the body why it fits here, with the evidence.
 
    Keep at most 3 issues in all, the ones that serve the owner most. Stop at 3 even if more hold. An issue for the owner is made only while step 1 allows it.
@@ -75,7 +75,7 @@ A candidate that the AI may decide (a bug fix, a refactoring that keeps behavior
 A candidate that matches any of these goes to the owner as well: an issue with `proposal` and `needs:owner`, whose body holds the options and the evidence, and the recommended option marked (at the owner's instruction, 2026-11-09: a Discussion is no longer a place to decide):
 - It changes what the owner sees or uses into a form `requirements/` does not describe.
 - It changes or removes a rule marked "at the owner's instruction".
-- It loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the rule that the owner merges the Release PR).
+- It loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the rule of who merges the Release PR).
 - Two or more options remain that primary sources and a prototype cannot settle.
 
 File at most 3 issues in a run, and no `needs:owner` issue while 5 or more proposals are open with `needs:owner`.

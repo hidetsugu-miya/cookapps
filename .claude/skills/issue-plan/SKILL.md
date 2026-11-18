@@ -41,7 +41,7 @@ To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `sh
 
 - Version numbers and checks: `plan-release.py`
 - What counts as related: `.claude/agents/release-planner.md`
-- Releasing: the owner merges the Release PR (`.claude/skills/release/SKILL.md`). The order does not start a release.
+- Releasing: the night run merges the Release PR it prepares, and in a session the owner merges it (`.claude/skills/release/SKILL.md`). The order does not start a release.
 - Implementing: the `ship` skill
 
 ## When it runs

@@ -1,6 +1,6 @@
 ---
 name: release-planner
-description: "Decides the order of the tsunagiai issues. Reads the bodies of the open issues and the code they relate to, and returns the order and the dependencies as JSON, each with a reason, from how the issues relate. Decides neither a version number nor the time of a release (the owner releases by merging the Release PR). Edits nothing. Launched inside the steps of issue-plan, at the start of ship and when the owner asks for a reorder."
+description: "Decides the order of the tsunagiai issues. Reads the bodies of the open issues and the code they relate to, and returns the order and the dependencies as JSON, each with a reason, from how the issues relate. Decides neither a version number nor the time of a release (the Release PR is merged by the night run, or by the owner in a session). Edits nothing. Launched inside the steps of issue-plan, at the start of ship and when the owner asks for a reorder."
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
