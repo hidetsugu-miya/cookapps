@@ -46,7 +46,11 @@ export function openFormationDialog(anchor: Element, created: (entry: FormationE
     for (const p of projects) p.row.hidden = re !== null && !re.test(p.project.repo);
     for (const s of sections) s.head.hidden = s.rows.every((r) => r.hidden);
   };
-  filter.oninput = narrow;
+  // Each change of the text shows the list from its top, so that the rows that match are seen from the first (#942).
+  filter.oninput = () => {
+    narrow();
+    list.scrollTop = 0;
+  };
 
   let busy = false;
   const submit = async () => {

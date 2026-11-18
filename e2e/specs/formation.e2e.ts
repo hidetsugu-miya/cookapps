@@ -1602,6 +1602,34 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     expect(await browser.execute(() => document.querySelectorAll(".formation-new-repo:not([hidden])").length)).toBe(4);
   });
 
+  it("scrolls the list to its top when the filter is typed in or emptied, so that the rows that match are seen from the first (#942)", async () => {
+    const many = Array.from({ length: 40 }, (_, i) => `repo-${String(i).padStart(2, "0")}`);
+    await ask({ formation_environments: formationEnvironments([...many, "tsunagiai"]) });
+    const scrollTop = () => browser.execute(() => document.querySelector<HTMLElement>(".formation-new-list")!.scrollTop);
+    const scrollDown = () =>
+      browser.execute(() => {
+        const l = document.querySelector<HTMLElement>(".formation-new-list")!;
+        l.scrollTop = l.scrollHeight;
+      });
+    await scrollDown();
+    expect(await scrollTop()).toBeGreaterThan(0);
+    await filterField().setValue("tsuna");
+    expect(await scrollTop()).toBe(0);
+    // The row that matches is inside the box of the list.
+    expect(
+      await browser.execute(() => {
+        const [l, r] = [document.querySelector(".formation-new-list")!.getBoundingClientRect(), document.querySelector<HTMLElement>(".formation-new-repo:not([hidden])")!.getBoundingClientRect()];
+        return r.top >= l.top && r.bottom <= l.bottom;
+      }),
+    ).toBe(true);
+    // Emptied, the list is at its top too.
+    await filterField().setValue("");
+    await scrollDown();
+    expect(await scrollTop()).toBeGreaterThan(0);
+    await filterField().setValue("repo-1");
+    expect(await scrollTop()).toBe(0);
+  });
+
   it("shows no heading for an environment with no repository, and none for one that could not be read", async () => {
     await ask({ formation_environments: formationEnvironments([], { "dev-server": ["wonder-api"], "empty-server": [] }, { "down-server": "届きません" }) });
     expect(await textsOf(".formation-new-env:not([hidden])")).toEqual(["dev-server"]);
