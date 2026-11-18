@@ -22,3 +22,4 @@ graphify-out/
 logs/
 tmp/*
 !tmp/.keep
+.orca/

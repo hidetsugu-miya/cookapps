@@ -86,7 +86,7 @@ describe("development screen: orchestration mode", () => {
     const lefts = await browser.execute(() => ["formation-list", "formation-orchestrator", "formation-flow"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().left)));
     expect(lefts[0]).toBeLessThan(lefts[1]);
     expect(lefts[1]).toBeLessThan(lefts[2]);
-    await expect($("#formation-orchestrator h1")).toHaveText("司令塔");
+    await expect($("#formation-orchestrator h1")).toHaveText("リーダー");
     await $("#footer-mode-orca").click();
     await expect($("#orca")).toBeDisplayed();
     await expect($("#formation")).not.toBeDisplayed();
@@ -136,7 +136,7 @@ describe("development screen: orchestration mode", () => {
   it("has the restart button at the right end of the orchestrator's header, with the icon only", async () => {
     await openFormation();
     const button = $("#formation-restart");
-    await expect(button).toHaveAttribute("aria-label", "司令塔を再起動");
+    await expect(button).toHaveAttribute("aria-label", "リーダーを再起動");
     expect(await button.getText()).toBe("");
     expect(await browser.execute(() => document.querySelectorAll("#formation-restart svg").length)).toBe(1);
     const place = await browser.execute(() => {
@@ -274,7 +274,7 @@ describe("orchestration mode: the flow pane", () => {
     await expect($("#formation-flow")).toHaveAttribute("aria-label", "チームメイト");
     await browser.waitUntil(async () => (await $("#formation-flow-count").getText()) === "子 3 · 予定 2");
     expect(await textsOf("#formation-flow-root .formation-card-name")).toEqual(["formation"]);
-    expect(await textsOf("#formation-flow-root .formation-card-role")).toEqual(["司令塔"]);
+    expect(await textsOf("#formation-flow-root .formation-card-role")).toEqual(["リーダー"]);
     // The orchestrator's card is above the children's, and "私" is not drawn.
     const [root, first] = [await rectOf("#formation-flow-root"), await rectOf("#formation-flow-list .formation-card")];
     expect(root.bottom).toBeLessThanOrEqual(first.top);
@@ -1624,7 +1624,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
 
   it("shows the refusal of projects of two environments where the other failures show, and makes no formation", async () => {
     await ask();
-    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（司令塔と子が別の PC にいると、SendMessage が届かないためです）";
+    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）";
     const create = await mock("formation_create", rejects(reason));
     await browser.keys("mail-api");
     await pick(0);
@@ -1791,7 +1791,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
 
   it("does not ask for a consent when the projects are of two environments, and leaves the refusal to Rust", async () => {
     await ask({ formation_consents: [] });
-    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（司令塔と子が別の PC にいると、SendMessage が届かないためです）";
+    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）";
     const create = await mock("formation_create", rejects(reason));
     await browser.keys("mail-api");
     await pick(0);
@@ -2107,7 +2107,7 @@ describe("orchestration mode: delete a formation", () => {
     await ask("mail-summary");
     await yes().click();
     await waitForCalls(del);
-    const message = "子「api-update」を閉じられないので、フォーメーション「mail-summary」を削除していません（何も閉じておらず、司令塔のプロセスも終えていません）。記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです";
+    const message = "子「api-update」を閉じられないので、フォーメーション「mail-summary」を削除していません（何も閉じておらず、リーダーのプロセスも終えていません）。記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです";
     await mock("formation_delete", rejects(message));
     await yes().click();
     await expect($("#formation-list-error")).toHaveText(message);
@@ -2342,13 +2342,13 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   const remote = (environment = "mac-studio") => formationList([formationEntry("formation"), formationEntry("studio-work", { minutes: 5, environment, projects: [{ environment, repo: "api" }] })]);
   const terminal = (environment = "mac-studio") => ({ environment, handle: "term_orch" });
   const orchestratorText = () => $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText();
-  const SHOWN = { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 司令塔です"], formation_consents: [formationConsent("mac-studio")] };
+  const SHOWN = { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> リーダーです"], formation_consents: [formationConsent("mac-studio")] };
 
   it("asks for the terminal of the formation and mirrors it in that environment, with no pseudo terminal", async () => {
     await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
     expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_orch", environment: "mac-studio" });
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"), { timeoutMsg: "the terminal of the orchestrator never showed" });
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"), { timeoutMsg: "the terminal of the orchestrator never showed" });
     expect(await headName()).toBe("studio-work");
     await expect($("#formation-term-error")).not.toBeDisplayed();
     expect(await starts()).toBe(0);
@@ -2356,7 +2356,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
 
   it("types into the terminal of the orchestrator in that environment", async () => {
     await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     const input = await mock("orca_terminal_input", null);
     await browser.keys(["c", "d"]);
     await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
@@ -2394,7 +2394,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf("formation_orchestrator")).toEqual([]);
     await row("studio-work").click();
     await waitForCalls("formation_orchestrator", 1);
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     // Back on this Mac's: its process is shown again, nothing is started, and the other terminal is not asked for again.
     await row("formation").click();
     await browser.waitUntil(async () => (await headName()) === "formation");
@@ -2406,7 +2406,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   });
 
   it("says in the pane why the terminal could not be made, and asks again on the restart button", async () => {
-    const reason = "司令塔を起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
+    const reason = "リーダーを起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
     await openList({ formation_list: remote(), ...SHOWN }, null);
     await mock("formation_orchestrator", rejects(reason));
     await row("studio-work").click();
@@ -2420,7 +2420,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await pressRestart();
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: true }]);
     await expect($("#formation-term-error")).not.toBeDisplayed();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     expect(await starts()).toBe(0);
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
@@ -2433,7 +2433,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await expect($("#formation-restart")).toBeDisabled();
     await release(start, terminal());
     await expect($("#formation-restart")).toBeEnabled();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
   });
 
   it("does not carry the off restart button of a start on its way over to a formation of this Mac", async () => {
@@ -2471,7 +2471,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await waitForCalls(consent)).toEqual([{ environment: "mac-studio" }]);
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
     await expect(remoteDialog()).not.toExist();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"), { timeoutMsg: "the terminal of the orchestrator never showed" });
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"), { timeoutMsg: "the terminal of the orchestrator never showed" });
   });
 
   it("closes the dialog and does nothing when the owner declines, with no failure in the pane", async () => {
@@ -2499,12 +2499,12 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
 
   it("restarts the terminal through Rust, and shows the new one in place of the old", async () => {
     await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
-    await browser.waitUntil(async () => (await orchestratorText()).includes("司令塔です"));
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
-    await mock("orca_terminal_read", ["$ claude", "> 新しい司令塔"]);
+    await mock("orca_terminal_read", ["$ claude", "> 新しいリーダー"]);
     await pressRestart();
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: true }]);
-    await browser.waitUntil(async () => (await orchestratorText()).includes("新しい司令塔"), { timeoutMsg: "the new terminal never showed" });
+    await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダー"), { timeoutMsg: "the new terminal never showed" });
     expect((await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
     await expect($("#formation-restart")).toBeEnabled();
   });

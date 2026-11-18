@@ -467,7 +467,7 @@ fn name_conflict(
 ) -> Result<(), String> {
     if formations.iter().any(|f| f == name) {
         return Err(format!(
-            "「{name}」はフォーメーションの名前（その司令塔のセッション名）なので、子には付けられません"
+            "「{name}」はフォーメーションの名前（そのリーダーのセッション名）なので、子には付けられません"
         ));
     }
     if let Some((owner, _)) = others
@@ -628,7 +628,7 @@ fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
     let environment = formation_environment(projects);
     match projects.iter().find(|p| p.environment != environment) {
         Some(other) => Err(format!(
-            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（司令塔と子が別の PC にいると、SendMessage が届かないためです）",
+            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）",
             other.environment
         )),
         None => Ok(()),
@@ -1448,7 +1448,7 @@ fn check_children_here(environment: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "環境「{environment}」には子を置けません。SendMessage は同じ PC の中でしか届かないので、子は司令塔と同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
+        "環境「{environment}」には子を置けません。SendMessage は同じ PC の中でしか届かないので、子はリーダーと同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
     ))
 }
 
@@ -1878,7 +1878,7 @@ fn is_secret_name(name: &str) -> bool {
 fn check_not_secret(path: &str) -> Result<(), Refusal> {
     if path.split('/').any(is_secret_name) {
         return Err(Refusal::from(
-            "司令塔には、.git の中と、.env で始まる名前のファイルは読ませません".to_owned(),
+            "リーダーには、.git の中と、.env で始まる名前のファイルは読ませません".to_owned(),
         ));
     }
     Ok(())
@@ -3721,7 +3721,7 @@ fn delete_with(
                 }),
                 None => {
                     return Err(format!(
-                        "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（何も閉じておらず、司令塔のプロセスも終えていません）。{}",
+                        "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（何も閉じておらず、リーダーのプロセスも終えていません）。{}",
                         child.name,
                         refusal_text(&refusal)
                     ));
@@ -3739,7 +3739,7 @@ fn delete_with(
     stop_orchestrator();
     close_orchestrator_terminal(config, formation, read, write).map_err(|e| {
         format!(
-            "司令塔のターミナルを閉じられないので、フォーメーション「{formation}」を削除していません（子は閉じていません。司令塔のプロセスは終えています）。{e}"
+            "リーダーのターミナルを閉じられないので、フォーメーション「{formation}」を削除していません（子は閉じていません。リーダーのプロセスは終えています）。{e}"
         )
     })?;
     let mut preserved = Vec::new();
@@ -3750,7 +3750,7 @@ fn delete_with(
         let done = close_with(config, formation, &child.name, force, read, write, git_of)
             .map_err(|refusal| {
                 format!(
-                    "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです。司令塔のプロセスは終えています）。{}",
+                    "子「{}」を閉じられないので、フォーメーション「{formation}」を削除していません（閉じ終えた子は閉じたままです。リーダーのプロセスは終えています）。{}",
                     child.name,
                     refusal_text(&refusal)
                 )
@@ -3762,7 +3762,7 @@ fn delete_with(
     let _held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     if !read_record(config, formation)?.is_empty() {
         return Err(format!(
-            "子を閉じている間に、司令塔が子を足しました。フォーメーション「{formation}」を削除していません。もう一度削除してください"
+            "子を閉じている間に、リーダーが子を足しました。フォーメーション「{formation}」を削除していません。もう一度削除してください"
         ));
     }
     let folder = dir(config, formation);
@@ -3800,7 +3800,7 @@ fn delete_formation(
     if copied && answer.deleted {
         if !record_children(config, formation, access.read, access.pull)?.is_empty() {
             return Err(format!(
-                "子を閉じている間に、司令塔が子を足しました。フォーメーション「{formation}」を削除していません。もう一度削除してください"
+                "子を閉じている間に、リーダーが子を足しました。フォーメーション「{formation}」を削除していません。もう一度削除してください"
             ));
         }
         let folder = dir(config, formation);
@@ -3898,12 +3898,12 @@ fn start_orchestrator_with(
     let environment = environment.as_str();
     if environment == LOCAL {
         return Err(format!(
-            "フォーメーション「{formation}」は、この Mac のものです。司令塔はつなぎAI の疑似端末で動きます"
+            "フォーメーション「{formation}」は、この Mac のものです。リーダーはつなぎAI の疑似端末で動きます"
         ));
     }
     let failed = |e: String| {
         format!(
-            "司令塔を起動できません（環境「{environment}」）: {}",
+            "リーダーを起動できません（環境「{environment}」）: {}",
             first_line(&e)
         )
     };
@@ -3920,7 +3920,7 @@ fn start_orchestrator_with(
             if let Err(e) = write(&terminal_close_args(handle, environment)) {
                 if is_listed_terminal(&list, handle) {
                     return Err(failed(format!(
-                        "今の司令塔のターミナルを閉じられません: {}",
+                        "今のリーダーのターミナルを閉じられません: {}",
                         first_line(&e)
                     )));
                 }
@@ -8143,8 +8143,8 @@ mod tests {
         assert!(err.contains("何も消していません"), "{err}");
         // The refusal comes before the orchestrator is ended, and says so.
         assert!(!stopped.get());
-        assert!(err.contains("司令塔のプロセスも終えていません"), "{err}");
-        assert!(!err.contains("司令塔のプロセスは終えています"), "{err}");
+        assert!(err.contains("リーダーのプロセスも終えていません"), "{err}");
+        assert!(!err.contains("リーダーのプロセスは終えています"), "{err}");
         // The child before the refused one is not closed either.
         assert!(orca.0.borrow().is_empty());
         assert!(dir(&config, "alpha").is_dir());
@@ -8189,7 +8189,7 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("子「a」を閉じられない"), "{err}");
         assert!(stopped.get());
-        assert!(err.contains("司令塔のプロセスは終えています"), "{err}");
+        assert!(err.contains("リーダーのプロセスは終えています"), "{err}");
         assert!(orca.0.borrow().is_empty());
         assert!(dir(&config, "alpha").is_dir());
         assert_eq!(names(&read_children(&config, "alpha")), ["a"]);
@@ -8280,7 +8280,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
-        assert!(err.contains("司令塔のプロセスも終えていません"), "{err}");
+        assert!(err.contains("リーダーのプロセスも終えていません"), "{err}");
         assert!(!stopped.get());
         assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
         std::fs::remove_dir_all(&config).unwrap();
@@ -8431,7 +8431,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
-        assert!(err.contains("司令塔のプロセスも終えていません"), "{err}");
+        assert!(err.contains("リーダーのプロセスも終えていません"), "{err}");
         assert!(!stopped.get());
         assert!(dir(&config, "alpha").is_dir());
         assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
@@ -8481,7 +8481,7 @@ mod tests {
             &|| {},
         )
         .unwrap_err();
-        assert!(err.contains("司令塔が子を足しました"), "{err}");
+        assert!(err.contains("リーダーが子を足しました"), "{err}");
         assert_eq!(names(&read_children(&config, "alpha")), ["late"]);
         assert!(dir(&config, "alpha").is_dir());
         std::fs::remove_dir_all(&config).unwrap();
@@ -9964,7 +9964,7 @@ mod tests {
         let mut orca = Stand::new();
         orca.fails = Some("terminal create");
         let err = orca.start(&config, "api-work", false).unwrap_err();
-        assert!(err.contains("司令塔を起動できません"), "{err}");
+        assert!(err.contains("リーダーを起動できません"), "{err}");
         assert!(err.contains("terminal create に失敗"), "{err}");
         assert!(!err.contains("二行目") && !err.contains('\n'), "{err}");
         assert!(!orca.steps().contains(&"terminal close".to_owned()));
@@ -10756,7 +10756,7 @@ mod tests {
         let config = temp_dir("through-record-drop-fails");
         remote_formation(&config, "api-work");
         let mut pc = Pc::with(vec![on_pc("a")]);
-        pc.drop_fails = Some("司令塔が children.json を書き換えたので、書き戻しませんでした");
+        pc.drop_fails = Some("リーダーが children.json を書き換えたので、書き戻しませんでした");
         let access = access!(pc);
         let err = through_record(&config, "api-work", &access, |scratch| {
             update(scratch, "api-work", |old| Ok(without(old, "a")))
@@ -11459,7 +11459,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.contains("司令塔のターミナルを閉じられない")
+            err.contains("リーダーのターミナルを閉じられない")
                 && err.contains("terminal_handle_stale"),
             "{err}"
         );
