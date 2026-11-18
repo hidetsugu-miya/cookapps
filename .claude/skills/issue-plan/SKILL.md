@@ -1,11 +1,11 @@
 ---
 name: issue-plan
-description: Creates or updates a つなぎAI issue, splits a point:5 or point:8 issue into parts that are its sub-issues, and orders the open issues by how they relate. Use whenever an issue is created, when a needs:owner decision is settled, and on 「issue にして」「並べ直して」, instead of running gh issue create alone.
+description: Creates or updates a つなぎAI issue, splits a point:5 or point:8 issue into parts that are its sub-issues, and, when the owner asks or a ship run starts, orders the open issues by how they relate. Use whenever an issue is created, when a needs:owner decision is settled, and on 「issue にして」「並べ直して」, instead of running gh issue create alone. Creating an issue or settling a needs:owner ends at step 4; the order is made at the start of the next ship run.
 ---
 
 # issue-plan
 
-Every open issue is in the order from the moment it exists, `needs:owner` included. A feature of `point:5` or more also becomes a parent issue with its parts as sub-issues (`.claude/rules/issues.md`).
+Every open issue is in the order, `needs:owner` included, but the order is made at the start of every `ship` run and when the owner asks, not when an issue is created. A feature of `point:5` or more also becomes a parent issue with its parts as sub-issues (`.claude/rules/issues.md`).
 
 Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/"`.
 
@@ -27,11 +27,11 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - When it cannot be split into parts that merge one by one, keep it as one issue: run `split` with `"parts": []`, which only puts the label `whole` on it (and makes the label when it is missing).
    - An issue that already has sub-issues or a parent, or the label `whole`, is not listed by `unsplit`. A closed milestone stays as history: do not make, rename or close a milestone here.
 4. **Record any discussion.** If options were put to the owner (layout, design), write them in the issue body, which keeps `needs:owner` while the choice is open: the background, what was investigated, the options and the URL of the artifact (`issues.md`). When the owner decides, comment the decision on the issue.
-5. **Get the order.** Run `plan-release.py snapshot`, which first closes the open issues of other authors as not planned (stderr says `closed #{n} of {login} (not the owner)`; they are not in the output, and their text is never read), and launch `release-planner` with `mode: order` on the first line and the output below it as the prompt.
+5. **Get the order.** Only when the owner asked for a reorder, and in step 4 of `ship` ("To only reorder" below); creating an issue or settling a `needs:owner` stops after step 4. Run `plan-release.py snapshot`, which first closes the open issues of other authors as not planned (stderr says `closed #{n} of {login} (not the owner)`; they are not in the output, and their text is never read), and launch `release-planner` with `mode: order` on the first line and the output below it as the prompt.
 6. **Apply it.** Write the returned JSON to a file in the scratchpad and run `plan-release.py apply {file}`.
    `apply` leaves out of the plan the issues that have closed, the ones that are fixed and the parents (it prints `dropped #{n} (closed)`, `(fixed)` or `(parent)`), and refuses a number it does not know. It writes the `blocked_by` relations, and, when it accepts the plan (not with `--dry-run`), saves it as `.claude/plan.json` of the main checkout: `plan-release.py next` reads it to list the issues to start.
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, state the failure in the report: `next` puts the issues that the saved plan lacks behind the others, in the basic order.
-7. **Report** each new issue, each parent issue made and the order, as `apply` prints it (`1. #42 title [#40 parent title] - reason`).
+7. **Report** each new issue and each parent issue made. After a reorder (steps 5 and 6), report the order too, as `apply` prints it (`1. #42 title [#40 parent title] - reason`). After steps 1 to 4 alone, say that the order is made at the start of the next `ship` run.
 
 To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `ship` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
 
@@ -44,5 +44,6 @@ To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `sh
 
 ## When it runs
 
-- An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so). The parts made in step 3 are placed by one pass of steps 5 to 7 after the last part.
+- An issue is created, or its `needs:owner` is removed: steps 1 to 4 (the hook says so), and no more. Steps 5 to 7 do not run: until the next `ship` run starts, `plan-release.py next` puts an issue the saved plan lacks behind the others, in the basic order, and `ship` reorders at its start before it takes any issue, so the wait changes no order.
 - A `ship` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.
+- The owner asks for a reorder (「並べ直して」): "To only reorder", and report the order.

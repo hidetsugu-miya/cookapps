@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostToolUse(Bash): issue の作成と needs:owner の解消のあとは issue-plan の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意の続行を、セッションに伝える。常に exit 0。
+# PostToolUse(Bash): issue の作成と needs:owner の解消のあとは issue-plan の手順 1〜4 の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意の続行を、セッションに伝える。常に exit 0。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
 cmd=$(jq -r '.tool_input.command // empty')
@@ -21,7 +21,7 @@ hook_log_begin
 
 msgs=()
 if [ "$plan" -eq 1 ]; then
-  msgs+=("issue を作成した、または needs:owner を外しました。issue-plan スキルの手順を続けてください（まだ始めていなければ、ここから始めてください）。")
+  msgs+=("issue を作成した、または needs:owner を外しました。issue-plan スキルの手順 1〜4（書く、ラベル、分割、議論の記録）を続けてください（まだ始めていなければ、ここから始めてください）。並べ直し（手順 5〜7）はここでは行いません。ship の開始時に行います。")
 fi
 if [ "$merge" -eq 1 ]; then
   main="$(git -C "${CLAUDE_PROJECT_DIR:?}" rev-parse --path-format=absolute --git-common-dir)/.."
