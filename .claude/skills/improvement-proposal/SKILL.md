@@ -5,8 +5,8 @@ description: Looks for improvements to つなぎAI (refactoring of ts/ and src-t
 
 # improvement-proposal
 
-One run files at most 3 issues (`.claude/rules/issues.md`, "Let the proposal agent file issues, and decide what it may decide itself").
-The owner starts it in a session; no job runs it (the job at 22:00 is retired, `.claude/rules/issues.md`). The night run of `ship` files one improvement of its own with a step of its own (`ship` step 3) and does not run this skill.
+One run files at most 3 issues ("Let the proposal agent file issues in a session, and decide what it may decide itself" in "Rules" at the end of this file).
+The owner starts it in a session; no job runs it (the job at 22:00 is retired, "Rules" at the end of this file). The night run of `ship` files one improvement of its own with a step of its own (`ship` step 3) and does not run this skill.
 Never implement, push or open a pull request, and never remove `needs:owner` from an issue.
 
 Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/"`.
@@ -58,3 +58,36 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 - Accepting an issue for the owner: the owner removes `needs:owner`, and `ship` implements it.
 - Declining a proposal: the owner closes it with `wontfix`.
+
+## Rules
+
+### Let the proposal agent file issues in a session, and decide what it may decide itself
+
+`improvement-proposal` looks for improvements and files them as issues. The owner runs it in a session; no job runs it any more. The job at 22:00 (`nightly.sh improvement-proposal`) is retired (at the owner's instruction, 2026-11-12; #485), and the night run of `ship` takes one improvement of its own in a step of its own ("Run `ship` once a day at 00:30" in the "Rules" of `.claude/skills/ship/SKILL.md`).
+It uses `refactor-scout` and `harness-scout`. Its scope is refactoring of `ts/` and `src-tauri/` that keeps behavior (`requirements/`, the E2E expectations and the `cargo test` expectations stay as they are), and the harness: hooks (not the permissions of `settings.local.json`), skills with the tools they run, and agents. UI and UX, new features and requirements, `docs/` and the README, versions and releases, personal settings and launchd are out of scope. `.claude/rules/` changes only to fix a statement that a change in scope made wrong.
+`ux-scout` runs only in a session, because UI and UX are a product decision.
+It only creates issues. It never removes `needs:owner`, implements, or opens a pull request.
+Apart from the hand-over Discussion, the agents make no Discussion and read none to decide anything (at the owner's instruction, 2026-11-09); `improvement-proposal` reads the owner's older Ideas Discussions only to check that a proposal does not have the same purpose.
+The run reports to the session that started it, with no comment on the hand-over Discussion.
+Give every proposal `proposal`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
+A candidate that `ux-scout` found goes to the owner: an issue with `needs:owner`, with the problem, the evidence and the options in its body.
+A candidate that the AI may decide (a bug fix, a refactoring that keeps behavior, a statement that no longer matches the code or the requirements, a change that strengthens a gate) is an issue through `issue-plan` with no `needs:owner`, and its body has a section `AI が決めたこと` that gives the reason. `ship` implements it like any issue.
+A candidate that matches any of these goes to the owner as well: an issue with `proposal` and `needs:owner`, whose body holds the options and the evidence, and the recommended option marked (at the owner's instruction, 2026-11-09: a Discussion is no longer a place to decide):
+- It changes what the owner sees or uses into a form `requirements/` does not describe.
+- It changes or removes a rule marked "at the owner's instruction".
+- It loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the rule that the owner merges the Release PR).
+- Two or more options remain that primary sources and a prototype cannot settle.
+
+File at most 3 issues in a run, and no `needs:owner` issue while 5 or more proposals are open with `needs:owner`.
+Do not file a proposal with the same purpose as a closed proposal, an open issue, or an open or closed Discussion.
+The owner accepts an issue with `needs:owner` by removing it, which makes it an ordinary issue for `ship`, and declines a proposal by closing it with `wontfix`.
+
+```text
+Good: 2 proposals are open with needs:owner -> a session's run files 3 -> the next run files none of that kind until the owner answers
+Good: #140 was declined with wontfix -> a later run does not propose the same thing again
+Good: a hook's message names a command that no longer exists -> the run files an issue with no needs:owner and "AI が決めたこと", and `ship` fixes it
+Good: a proposal would lower the severity that stops a push -> the run files an issue with `proposal` and `needs:owner` and the options, and the owner decides
+Bad:  the proposal agent removes needs:owner from its own proposal, so that ship implements it at its next run
+Bad:  a proposal is filed without proposal, and the count of open proposals misses it
+Bad:  a run files a UI change as an issue with no needs:owner
+```

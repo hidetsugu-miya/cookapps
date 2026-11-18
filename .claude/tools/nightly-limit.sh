@@ -1,12 +1,12 @@
 #!/bin/sh
-# Tells a run whether it may start something new (issues.md). The run stops itself with this; nothing kills the process.
+# Tells a run whether it may start something new (.claude/skills/ship/SKILL.md, "Rules"). The run stops itself with this; nothing kills the process.
 # Usage: nightly-limit.sh issue {n} [--taken {a,b,...}]
 # issue {n}: may issue #n be started, when the issues {a,b,...} are already in hand in this run?
 #   In a night run (NIGHTLY_DEADLINE_EPOCH is set) no when #n has the label `session`: the owner implements it in a session (issues.md). Exit 3.
 #   A session of the owner starts it like any issue.
 #   In a night run (NIGHTLY_DEADLINE_EPOCH is set) no when the unit rule says so. Exit 3. A unit is a Release PR of its own: one point:8 issue, or all the `solo` parts (the label `issue-plan` gives the parts of a point:8 issue it split) of one parent issue.
 #   The parts of one unit start together in a night; an issue that is not in the unit, and a part of another unit, do not start with it, before it or after it.
-#   A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
+#   A session of the owner has no unit rule (.claude/skills/ship/SKILL.md, "Rules"): it may bundle issues of any units.
 #   In a night run also no once the deadline has passed (exit 1), and no when the points of the issues in hand and of #n add up to more than 10 (exit 3; a smaller issue may still fit).
 # Exit 0: yes. Exit 1: no, the deadline has passed (stdout says why). Exit 3: no, #n does not fit the points, or it waits for a session or for its unit (stdout says why). Exit 2: wrong usage, or an issue without a point label.
 # nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the run it starts. A session of the owner has none, so it is never limited in time, in points, by the unit rule or by `session`.

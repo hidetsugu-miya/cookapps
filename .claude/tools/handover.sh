@@ -1,5 +1,5 @@
 #!/bin/sh
-# The hand-over between the runs of ship: one fixed Discussion (Ideas, titled 自走の引き継ぎ), one comment per run (issues.md).
+# The hand-over between the runs of ship: one fixed Discussion (Ideas, titled 自走の引き継ぎ), one comment per run (.claude/skills/ship/SKILL.md, "Rules").
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
 #        handover.sh history [n]     ensure, then prints the last n hand-overs (default 3, 1 to 30) and the `<!-- ai -->` writes and the owner's unmarked replies since the oldest of them, oldest first
