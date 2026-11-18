@@ -13,6 +13,18 @@ Good: a session needs the worktree, `use-worktree.sh` exits 3 because a night br
 Bad:  a second worktree for the same repository, so that two pieces of work run at once
 ```
 
+### One session develops one piece at a time, never in parallel
+
+A single AI session does one piece of development at a time: one worktree, one branch, one build or test run. It never fans out into parallel development of its own -- two worktrees, two branches, or two builds or E2E runs driven from the same session at once -- even when the pieces touch no common file (at the owner's instruction, 2026-11-19).
+The limit is on parallelism inside one session. Separate sessions are a different matter: each runs on its own, and a session that meets another at work on the repository coordinates with it (a message to the other session) rather than driving both itself.
+A session that wants a second piece started finishes or parks the first, or leaves it to another session.
+
+```text
+Good: a session implements one branch, reviews it, merges it, then starts the next
+Bad:  one session launches work on two branches at once, one build racing the other
+Good: a session finds another session already working, and tells it before changing shared rules
+```
+
 ### Add features and fix bugs on a branch of that worktree
 
 Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. The night run's branch is `night/{YYYY-MM-DD}`, and it holds the commits of several issues. `improvement-proposal` works on `proposal/{date and time}`, which it does not push, and the Release PR is `release/next`.
