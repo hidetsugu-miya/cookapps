@@ -178,8 +178,16 @@ const answers = {
   lsp_server_for: "ruby",
   // A-34: the languages found in a worktree: none (a spec that checks the finding gives its own).
   lsp_detect: [],
-  // The languages that a server can take (A-21), as `orca_languages` answers them.
-  orca_languages: ["plaintext", "python", "ruby", "typescript"],
+  // How the card of a language server draws a language (A-34), as `lsp_language_looks` answers it: the six of the table with their titles and icons, and one that has neither.
+  lsp_language_looks: [
+    { language: "go", title: "Go", icon: "go" },
+    { language: "javascript", title: "JavaScript", icon: "javaScript" },
+    { language: "plaintext", title: "plaintext", icon: null },
+    { language: "python", title: "Python", icon: "python" },
+    { language: "ruby", title: "Ruby", icon: "ruby" },
+    { language: "rust", title: "Rust", icon: "rust" },
+    { language: "typescript", title: "TypeScript", icon: "typeScript" },
+  ],
   lsp_launches: ({ servers }) => servers.map(() => ({ method: "none", candidates: [], service: null, command: null, mount: null })),
   // A-14: the two default themes, with example colors (a spec that chooses among themes gives `terminalThemes` of e2e/support.ts); a spec that presses a select mocks `terminal_theme_set`.
   terminal_themes: {

@@ -17,6 +17,7 @@ use super::{
 use crate::{
     auth::config_dir,
     orca_files::check_worktree_of_project,
+    orca_icon::language_icon,
     ssh::{failure, Ran},
 };
 
@@ -31,9 +32,10 @@ pub(crate) struct Tool {
     pub command: &'static str,
 }
 
-/// A language of the table: the files whose presence says that the worktree has it, and its servers in the order they are tried.
+/// A language of the table: its `title` (how the screen calls it), the files whose presence says that the worktree has it, and its servers in the order they are tried.
 pub(crate) struct Known {
     pub language: &'static str,
+    pub title: &'static str,
     pub marks: &'static [&'static str],
     pub tools: &'static [Tool],
 }
@@ -55,6 +57,7 @@ const TYPESCRIPT_SERVERS: &[Tool] = &[
 pub(crate) const TABLE: &[Known] = &[
     Known {
         language: RUBY,
+        title: "Ruby",
         marks: &["Gemfile.lock"],
         tools: &[Tool {
             name: "ruby-lsp",
@@ -64,6 +67,7 @@ pub(crate) const TABLE: &[Known] = &[
     },
     Known {
         language: "rust",
+        title: "Rust",
         marks: &["Cargo.toml"],
         tools: &[Tool {
             name: "rust-analyzer",
@@ -73,16 +77,19 @@ pub(crate) const TABLE: &[Known] = &[
     },
     Known {
         language: "typescript",
+        title: "TypeScript",
         marks: &["package.json", "tsconfig.json"],
         tools: TYPESCRIPT_SERVERS,
     },
     Known {
         language: "javascript",
+        title: "JavaScript",
         marks: &["package.json", "tsconfig.json"],
         tools: TYPESCRIPT_SERVERS,
     },
     Known {
         language: "go",
+        title: "Go",
         marks: &["go.mod"],
         tools: &[Tool {
             name: "gopls",
@@ -92,6 +99,7 @@ pub(crate) const TABLE: &[Known] = &[
     },
     Known {
         language: "python",
+        title: "Python",
         marks: &["pyproject.toml", "requirements.txt"],
         tools: &[
             Tool {
@@ -111,6 +119,11 @@ pub(crate) const TABLE: &[Known] = &[
 /// The row of the table for `language`.
 pub(crate) fn known(language: &str) -> Option<&'static Known> {
     TABLE.iter().find(|known| known.language == language)
+}
+
+/// How the screen calls a language: the title of the table (`Ruby`, `TypeScript`), else the name of A-21 as it is.
+fn title_of(language: &str) -> &str {
+    known(language).map_or(language, |known| known.title)
 }
 
 impl Known {
@@ -311,6 +324,36 @@ pub struct LspFound {
     pub state: LspFoundState,
 }
 
+/// How the screen draws the card of a language (A-34): its `title` and the `icon`, the name of one of the files of `src/vendor/jetbrains-icons/` (none: the screen keeps its own line drawing).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct LspLanguageLook {
+    pub language: String,
+    pub title: String,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub icon: Option<String>,
+}
+
+/// The look of each of `languages`, in their order.
+fn looks_of(languages: Vec<String>) -> Vec<LspLanguageLook> {
+    languages
+        .into_iter()
+        .map(|language| LspLanguageLook {
+            title: title_of(&language).to_owned(),
+            icon: language_icon(&language).map(str::to_owned),
+            language,
+        })
+        .collect()
+}
+
+/// The look of every language of A-21 (each once, sorted, `plaintext` too): the cards of the language servers draw a language by it. Read once with the settings.
+#[tauri::command]
+pub fn lsp_language_looks() -> Vec<LspLanguageLook> {
+    looks_of(crate::orca_language::languages())
+}
+
 /// Whether `known` is in the worktree: ruby by a `Gemfile.lock` that lists ruby-lsp, the others by one of their files.
 fn marked(known: &Known, host: &Probe) -> bool {
     if known.language == RUBY {
@@ -482,6 +525,7 @@ mod tests {
             assert!(!known.marks.is_empty(), "{}", known.language);
             assert!(!known.tools.is_empty(), "{}", known.language);
             assert_eq!(known.default_name(), known.tools[0].name);
+            assert!(!known.title.is_empty(), "{}", known.language);
         }
         assert_eq!(known("ruby").unwrap().default_name(), "ruby-lsp");
         assert_eq!(known("rust").unwrap().default_name(), "rust-analyzer");
@@ -940,5 +984,80 @@ mod tests {
         assert_eq!(got, Ok(Some("gopls".into())));
         assert_eq!(commands.borrow().len(), 2);
         assert!(commands.borrow()[1].starts_with("docker compose exec -T -w /srv worker sh -c '"));
+    }
+
+    // ---- how the screen draws a language ----
+
+    #[test]
+    fn the_languages_of_the_table_have_their_titles_and_any_other_keeps_its_name() {
+        let titles: Vec<(&str, &str)> = [
+            "ruby",
+            "rust",
+            "typescript",
+            "javascript",
+            "go",
+            "python",
+            "java",
+            "plaintext",
+        ]
+        .iter()
+        .map(|language| (*language, title_of(language)))
+        .collect();
+        assert_eq!(
+            titles,
+            [
+                ("ruby", "Ruby"),
+                ("rust", "Rust"),
+                ("typescript", "TypeScript"),
+                ("javascript", "JavaScript"),
+                ("go", "Go"),
+                ("python", "Python"),
+                ("java", "java"),
+                ("plaintext", "plaintext"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_look_of_a_language_has_its_title_and_the_icon_of_the_language_or_none() {
+        let got = looks_of(
+            ["ruby", "typescript", "javascript", "plaintext", "liquid"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        );
+        let look = |language: &str, title: &str, icon: Option<&str>| LspLanguageLook {
+            language: language.into(),
+            title: title.into(),
+            icon: icon.map(str::to_owned),
+        };
+        assert_eq!(
+            got,
+            [
+                look("ruby", "Ruby", Some("ruby")),
+                look("typescript", "TypeScript", Some("typeScript")),
+                look("javascript", "JavaScript", Some("javaScript")),
+                look("plaintext", "plaintext", None),
+                look("liquid", "liquid", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_language_of_the_table_has_an_icon_and_the_command_answers_every_language_of_a21() {
+        for known in TABLE {
+            assert!(
+                language_icon(known.language).is_some(),
+                "{}",
+                known.language
+            );
+        }
+        let all = lsp_language_looks();
+        assert_eq!(
+            all.iter()
+                .map(|look| look.language.as_str())
+                .collect::<Vec<_>>(),
+            crate::orca_language::languages()
+        );
     }
 }

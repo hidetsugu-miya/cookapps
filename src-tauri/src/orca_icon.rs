@@ -140,6 +140,11 @@ fn lookup(table: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
         .map(|(_, icon)| *icon)
 }
 
+/// The icon of the language `language` of A-21 (the card of a language server, A-34), or none.
+pub fn language_icon(language: &str) -> Option<&'static str> {
+    lookup(LANGUAGE_TO_ICON, language)
+}
+
 /// The icon of the file called `name` (the last part of its path), or none.
 pub fn file_icon(name: &str) -> Option<&'static str> {
     if let Some(icon) = lookup(FILENAME_TO_ICON, name) {
@@ -209,6 +214,16 @@ mod tests {
         ];
         for (name, icon) in cases {
             assert_eq!(file_icon(name), Some(icon), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_language_gives_its_icon_without_a_file_name() {
+        for (language, icon) in [("ruby", "ruby"), ("typescript", "typeScript"), ("go", "go")] {
+            assert_eq!(language_icon(language), Some(icon), "{language}");
+        }
+        for language in ["plaintext", "liquid", "", "Ruby"] {
+            assert_eq!(language_icon(language), None, "{language:?}");
         }
     }
 

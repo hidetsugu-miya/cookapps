@@ -37,6 +37,7 @@ import type { KeySaved } from "./bindings/KeySaved";
 import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
 import type { LspFound } from "./bindings/LspFound";
+import type { LspLanguageLook } from "./bindings/LspLanguageLook";
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspOutsideFile } from "./bindings/LspOutsideFile";
@@ -407,8 +408,8 @@ export interface Commands {
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
   // A-34: the names of the Hosts of this Mac's `~/.ssh/config` (and of the files it includes), in the order they come, with no pattern (`*`, `?`, `!`) and no name that ssh is not given; the choices of the ssh Host of a repository. No file is an empty list.
   ssh_hosts: { args: undefined; result: string[] };
-  // A-34: the languages of A-21 (`plaintext` too), each once and sorted: the choices of the languages that a language server takes.
-  orca_languages: { args: undefined; result: string[] };
+  // A-34: how the card of a language server draws each language of A-21 (`plaintext` too, each once, sorted): its title (`Ruby`, `TypeScript`; any other is its name) and its icon of src/vendor/jetbrains-icons/, none for a language that has none.
+  lsp_language_looks: { args: undefined; result: LspLanguageLook[] };
   // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, of the language `ruby`, with `autoStart` true and nothing replaced). A repository has one server for each language.
   lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
   // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name over 64 characters (an empty one is saved as the name of the app's table for the language, else the language), a language that is not one of A-21 and a language that two servers have are errors.
