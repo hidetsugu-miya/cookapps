@@ -1144,7 +1144,7 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
     on(args, environment)
 }
 
-/// The shell sentence that starts an orchestrator on its PC: the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and the terminal stays. The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
+/// The shell sentence that starts an orchestrator on its PC: it begins with `exec`, so the `sh` takes the place of the login shell it is typed into and the terminal ends with the process that runs in it (a sentence typed without it leaves the login shell, and the terminal, listed after Claude Code has ended; measured on Orca, #943). In it the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and opens a shell in its place (`exec "${SHELL:-/bin/sh}"`), so the terminal stays and the owner can read the words (an `exit` would close the terminal with them). The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
 fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<String, String> {
     check_name(name)?;
     local_first_prompt(repos)?;
@@ -1160,7 +1160,7 @@ fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<Stri
         .map(|repo| format!(" --project {}", crate::claude_code::sh_quote(repo)))
         .collect();
     Ok(format!(
-        "sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exit 1; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
+        "exec sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exec \"${{SHELL:-/bin/sh}}\"; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
     ))
 }
 
@@ -4190,8 +4190,8 @@ fn terminal_is_gone(
     }
 }
 
-/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again (the shell it was typed into stays alive when Claude Code ends); one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
-/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails.
+/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again; one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
+/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails. When Claude Code ends, the terminal ends with it (`orchestrator_command` replaces the login shell), so it leaves that list and the next ask makes a new one (#943).
 /// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
 fn start_orchestrator_with(
     config: &Path,
@@ -10206,16 +10206,22 @@ mod tests {
         let command = orchestrator_command("api-work", &[], HOST).unwrap();
         assert_eq!(
             command,
-            "sh -c 'm=\"$HOME/Library/Application Support/jp.mysis.tsunagiai/remote/tsunagiai-mcp\"; [ -x \"$m\" ] || { echo \"tsunagiai-mcp が置かれていません\" >&2; exit 1; }; \"$m\" --serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\" --formation-start api-work \"$@\"' sh"
+            "exec sh -c 'm=\"$HOME/Library/Application Support/jp.mysis.tsunagiai/remote/tsunagiai-mcp\"; [ -x \"$m\" ] || { echo \"tsunagiai-mcp が置かれていません\" >&2; exec \"${SHELL:-/bin/sh}\"; }; \"$m\" --serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\" --formation-start api-work \"$@\"' sh"
         );
+        // The login shell the sentence is typed into is replaced, so the terminal ends with the process that runs in it (#943): the sentence begins with `exec`, and the script never `exit`s (that would close the terminal with the words of the missing program unread; there it opens a shell instead).
+        assert!(command.starts_with("exec sh -c '"));
+        assert!(!command.contains("exit"));
+        assert!(command.contains(
+            "{ echo \"tsunagiai-mcp が置かれていません\" >&2; exec \"${SHELL:-/bin/sh}\"; }"
+        ));
         // The program of the app and the cargo and PATH places of #877 are not looked at any more.
         for old in ["/Applications/", ".cargo/bin", "command -v"] {
             assert!(!command.contains(old), "{old}");
         }
         // The server is started first, and a failure of it does not stop the orchestrator.
         let at = |needle: &str| command.find(needle).unwrap();
-        assert!(at("--serve --bind") < at("exec "));
-        assert!(command.contains("--serve --bind 10.0.0.2 >/dev/null 2>&1; exec"));
+        assert!(at("--serve --bind") < at("; exec \"$m\""));
+        assert!(command.contains("--serve --bind 10.0.0.2 >/dev/null 2>&1; exec \"$m\""));
         assert!(command.contains(MCP_NOT_PLACED));
         // One line, and one quoted word for `sh -c`: nothing inside ends the quote.
         assert!(!command.contains('\n'));

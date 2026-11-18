@@ -58,12 +58,14 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 // Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
 // `pty` is what a pty is started with: whether Claude Code keeps its own tools and the saved skill it is given; `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
+// `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, or a read that says the terminal is not listed, which also stops the mirror's reads. The last screen stays drawn.
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
   path: string;
   environment: string | null;
   pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; onEnd?: () => void };
+  onGone?: () => void;
 }
 
 // A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
@@ -427,6 +429,9 @@ async function attach(host: HTMLElement, files: File[]) {
 
 // ---- the mirror (this machine, or a saved environment that is not streamed) ----
 
+// What a read says (`check_terminal` of orca.rs) when the list of its Orca has no such terminal.
+const NOT_LISTED = "宛先のターミナルは終了したか、見つかりません";
+
 // The saved environment a mirror reads and types into; this machine's is left out.
 const mirrorTarget = (instance: Instance) => (instance.source.environment === null ? {} : { environment: instance.source.environment });
 
@@ -440,8 +445,12 @@ async function readFrame(instance: Instance) {
       instance.last = text;
       writeAgain(instance, CLEAR + text);
     }
-  } catch {
-    // The tab goes when the list says the terminal is gone; a read that fails is tried again.
+  } catch (e) {
+    // The tab goes when the list says the terminal is gone; a read that fails is tried again, except that a terminal the list does not have is not read any more.
+    if (instance.source.onGone && String(e).includes(NOT_LISTED)) {
+      stopMirror(instance);
+      instance.source.onGone();
+    }
   } finally {
     instance.reading = false;
   }
@@ -475,6 +484,7 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
     term.resize(event.cols, event.rows);
   } else {
     term.write(`\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
+    instance.source.onGone?.();
   }
 }
 

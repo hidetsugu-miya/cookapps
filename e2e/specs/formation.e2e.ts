@@ -2338,6 +2338,47 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await starts()).toBe(0);
   });
 
+  // #943: Claude Code ends, the terminal ends with it (the sentence replaces the login shell) and leaves the list of its Orca. The screen reads no more, keeps the last screen, and asks Rust for the leader again when the formation is shown next.
+  it("stops reading a mirrored terminal that its Orca no longer lists, and asks for the leader again when the formation is pressed next", async () => {
+    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
+    const read = await mock("orca_terminal_read", rejects("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください"));
+    await waitForCalls(read, 1);
+    await browser.pause(MIRROR * 4);
+    expect(await callsOf(read)).toHaveLength(1);
+    expect(await orchestratorText()).toContain("リーダーです");
+    const asked = await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
+    await mock("orca_terminal_read", ["$ claude", "> 新しいリーダーです"]);
+    await row("formation").click();
+    await waitForStarts(1);
+    await row("studio-work").click();
+    expect(await waitForCalls(asked, 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダーです"), { timeoutMsg: "the new terminal of the leader never showed" });
+    expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
+  });
+
+  it("asks for the leader again when the stream of its terminal has ended, and not while it is still listed", async () => {
+    const overview = orcaOverview([], [], { target: "Studio", environments: ["Studio"] });
+    await openList({ formation_list: remote("Studio"), formation_orchestrator: terminal("Studio"), orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList([], []));
+    await row("studio-work").click();
+    await waitForCalls("orca_stream_terminal");
+    await sendTerm({ kind: "snapshot", data: "$ claude", cols: 80, rows: 24 });
+    // A terminal that is still listed is shown again with nothing asked.
+    await row("formation").click();
+    await waitForStarts(1);
+    await row("studio-work").click();
+    await browser.pause(300);
+    expect(await callsOf("formation_orchestrator")).toHaveLength(1);
+    await sendTerm({ kind: "ended", message: "このターミナルは一覧にありません" });
+    const asked = await mock("formation_orchestrator", { environment: "Studio", handle: "term_orch2" });
+    await row("formation").click();
+    await row("studio-work").click();
+    expect(await waitForCalls(asked, 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await browser.waitUntil(async () => (await callsOf("orca_stream_terminal")).some((c) => (c as { handle: string }).handle === "term_orch2"), { timeoutMsg: "the new terminal of the leader was never streamed" });
+  });
+
   // The children of such a formation are in its PC's `children.json`, which Rust reads through Orca (#860): the screen asks by the name of the formation, as for this Mac's, and draws the answer, whose children are in that environment.
   it("reads the children of the formation of a saved environment by its name, draws them, and reads their terminals in that environment", async () => {
     const children = [formationChild("api-update", "working", { environment: "mac-studio" }), formationChild("docs-update", "planned", { environment: "mac-studio" })];
