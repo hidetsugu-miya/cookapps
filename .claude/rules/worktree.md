@@ -15,13 +15,14 @@ Bad:  a second worktree for the same repository, so that two pieces of work run 
 
 ### One session develops one piece at a time, never in parallel
 
-A single AI session does one piece of development at a time: one worktree, one branch, one build or test run. It never fans out into parallel development of its own -- two worktrees, two branches, or two builds or E2E runs driven from the same session at once -- even when the pieces touch no common file (at the owner's instruction, 2026-11-19).
+A single AI session develops one piece at a time: one worktree, one branch. It never fans out into parallel development of its own (a second piece started in another worktree or on another branch and driven from the same session at once), even when the pieces touch no common file (at the owner's instruction, 2026-11-19).
+Running the steps of one piece together is not this: the default flow still runs `run-ci.sh` beside wdio and starts E2E together with the reviewers (`review.md`). That is one piece, not parallel development.
 The limit is on parallelism inside one session. Separate sessions are a different matter: each runs on its own, and a session that meets another at work on the repository coordinates with it (a message to the other session) rather than driving both itself.
 A session that wants a second piece started finishes or parks the first, or leaves it to another session.
 
 ```text
 Good: a session implements one branch, reviews it, merges it, then starts the next
-Bad:  one session launches work on two branches at once, one build racing the other
+Bad:  one session drives two branches in two worktrees at once
 Good: a session finds another session already working, and tells it before changing shared rules
 ```
 
