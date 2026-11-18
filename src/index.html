@@ -629,13 +629,20 @@
           <p id="formation-list-error" class="pending fail" role="alert" hidden></p>
           <div id="formation-list-feed"></div>
         </div>
-        <h2 class="orca-list-head">プロジェクト</h2>
-        <div id="orca-search" role="search">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
-          <input id="orca-search-input" type="text" autocomplete="off" spellcheck="false" aria-label="プロジェクトを検索" placeholder="検索">
-          <button id="orca-search-clear" class="icon-btn" type="button" aria-label="検索を消す" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
+        <div id="orca-projects">
+          <div id="orca-projects-head">
+            <h2 class="orca-list-head">プロジェクト</h2>
+            <button id="orca-search-open" class="icon-btn" type="button" aria-label="検索">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            </button>
+          </div>
+          <div id="orca-search" role="search" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            <input id="orca-search-input" type="text" autocomplete="off" spellcheck="false" aria-label="プロジェクトを検索" placeholder="検索">
+            <button id="orca-search-clear" class="icon-btn" type="button" aria-label="検索を消す" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
         </div>
         <div id="orca-feed"></div>
       </aside>

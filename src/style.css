@@ -1209,8 +1209,13 @@ button.formation-card { cursor: pointer; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
 button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
-/* A-19: the search field under the header, level with the list: the icon, the field and (while something is typed) the button that clears it. The row the keys are on has a line in the accent color; the matched letters are bold. */
-#orca-search { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; margin: 8px 8px 0; padding: 0 4px 0 10px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: var(--muted); }
+/* A-19: the magnifier at the right end of the heading 「プロジェクト」; pressed, the row of the heading (`#orca-projects-head`) is the search field, of the same height: the icon, the field and (while something is typed) the button that clears it. The row the keys are on has a line in the accent color; the matched letters are bold. */
+#orca-projects { flex: none; }
+#orca-projects-head { display: flex; align-items: center; height: 36px; }
+#orca-projects-head .orca-list-head { flex: 1; min-width: 0; padding: 0 0 0 18px; }
+#orca-search-open { flex: none; width: 24px; height: 24px; margin-right: 8px; color: var(--muted); }
+#orca-search-open svg { width: 14px; height: 14px; }
+#orca-search { display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; margin: 2px 8px; padding: 0 4px 0 10px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: var(--muted); }
 #orca-search:focus-within { border-color: var(--accent); }
 #orca-search svg { flex: none; width: 14px; height: 14px; }
 #orca-search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; }

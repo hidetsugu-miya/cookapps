@@ -6,7 +6,7 @@
 // and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments.
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
-// A search field above the projects (A-19) narrows them by name; ⌘J moves to it.
+// A search field in the row of the heading 「プロジェクト」 (A-19), opened by the magnifier at the right end of the row or by ⌘J, narrows the projects by name.
 // While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { OrcaLocal } from "./bindings/OrcaLocal";
@@ -91,6 +91,8 @@ let filesAt = Date.now();
 let listOpen = true;
 // The text of the search field (A-19): the list shows the projects whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
 let query = "";
+// Whether the search field (A-19) is open: it takes the place of the heading's row. It is closed again when its text is empty and the focus leaves it, or with Escape; while text is kept it stays open.
+let searchOpen = false;
 let cursor: string | null = null;
 // The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
 let projectKey: string | null = null;
@@ -347,8 +349,10 @@ function drawNotice() {
   );
 }
 
-// The clear button of the search field shows while something is typed.
+// The heading's row or the search field shows (A-19), and the clear button of the field shows while something is typed.
 function drawSearch() {
+  $("orca-projects-head").hidden = searchOpen;
+  $("orca-search").hidden = !searchOpen;
   $("orca-search-clear").hidden = query === "";
 }
 
@@ -1368,7 +1372,7 @@ function drawSearchList() {
   drawFeed();
 }
 
-// Ends the search: the list is the whole list again.
+// Ends the search: the list is the whole list again (the field stays as it is).
 function clearSearch() {
   query = "";
   cursor = null;
@@ -1376,12 +1380,25 @@ function clearSearch() {
   drawSearchList();
 }
 
-// ⌘J: the field takes the focus with its text selected.
+// Opens the field in place of the heading's row, and gives it the focus with its text selected.
+function openSearch() {
+  searchOpen = true;
+  drawSearch();
+  searchInput().focus();
+  searchInput().select();
+}
+
+// Clears the text and shows the heading's row again.
+function closeSearch() {
+  searchOpen = false;
+  clearSearch();
+}
+
+// ⌘J: the list opens if it is closed, and the field opens and takes the focus.
 function focusSearch() {
   if (!listOpen) toggleList();
   draw();
-  searchInput().focus();
-  searchInput().select();
+  openSearch();
 }
 
 // ↑ and ↓ move the row the keys are on along the rows the search leaves, and stop at the first and the last.
@@ -1404,7 +1421,7 @@ function initSearch() {
   input.onkeydown = (e) => {
     if (composing(e)) return;
     if (e.key === "Escape") {
-      clearSearch();
+      closeSearch();
       input.blur();
     } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -1414,6 +1431,12 @@ function initSearch() {
       if (key !== null) selectProject(key);
     }
   };
+  // The focus left the field with no text in it: the heading's row comes back. A window that lost the focus keeps the field as the active element, and keeps it open.
+  input.onblur = () =>
+    setTimeout(() => {
+      if (searchOpen && input.value === "" && document.activeElement !== input) closeSearch();
+    }, 0);
+  $("orca-search-open").onclick = openSearch;
   $("orca-search-clear").onclick = () => {
     clearSearch();
     input.focus();

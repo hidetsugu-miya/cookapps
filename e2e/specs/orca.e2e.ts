@@ -2936,7 +2936,10 @@ describe("orca: search the list (A-19)", () => {
   const bolds = () =>
     browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project")].map((r) => [r.querySelector(".orca-project-name")!.textContent, [...r.querySelectorAll("b")].map((b) => b.textContent)]));
   const cursorOn = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].filter((r) => r.dataset.cursor === "true").map((r) => r.dataset.key));
+  // The page's own press of the magnifier (the driver's click focuses a button after the page's handler ran, which takes the focus off the field it opened).
+  const openField = () => browser.execute(() => document.getElementById("orca-search-open")!.click());
   const search = async (text: string) => {
+    if (!(await input().isDisplayed())) await openField();
     await input().setValue(text);
     // The list is narrowed when every row it draws holds the text (in bold), however many rows that leaves; a blank text draws all of them, none in bold.
     const needle = text.trim().toLowerCase();
@@ -2958,18 +2961,47 @@ describe("orca: search the list (A-19)", () => {
   const cmdJ = (init: KeyboardEventInit = { metaKey: true }) =>
     browser.execute((i) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true, ...i })), init);
 
-  it("has a field between the header and the list, and the clear button only while something is typed", async () => {
+  const rectOf = (selector: string) =>
+    browser.execute((s: string) => {
+      const r = document.querySelector(s)!.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, right: r.right, left: r.left };
+    }, selector);
+
+  it("shows the magnifier at the right end of the heading's row and no field until it is pressed", async () => {
     await openOrca(overview());
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await expect($("#orca-projects-head .orca-list-head")).toHaveText("プロジェクト");
+    await expect($("#orca-search-open")).toBeDisplayed();
+    await expect($("#orca-search-open")).toHaveAttribute("aria-label", "検索");
+    const head = await rectOf("#orca-projects-head");
+    const button = await rectOf("#orca-search-open");
+    expect(button.right).toBeGreaterThan(head.right - 12);
+    expect(button.top).toBeGreaterThanOrEqual(head.top);
+    expect(button.bottom).toBeLessThanOrEqual(head.bottom);
+  });
+
+  it("turns the heading's row into the field when the magnifier is pressed, with the focus in it and the list not moved", async () => {
+    await openOrca(overview());
+    const before = { head: await rectOf("#orca-projects-head"), feed: await rectOf("#orca-feed") };
+    await openField();
     await expect($("#orca-search")).toBeDisplayed();
+    await expect($("#orca-projects-head")).not.toBeDisplayed();
+    await expect($("#orca-search-open")).not.toBeDisplayed();
+    expect(await focusedId()).toBe("orca-search-input");
     await expect(input()).toHaveAttribute("aria-label", "プロジェクトを検索");
     await expect(input()).toHaveAttribute("placeholder", "検索");
+    // The field is in the row of the heading, and the list stays where it was.
+    const field = await rectOf("#orca-search");
+    expect(field.top).toBeGreaterThanOrEqual(before.head.top - 1);
+    expect(field.bottom).toBeLessThanOrEqual(before.head.bottom + 1);
+    expect((await rectOf("#orca-feed")).top).toBe(before.feed.top);
+    expect(await names()).toEqual(ALL);
+  });
+
+  it("has the clear button only while something is typed", async () => {
+    await openOrca(overview());
+    await openField();
     await expect($("#orca-search-clear")).not.toBeDisplayed();
-    const place = await browser.execute(() => {
-      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      return { headerBottom: r("#orca-header").bottom, searchTop: r("#orca-search").top, searchBottom: r("#orca-search").bottom, feedTop: r("#orca-feed").top };
-    });
-    expect(place.searchTop).toBeGreaterThanOrEqual(place.headerBottom - 1);
-    expect(place.feedTop).toBeGreaterThanOrEqual(place.searchBottom - 1);
     await search("app");
     await expect($("#orca-search-clear")).toBeDisplayed();
     expect(await names()).toEqual(["example-app"]);
@@ -3055,7 +3087,7 @@ describe("orca: search the list (A-19)", () => {
 
   it("has no line while nothing is typed, and Down does nothing", async () => {
     await openOrca(overview());
-    await input().click();
+    await openField();
     await browser.keys("ArrowDown");
     expect(await cursorOn()).toEqual([]);
   });
@@ -3082,10 +3114,32 @@ describe("orca: search the list (A-19)", () => {
     await openOrca(overview());
     await search("app");
     await browser.keys("Escape");
-    await expect(input()).toHaveValue("");
     expect(await names()).toEqual(ALL);
     expect(await focusedId()).not.toBe("orca-search-input");
+    // The field is closed and the heading's row is back; the next opening shows no text.
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await expect($("#orca-projects-head")).toBeDisplayed();
+    await openField();
+    await expect(input()).toHaveValue("");
     await expect($("#orca-search-clear")).not.toBeDisplayed();
+  });
+
+  it("closes the field when the focus leaves it with no text, and keeps it open while text is left", async () => {
+    await openOrca(overview());
+    await openField();
+    await browser.execute(() => (document.activeElement as HTMLElement).blur());
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await expect($("#orca-projects-head")).toBeDisplayed();
+    await search("app");
+    await browser.execute(() => (document.activeElement as HTMLElement).blur());
+    await browser.pause(150);
+    await expect($("#orca-search")).toBeDisplayed();
+    await expect(input()).toHaveValue("app");
+    expect(await names()).toEqual(["example-app"]);
+    // Cleared by the button, the field keeps the focus and so stays open.
+    await browser.execute(() => document.getElementById("orca-search-clear")!.click());
+    await browser.pause(150);
+    await expect($("#orca-search")).toBeDisplayed();
   });
 
   it("clears the text with the clear button and keeps the focus in the field", async () => {
@@ -3108,12 +3162,22 @@ describe("orca: search the list (A-19)", () => {
     expect(await browser.execute(() => [(document.activeElement as HTMLInputElement).selectionStart, (document.activeElement as HTMLInputElement).selectionEnd])).toEqual([0, 3]);
   });
 
+  it("opens the closed field with Cmd+J and gives it the focus", async () => {
+    await openOrca(overview());
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await cmdJ();
+    await expect($("#orca-search")).toBeDisplayed();
+    await expect($("#orca-projects-head")).not.toBeDisplayed();
+    expect(await focusedId()).toBe("orca-search-input");
+  });
+
   it("opens a closed list (A-23) with Cmd+J before it takes the field", async () => {
     await openOrca(overview());
     await $("#orca-list-toggle").click();
     await expect($("#orca-list")).not.toBeDisplayed();
     await cmdJ();
     await expect($("#orca-list")).toBeDisplayed();
+    await expect($("#orca-search")).toBeDisplayed();
     expect(await focusedId()).toBe("orca-search-input");
   });
 
