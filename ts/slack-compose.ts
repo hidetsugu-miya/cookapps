@@ -1,6 +1,8 @@
-// The Slack compose screen, opened by "Slack に貼る" in the thread's header. Two panes: on the left, at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it)
-// with "元の内容に戻す" above it, under it the things to do ("行うこと": numbered cards, each one post, with where it goes and what it posts, and a plus that adds one), and "投稿" at the bottom, which sends them from the top down;
-// on the right a conversation with Claude that proofreads the original message and can write the things to do. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
+// The Slack compose screen, opened by "Slack に貼る" in the thread's header. It has two modes, switched at the right of the header (S-27); it always opens in Claude mode.
+// Manual mode: at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it) with "元の内容に戻す" above it, under it the things to do
+// ("行うこと": numbered cards, each one post, with where it goes and what it posts, and a plus that adds one), and "投稿" at the bottom, which sends them from the top down.
+// Claude mode: a conversation with Claude that proofreads the original message and can write the things to do, and a narrow column of the things to do (number, destination and the head of the text).
+// Both show one draft, so a switch keeps it. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
 import type { Channel } from "./bindings/Channel";
 import type { Recent } from "./bindings/Recent";
 import type { SlackAction } from "./bindings/SlackAction";
@@ -10,7 +12,7 @@ import type { Workspace } from "./bindings/Workspace";
 import { showModelSlot } from "./claude.js";
 import { createChat } from "./claude-chat.js";
 import { createComposer } from "./composer.js";
-import { $, tag } from "./dom.js";
+import { $, composing, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
 import { CLOSE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -39,6 +41,8 @@ interface Draft {
 // `posted` is set once it was posted, and it is never sent again: its `thread` is the thread a later action continues, the thread it replied in or else the time of its own message (empty when Slack answered none).
 type Action = SlackAction;
 let draft: Draft | null = null;
+// Which of the two parts of the screen is shown. It is not kept: every opening starts in Claude mode.
+type Mode = "claude" | "manual";
 
 // From the last `slack_load`: the picker lists them.
 let workspaces: Workspace[] = [];
@@ -161,6 +165,14 @@ function destinationOf(d: Draft, a: Action): Target | null {
   return p?.thread ? { teamId: p.teamId, channel: p.channel, name: p.name, threadTs: p.thread } : null;
 }
 
+// The channel that the action `index` of `d` goes to: its own destination's channel (a thread link gives its channel), or the channel of the post it continues. Null while none is chosen.
+function channelOf(d: Draft, index: number): Target | null {
+  const a = d.actions[index];
+  if (a.after === null) return a.target && { ...a.target, threadTs: null };
+  const p = d.actions[a.after].posted;
+  return p ? { teamId: p.teamId, channel: p.channel, name: p.name, threadTs: null } : channelOf(d, a.after);
+}
+
 // The actions still to send, and whether "投稿" can send them all: each has somewhere to go and a text that is not blank.
 function pendingOf(d: Draft | null) {
   const pending = d?.actions.filter((a) => !a.posted) ?? [];
@@ -238,6 +250,27 @@ function drawActions() {
     }),
   );
   $<HTMLButtonElement>("slack-add").disabled = !d || posting || pendingOf(d).pending.length >= ACTIONS_MAX;
+  drawBrief();
+}
+
+// The things to do as the narrow column of Claude mode draws them: the number, where it goes, and the head of what it posts (the CSS cuts it to two lines).
+function drawBrief() {
+  const d = draft;
+  $("slack-brief-list").replaceChildren(
+    ...(d?.actions ?? []).map((a, index) => {
+      const item = tag("li", a.posted ? "slack-brief-item posted" : "slack-brief-item");
+      const main = tag("div", "slack-brief-main");
+      main.append(tag("span", "slack-brief-where", whereLabel(a)), tag("span", "slack-brief-text", a.paste ? d!.text : a.text));
+      item.append(tag("span", "slack-no", String(index + 1)), main);
+      return item;
+    }),
+  );
+}
+
+// Shows one of the two parts of the screen; nothing of the draft changes.
+function setMode(mode: Mode) {
+  $("slack-compose").dataset.mode = mode;
+  for (const m of ["claude", "manual"] as const) $(`slack-mode-${m}`).setAttribute("aria-pressed", String(m === mode));
 }
 
 // The preview is shown, or the field it opens (pressing the preview opens it, leaving the field closes it).
@@ -250,6 +283,7 @@ function setEditing(on: boolean) {
 export function refreshSlackCompose() {
   const d = draft;
   $("slack-preview").textContent = d?.text ?? "";
+  drawBrief();
   $<HTMLTextAreaElement>("slack-body").disabled = posting;
   const { pending, ready } = pendingOf(d);
   $("slack-post").textContent = pending.length > 1 ? `${pending.length} 件を投稿` : "投稿";
@@ -430,6 +464,7 @@ async function openCompose() {
   $("slack-error").hidden = true;
   drawActions();
   setEditing(false);
+  setMode("claude");
   // The selects in the frame of the request field need the model settings.
   showModelSlot("slack-model");
   showComposeScreen();
@@ -448,7 +483,105 @@ function back() {
   requestAnimationFrame(() => ($("main").scrollTop = threadScroll));
 }
 
-// "投稿": sends the actions that are not posted yet, from the top down. One that continues a thread is sent to the thread of the post it follows, by the time (`ts`) that post answered.
+// The dialog of "投稿" for two things to do or more (#905): for each one after the first that is not posted, "N をどこに送りますか", the thread of the one before it or the other choice, chosen with a radio button: the card's own destination when it has one, else the channel of the one before it; nothing is chosen for one that continues the thread of an earlier post other than the one before it.
+// "投稿" of the dialog fixes the chosen destinations in the cards and resolves true; "やめる", Escape and a press on the dimmed screen resolve false and change nothing.
+function askDestinations(d: Draft): Promise<boolean> {
+  const first = d.actions.findIndex((a) => !a.posted);
+  const indexes = d.actions.map((_, i) => i).filter((i) => i > first && !d.actions[i].posted);
+  const dialog = tag("div", "slack-ask");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", "投稿の送り先");
+  const radios = new Map<number, HTMLInputElement[]>();
+  for (const i of indexes) {
+    const a = d.actions[i];
+    const group = tag("fieldset", "slack-ask-item");
+    group.append(tag("legend", "", `${i + 1} をどこに送りますか`));
+    const current = a.after === i - 1 ? "thread" : a.after === null ? "channel" : "";
+    const inputs = (
+      [
+        ["thread", `${i} のスレッドに投稿`],
+        // A card with a destination of its own keeps it; one that continues a thread goes to the channel of the card before it.
+        ["channel", a.after === null ? `${whereLabel(a)} に投稿` : `#${channelOf(d, i - 1)!.name} に投稿`],
+      ] as const
+    ).map(([value, text]) => {
+      const input = tag("input");
+      input.type = "radio";
+      input.name = `slack-ask-${i}`;
+      input.value = value;
+      input.checked = value === current;
+      const choice = tag("label", "slack-ask-choice");
+      choice.append(input, tag("span", "", text));
+      group.append(choice);
+      return input;
+    });
+    radios.set(i, inputs);
+    dialog.append(group);
+  }
+  const cancel = tag("button", "text-btn", "やめる");
+  cancel.type = "button";
+  const go = tag("button", "text-btn primary", "投稿");
+  go.type = "button";
+  const buttons = tag("div", "slack-ask-buttons");
+  buttons.append(cancel, go);
+  dialog.append(buttons);
+  const scrim = tag("div", "scrim slack-ask-scrim");
+  scrim.append(dialog);
+  const chosen = (i: number) => radios.get(i)!.find((r) => r.checked)?.value;
+  const sync = () => (go.disabled = !indexes.every(chosen));
+
+  return new Promise((resolve) => {
+    const behind = [...document.querySelectorAll<HTMLElement>("#sidebar, #content")];
+    const close = (answer: boolean) => {
+      scrim.remove();
+      for (const el of behind) el.inert = false;
+      document.removeEventListener("keydown", onKey);
+      $("slack-post").focus();
+      resolve(answer);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !composing(e)) close(false);
+    };
+    for (const r of radios.values()) for (const input of r) input.onchange = sync;
+    cancel.onclick = () => close(false);
+    scrim.onpointerdown = (e) => {
+      if (e.target !== scrim) return;
+      e.preventDefault();
+      close(false);
+    };
+    go.onclick = () => {
+      // Every channel is read before any card changes: a card that continued a thread has the channel of the one before it.
+      const channels = new Map(indexes.map((i) => [i, channelOf(d, i - 1)]));
+      for (const i of indexes) {
+        const a = d.actions[i];
+        if (chosen(i) === "thread") [a.after, a.byClaude] = [i - 1, false];
+        else if (a.after === null) a.byClaude = false;
+        else [a.target, a.after, a.byClaude] = [channels.get(i)!, null, false];
+      }
+      $("slack-error").hidden = true;
+      drawActions();
+      refreshSlackCompose();
+      close(true);
+    };
+    sync();
+    for (const el of behind) el.inert = true;
+    document.addEventListener("keydown", onKey);
+    document.body.append(scrim);
+    (indexes.map((i) => radios.get(i)![0])[0] ?? go).focus();
+  });
+}
+
+// "投稿": with one thing to do not posted it posts at once, and with more the dialog above asks first (#905), then `post`.
+async function startPost() {
+  const d = draft;
+  if (!d || posting || asking) return;
+  const { pending, ready } = pendingOf(d);
+  if (!ready) return;
+  if (pending.length > 1 && !(await askDestinations(d))) return;
+  if (draft === d) await post();
+}
+
+// `post` sends the actions that are not posted yet, from the top down. One that continues a thread is sent to the thread of the post it follows, by the time (`ts`) that post answered.
 // A failure stops there: what was sent is marked posted and is never sent again, and the rest stays as it is. The screen stays open after the last one, so more can be added.
 async function post() {
   const d = draft;
@@ -486,7 +619,9 @@ async function post() {
 export function initSlackCompose() {
   $("thread-slack").onclick = openCompose;
   $("slack-back").onclick = back;
-  $("slack-post").onclick = post;
+  $("slack-mode-claude").onclick = () => setMode("claude");
+  $("slack-mode-manual").onclick = () => setMode("manual");
+  $("slack-post").onclick = startPost;
   // A new thing to do goes on in the thread of the one before it, with a text of its own that starts empty.
   $("slack-add").onclick = () => {
     const d = draft;
@@ -533,7 +668,8 @@ export function initSlackCompose() {
   // The form is the shared composer's; the field is three lines high and scrolls inside.
   $("slack-chat-note").after(createComposer({ prefix: "slack", label: "Claude への依頼" }));
   chat.init();
-  initSplit($("slack-main"), $("slack-split"));
+  // The divider sets the width of the column of the things to do, a fifth to a half of the screen body.
+  initSplit($("slack-main"), $("slack-split"), { min: 1 / 5, max: 1 / 2, initial: 1 / 3, property: "--brief-w" });
   drawActions();
   refreshSlackCompose();
 }

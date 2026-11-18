@@ -179,6 +179,91 @@ describe("footer", () => {
       await expect($("#unread-pane")).not.toBeDisplayed();
     });
 
+    describe("when the count of the footer reaches 0", () => {
+      // One unread mail, and `slack` for the Slack list (empty unless given).
+      const fewer = (slack = timeline([], { refreshSecs: 1 })) => boot({ inbox: inbox([mail("t1", "Mail only", 2)]), slack_load: slackLoad, slack_timeline: slack, claude_status: claudeReady, calendar_week: weekOfToday() });
+      const slackOnly = () => timeline([timelineMessage(slackTs(4), "Slack Only", "dev", "only text", { unread: true })], { refreshSecs: 1 });
+      const openAt = async (n: string) => {
+        await waitForText("#footer-bell .footer-count", n);
+        await $("#footer-bell").click();
+        await expect($("#unread-pane")).toBeDisplayed();
+        await waitForCount("#unread-pane-list li", Number(n));
+      };
+
+      it("closes the pane when the last row is cleared with a button of the row, and 元に戻す does not open it again", async () => {
+        await fewer();
+        await openAt("1");
+        const trash = await mock("trash", true);
+        const untrash = await mock("untrash", true);
+        const row = $$("#unread-pane-list li")[0];
+        await row.moveTo();
+        await row.$('button[aria-label="ゴミ箱へ移動"]').click();
+        expect(await waitForCalls(trash)).toEqual([{ account, id: "t1" }]);
+        await expect($("#unread-pane")).not.toBeDisplayed();
+        await expect($("#footer-bell")).toHaveAttribute("aria-expanded", "false");
+        await expect($("#footer-bell .footer-count")).not.toBeDisplayed();
+        await $(".toast button").click();
+        expect(await waitForCalls(untrash)).toEqual([{ account, id: "t1" }]);
+        await waitForText("#footer-bell .footer-count", "1");
+        await expect($("#unread-pane")).not.toBeDisplayed();
+      });
+
+      it("closes the pane when the count falls to 0 for a reason outside it", async () => {
+        await fewer(slackOnly());
+        await openAt("2");
+        // The Slack message is read in Slack: the count falls, but not to 0.
+        await mock("slack_timeline", timeline([], { refreshSecs: 1 }));
+        await waitForText("#footer-bell .footer-count", "1");
+        await expect($("#unread-pane")).toBeDisplayed();
+        // The mail is read on the list: the count reaches 0. set_read answers, or the row goes back and so does the count.
+        const setRead = await mock("set_read", true);
+        await browser.execute(() => document.querySelector<HTMLInputElement>("#unread-threads .read-box")!.click());
+        expect(await waitForCalls(setRead)).toEqual([{ account, id: "t1", read: true }]);
+        await expect($("#unread-pane")).not.toBeDisplayed();
+      });
+
+      it("keeps the pane open when an operation leaves the count above 0", async () => {
+        await fewer(slackOnly());
+        await openAt("2");
+        const trash = await mock("trash", true);
+        // The mail is 2 minutes old and the Slack message 4, so the mail is the first row.
+        const mailRow = $$("#unread-pane-list li")[0];
+        await mailRow.moveTo();
+        await mailRow.$('button[aria-label="ゴミ箱へ移動"]').click();
+        expect(await waitForCalls(trash)).toEqual([{ account, id: "t1" }]);
+        await waitForText("#footer-bell .footer-count", "1");
+        await browser.pause(300);
+        await expect($("#unread-pane")).toBeDisplayed();
+      });
+
+      it("keeps the pane open with no rows when ウォッチ takes the last row and the count stays above 0", async () => {
+        const only = timelineMessage(slackTs(4), "Slack Only", "dev", "only text", { unread: true, channel: "C1" });
+        await boot({ inbox: inbox([thread("t3", "Already read", false)]), slack_load: slackLoad, slack_timeline: timeline([only], { refreshSecs: 1 }), claude_status: claudeReady, calendar_week: weekOfToday() });
+        await openAt("1");
+        const watch = await mock("slack_watch", holds);
+        await mock("slack_timeline", timeline([], { unreadTotal: 1 }));
+        const row = $$("#unread-pane-list li")[0];
+        await row.moveTo();
+        await row.$('button[aria-label="ウォッチ"]').click();
+        expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
+        await waitForCount("#unread-pane-list li", 0);
+        await release(watch, true);
+        await waitForCalls("slack_timeline");
+        await expect($("#unread-pane-title")).toHaveText("未読 1");
+        await expect($("#unread-pane")).toBeDisplayed();
+      });
+
+      it("leaves the pane open when the bell opens it at 0", async () => {
+        await boot({ inbox: inbox([thread("t3", "Already read", false)]), slack_load: slackLoad, slack_timeline: timeline([]), claude_status: claudeReady, calendar_week: weekOfToday() });
+        await waitForCount("#read-threads li", 1);
+        await $("#footer-bell").click();
+        await expect($("#unread-pane")).toBeDisplayed();
+        await expect($("#unread-pane-title")).toHaveText("未読 0");
+        await browser.pause(300);
+        await expect($("#unread-pane")).toBeDisplayed();
+      });
+    });
+
     it("opens the thread of a mail with 詳細を開く as pressing its row does, and closes", async () => {
       await panes();
       await open();

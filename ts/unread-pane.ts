@@ -15,7 +15,7 @@ import { openUnreadMessage, readableMessage, readUnreadMessage, unreadMessages, 
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
 import { openThread } from "./thread.js";
 
-// The count in the heading: the footer's, which counts every unread message held and not only the rows the pane can list.
+// The count in the heading: the footer's, which counts every unread message held and not only the rows the pane can list. A fall of it to 0 closes the pane.
 let count = 0;
 // What the pane drew last, so that a redraw with nothing changed leaves the rows (and a hover or a focus on them) alone.
 let drawnKey = "";
@@ -162,7 +162,10 @@ export function drawUnreadPane() {
 
 export function initUnreadPane() {
   watchFooterCount((n) => {
+    const before = count;
     count = n;
+    // The count falling to 0 while the pane is open closes it, whatever cleared the last unread: a row's button or a sync. A pane opened at 0 stays, and one that closed stays closed when 元に戻す brings the count back.
+    if (before > 0 && n === 0) close();
     drawUnreadPane();
   });
   $("footer-bell").onclick = toggle;

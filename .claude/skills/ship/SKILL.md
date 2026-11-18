@@ -81,6 +81,7 @@ Pass these to every `code-implementer` launch as `制約:`, word for word (at th
 - A force push or a history rewrite of a pushed branch: ask first. Dropping the unpushed commits of this run's own branch (7.2) is not a rewrite of history that anyone has.
 - A new product decision: step 7.2, not a stop of the whole run.
 - The run's limit: `nightly-limit.sh` says no. The process is never killed; the run finishes steps 7.4 to 9.
+- Wait for a background command and a subagent by their completion notification, never by a scheduled wake-up (`ScheduleWakeup`). If a wake-up was scheduled anyway, cancel it before the report of step 9, so that it does not run another turn after the work is done.
 
 Do not widen the run: a request that arrives during it becomes an issue through `issue-plan`.
 

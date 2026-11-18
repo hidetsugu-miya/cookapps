@@ -403,7 +403,7 @@ describe("orca", () => {
     });
     expect(box.listRight).toBeLessThanOrEqual(box.splitLeft + 1);
     expect(box.splitRight).toBeLessThanOrEqual(box.workLeft + 1);
-    expect(box.share).toBeCloseTo(0.25, 2);
+    expect(box.share).toBeCloseTo(0.19, 2);
     expect(box.header).toBe(44);
     expect(box.tabs).toBe(44);
     expect(box.tabsTop).toBe(box.headerTop);
@@ -469,6 +469,18 @@ describe("orca", () => {
     // Each item draws its own icon in place of the dot.
     expect(await count('.menu[role="menu"] button svg')).toBe(3);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    // Only the Claude icon is in the Claude color; the other two keep the color of the line.
+    const colors = await browser.execute(() => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--claude)";
+      document.body.append(probe);
+      const claude = getComputedStyle(probe).color;
+      probe.remove();
+      return { claude, icons: [...document.querySelectorAll('.menu[role="menu"] button svg')].map((svg) => getComputedStyle(svg).color) };
+    });
+    expect(colors.icons[0]).toBe(colors.claude);
+    expect(colors.icons[1]).not.toBe(colors.claude);
+    expect(colors.icons[2]).not.toBe(colors.claude);
     await expect($(".orca-plus")).toHaveAttribute("aria-expanded", "true");
     // Escape closes it, and nothing was started.
     await browser.keys("Escape");
@@ -900,19 +912,19 @@ describe("orca: the divider", () => {
       key,
     );
 
-  it("is a vertical separator that starts at 25%", async () => {
+  it("is a vertical separator that starts at 19%", async () => {
     await openOrca();
     const split = $("#orca-split");
     await expect(split).toHaveAttribute("role", "separator");
     await expect(split).toHaveAttribute("aria-orientation", "vertical");
     await expect(split).toHaveAttribute("tabindex", "0");
-    await expect(split).toHaveAttribute("aria-valuemin", "20");
+    await expect(split).toHaveAttribute("aria-valuemin", "15");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
-    await expect(split).toHaveAttribute("aria-valuenow", "25");
-    expect(await share()).toBeCloseTo(0.25, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "19");
+    expect(await share()).toBeCloseTo(0.19, 2);
   });
 
-  it("sets the list width by dragging, and keeps it between 20% and 50% however far it is dragged", async () => {
+  it("sets the list width by dragging, and keeps it between 15% and 50% however far it is dragged", async () => {
     await openOrca();
     await drag(0.4);
     expect(await share()).toBeCloseTo(0.4, 2);
@@ -921,19 +933,19 @@ describe("orca: the divider", () => {
     expect(await share()).toBeCloseTo(0.5, 2);
     await expect($("#orca-split")).toHaveAttribute("aria-valuenow", "50");
     await drag(0.01);
-    expect(await share()).toBeCloseTo(0.2, 2);
-    await expect($("#orca-split")).toHaveAttribute("aria-valuenow", "20");
+    expect(await share()).toBeCloseTo(0.15, 2);
+    await expect($("#orca-split")).toHaveAttribute("aria-valuenow", "15");
   });
 
   it("is moved with the arrow keys inside the same range, and keeps its width when the screen is left and opened again", async () => {
     await openOrca();
     await press("ArrowRight");
     await press("ArrowRight");
-    expect(await share()).toBeCloseTo(0.29, 2);
+    expect(await share()).toBeCloseTo(0.23, 2);
     for (let i = 0; i < 20; i++) await press("ArrowRight");
     expect(await share()).toBeCloseTo(0.5, 2);
     for (let i = 0; i < 30; i++) await press("ArrowLeft");
-    expect(await share()).toBeCloseTo(0.2, 2);
+    expect(await share()).toBeCloseTo(0.15, 2);
     await press("ArrowRight");
     const widened = await share();
     await $("#nav-mail").click();
@@ -1790,8 +1802,8 @@ describe("orca: a saved environment's stream", () => {
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
     const viewport = await mock("orca_stream_viewport", null);
-    // The list narrows to 20%, so the terminal widens.
-    await dragDivider(0.2);
+    // The list narrows to 15%, so the terminal widens.
+    await dragDivider(0.15);
     const [sent] = await waitForCalls(viewport);
     expect(viewportOf(sent).cols).toBeGreaterThan(viewportOf(call).cols);
     expect(viewportOf(sent).rows).toBe(viewportOf(call).rows);
@@ -2879,7 +2891,8 @@ describe("orca: split panes (A-17)", () => {
       await openStudioSplit();
       const calls = await waitForCalls("orca_stream_terminal", 2);
       const viewport = await mock("orca_stream_viewport", null);
-      await dragDivider(0.2);
+      // The list narrows from 19% to 15%, so the panes widen.
+      await dragDivider(0.15);
       const sent = await waitForCalls(viewport, 2);
       expect(sent.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
       expect(viewportOf(sent[0]).cols).toBeGreaterThan(viewportOf(calls[0]).cols);
