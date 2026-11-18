@@ -296,6 +296,8 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-edit-body")).not.toBeDisplayed();
     await expect(modeButton("リッチ")).toHaveAttribute("aria-pressed", "true");
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "false");
+    await expect(modeButton("プレビュー")).not.toBeDisplayed();
+    await expect(modeButton("再読み込み")).not.toBeDisplayed();
     expect(await callsOf("markdown_split")).toEqual([{ text: mdSample }]);
     // The unchanged export is what Rust is asked to put into the text, to know that it can.
     const [check] = (await callsOf("markdown_patch")) as PatchCall[];
@@ -2710,6 +2712,116 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCalls(open);
     await expect($(CARD)).toHaveText("ブラウザで開けません");
     await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  // A-42: an HTML file opens in the preview, a frame that shows the address `orca_file_preview_url` returns. Rust makes the address and serves the file (unit tests): the mock answers a made-up one, and the spec checks what the page asks, draws and saves.
+  const PREVIEW_URL = "http://127.0.0.1:12345/tok/page.html";
+  const previewArgs = { path: "/work/example-app", relative: "page.html", environment: null };
+  const html = (content: string) => text(content, "sig-1", "html", "xml");
+  const frameOf = () =>
+    browser.execute(() => {
+      const frame = document.querySelector<HTMLIFrameElement>(".orca-edit-preview iframe");
+      return frame === null ? null : { src: frame.getAttribute("src"), sandbox: frame.getAttribute("sandbox") };
+    });
+  // Opens page.html (or `name`) with `content`, with `orca_file_preview_url` answering the made-up address, and waits for the frame.
+  async function openPage(content = "<h1>見出し</h1>\n", name = "page.html") {
+    await openFiles({ orca_files_list: withPage() });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const url = await mock("orca_file_preview_url", PREVIEW_URL);
+    await mock("orca_file_read", html(content));
+    await doublePress(name);
+    await waitForCount(".orca-edit-preview iframe", 1);
+    return url;
+  }
+
+  it("opens an HTML file in the preview, with the source and preview buttons and the frame of the address, its sandbox letting no top navigation through (A-42)", async () => {
+    const url = await openPage();
+    expect(await frameOf()).toEqual({ src: PREVIEW_URL, sandbox: "allow-scripts allow-same-origin" });
+    expect(await callsOf(url)).toEqual([previewArgs]);
+    await expect($(".orca-edit-preview")).toBeDisplayed();
+    await expect($(".orca-edit-body")).not.toBeDisplayed();
+    await expect(modeButton("プレビュー")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "false");
+    await expect(modeButton("リッチ")).not.toBeDisplayed();
+    await expect(modeButton("再読み込み")).toBeDisplayed();
+    // The text stays in the editor for the source.
+    await expect($(".orca-edit-area")).toHaveValue("<h1>見出し</h1>\n", { trim: false });
+  });
+
+  it("opens a file whose name ends with .html in capitals in the preview too (A-42)", async () => {
+    const url = await openPage("<p>a</p>", "INDEX.HTML");
+    expect(await callsOf(url)).toEqual([{ ...previewArgs, relative: "INDEX.HTML" }]);
+    await expect(modeButton("プレビュー")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("switches an HTML file to its source and back to the preview with the buttons, and asks for the address again for the preview (A-42)", async () => {
+    const url = await openPage();
+    await modeButton("ソース").click();
+    await expect($(".orca-edit-body")).toBeDisplayed();
+    await expect($(".orca-edit-preview")).not.toBeDisplayed();
+    await expect($(".orca-edit-area")).toHaveValue("<h1>見出し</h1>\n", { trim: false });
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("プレビュー")).toHaveAttribute("aria-pressed", "false");
+    await expect(modeButton("再読み込み")).not.toBeDisplayed();
+    expect(await count(".orca-edit-preview iframe")).toBe(0);
+    expect(await callsOf(url)).toEqual([previewArgs]);
+    await modeButton("プレビュー").click();
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await callsOf(url)).toEqual([previewArgs, previewArgs]);
+    await expect(modeButton("プレビュー")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("再読み込み")).toBeDisplayed();
+  });
+
+  it("makes a new frame and asks for the address again with the reload button of the preview (A-42)", async () => {
+    const url = await openPage();
+    await browser.execute(() => {
+      (document.querySelector(".orca-edit-preview iframe") as HTMLIFrameElement & { old?: boolean }).old = true;
+    });
+    await modeButton("再読み込み").click();
+    await waitForCalls(url, 2);
+    await browser.waitUntil(() => browser.execute(() => (document.querySelector(".orca-edit-preview iframe") as HTMLIFrameElement & { old?: boolean }).old !== true), { timeoutMsg: "the frame was not made again" });
+    expect(await count(".orca-edit-preview iframe")).toBe(1);
+    expect(await frameOf()).toEqual({ src: PREVIEW_URL, sandbox: "allow-scripts allow-same-origin" });
+  });
+
+  it("saves the typing that waits before it asks for the address of the preview (A-42)", async () => {
+    const url = await openPage();
+    await modeButton("ソース").click();
+    const write = await mock("orca_file_write", holds);
+    await mock(url, PREVIEW_URL);
+    await type("<p>追記</p>\n");
+    await modeButton("プレビュー").click();
+    const [call] = (await waitForCalls(write)) as { content: string }[];
+    expect(call.content).toBe("<h1>見出し</h1>\n<p>追記</p>\n");
+    await browser.pause(300);
+    expect(await callsOf(url)).toEqual([]);
+    expect(await count(".orca-edit-preview iframe")).toBe(0);
+    await release(write, saved("sig-2"));
+    expect(await waitForCalls(url)).toEqual([previewArgs]);
+    await waitForCount(".orca-edit-preview iframe", 1);
+  });
+
+  it("shows the message of an address that failed on a card and shows the source (A-42)", async () => {
+    await openFiles({ orca_files_list: withPage() });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_file_preview_url", rejects("プレビューを開けません"));
+    await mock("orca_file_read", html("<h1>a</h1>\n"));
+    await doublePress("page.html");
+    await expect($(CARD)).toHaveText("プレビューを開けません");
+    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(".orca-edit-area")).toHaveValue("<h1>a</h1>\n", { trim: false });
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("再読み込み")).not.toBeDisplayed();
+    expect(await count(".orca-edit-preview iframe")).toBe(0);
+  });
+
+  it("shows no preview button and no reload button for a file that is not HTML (A-42)", async () => {
+    await openFiles();
+    await openFileWith(rust("fn main() {}\n"));
+    await expect(modeButton("プレビュー")).not.toBeDisplayed();
+    await expect(modeButton("再読み込み")).not.toBeDisplayed();
+    await expect($(".orca-edit-preview")).not.toBeDisplayed();
+    expect(await count(".orca-edit-preview iframe")).toBe(0);
   });
 
   // A-24: the diff tab. Rust compares the two texts (`orca_file_diff`): the rows of both views and the blocks of changes; the page draws them and colors the text.

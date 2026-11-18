@@ -67,6 +67,7 @@ export const UP_SVG = svgOf('<path d="m6 15 6-6 6 6"/>');
 export const DOWN_SVG = svgOf('<path d="m6 9 6 6 6-6"/>');
 export const RELOAD_SVG = svgOf('<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>');
 export const CODE_SVG = svgOf('<path d="m8 8-4 4 4 4M16 8l4 4-4 4"/>');
+export const EYE_SVG = svgOf('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>');
 export const BRANCH_SVG = svgOf('<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>');
 // A-34: a server (two racks with a light each), the button of the language server in the file pane.
 export const SERVER_SVG = svgOf('<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/>');
