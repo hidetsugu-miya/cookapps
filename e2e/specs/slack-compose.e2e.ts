@@ -20,6 +20,19 @@ const claudeMode = () => $("#slack-mode-claude").click();
 const briefItems = "#slack-brief-list > li";
 const brief = (n: number) => $(`${briefItems}:nth-child(${n})`);
 const briefWhere = (n = 1) => brief(n).$(".slack-brief-where");
+// The dialog that "投稿" opens for two things to do or more (#905): the choice `how` of the `n`th thing to do (from 2), its "投稿" and its "やめる".
+const ask = () => $(".slack-ask");
+const askChoice = (n: number, how: "thread" | "channel") => $(`.slack-ask input[name="slack-ask-${n - 1}"][value="${how}"]`);
+const askGo = () => $(".slack-ask-buttons .primary");
+const askCancel = () => $("//div[contains(@class, 'slack-ask-buttons')]//button[normalize-space()='やめる']");
+// Presses "投稿", chooses `hows` for the things to do from the second on, and sends from the dialog.
+async function postThrough(...hows: ("thread" | "channel")[]) {
+  await post().click();
+  await ask().waitForExist();
+  for (const [at, how] of hows.entries()) await askChoice(at + 2, how).click();
+  await askGo().click();
+  await expect(ask()).not.toExist();
+}
 // The destination chip of the first thing to do.
 const target = () => where(1);
 // What `slack_post` answers: the time of the posted message.
@@ -237,7 +250,7 @@ describe("slack compose screen", () => {
     const slackPost = await mock("slack_post", postedTs);
     await manual();
     await what(2).click();
-    await post().click();
+    await postThrough("thread");
     await waitForCalls(slackPost, 2);
     await waitForCount(`${cards} .slack-done`, 2);
     await claudeMode();
@@ -391,7 +404,7 @@ describe("slack compose screen", () => {
     await what(2).click();
     await expect(post()).toHaveText("2 件を投稿");
     const slackPost = await mock("slack_post", postedTs);
-    await post().click();
+    await postThrough("thread");
     expect(await waitForCalls(slackPost, 2)).toEqual([
       { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "@here 共有します", written: true },
       { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: slackPreview, written: false },
@@ -412,6 +425,95 @@ describe("slack compose screen", () => {
       { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: "以上です", written: true },
     ]);
     await waitForCount(`${cards} .slack-done`, 3);
+  });
+
+  it("opens a dialog for two things to do or more, with the thread of the one before and the channel for each one after the first, and posts nothing until it is confirmed", async () => {
+    await openManual();
+    await chooseGeneral();
+    await add().click();
+    await written(2).setValue("補足です");
+    await add().click();
+    await written(3).setValue("以上です");
+    const slackPost = await mock("slack_post", postedTs);
+    await post().click();
+    await ask().waitForExist();
+    await expect(ask()).toHaveAttribute("role", "dialog");
+    expect(await textsOf(".slack-ask legend")).toEqual(["2 をどこに送りますか", "3 をどこに送りますか"]);
+    expect(await textsOf(".slack-ask-choice")).toEqual(["1 のスレッドに投稿", "#general に投稿", "2 のスレッドに投稿", "#general に投稿"]);
+    // The things to do added with the plus go on in the thread of the one before, so that is what is chosen at first.
+    await expect(askChoice(2, "thread")).toBeSelected();
+    await expect(askChoice(3, "thread")).toBeSelected();
+    expect(await callsOf(slackPost)).toEqual([]);
+    // The second goes to the thread of the first, the third to the channel.
+    await askChoice(3, "channel").click();
+    await askGo().click();
+    await expect(ask()).not.toExist();
+    expect(await waitForCalls(slackPost, 3)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: slackPreview, written: false },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: "補足です", written: true },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "以上です", written: true },
+    ]);
+    await waitForCount(`${cards} .slack-done`, 3);
+  });
+
+  it("sends the second thing to do to the thread of the first when the thread is chosen in the dialog", async () => {
+    await openManual();
+    await chooseGeneral();
+    await add().click();
+    await written(2).setValue("補足です");
+    const slackPost = await mock("slack_post", postedTs);
+    await postThrough("thread");
+    expect(await waitForCalls(slackPost, 2)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: slackPreview, written: false },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: "補足です", written: true },
+    ]);
+  });
+
+  it("sends the second thing to do to the channel, with no thread, when the channel is chosen in the dialog, and fixes the chip of its card", async () => {
+    await openManual();
+    await chooseGeneral();
+    await add().click();
+    await written(2).setValue("補足です");
+    const slackPost = await mock("slack_post", postedTs);
+    await postThrough("channel");
+    expect(await waitForCalls(slackPost, 2)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: slackPreview, written: false },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "補足です", written: true },
+    ]);
+    await expect(where(2)).toHaveText("Example Team ・ #general");
+  });
+
+  it("posts nothing and changes no card when the dialog is closed with やめる, Escape or a press on the dimmed screen", async () => {
+    await openManual();
+    await chooseGeneral();
+    await add().click();
+    await written(2).setValue("補足です");
+    const slackPost = await mock("slack_post", postedTs);
+    await post().click();
+    await ask().waitForExist();
+    await askCancel().click();
+    await expect(ask()).not.toExist();
+    await post().click();
+    await ask().waitForExist();
+    await browser.keys("Escape");
+    await expect(ask()).not.toExist();
+    await post().click();
+    await ask().waitForExist();
+    await browser.action("pointer").move({ origin: "viewport", x: 5, y: 5 }).down().up().perform();
+    await expect(ask()).not.toExist();
+    expect(await callsOf(slackPost)).toEqual([]);
+    expect(await count(`${cards} .slack-done`)).toBe(0);
+    await expect(where(2)).toHaveText("1 のスレッド");
+    await expect(post()).toBeEnabled();
+  });
+
+  it("posts one thing to do at once, with no dialog", async () => {
+    await openManual();
+    await chooseGeneral();
+    const slackPost = await mock("slack_post", postedTs);
+    await post().click();
+    expect(await waitForCalls(slackPost)).toEqual([{ teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: slackPreview, written: false }]);
+    expect(await count(".slack-ask")).toBe(0);
   });
 
   it("chooses the thread of an earlier post, or a channel of its own, in the picker of a later thing to do", async () => {
@@ -447,7 +549,7 @@ describe("slack compose screen", () => {
     await add().click();
     await written(2).setValue("補足です");
     const slackPost = await mock("slack_post", holds);
-    await post().click();
+    await postThrough("thread");
     await waitForCalls(slackPost);
     // While the posts are on their way nothing of the cards can be changed.
     await expect(where(1)).toBeDisabled();
@@ -480,7 +582,7 @@ describe("slack compose screen", () => {
     await add().click();
     await written(2).setValue("続きです");
     const slackPost = await mock("slack_post", postedTs);
-    await post().click();
+    await postThrough("thread");
     expect(((await waitForCalls(slackPost, 2)) as { threadTs: string | null }[]).map((c) => c.threadTs)).toEqual(["1761700000.000001", "1761700000.000001"]);
   });
 
@@ -894,7 +996,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     // The owner reads them and presses 投稿: the written text first, then the original message in its thread.
     await manual();
     await expect(post()).toHaveText("2 件を投稿");
-    await post().click();
+    await postThrough("thread");
     expect(await waitForCalls(slackPost, 2)).toEqual([
       { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: greeting, written: true },
       { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: slackPreview, written: false },
