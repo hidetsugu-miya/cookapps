@@ -169,23 +169,18 @@ async function markIgnored(here: FilesContext, mine: number, dir: string, read: 
   drawSoon();
 }
 
-// A folder as it was listed, whose marks of differences are to be asked.
+// A folder as it was listed, whose marks of differences are to be asked, with the number of its question (taken when it was listed, so that the folder that was listed last is the one that is answered).
 interface Listed {
   dir: string;
   read: OrcaDir;
+  token: number;
 }
 
 // How many paths one question of `orca_files_changes` takes at most (the limit of a list in Rust).
 const CHANGES_LIMIT = 5000;
 
-// Takes the marks of the entries of the folders `listed`, each as it was listed, from `orca_files_changes` (A-39): an entry the answer does not name loses its mark. The folders of one read go in one question (one `git.status` of the worktree, not one for each folder), and in several only when their entries pass CHANGES_LIMIT. It is asked after the folders are drawn, and an answer that fails leaves the marks as they are. Only the last question of a folder is answered, and an answer that comes after the tree became another worktree's, or the folder was dropped, is dropped. Nothing is drawn when the marks are the ones shown.
+// Takes the marks of the entries of the folders `listed`, each as it was listed, from `orca_files_changes` (A-39): an entry the answer does not name loses its mark. The folders of one read go in one question (one `git.status` of the worktree, not one for each folder), and in several only when their entries pass CHANGES_LIMIT. It is asked after the folders are drawn, and an answer that fails leaves the marks as they are. Only the last question of a folder (the one whose number `readDir` took last) is answered, and an answer that comes after the tree became another worktree's, or the folder was dropped, is dropped. Nothing is drawn when the marks are the ones shown.
 async function markChanges(here: FilesContext, mine: number, listed: Listed[]) {
-  const tokens = new Map<string, number>();
-  for (const { dir } of listed) {
-    const token = (asked.get(dir) ?? 0) + 1;
-    asked.set(dir, token);
-    tokens.set(dir, token);
-  }
   const groups: Listed[][] = [];
   let size = 0;
   for (const l of listed) {
@@ -196,10 +191,10 @@ async function markChanges(here: FilesContext, mine: number, listed: Listed[]) {
     groups[groups.length - 1].push(l);
     size += l.read.entries.length;
   }
-  await Promise.all(groups.map((group) => markGroup(here, mine, group, tokens)));
+  await Promise.all(groups.map((group) => markGroup(here, mine, group)));
 }
 
-async function markGroup(here: FilesContext, mine: number, group: Listed[], tokens: Map<string, number>) {
+async function markGroup(here: FilesContext, mine: number, group: Listed[]) {
   let answer: OrcaGitChange[];
   try {
     answer = await invoke("orca_files_changes", { path: here.path, paths: group.flatMap((l) => l.read.entries.map((e) => e.path)), environment: here.target });
@@ -209,8 +204,8 @@ async function markGroup(here: FilesContext, mine: number, group: Listed[], toke
   if (mine !== generation) return;
   const now = new Map(answer.map((c) => [c.path, c.mark]));
   let moved = false;
-  for (const { dir, read } of group) {
-    if (asked.get(dir) !== tokens.get(dir) || !listings.has(dir)) continue;
+  for (const { dir, read, token } of group) {
+    if (asked.get(dir) !== token || !listings.has(dir)) continue;
     for (const e of read.entries) {
       const mark = now.get(e.path);
       if (changes.get(e.path) === mark) continue;
@@ -264,8 +259,11 @@ async function readDir(dir: string, quiet = false, clock = false, pending?: List
   }
   if (inherited || next.dir === null || next.error !== null || next.dir.entries.length === 0) return;
   // The differences from HEAD can change with no change of the entries (a file is edited), so the clock asks for them too, for all the folders in one question.
-  if (pending) pending.push({ dir, read: next.dir });
-  else void markChanges(here, mine, [{ dir, read: next.dir }]);
+  const token = (asked.get(dir) ?? 0) + 1;
+  asked.set(dir, token);
+  const listed = { dir, read: next.dir, token };
+  if (pending) pending.push(listed);
+  else void markChanges(here, mine, [listed]);
   // The clock does not ask git again for the ignore marks of a folder that holds what it held: they are asked for at the next read that is not the clock's.
   if (!(same && clock)) void markIgnored(here, mine, dir, next.dir);
 }
@@ -307,8 +305,12 @@ export function refreshFiles(clock = false) {
 // A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now.
 export function rereadScratchpad(target: string | null, path: string) {
   if (context === null || context.path !== path || context.target !== target) return;
+  const mine = generation;
+  const here = context;
   void (async () => {
-    for (const dir of ["", ".orca", ".orca/scratchpad"]) if (listings.has(dir)) await readDir(dir);
+    const pending: Listed[] = [];
+    for (const dir of ["", ".orca", ".orca/scratchpad"]) if (listings.has(dir)) await readDir(dir, false, false, pending);
+    if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
   })();
 }
 
@@ -462,14 +464,16 @@ async function move(here: FilesContext, from: string, to: string, folder: boolea
   let target = parentOf(to);
   while (target !== "" && !listings.has(target)) target = parentOf(target);
   const [first, ...queue] = new Set([parentOf(from), target, ...reopened]);
-  await readDir(first);
+  const pending: Listed[] = [];
+  await readDir(first, false, false, pending);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir);
+      await readDir(dir, false, false, pending);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+  if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
 // Turns the row of `relative` into the field of its path from the worktree, with the name selected (a file's without its extension).
@@ -626,13 +630,15 @@ async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
     if (creating !== null && under(creating.dir)) creating = null;
   }
   const queue = [...new Set(answer.deleted.map((d) => parentOf(d.relative)))].filter((dir) => dir === "" || listings.has(dir));
+  const pending: Listed[] = [];
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir);
+      await readDir(dir, false, false, pending);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+  if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
 // The rows drawn now, in the order of the tree.

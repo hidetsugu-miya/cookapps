@@ -86,10 +86,11 @@ interface EditorFile {
   // The band under the line of the caret, in the box of the text and under its layer (hidden unless the text area has the focus and no range is selected), and the band under the paragraph of the caret of the rich view, in the box of the rich view and under its text.
   band: HTMLElement;
   richBand: HTMLElement;
-  // What the band of the source keeps: the line it is under (`bandLine`, counted only when the caret or the text is not the one of `bandCaret` and `bandText`), the height of a line and the padding above the text (`bandMetrics`, null: read again at the next place), and the frame in which the band of the rich view is put (null: none waits).
+  // What the band of the source keeps: the line it is under (`bandLine`, counted only when the caret is not `bandCaret` or the text was changed since (`edits` is not `bandEdits`: `edits` counts every change of the text area's value, by the user and by the page)), the height of a line and the padding above the text (`bandMetrics`, null: read again at the next place), and the frame in which the band of the rich view is put (null: none waits).
   bandLine: number;
   bandCaret: number;
-  bandText: string;
+  bandEdits: number;
+  edits: number;
   bandMetrics: { height: number; top: number } | null;
   richFrame: number | null;
   // The numbers of the lines, one text node ("1\n2\n…") that grows and shrinks at its end with the line count (`lines`), in the box at the left of the text that follows the vertical scroll.
@@ -219,12 +220,12 @@ function placeBand(f: EditorFile) {
     return;
   }
   const text = area.value;
-  if (caret !== f.bandCaret || text !== f.bandText) {
+  if (caret !== f.bandCaret || f.edits !== f.bandEdits) {
     let line = 0;
     for (let i = text.indexOf("\n"); i !== -1 && i < caret; i = text.indexOf("\n", i + 1)) line++;
     f.bandLine = line;
     f.bandCaret = caret;
-    f.bandText = text;
+    f.bandEdits = f.edits;
     f.band.dataset.line = String(line);
   }
   moveBand(f);
@@ -399,6 +400,7 @@ async function putRich(f: EditorFile) {
       }
       if (patched.text !== f.area.value) {
         f.area.value = patched.text;
+        f.edits++;
         typed(f);
       }
     } catch (e) {
@@ -487,6 +489,7 @@ async function load(f: EditorFile) {
       ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
       : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
+    f.edits++;
     f.highlight = text.highlight;
     f.language = text.language;
     f.markdown = text.language === "markdown";
@@ -622,6 +625,7 @@ async function reread(f: EditorFile) {
     const area = f.area;
     const [start, end, top, left, richTop] = [area.selectionStart, area.selectionEnd, area.scrollTop, area.scrollLeft, f.rich.scrollTop];
     area.value = text.content;
+    f.edits++;
     area.setSelectionRange(Math.min(start, text.content.length), Math.min(end, text.content.length));
     area.scrollTop = top;
     area.scrollLeft = left;
@@ -701,8 +705,9 @@ function create(id: string, target: string | null, project: string, path: string
   richBand.hidden = true;
   rich.append(richBand);
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandText: "", bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => {
+    f.edits++;
     typed(f);
     placeBand(f);
   };
