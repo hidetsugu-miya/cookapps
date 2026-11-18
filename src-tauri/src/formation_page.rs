@@ -4,7 +4,7 @@
 //! Everything the page names is inside the repositories of the formation: a root and an evidence path are checked against the folders that Orca lists for this PC (`Allowed`), through the real path of each, so that `..`, an absolute path and a link cannot leave them; `.git` and the names that start with `.env` are never read, as `formation_read` does not.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::Read,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -287,6 +287,19 @@ pub enum Evidence {
         note: Option<String>,
         text: String,
     },
+}
+
+impl Evidence {
+    /// The bytes of the text that the evidence carries, which `Walk` adds up against `PAGE_LIMIT`.
+    fn size(&self) -> usize {
+        let lines = |lines: &[String]| lines.iter().map(|line| line.len() + 1).sum::<usize>();
+        match self {
+            Self::Excerpt { lines: l, .. } => lines(l),
+            Self::Diff { before, after, .. } => lines(before) + lines(after),
+            Self::GitDiff { diff, .. } => diff.len(),
+            Self::Node { text, .. } => text.len(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -578,14 +591,26 @@ fn split_ref(reference: &str) -> Result<(&str, &str), String> {
     Ok((file, pointer))
 }
 
-/// The text of the node `reference` of a JSON file under `root`.
-fn node_text(root: &Path, reference: &str) -> Result<String, String> {
+/// The JSON file at `real` (a real path), read and parsed.
+fn read_json(real: &Path) -> Result<Value, String> {
+    let bytes = read_bounded(real, EVIDENCE_FILE_LIMIT)?;
+    serde_json::from_slice(&bytes).map_err(|_| "ファイルは JSON として読めません".to_owned())
+}
+
+/// The text of the node `reference` of a JSON file under `root`. `docs` keeps the files read, by real path, so that the many nodes of one deliverable read and parse it once.
+fn node_text(
+    root: &Path,
+    reference: &str,
+    docs: &mut BTreeMap<PathBuf, Result<Value, String>>,
+) -> Result<String, String> {
     let (file, pointer) = split_ref(reference)?;
     let real = locate(root, file)?;
-    let bytes = read_bounded(&real, EVIDENCE_FILE_LIMIT)?;
-    let doc: Value =
-        serde_json::from_slice(&bytes).map_err(|_| "ファイルは JSON として読めません")?;
-    let node = pointer_value(&doc, pointer).ok_or("その node はありません")?;
+    let doc = docs
+        .entry(real)
+        .or_insert_with_key(|real| read_json(real))
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let node = pointer_value(doc, pointer).ok_or("その node はありません")?;
     let text = serde_json::to_string_pretty(node).map_err(|e| e.to_string())?;
     if text.len() > NODE_TEXT_LIMIT {
         return Err(format!(
@@ -610,8 +635,8 @@ fn check_revision(revision: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The arguments of `git diff` as the decision pages run it (A-41): no pager, no external diff, no text conversion, and the pathspec read literally.
-fn git_diff_args(path: &str, base: &str, head: Option<&str>) -> Vec<String> {
+/// The arguments of `git diff` as the decision pages run it (A-41): no pager, no external diff, no text conversion, no rename (a renamed file is a deletion and an addition, so that every name is listed), and the pathspec read literally. `names` lists the names of the changed files alone (`--name-only -z`), with the same range and path as the diff itself.
+fn git_diff_args(path: &str, base: &str, head: Option<&str>, names: bool) -> Vec<String> {
     let mut args: Vec<String> = [
         "--literal-pathspecs",
         "-c",
@@ -622,11 +647,15 @@ fn git_diff_args(path: &str, base: &str, head: Option<&str>) -> Vec<String> {
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
+        "--no-renames",
         "--src-prefix=a/",
         "--dst-prefix=b/",
     ]
     .map(str::to_owned)
     .to_vec();
+    if names {
+        args.extend(["--name-only", "-z"].map(str::to_owned));
+    }
     args.push(base.to_owned());
     if let Some(head) = head {
         args.push(head.to_owned());
@@ -636,17 +665,12 @@ fn git_diff_args(path: &str, base: &str, head: Option<&str>) -> Vec<String> {
     args
 }
 
-/// `git diff {base} [{head}] -- {path}` in `root`, at most `GIT_DIFF_LIMIT` bytes of it (the second value says it was cut) and `GIT_WAIT` of time. A diff with no change is an error.
-fn git_diff(
-    root: &Path,
-    path: &str,
-    base: &str,
-    head: Option<&str>,
-) -> Result<(String, bool), String> {
+/// What `git` printed in `root` for `args`: at most `limit` bytes of its output (the second value says it was cut) and `GIT_WAIT` of time.
+fn run_git(root: &Path, args: &[String], limit: usize) -> Result<(Vec<u8>, bool), String> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(git_diff_args(path, base, head))
+        .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -659,7 +683,7 @@ fn git_diff(
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        let _ = out.take(GIT_DIFF_LIMIT as u64 + 1).read_to_end(&mut bytes);
+        let _ = out.take(limit as u64 + 1).read_to_end(&mut bytes);
         let _ = sender.send(bytes);
     });
     let errors = std::thread::spawn(move || {
@@ -667,12 +691,12 @@ fn git_diff(
         let _ = err.take(4096).read_to_end(&mut bytes);
         bytes
     });
-    let Ok(bytes) = receiver.recv_timeout(GIT_WAIT) else {
+    let Ok(mut bytes) = receiver.recv_timeout(GIT_WAIT) else {
         let _ = child.kill();
         let _ = child.wait();
         return Err("git が時間内に終わりませんでした".into());
     };
-    let truncated = bytes.len() > GIT_DIFF_LIMIT;
+    let truncated = bytes.len() > limit;
     if truncated {
         let _ = child.kill();
     }
@@ -682,11 +706,49 @@ fn git_diff(
         let line = stderr.lines().next().unwrap_or("git が失敗しました");
         return Err(format!("git diff が失敗しました: {line}"));
     }
-    let used = &bytes[..bytes.len().min(GIT_DIFF_LIMIT)];
-    if used.is_empty() {
+    bytes.truncate(limit);
+    Ok((bytes, truncated))
+}
+
+/// Whether a name that `git diff --name-only -z` printed has a name of `formation::is_secret_name` in it.
+fn names_a_secret(names: &[u8]) -> bool {
+    names.split(|byte| *byte == 0).any(|name| {
+        String::from_utf8_lossy(name)
+            .split('/')
+            .any(formation::is_secret_name)
+    })
+}
+
+/// `git diff {base} [{head}] -- {path}` in `root`, at most `GIT_DIFF_LIMIT` bytes of it (the second value says it was cut) and `GIT_WAIT` of time. A diff with no change is an error.
+/// `path` may be a folder, and a tracked file of it may be a `.env...` or lie in a `.git...` folder, which `check_clean` cannot see: the names of the changed files are read first with the same arguments, and a diff that has a secret name among them is refused without being read.
+fn git_diff(
+    root: &Path,
+    path: &str,
+    base: &str,
+    head: Option<&str>,
+) -> Result<(String, bool), String> {
+    let (names, names_cut) = run_git(root, &git_diff_args(path, base, head, true), GIT_DIFF_LIMIT)?;
+    if names_a_secret(&names) {
+        return Err(
+            "変更に、`.git` の中か、`.env` で始まる名前のファイルがあるので、差分を読めません。ファイルの名前を指してください"
+                .into(),
+        );
+    }
+    if names_cut {
+        return Err("変更のあるファイルが多すぎて、名前を確かめきれません".into());
+    }
+    if names.is_empty() {
         return Err("この二つの版のあいだで、そのパスに変更がありません".into());
     }
-    Ok((String::from_utf8_lossy(used).into_owned(), truncated))
+    let (bytes, truncated) = run_git(
+        root,
+        &git_diff_args(path, base, head, false),
+        GIT_DIFF_LIMIT,
+    )?;
+    if bytes.is_empty() {
+        return Err("この二つの版のあいだで、そのパスに変更がありません".into());
+    }
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
 }
 
 // ---- the walk: the checks and the resolution ----
@@ -697,18 +759,50 @@ struct Walk<'a> {
     roots: BTreeMap<String, Option<PathBuf>>,
     errors: Vec<Violation>,
     evidence: usize,
+    /// The bytes of the evidence and nodes resolved so far: a page over `PAGE_LIMIT` is refused as soon as it is known, and the rest is not read.
+    resolved: usize,
+    over: bool,
+    /// The numbers of the cards seen: the reply names a card by its number, so a page keeps each once.
+    numbers: BTreeSet<String>,
+    /// The JSON files that nodes were read from, by real path (`node_text`).
+    docs: BTreeMap<PathBuf, Result<Value, String>>,
+    /// Whether the evidence is read (the lines of a file, a node, `git diff`). A page read for its cards alone (`build_input`) checks the evidence's shape and reads none of it.
+    resolve: bool,
 }
 
 type Object = Map<String, Value>;
 
 impl<'a> Walk<'a> {
-    fn new(allowed: &'a Allowed) -> Self {
+    fn new(allowed: &'a Allowed, resolve: bool) -> Self {
         Self {
             allowed,
+            resolve,
             roots: BTreeMap::new(),
             errors: Vec::new(),
             evidence: 0,
+            resolved: 0,
+            over: false,
+            numbers: BTreeSet::new(),
+            docs: BTreeMap::new(),
         }
+    }
+
+    /// Whether the evidence resolved so far has used up `PAGE_LIMIT`: the violation is told once, at the first evidence that is not read.
+    fn over_budget(&mut self, path: &str) -> bool {
+        if self.resolved <= PAGE_LIMIT {
+            return false;
+        }
+        if !self.over {
+            self.over = true;
+            self.bad(
+                path,
+                format!(
+                    "根拠を入れたページが大きすぎます（{} KiB まで）。ここから先の根拠は読んでいません",
+                    PAGE_LIMIT / 1024
+                ),
+            );
+        }
+        true
     }
 
     fn bad(&mut self, path: &str, message: impl Into<String>) {
@@ -921,12 +1015,17 @@ impl<'a> Walk<'a> {
             }
             return None;
         }
-        match kind {
+        if kind != Some("diff") && self.over_budget(path) {
+            return None;
+        }
+        let evidence = match kind {
             Some("excerpt") => self.excerpt(value, path),
             Some("diff") => self.diff(value, path),
             Some("git-diff") => self.git_diff(value, path),
             _ => self.node(value, path),
-        }
+        };
+        self.resolved += evidence.as_ref().map_or(0, Evidence::size);
+        evidence
     }
 
     fn excerpt(&mut self, value: &Value, path: &str) -> Option<Evidence> {
@@ -982,7 +1081,11 @@ impl<'a> Walk<'a> {
         if !valid {
             return None;
         }
-        let lines = self.read_lines(&root, &file, start, end, path)?;
+        let lines = if self.resolve {
+            self.read_lines(&root, &file, start, end, path)?
+        } else {
+            Vec::new()
+        };
         Some(Evidence::Excerpt {
             root: name,
             path: file,
@@ -1096,6 +1199,18 @@ impl<'a> Walk<'a> {
         if !valid {
             return None;
         }
+        if !self.resolve {
+            return Some(Evidence::GitDiff {
+                summary,
+                root: name,
+                path: file,
+                base,
+                head,
+                note,
+                diff: String::new(),
+                truncated: false,
+            });
+        }
         match git_diff(&root, &file, &base, head.as_deref()) {
             Ok((diff, truncated)) => Some(Evidence::GitDiff {
                 summary,
@@ -1120,7 +1235,15 @@ impl<'a> Walk<'a> {
         let reference = self.text(map, "ref", path, true);
         let note = self.text(map, "note", path, false);
         let ((name, root), reference) = (root?, reference?);
-        match node_text(&root, &reference) {
+        if !self.resolve {
+            return Some(Evidence::Node {
+                root: name,
+                reference,
+                note,
+                text: String::new(),
+            });
+        }
+        match node_text(&root, &reference, &mut self.docs) {
             Ok(text) => Some(Evidence::Node {
                 root: name,
                 reference,
@@ -1336,6 +1459,14 @@ impl<'a> Walk<'a> {
             ),
         }
         let number = self.text(map, "number", path, true);
+        if let Some(number) = &number {
+            if !self.numbers.insert(number.clone()) {
+                self.bad(
+                    &format!("{path}.number"),
+                    format!("同じ番号のカードがもう一枚あります: {number}"),
+                );
+            }
+        }
         let title = self.text(map, "title", path, true);
         let summary = self.text(map, "summary", path, true);
         let options = self.options(map, path, expected);
@@ -1524,10 +1655,25 @@ impl<'a> Walk<'a> {
         }
         let (name, root) = root?;
         let mut text = None;
+        if !self.resolve {
+            return Some(ScopeItem {
+                root: name,
+                reference,
+                path: file,
+                description: description?,
+                extras,
+                text,
+            });
+        }
         if let Some(reference) = &reference {
-            match node_text(&root, reference) {
-                Ok(node) => text = Some(node),
-                Err(message) => self.bad(&format!("{path}.ref"), message),
+            if !self.over_budget(path) {
+                match node_text(&root, reference, &mut self.docs) {
+                    Ok(node) => {
+                        self.resolved += node.len();
+                        text = Some(node);
+                    }
+                    Err(message) => self.bad(&format!("{path}.ref"), message),
+                }
             }
         }
         if let Some(file) = &file {
@@ -1798,7 +1944,20 @@ impl<'a> Walk<'a> {
 
 /// Checks the input `value` of a decision page and resolves its evidence. Every violation is returned, in the order the input is walked; a page with any is not returned.
 pub fn build(value: &Value, allowed: &Allowed) -> Result<DecisionPage, Vec<Violation>> {
-    let mut walk = Walk::new(allowed);
+    build_with(value, allowed, true)
+}
+
+/// `build` for a reader that needs the cards alone (the reply of the owner's answers): every check of the input is made, and no evidence is read, so no file, no JSON node and no `git` is touched and the page's size is not looked at. The evidence of the page is there with its shape and empty content.
+pub fn build_input(value: &Value, allowed: &Allowed) -> Result<DecisionPage, Vec<Violation>> {
+    build_with(value, allowed, false)
+}
+
+fn build_with(
+    value: &Value,
+    allowed: &Allowed,
+    resolve: bool,
+) -> Result<DecisionPage, Vec<Violation>> {
+    let mut walk = Walk::new(allowed, resolve);
     let page = walk.page(value);
     if !walk.errors.is_empty() {
         return Err(walk.errors);
@@ -1806,6 +1965,9 @@ pub fn build(value: &Value, allowed: &Allowed) -> Result<DecisionPage, Vec<Viola
     let Some(page) = page else {
         return Err(alone("ページを読めませんでした"));
     };
+    if !resolve {
+        return Ok(page);
+    }
     let size = serde_json::to_vec(&page).map_or(0, |bytes| bytes.len());
     if size > PAGE_LIMIT {
         return Err(alone(format!(
@@ -1836,6 +1998,15 @@ pub fn load(
     allowed: &Allowed,
 ) -> Result<DecisionPage, Vec<Violation>> {
     build(&read_value(given, worktree, allowed)?, allowed)
+}
+
+/// `load` for a reader that needs the cards alone (`read_value`, then `build_input`).
+fn load_input(
+    given: &str,
+    worktree: &str,
+    allowed: &Allowed,
+) -> Result<DecisionPage, Vec<Violation>> {
+    build_input(&read_value(given, worktree, allowed)?, allowed)
 }
 
 // ---- the record: pages.json ----
@@ -1965,28 +2136,6 @@ pub fn mark_pending(
     }
 }
 
-/// The pages recorded for `formation`, wherever it is: its own `pages.json` for a formation of this Mac, and for a formation of a saved environment the one that PC's server answers (`pages.read`). A PC that cannot be asked, and a formation whose orchestrator never started on its PC, have none: the screen draws no mark then, and the read of the children goes on.
-pub fn pages_of(
-    config: &Path,
-    formation: &str,
-    open: &impl AsyncFn(&str) -> Result<Client, String>,
-) -> Vec<PageRecord> {
-    let (environment, started) = formation::formation_home(config, formation);
-    if environment == LOCAL {
-        return read_pages(config, formation);
-    }
-    if !started {
-        return Vec::new();
-    }
-    formation::on_pc(
-        &environment,
-        open,
-        formation::SAVED_PS_TIMEOUT,
-        async |client| client.pages_read(formation).await,
-    )
-    .unwrap_or_default()
-}
-
 // ---- the tool of the orchestrator ----
 
 /// The refusal of a page with violations: nothing is recorded, and the list is the answer, so that the orchestrator can send it back to the child.
@@ -2114,23 +2263,29 @@ fn read_with(
 
 /// The page that waits on `child` of a formation whose record is on this machine, checked again and with its evidence resolved now (`page.read` of the server, and the read of a formation of this Mac).
 pub fn read_here(config: &Path, formation: &str, child: &str) -> Result<DecisionPage, String> {
-    read_here_at(config, formation, child).map(|(page, _)| page)
+    read_here_at(config, formation, child, true).map(|(page, _)| page)
 }
 
-/// `read_here`, and the time the page was recorded at (the mark's `atMs`): what the answer to the page names, so that a page that was replaced meanwhile is told from the one that was shown.
+/// `read_here`, and the time the page was recorded at (the mark's `atMs`): what the answer to the page names, so that a page that was replaced meanwhile is told from the one that was shown. `resolve` false reads the cards alone (`load_input`: no file, node or `git` of the evidence is read).
 pub fn read_here_at(
     config: &Path,
     formation: &str,
     child: &str,
+    resolve: bool,
 ) -> Result<(DecisionPage, u64), String> {
     let (page, worktree) = waiting_page(config, formation, child)?;
     let allowed = allowed_here().map_err(|r| formation::refusal_text(&r))?;
-    let loaded = load(&page.path, &worktree, &allowed).map_err(|v| violations_text(&v))?;
+    let loaded = if resolve {
+        load(&page.path, &worktree, &allowed)
+    } else {
+        load_input(&page.path, &worktree, &allowed)
+    }
+    .map_err(|v| violations_text(&v))?;
     Ok((loaded, page.at))
 }
 
-/// The page of `child` and the time it was recorded at, read where the formation's record is: here for a formation of this Mac, on the server of its PC for a formation of a saved environment (#923).
-pub fn page_with_time(
+/// The page of `child` for the reply to it, and the time it was recorded at, read where the formation's record is: here for a formation of this Mac, on the server of its PC for a formation of a saved environment (#923). The cards alone are read (`read_here_at` with `resolve` false, and `light` for the server): the reply holds none of the evidence, so none of it is read or sent over.
+pub fn page_input_with_time(
     config: &Path,
     formation: &str,
     child: &str,
@@ -2139,7 +2294,7 @@ pub fn page_with_time(
     formation::check_name(formation)?;
     let (environment, started) = formation::formation_home(config, formation);
     if environment == LOCAL {
-        return read_here_at(config, formation, child);
+        return read_here_at(config, formation, child, false);
     }
     if !started {
         return Err(format!("「{child}」に判断待ちのページはありません"));
@@ -2148,7 +2303,7 @@ pub fn page_with_time(
         &environment,
         open,
         formation::PC_RECORD_WAIT,
-        async |client| client.page_read_at(formation, child).await,
+        async |client| client.page_read_at(formation, child, true).await,
     )
 }
 
@@ -2792,6 +2947,108 @@ mod tests {
     }
 
     #[test]
+    fn a_page_read_for_its_cards_alone_checks_the_shape_of_evidence_and_reads_none_of_it() {
+        let repo = repo("input-only");
+        let mut value = approval(&repo);
+        let cited = json!([
+            {"type": "excerpt", "root": "repo", "path": "missing.txt", "start": 1},
+            {"type": "git-diff", "summary": "s", "root": "repo", "path": "src/main.rs", "base": "nonexistent-rev", "head": "HEAD"},
+            {"type": "node", "root": "deliverables", "ref": "design.json#/designs/NONE"}
+        ]);
+        value["needs_user_decision"] = json!([
+            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r", "evidence": cited}
+        ]);
+        value["approval_scope"][0]["items"] = json!([
+            {"ref": "design.json#/designs/NONE", "description": "d"},
+            {"path": "missing.md", "description": "d", "extras": ["also-missing.md"]}
+        ]);
+        // With its evidence read, every file that is not there is a violation.
+        assert!(build(&value, &repo.allowed()).is_err());
+        // For its cards alone, none of it is read: the cards are there, the evidence has its shape and no content.
+        let page = build_input(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.needs_user_decision[0].number, "NR-1");
+        assert_eq!(page.needs_user_decision[0].evidence.len(), 3);
+        let Evidence::Excerpt { lines, .. } = &page.needs_user_decision[0].evidence[0] else {
+            panic!("an excerpt");
+        };
+        assert!(lines.is_empty());
+        let Evidence::GitDiff { diff, .. } = &page.needs_user_decision[0].evidence[1] else {
+            panic!("a git diff");
+        };
+        assert!(diff.is_empty());
+        assert!(page.approval_scope[0]
+            .items
+            .iter()
+            .all(|i| i.text.is_none()));
+        // Every check of the input is still made.
+        let mut bad = value.clone();
+        bad["needs_user_decision"][0]["evidence"][0]["start"] = json!(0);
+        bad["needs_user_decision"][0]["evidence"][1]["base"] = json!("--output=x");
+        assert_eq!(
+            paths(&build_input(&bad, &repo.allowed()).unwrap_err()),
+            [
+                "$.needs_user_decision[0].evidence[0].start",
+                "$.needs_user_decision[0].evidence[1].base"
+            ]
+        );
+    }
+
+    #[test]
+    fn two_cards_with_the_same_number_are_a_violation() {
+        let repo = repo("same-number");
+        let mut value = open_questions(&repo);
+        value["questions"] = json!([question("論点1"), question("論点2"), question("論点1")]);
+        assert_eq!(paths(&violations(&value, &repo)), ["$.questions[2].number"]);
+        // Another list of the page shares the numbers of the first.
+        let mut value = approval(&repo);
+        value["needs_user_decision"] = json!([
+            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r"}
+        ]);
+        value["residual_must_fix"] = json!([
+            {"kind": "must-fix", "number": "NR-1", "title": "t", "summary": "s", "recommendation": "fix", "recommendation_reason": "r"}
+        ]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.residual_must_fix[0].number"]
+        );
+    }
+
+    #[test]
+    fn the_evidence_after_the_page_has_used_up_its_size_is_not_read() {
+        let repo = repo("budget");
+        let long = "x".repeat(2000);
+        let text: String = (0..400).map(|_| format!("{long}\n")).collect();
+        write(&repo.dir, "big.txt", &text);
+        let big =
+            json!({"type": "excerpt", "root": "repo", "path": "big.txt", "start": 1, "end": 400});
+        let missing = json!({"type": "excerpt", "root": "repo", "path": "missing.txt", "start": 1});
+        let mut value = open_questions(&repo);
+        value["questions"][0]["evidence"] = json!([big, big, missing, big]);
+        // The first fills the page; the second is told as the cut, and the rest are not read (the missing file is no violation).
+        let found = violations(&value, &repo);
+        assert_eq!(paths(&found), ["$.questions[0].evidence[1]"]);
+        assert!(found[0].message.contains("読んでいません"));
+    }
+
+    #[test]
+    fn the_nodes_of_one_file_read_and_parse_it_once() {
+        let dir = temp_dir("node-cache");
+        write(&dir, "design.json", r#"{"a": 1, "b": 2}"#);
+        let mut docs = BTreeMap::new();
+        assert_eq!(node_text(&dir, "design.json#/a", &mut docs).unwrap(), "1");
+        // The file changes on the disk: the walk still reads the one it read first.
+        write(&dir, "design.json", r#"{"a": 10, "b": 20}"#);
+        assert_eq!(node_text(&dir, "design.json#/b", &mut docs).unwrap(), "2");
+        assert_eq!(docs.len(), 1);
+        // A file that cannot be read is kept as the failure it was.
+        assert!(node_text(&dir, "none.json#/a", &mut docs).is_err());
+        write(&dir, "bad.json", "{");
+        assert!(node_text(&dir, "bad.json#/a", &mut docs).is_err());
+        assert!(node_text(&dir, "design.json#/zzz", &mut docs).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_git_diff_is_resolved_and_a_bad_one_is_a_violation() {
         let repo = repo("git-diff");
         let mut value = open_questions(&repo);
@@ -2831,6 +3088,55 @@ mod tests {
         assert!(diff.contains("-fn two() {}") && diff.contains("+fn two2() {}"));
         assert!(!truncated);
         assert_eq!(head.as_deref(), Some("HEAD"));
+    }
+
+    #[test]
+    fn a_git_diff_of_a_folder_that_tracks_an_env_file_is_refused_unread() {
+        let repo = repo("git-diff-secret");
+        write(&repo.dir, "config/app.txt", "one\n");
+        write(&repo.dir, "config/.env.production", "TOKEN=old\n");
+        write(&repo.dir, "vendor/.git-hooks/pre", "old\n");
+        git(&repo.dir, &["add", "-f", "."]);
+        git(&repo.dir, &["commit", "-q", "-m", "config"]);
+        write(&repo.dir, "config/app.txt", "two\n");
+        write(&repo.dir, "config/.env.production", "TOKEN=new\n");
+        write(&repo.dir, "vendor/.git-hooks/pre", "new\n");
+        // The folder lists a changed `.env...`: no diff is read, and the message does not carry the value.
+        let err = git_diff(&repo.dir, "config", "HEAD", None).unwrap_err();
+        assert!(err.contains(".env"), "{err}");
+        assert!(!err.contains("TOKEN"), "{err}");
+        // The whole tree too.
+        assert!(git_diff(&repo.dir, ".", "HEAD", None).is_err());
+        // A file of the same folder is read as before; a folder with no secret name in its changes too.
+        let (diff, _) = git_diff(&repo.dir, "config/app.txt", "HEAD", None).unwrap();
+        assert!(diff.contains("+two"));
+        assert!(!diff.contains("TOKEN"));
+        let (diff, _) = git_diff(&repo.dir, "vendor", "HEAD", None).unwrap();
+        assert!(diff.contains("+new"));
+        // The same through a page: the evidence is a violation at its place.
+        let mut value = open_questions(&repo);
+        value["questions"][0]["evidence"] = json!([
+            {"type": "git-diff", "summary": "s", "root": "repo", "path": "config", "base": "HEAD", "head": null},
+            {"type": "git-diff", "summary": "s", "root": "repo", "path": "config/app.txt", "base": "HEAD", "head": null}
+        ]);
+        let found = violations(&value, &repo);
+        assert_eq!(paths(&found), ["$.questions[0].evidence[0]"]);
+        // A change in a commit range is looked at the same way.
+        git(&repo.dir, &["add", "-f", "."]);
+        git(&repo.dir, &["commit", "-q", "-m", "change"]);
+        assert!(git_diff(&repo.dir, "config", "HEAD~1", Some("HEAD")).is_err());
+        assert!(git_diff(&repo.dir, "config/app.txt", "HEAD~1", Some("HEAD")).is_ok());
+    }
+
+    #[test]
+    fn a_secret_name_among_the_names_of_a_diff_is_found_in_any_component() {
+        assert!(names_a_secret(b"a/b.rs\0config/.env.production\0"));
+        assert!(names_a_secret(b".ENV\0"));
+        assert!(names_a_secret(b"x/.git/config\0"));
+        assert!(!names_a_secret(
+            b"a/b.rs\0.github/workflows/ci.yml\0.claude/x\0"
+        ));
+        assert!(!names_a_secret(b""));
     }
 
     #[test]
@@ -3418,7 +3724,7 @@ mod tests {
         for good in ["HEAD", "HEAD~1", "origin/main", "abc1234", "v1.0^"] {
             assert!(check_revision(good).is_ok(), "{good:?}");
         }
-        let args = git_diff_args("a.rs", "base", Some("head"));
+        let args = git_diff_args("a.rs", "base", Some("head"), false);
         let at = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(
             &args[at - 2..],

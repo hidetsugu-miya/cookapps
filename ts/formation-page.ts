@@ -119,7 +119,7 @@ function changes(page: DecisionPage): HTMLElement {
   if (page.what !== null) node.append(tag("p", "fp-p", page.what));
   for (const change of page.changes) {
     const body = fold(change.heading, "fp-change", page.pageKind === "code-review");
-    body.append(...drawBlocks(change.blocks));
+    body.append(...drawBlocks(change.blocks, !body.open));
     node.append(body);
   }
   return node;
@@ -211,7 +211,7 @@ function drawCard(card: Card): HTMLElement {
       for (const fact of card.facts) facts.append(tag("dt", "", fact.label), tag("dd", "", fact.value));
       more.append(facts);
     }
-    more.append(...drawBlocks(blocks));
+    more.append(...drawBlocks(blocks, true));
     if (card.evidence.length > 0) more.append(drawEvidence(card.evidence));
     node.append(more);
   }

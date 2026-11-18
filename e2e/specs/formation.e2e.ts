@@ -2626,6 +2626,35 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await count('#formation-page [data-card="Q1"] .fp-more')).toBe(0);
   });
 
+  it("draws a diagram behind 詳しく見る only when that fold is first opened", async () => {
+    const good = "flowchart TD\n  A[開始] --> B[終了]";
+    await openPage(
+      decisionPage({
+        questions: [
+          decisionCard("Q1", {
+            options: [{ key: "A", label: "案", detail: null }],
+            blocks: [
+              { type: "diagram", mermaid: good, caption: "表の図" },
+              { type: "diagram", mermaid: good, caption: "中の図" },
+            ],
+          }),
+        ],
+        changes: [],
+      }),
+    );
+    const boxes = '#formation-page [data-card="Q1"] .fp-diagram-box';
+    const inside = '#formation-page [data-card="Q1"] .fp-more .fp-diagram-box';
+    await browser.waitUntil(async () => $(`${boxes}[data-drawn="true"]`).isExisting(), { timeoutMsg: "the diagram of the card was not drawn" });
+    // The diagram in the closed fold waits: it is not drawn and has no SVG.
+    expect(await $(inside).getAttribute("data-pending")).toBe("true");
+    expect(await $(inside).getAttribute("data-drawn")).toBe(null);
+    expect(await count(`${inside} svg`)).toBe(0);
+    await $('#formation-page [data-card="Q1"] .fp-more > summary').click();
+    await browser.waitUntil(async () => (await $(inside).getAttribute("data-drawn")) === "true", { timeoutMsg: "the diagram was not drawn when the fold opened" });
+    expect(await count(`${inside} svg`)).toBe(1);
+    expect(await $(inside).getAttribute("data-pending")).toBe(null);
+  });
+
   it("shows the Mermaid source as text when the diagram cannot be drawn", async () => {
     const bad = "flowchart TD\n  A[開始 --> ((";
     await openPage(decisionPage({ questions: [decisionCard("Q1", { blocks: [{ type: "paragraph", text: "x" }, { type: "diagram", mermaid: bad, caption: null }] })] }));

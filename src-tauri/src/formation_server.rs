@@ -347,6 +347,9 @@ struct PagesParams {
 struct PageParams {
     formation: String,
     child: String,
+    /// The cards alone: the evidence is checked for its shape and not read (`formation_page::build_input`). A client that does not send it gets the page with its evidence.
+    #[serde(default)]
+    light: bool,
 }
 
 #[derive(Deserialize)]
@@ -492,7 +495,12 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
             let Ok(params) = serde_json::from_value::<PageParams>(request.params) else {
                 return bad_params();
             };
-            match formation_page::read_here_at(config, &params.formation, &params.child) {
+            match formation_page::read_here_at(
+                config,
+                &params.formation,
+                &params.child,
+                !params.light,
+            ) {
                 Ok((page, at)) => Reply::ok(json!({"page": page, "at": at})),
                 Err(e) => Reply::error(&e),
             }
@@ -765,19 +773,23 @@ impl Client {
         formation: &str,
         child: &str,
     ) -> Result<DecisionPage, String> {
-        self.page_read_at(formation, child)
+        self.page_read_at(formation, child, false)
             .await
             .map(|(page, _)| page)
     }
 
-    /// `page_read`, and the time the PC recorded the page at (#923).
+    /// `page_read`, and the time the PC recorded the page at (#923). `light` asks for the cards alone, with the evidence's shape and none of its content (the reply of the owner's answers needs no more).
     pub async fn page_read_at(
         &mut self,
         formation: &str,
         child: &str,
+        light: bool,
     ) -> Result<(DecisionPage, u64), String> {
         let result = self
-            .call("page.read", json!({"formation": formation, "child": child}))
+            .call(
+                "page.read",
+                json!({"formation": formation, "child": child, "light": light}),
+            )
             .await?;
         let bad = || "サーバーの答えの形式が正しくありません".to_owned();
         let page = serde_json::from_value(result["page"].clone()).map_err(|_| bad())?;
@@ -1718,6 +1730,16 @@ mod tests {
         );
         assert_eq!(bad.body["ok"], false);
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_page_read_is_for_the_whole_page_unless_it_asks_for_the_cards_alone() {
+        let params: PageParams =
+            serde_json::from_value(json!({"formation": "f", "child": "c"})).unwrap();
+        assert!(!params.light);
+        let params: PageParams =
+            serde_json::from_value(json!({"formation": "f", "child": "c", "light": true})).unwrap();
+        assert!(params.light);
     }
 
     #[test]

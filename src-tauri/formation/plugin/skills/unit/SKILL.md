@@ -31,7 +31,7 @@ Extract them once, at the start:
 
 ```sh
 d="${TMPDIR:-/tmp}/feature-dev-jq"; mkdir -p "$d"
-find ${CLAUDE_SKILL_DIR}/references -name '*.md' | while read -r f; do
+find "${CLAUDE_SKILL_DIR}/references" -name '*.md' | while read -r f; do
   awk -v d="$d" '/^```jq [a-z-]+$/{out=d"/"$2".jq"; f=1; next} /^```$/{f=0; close(out)} f{print > out}' "$f"
 done
 ls "$d"

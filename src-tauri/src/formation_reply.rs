@@ -232,16 +232,16 @@ pub const ENTER_PAUSE: Duration = Duration::from_millis(250);
 const PASTE_START: &str = "\x1b[200~";
 const PASTE_END: &str = "\x1b[201~";
 
-/// The text as one bracketed paste: the control characters of the text are taken out first, so that its own paste end cannot close the paste, and nothing in it is an Enter (`\r`) that would send a line before the rest is in. The paste has no Enter: `ENTER` follows it.
+/// The text as one bracketed paste: the control characters of the text are taken out first, so that its own paste end cannot close the paste, and nothing in it is an Enter (`\r`) that would send a line before the rest is in. The paste has no Enter: `ENTER` follows it. The limit of a send (`orca::TEXT_LIMIT`) is the paste's, its two marks counted.
 pub fn paste_of(text: &str) -> Result<String, String> {
-    let text = clean(text);
-    if text.chars().count() > orca::TEXT_LIMIT {
+    let paste = format!("{PASTE_START}{}{PASTE_END}", clean(text));
+    if paste.chars().count() > orca::TEXT_LIMIT {
         return Err(format!(
-            "返信が長すぎます（{} 文字までです）",
+            "返信が長すぎます（印を入れて {} 文字までです）",
             orca::TEXT_LIMIT
         ));
     }
-    Ok(format!("{PASTE_START}{text}{PASTE_END}"))
+    Ok(paste)
 }
 
 /// Puts `text` into the leader's terminal of the formation `name` of this Mac (the pane `formation:{name}`): the paste, a pause, then Enter.
@@ -261,6 +261,38 @@ fn sending() -> &'static std::sync::Mutex<HashSet<(String, String)>> {
     static SENDING: std::sync::OnceLock<std::sync::Mutex<HashSet<(String, String)>>> =
         std::sync::OnceLock::new();
     SENDING.get_or_init(Default::default)
+}
+
+/// A page whose reply was put into the leader's terminal and not yet marked as answered: its formation, its child and the time it was recorded at (`at`). The press that finds the page here marks it and sends nothing, so that a failed mark does not make the reply go twice.
+type SentPage = (String, String, u64);
+
+fn sent() -> &'static std::sync::Mutex<HashSet<SentPage>> {
+    static SENT: std::sync::OnceLock<std::sync::Mutex<HashSet<SentPage>>> =
+        std::sync::OnceLock::new();
+    SENT.get_or_init(Default::default)
+}
+
+fn sent_pages() -> std::sync::MutexGuard<'static, HashSet<SentPage>> {
+    sent()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Sends the reply with `send` unless it was sent already, then marks the page as answered with `mark`. The reply counts as sent from the moment `send` succeeds until `mark` does, so a press that follows a failed mark only marks.
+async fn deliver(
+    page: SentPage,
+    send: impl AsyncFnOnce() -> Result<(), String>,
+    mark: impl AsyncFnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !sent_pages().contains(&page) {
+        send().await?;
+        sent_pages().insert(page.clone());
+    }
+    mark()
+        .await
+        .map_err(|e| format!("返信は送りましたが、答えた印を付けられません: {e}"))?;
+    sent_pages().remove(&page);
+    Ok(())
 }
 
 /// Frees the place of a reply that is on its way when the send ends, whatever way it ends.
@@ -288,7 +320,7 @@ impl Drop for Sending {
     }
 }
 
-/// Sends the owner's `answers` to the page that waits on the child `child` of the formation `name` (A-41) as the reply, into the leader's terminal, and takes the page off the waiting. `at_ms` is the time of the mark the screen drew the page for: a page that was replaced meanwhile is refused, because the answers belong to the page that was shown. The page is read again, so the reply is made of what is there now; nothing is sent when a required card has no answer. A formation of this Mac has its leader in the app's own pseudo terminal; one of a saved environment has it in the terminal of that PC's Orca, and the page's record is on that PC. A failure carries the message, and the page stays waiting.
+/// Sends the owner's `answers` to the page that waits on the child `child` of the formation `name` (A-41) as the reply, into the leader's terminal, and takes the page off the waiting. `at_ms` is the time of the mark the screen drew the page for: a page that was replaced meanwhile is refused, because the answers belong to the page that was shown. The page is read again, so the reply is made of what is there now; nothing is sent when a required card has no answer. A formation of this Mac has its leader in the app's own pseudo terminal; one of a saved environment has it in the terminal of that PC's Orca, and the page's record is on that PC. The page is read for its cards alone (`page_input_with_time`: its evidence is not resolved, because the reply holds none of it). A failure carries the message, and the page stays waiting; when the reply was sent and only the mark failed, the next press marks the page and sends nothing (`deliver`).
 #[tauri::command]
 pub async fn formation_page_answer(
     app: tauri::AppHandle,
@@ -311,7 +343,7 @@ pub async fn formation_page_answer(
             (dir.clone(), name.clone(), child.clone(), version.clone());
         orca::blocking(move || {
             let open = formation::pc_connect(&dir, &version, true);
-            formation_page::page_with_time(&dir, &name, &child, &open)
+            formation_page::page_input_with_time(&dir, &name, &child, &open)
         })
         .await??
     };
@@ -320,19 +352,28 @@ pub async fn formation_page_answer(
     }
     let reply = build_reply(&page, &answers)?;
     let paste = paste_of(&terminal_text(&child, &reply))?;
-    if environment == LOCAL {
-        send_here(&sessions, &name, paste).await?;
-    } else {
-        let handle =
-            orchestrator.ok_or_else(|| "リーダーのターミナルがまだ始まっていません".to_owned())?;
-        send_orca(&environment, &handle, paste).await?;
-    }
-    orca::blocking(move || {
-        let open = formation::pc_connect(&dir, &version, true);
-        formation_page::mark_page_answered(&dir, &name, &child, at, &open)
-    })
-    .await?
-    .map_err(|e| format!("返信は送りましたが、答えた印を付けられません: {e}"))
+    let key = (name.clone(), child.clone(), at);
+    let leader_of = name.clone();
+    deliver(
+        key,
+        async || {
+            if environment == LOCAL {
+                send_here(&sessions, &leader_of, paste).await
+            } else {
+                let handle = orchestrator
+                    .ok_or_else(|| "リーダーのターミナルがまだ始まっていません".to_owned())?;
+                send_orca(&environment, &handle, paste).await
+            }
+        },
+        async move || {
+            orca::blocking(move || {
+                let open = formation::pc_connect(&dir, &version, true);
+                formation_page::mark_page_answered(&dir, &name, &child, at, &open)
+            })
+            .await?
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -624,9 +665,61 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_over_the_limit_of_a_send_is_refused() {
-        assert!(paste_of(&"あ".repeat(orca::TEXT_LIMIT)).is_ok());
-        assert!(paste_of(&"あ".repeat(orca::TEXT_LIMIT + 1)).is_err());
+    fn a_reply_over_the_limit_of_a_send_is_refused_with_the_paste_marks_counted() {
+        let marks = PASTE_START.chars().count() + PASTE_END.chars().count();
+        assert_eq!(marks, 12);
+        let fits = paste_of(&"あ".repeat(orca::TEXT_LIMIT - marks)).unwrap();
+        assert_eq!(fits.chars().count(), orca::TEXT_LIMIT);
+        // What the send takes is the paste, so the text that fills the limit alone is refused.
+        assert!(orca::check_keys(&fits).is_ok());
+        assert!(paste_of(&"あ".repeat(orca::TEXT_LIMIT - marks + 1)).is_err());
+        assert!(paste_of(&"あ".repeat(orca::TEXT_LIMIT)).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_was_sent_and_not_marked_is_not_sent_again_by_the_next_press() {
+        use std::cell::Cell;
+        let page = ("f-deliver".to_owned(), "c".to_owned(), 7);
+        let sends = Cell::new(0);
+        let send = async || {
+            sends.set(sends.get() + 1);
+            Ok(())
+        };
+        // The send succeeds and the mark fails: the failure says the reply went.
+        let error = deliver(page.clone(), send, async || Err("record".to_owned()))
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("返信は送りましたが"), "{error}");
+        assert_eq!(sends.get(), 1);
+        // The next press marks and sends nothing, and a mark that fails again keeps the memory.
+        deliver(page.clone(), send, async || Err("x".to_owned()))
+            .await
+            .unwrap_err();
+        assert_eq!(sends.get(), 1);
+        deliver(page.clone(), send, async || Ok(())).await.unwrap();
+        assert_eq!(sends.get(), 1);
+        // The mark is made and the memory is freed: the same pair with a send to make sends.
+        deliver(page.clone(), send, async || Ok(())).await.unwrap();
+        assert_eq!(sends.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_could_not_be_sent_is_not_remembered_and_the_page_is_not_marked() {
+        let page = ("f-deliver".to_owned(), "failed".to_owned(), 9);
+        let marked = std::cell::Cell::new(false);
+        let error = deliver(
+            page.clone(),
+            async || Err("terminal".to_owned()),
+            async || {
+                marked.set(true);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "terminal");
+        assert!(!marked.get());
+        assert!(!sent_pages().contains(&page));
     }
 
     #[test]

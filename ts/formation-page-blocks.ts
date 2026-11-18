@@ -9,14 +9,18 @@ export function fold(summary: string, className: string, open = false): HTMLDeta
   const node = tag("details", className);
   node.open = open;
   node.append(tag("summary", "", summary));
+  node.addEventListener("toggle", () => {
+    if (node.open) paintPending(node);
+  });
   return node;
 }
 
-export function drawBlocks(blocks: Block[]): HTMLElement[] {
-  return blocks.map(drawBlock);
+// `lazy` is for blocks inside a fold that is closed: a diagram there is drawn when the fold is first opened, not when the page is drawn.
+export function drawBlocks(blocks: Block[], lazy = false): HTMLElement[] {
+  return blocks.map((block) => drawBlock(block, lazy));
 }
 
-function drawBlock(block: Block): HTMLElement {
+function drawBlock(block: Block, lazy: boolean): HTMLElement {
   switch (block.type) {
     case "paragraph":
       return tag("p", "fp-p", block.text);
@@ -39,18 +43,18 @@ function drawBlock(block: Block): HTMLElement {
       ] as const) {
         const half = tag("div", "fp-side");
         half.dataset.side = side;
-        half.append(tag("div", "fp-side-caption", caption ?? fallback), ...drawBlocks(blocks));
+        half.append(tag("div", "fp-side-caption", caption ?? fallback), ...drawBlocks(blocks, lazy));
         wrap.append(half);
       }
       return wrap;
     }
     case "folded": {
       const node = fold(block.summary, "fp-folded");
-      node.append(...drawBlocks(block.blocks));
+      node.append(...drawBlocks(block.blocks, true));
       return node;
     }
     case "diagram":
-      return drawDiagram(block.mermaid, block.caption);
+      return drawDiagram(block.mermaid, block.caption, lazy);
     case "evidence":
       return drawEvidence(block.items);
   }
@@ -84,14 +88,31 @@ let diagrams = 0;
 const darkScheme = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
 // A diagram: the SVG once Mermaid has drawn it; the Mermaid source as text while it has not, and for good when it cannot draw it.
-function drawDiagram(source: string, caption: string | null): HTMLElement {
+function drawDiagram(source: string, caption: string | null, lazy: boolean): HTMLElement {
   const figure = tag("figure", "fp-diagram");
   const box = tag("div", "fp-diagram-box");
   figure.append(box);
   if (caption !== null) figure.append(tag("figcaption", "", caption));
   box.append(tag("pre", "fp-diagram-source", source));
-  void paintDiagram(source, box, caption ?? "図");
+  const paint = () => void paintDiagram(source, box, caption ?? "図");
+  if (lazy) {
+    box.dataset.pending = "true";
+    pending.set(box, paint);
+  } else paint();
   return figure;
+}
+
+// The diagrams that wait for their fold to be opened.
+const pending = new WeakMap<HTMLElement, () => void>();
+
+// Draws the waiting diagrams of `root` that no closed fold hides.
+function paintPending(root: HTMLElement) {
+  for (const box of root.querySelectorAll<HTMLElement>(".fp-diagram-box[data-pending]")) {
+    if (box.closest("details:not([open])") !== null) continue;
+    delete box.dataset.pending;
+    pending.get(box)?.();
+    pending.delete(box);
+  }
 }
 
 async function paintDiagram(source: string, box: HTMLElement, label: string) {

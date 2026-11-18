@@ -3,7 +3,7 @@
 //! Every command of Orca and of git is run with an argument list, never through a shell, and what they print is data: it is quoted in the answer and never read as an instruction.
 
 use std::{
-    cell::OnceCell,
+    cell::{OnceCell, RefCell},
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -20,7 +20,7 @@ use ts_rs::TS;
 use crate::{
     accounts,
     auth::config_dir,
-    formation_page::{self, PendingPage},
+    formation_page::{self, PageRecord, PendingPage},
     formation_remote,
     formation_server::{Client, RemoteChildren},
     orca,
@@ -2301,6 +2301,23 @@ fn has_agent_at(ps: &Value, path: &str, pane_key: &str) -> bool {
         .any(|agent| agent["paneKey"].as_str() == Some(pane_key))
 }
 
+/// Whether Orca's list says the terminal the record names is the child's: for a Claude Code child an agent of its pane under its path in `ps` (`orca worktree ps` of its environment, `None` when it could not be read), for a Codex child, which `ps` has no row for (measured, 2026-11-18), its handle in `orca terminal list` of its environment (`child_row` reads it the same way). A list that cannot be read does not say so.
+fn terminal_is_childs(
+    agent: FormationAgent,
+    launch: &Launch,
+    environment: &str,
+    ps: Option<&Value>,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> bool {
+    match agent {
+        FormationAgent::Claude => {
+            ps.is_some_and(|ps| has_agent_at(ps, &launch.path, &launch.pane_key))
+        }
+        FormationAgent::Codex => read(&all_terminals_args(environment))
+            .is_ok_and(|list| is_listed_terminal(&list, &launch.handle)),
+    }
+}
+
 /// Whether the repository has a remote (`git remote` printed a name): a repository with none has no commit that a remote lacks to ask for.
 fn has_remote(remotes: &str) -> bool {
     !remotes.trim().is_empty()
@@ -2491,9 +2508,8 @@ fn inspect_child(
     };
     if gone {
         // The handle is closed only when Orca's list says the terminal is the child's; a list that cannot be read or does not say so leaves every terminal alone.
-        let terminal = ps
-            .as_ref()
-            .is_ok_and(|ps| has_agent_at(ps, path, &launch.pane_key));
+        let terminal =
+            terminal_is_childs(child.agent, &launch, &environment, ps.as_ref().ok(), read);
         return Ok(Closing::WorktreeGone {
             path: launch.path,
             handle: launch.handle,
@@ -2505,7 +2521,7 @@ fn inspect_child(
     if !launch.created {
         // Nothing of it is removed, so the repository's own folder and a worktree that has changes are closed all the same; the handle and the environment were checked above as for any child.
         // The record is a file the orchestrator can write: the terminal is closed only when Orca's list says that it is the child's.
-        let terminal = has_agent_at(&ps, path, &launch.pane_key);
+        let terminal = terminal_is_childs(child.agent, &launch, &environment, Some(&ps), read);
         return Ok(Closing::Detach {
             handle: launch.handle,
             environment,
@@ -2867,6 +2883,41 @@ fn pull_env_from_pc(
             .map(|answer| records_of(items, answer))
     })
     .unwrap_or_else(|e| items.iter().map(|_| Err(e.clone())).collect())
+}
+
+/// What the screen's read of the PC of a saved environment answers: the records of the formations (`PulledRecords`) and, for each formation in the same order, the decision pages that its PC records (A-41, `pages.json`; none for a formation whose record could not be read).
+#[derive(Clone)]
+struct PulledEnv {
+    records: Vec<Result<Vec<Child>, String>>,
+    pages: Vec<Vec<PageRecord>>,
+}
+
+/// `pull_env_from_pc`, and the pages of each formation whose record was read, asked on the same connection (A-41): the screen's poll opens one connection for the environment, not one more for the pages. A page that cannot be read leaves no mark, and the records are still answered.
+fn pull_env_with_pages_from_pc(
+    environment: &str,
+    open: &impl AsyncFn(&str) -> Result<Client, String>,
+    limit: Duration,
+    items: &[String],
+) -> PulledEnv {
+    on_pc(environment, open, limit, async |client| {
+        let records = client
+            .children_read(items)
+            .await
+            .map(|answer| records_of(items, answer))?;
+        let mut pages = Vec::with_capacity(items.len());
+        for (formation, record) in items.iter().zip(&records) {
+            pages.push(if record.is_ok() {
+                client.pages_read(formation).await.unwrap_or_default()
+            } else {
+                Vec::new()
+            });
+        }
+        Ok(PulledEnv { records, pages })
+    })
+    .unwrap_or_else(|e| PulledEnv {
+        records: items.iter().map(|_| Err(e.clone())).collect(),
+        pages: items.iter().map(|_| Vec::new()).collect(),
+    })
 }
 
 /// The record of one formation, for a close.
@@ -3414,18 +3465,18 @@ fn read_metas(config: &Path, names: &[String]) -> Vec<(String, Meta)> {
         .collect()
 }
 
-/// The reads of a PC's records by the screen's commands. `formation_children` and `formation_list` are called at the same moment, and both read the records of the formations of an environment over one connection: the calls made at the same time for the same environment and the same formations run once and take the same answer (`orca::Flights`), as `screen_read` does. It waits `SAVED_PS_TIMEOUT`, and `open` is made with no wait for a start (`pc_connect`), so a PC that is being started or placed again answers with that reason at once.
+/// The reads of a PC's records by the screen's commands. `formation_children` and `formation_list` are called at the same moment, and both read the records of the formations of an environment, and their decision pages, over one connection: the calls made at the same time for the same environment and the same formations run once and take the same answer (`orca::Flights`), as `screen_read` does. It waits `SAVED_PS_TIMEOUT`, and `open` is made with no wait for a start (`pc_connect`), so a PC that is being started or placed again answers with that reason at once.
 fn screen_pull_env(
     environment: &str,
     items: &[String],
     open: &impl AsyncFn(&str) -> Result<Client, String>,
-) -> Vec<Result<Vec<Child>, String>> {
-    type Pulling = orca::Flights<(String, Vec<String>), Vec<Result<Vec<Child>, String>>>;
+) -> PulledEnv {
+    type Pulling = orca::Flights<(String, Vec<String>), PulledEnv>;
     static PULLING: OnceLock<Pulling> = OnceLock::new();
     PULLING
         .get_or_init(orca::Flights::default)
         .run((environment.to_owned(), items.to_vec()), || {
-            pull_env_from_pc(environment, open, SAVED_PS_TIMEOUT, items)
+            pull_env_with_pages_from_pc(environment, open, SAVED_PS_TIMEOUT, items)
         })
 }
 
@@ -3435,16 +3486,24 @@ fn children_view(
     open: &impl AsyncFn(&str) -> Result<Client, String>,
 ) -> Result<Vec<FormationChild>, String> {
     check_name(formation)?;
-    // The record of the formation is read with those of the formations of its environment, the same call as `formation_list` makes.
+    // The record of the formation is read with those of the formations of its environment, the same call as `formation_list` makes, and its decision pages come on the same connection.
+    let pc_pages: RefCell<Option<Vec<PageRecord>>> = RefCell::new(None);
     let pull = |environment: &str, formation: &str| {
         let metas = read_metas(config, &formation_names(config, None));
         let items = pc_groups(&metas).remove(environment).unwrap_or_default();
-        match items.iter().position(|name| name == formation) {
-            Some(at) => screen_pull_env(environment, &items, open).swap_remove(at),
-            None => screen_pull_env(environment, &[formation.to_owned()], open)
-                .pop()
-                .unwrap_or_else(|| Err("サーバーが記録を答えませんでした".to_owned())),
+        let (items, at) = match items.iter().position(|name| name == formation) {
+            Some(at) => (items, at),
+            None => (vec![formation.to_owned()], 0),
+        };
+        let mut pulled = screen_pull_env(environment, &items, open);
+        if at < pulled.pages.len() {
+            *pc_pages.borrow_mut() = Some(pulled.pages.swap_remove(at));
         }
+        pulled
+            .records
+            .into_iter()
+            .nth(at)
+            .unwrap_or_else(|| Err("サーバーが記録を答えませんでした".to_owned()))
     };
     let children = record_children(
         config,
@@ -3453,7 +3512,14 @@ fn children_view(
         &pull,
     )?;
     let mut rows = children_view_with(&children, &screen_read)?;
-    let pages = formation_page::pages_of(config, formation, open);
+    // A formation of this Mac has its pages here, one of a saved environment on its PC (read above with its record), and one whose orchestrator never started there has none.
+    let pages = match pc_pages.into_inner() {
+        Some(pages) => pages,
+        None if formation_home(config, formation).0 == LOCAL => {
+            formation_page::read_pages(config, formation)
+        }
+        None => Vec::new(),
+    };
     formation_page::mark_pending(&mut rows, &children, &pages);
     Ok(rows)
 }
@@ -4265,7 +4331,7 @@ pub async fn formation_list(
         list_core(
             &dir,
             &screen_read,
-            &|environment, items| screen_pull_env(environment, items, &open),
+            &|environment, items| screen_pull_env(environment, items, &open).records,
             Some(&|name| claude.formation_title(name)),
         )
     })
@@ -6297,6 +6363,149 @@ mod tests {
         assert_eq!(orca.names(), ["terminal close"]);
         assert!(there.is_dir());
         assert!(!dir(&config, F).exists());
+        std::fs::remove_dir_all(&config).ok();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    /// The record of a Codex child in a folder that was there (`folder`, `created: false`), or in a worktree that tsunagiai made.
+    fn recorded_codex(config: &Path, path: &str, handle: &str, created: bool) {
+        let mut child = launched("a", "x");
+        child.agent = FormationAgent::Codex;
+        let launch = child.launch.as_mut().unwrap();
+        launch.path = path.into();
+        launch.handle = handle.into();
+        launch.created = created;
+        write_children(config, F, &[planned("p", "x"), child]).unwrap();
+    }
+
+    /// A stand-in Orca for a Codex child: `terminal list` says `terminals`, and `worktree ps` lists no agent (it has no row for Codex, measured 2026-11-18).
+    fn codex_orca(path: &str, terminals: Value) -> impl Fn(&[String]) -> Result<Value, String> {
+        let path = path.to_owned();
+        move |args| {
+            if args[0] == "terminal" {
+                Ok(terminals.clone())
+            } else {
+                Ok(json!({"worktrees": [{"path": path, "isMainWorktree": false}]}))
+            }
+        }
+    }
+
+    #[test]
+    fn the_terminal_of_a_codex_child_in_a_folder_is_closed_when_orcas_terminal_list_has_it() {
+        let config = temp_dir("close-codex-folder");
+        let there = temp_dir("close-codex-folder-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        for (terminals, confirmed) in [
+            (json!({"terminals": [{"handle": "term_a"}]}), true),
+            (
+                json!({"terminals": [{"handle": "term_a", "orphaned": true}]}),
+                false,
+            ),
+            (json!({"terminals": [{"handle": "term_other"}]}), false),
+        ] {
+            recorded_codex(&config, &path, "term_a", false);
+            let orca = Calls::new();
+            let done = close_with(
+                &config,
+                F,
+                "a",
+                None,
+                &codex_orca(&path, terminals),
+                &|args| orca.run(args),
+                &no_remote_git,
+            )
+            .unwrap();
+            assert_eq!(done["folderKept"], true);
+            assert_eq!(done["terminalClosed"], confirmed);
+            if confirmed {
+                assert_eq!(
+                    orca.0.borrow()[..],
+                    [terminal_close_args("term_a", "local")]
+                );
+            } else {
+                assert!(orca.0.borrow().is_empty());
+            }
+            assert_eq!(names(&read_children(&config, F)), ["p"]);
+        }
+        // A terminal list that cannot be read leaves the terminal alone.
+        recorded_codex(&config, &path, "term_a", false);
+        let orca = Calls::new();
+        let done = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|args| {
+                if args[0] == "terminal" {
+                    Err("orca が答えません".to_owned())
+                } else {
+                    Ok(json!({"worktrees": [{"path": path}]}))
+                }
+            },
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert_eq!(done["terminalClosed"], false);
+        assert!(orca.0.borrow().is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn the_terminal_of_a_codex_child_whose_worktree_is_gone_is_closed_when_orcas_terminal_list_has_it(
+    ) {
+        let config = temp_dir("close-codex-gone");
+        let path = "/nonexistent-tsunagiai/w/a";
+        for (terminals, confirmed) in [
+            (json!({"terminals": [{"handle": "term_a"}]}), true),
+            (json!({"terminals": []}), false),
+        ] {
+            recorded_codex(&config, path, "term_a", true);
+            let orca = Calls::new();
+            let done = close_with(
+                &config,
+                F,
+                "a",
+                None,
+                &codex_orca(path, terminals),
+                &|args| orca.run(args),
+                &no_remote_git,
+            )
+            .unwrap();
+            assert_eq!(done["worktreeGone"], true);
+            assert_eq!(done["terminalClosed"], confirmed);
+            assert_eq!(orca.names().len(), usize::from(confirmed));
+            assert_eq!(names(&read_children(&config, F)), ["p"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_deletion_of_a_formation_closes_the_terminal_of_a_codex_child_in_a_folder() {
+        let config = temp_dir("delete-codex-folder");
+        let there = temp_dir("delete-codex-folder-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        recorded_codex(&config, &path, "term_a", false);
+        let orca = Calls::new();
+        let done = delete_with(
+            &config,
+            F,
+            None,
+            &codex_orca(&path, json!({"terminals": [{"handle": "term_a"}]})),
+            &|args| orca.run(args),
+            &no_remote_git,
+            &|| {},
+        )
+        .unwrap();
+        assert!(done.deleted, "{:?}", done.kept);
+        assert_eq!(
+            orca.0.borrow()[..],
+            [terminal_close_args("term_a", "local")]
+        );
+        assert!(there.is_dir());
         std::fs::remove_dir_all(&config).ok();
         std::fs::remove_dir_all(&there).unwrap();
     }
@@ -10885,6 +11094,57 @@ mod tests {
         assert_eq!(counts, [("api-work", 2), ("docs-work", 0), ("never", 0)]);
         assert_eq!(list.read_error, None);
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_screens_read_of_an_environment_takes_the_decision_pages_over_the_same_connection()
+    {
+        let pc = PcServer::start("pc-pages");
+        write_children(&pc.config, "api-work", &[planned("a", "api")]).unwrap();
+        write_children(&pc.config, "docs-work", &[planned("b", "docs")]).unwrap();
+        let page = json!({"child": "a", "path": "/p.json", "title": "t", "page_kind": "approval", "subject": "design", "at": 5});
+        std::fs::write(
+            dir(&pc.config, "api-work").join("pages.json"),
+            json!({"pages": [page]}).to_string(),
+        )
+        .unwrap();
+        let open = pc.opener("mac-studio");
+        let items = vec![
+            "api-work".to_owned(),
+            "docs-work".to_owned(),
+            "gone".to_owned(),
+        ];
+        let pulled = blocking(move || {
+            pull_env_with_pages_from_pc("mac-studio", &open, PC_RECORD_WAIT, &items)
+        })
+        .await;
+        assert_eq!(
+            pc.opened(),
+            1,
+            "the records and the pages share one connection"
+        );
+        assert_eq!(pulled.records.len(), 3);
+        assert_eq!(pulled.pages.len(), 3);
+        assert_eq!(pulled.pages[0].len(), 1);
+        assert_eq!(
+            (pulled.pages[0][0].child.as_str(), pulled.pages[0][0].at),
+            ("a", 5)
+        );
+        // A formation with no pages, and one that the PC has no record of, have none.
+        assert!(pulled.pages[1].is_empty());
+        assert!(pulled.pages[2].is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pc_that_cannot_be_reached_has_no_pages_and_every_record_is_the_reason() {
+        let open = async |_: &str| Err::<Client, String>("つながりません".to_owned());
+        let items = vec!["a".to_owned(), "b".to_owned()];
+        let pulled = blocking(move || {
+            pull_env_with_pages_from_pc("mac-studio", &open, PC_RECORD_WAIT, &items)
+        })
+        .await;
+        assert!(pulled.records.iter().all(|r| r.is_err()));
+        assert_eq!(pulled.pages, [Vec::<PageRecord>::new(), Vec::new()]);
     }
 
     /// A read of the screen's list as it was asked for: the environment, and the name of each formation.
