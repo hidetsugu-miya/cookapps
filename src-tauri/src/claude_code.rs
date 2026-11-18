@@ -1359,6 +1359,9 @@ mod tests {
         ] {
             assert!(FORMATION_CLAUDE_MD.contains(needle), "{needle}");
         }
+        // A finished child stays until the owner closes it (#912).
+        assert!(FORMATION_CLAUDE_MD.contains("明示して頼んだときだけ"));
+        assert!(!FORMATION_CLAUDE_MD.contains("閉じてかまいません"));
     }
 
     #[test]
