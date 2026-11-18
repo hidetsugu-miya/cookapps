@@ -70,6 +70,7 @@ const STEP_WORKTREE: &str = "worktree の作成";
 const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
+const STEP_PLUGIN: &str = "プラグインの書き出し";
 const STEP_IDLE: &str = "claude の立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
@@ -1034,15 +1035,28 @@ fn all_terminals_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["terminal", "list", "--json"]), environment)
 }
 
-/// The child's terminal: titled with its name, and running Claude Code in auto mode at the effort `medium` (#911) under that name (`claude -n`, which is also the address of `SendMessage`). The name was checked, so the command line holds nothing a shell would read.
-fn terminal_create_args(path: &str, name: &str, environment: &str) -> Vec<String> {
+/// The command of the child's terminal: Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space). The name was checked, so the rest of the command line holds nothing a shell would read.
+fn child_command(name: &str, plugin_dir: &Path) -> String {
+    format!(
+        "claude -n {name} --permission-mode auto --effort medium --plugin-dir {}",
+        crate::claude_code::sh_quote(&plugin_dir.to_string_lossy())
+    )
+}
+
+/// The child's terminal: titled with its name, and running `child_command`.
+fn terminal_create_args(
+    path: &str,
+    name: &str,
+    plugin_dir: &Path,
+    environment: &str,
+) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
     args.extend([
         format!("path:{path}"),
         "--title".into(),
         name.into(),
         "--command".into(),
-        format!("claude -n {name} --permission-mode auto --effort medium"),
+        child_command(name, plugin_dir),
         "--json".into(),
     ]);
     on(args, environment)
@@ -1632,7 +1646,7 @@ fn make_worktree(
     })
 }
 
-/// Launches a child: a terminal with `claude -n {name}` in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
+/// Launches a child: a terminal with `claude -n {name}` and the plugin of A-41 (`--plugin-dir`, written first) in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
 /// With no `place.folder` the worktree is made here in the repository of the environment (`create_worktree`: Orca's RPC, not its CLI), on `place.branch` (or on the branch Orca names, when there is none): a branch that the repository has is opened as it is, one that only `origin` has is taken from there, and a new one starts from `place.base`. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
 /// With `place.folder` nothing is made: the folder must be the repository's own folder or a worktree of it that `orca worktree ps` lists (`folder_in`), and the child works there. The record says that tsunagiai did not make it (`Launch::created`), so that no close removes it.
 pub fn launch(
@@ -1652,6 +1666,9 @@ pub fn launch(
     if is_launched(&read_record(config, formation)?, name) {
         return Err(already_launched(name).into());
     }
+    // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree.
+    let plugin_dir = crate::formation_assets::write_plugin(config)
+        .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?;
     let environment = chosen_environment(&mut None, environment)?;
     let environment = environment.as_str();
     let list = repos(environment)?;
@@ -1689,7 +1706,7 @@ pub fn launch(
             refusal.with("folder", path.as_str())
         }
     };
-    let made = orca::write(&terminal_create_args(&path, name, environment))
+    let made = orca::write(&terminal_create_args(&path, name, &plugin_dir, environment))
         .map_err(|e| kept(STEP_TERMINAL, e))?;
     let (handle, pane_key) = created_terminal_of(&made).map_err(|e| kept(STEP_TERMINAL, e))?;
     let child = Child {
@@ -5150,7 +5167,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            terminal_create_args("/w/a", "web-2", "local"),
+            terminal_create_args("/w/a", "web-2", Path::new("/c/formation-plugin"), "local"),
             [
                 "terminal",
                 "create",
@@ -5159,7 +5176,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto --effort medium",
+                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin'",
                 "--json",
                 "--environment=local"
             ]
@@ -5230,13 +5247,31 @@ mod tests {
     }
 
     #[test]
+    fn the_command_of_a_child_passes_the_plugin_folder_as_one_quoted_word() {
+        assert_eq!(
+            child_command("web-2", Path::new("/c/formation-plugin")),
+            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin'"
+        );
+        // A folder with a space or a quote stays one word.
+        assert!(
+            child_command("web-2", Path::new("/c/it's here/formation-plugin"))
+                .ends_with(r"--plugin-dir '/c/it'\''s here/formation-plugin'")
+        );
+    }
+
+    #[test]
     fn every_command_of_a_child_ends_with_the_environment_in_the_joined_form() {
         // A name that looks like an option stays one argument, joined to its flag.
         let environment = "--help";
         let all = [
             repo_list_args(environment),
             terminal_list_args("/w/a", environment),
-            terminal_create_args("/w/a", "web-2", environment),
+            terminal_create_args(
+                "/w/a",
+                "web-2",
+                Path::new("/c/formation-plugin"),
+                environment,
+            ),
             terminal_wait_args("term_1", environment),
             terminal_send_args("term_1", "go", environment),
             terminal_close_args("term_1", environment),
