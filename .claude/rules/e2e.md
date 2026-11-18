@@ -128,6 +128,21 @@ Good: add e2e/specs/foo.e2e.ts and let it run in the last app
 Bad:  wdio run wdio.conf.ts --spec e2e/specs/inbox.e2e.ts, which runs inbox in more than one app
 ```
 
+### Keep every app under 180 seconds: even out the split first, and add an app when that is not enough
+
+After a full run, sum the seconds of each app from its log (the lines `[webkit … #{app}-{n}] N passing ({time})` in `.claude/e2e/{HEAD SHA}.log`).
+When an app takes more than 180 seconds, move specs among the apps in `namedSpecs` so that the sums come close, and write the new seconds in the comment of `wdio.conf.ts` (at the owner's instruction, 2026-11-18; #930).
+When the seconds of all the specs divided by the number of apps are still over 180, add one capability, measure the next full run, and keep it only when wdio got shorter.
+No app is shorter than its longest spec: split such a spec by its parts instead ("Keep one `e2e/specs/{screen}.e2e.ts` per screen").
+The slowest app sets the length of every run, and every round of the review waits for E2E: on 2026-11-18 the last app held ten specs and took 345 of wdio's 351 seconds, while the other four ended in 128 to 161.
+An app costs about 1 GB of memory (measured on 2026-11-18: five apps took about 5 GB of the 64 GB), so the cost of one more is the competition for the cores, which only a run shows.
+
+```text
+Good: an app takes 205 seconds and the five sum to 850 -> move specs so that each is near 170
+Good: the five sum to 1,000 seconds -> add a sixth capability, and keep it only if wdio got shorter
+Bad:  add a capability without measuring, or leave an app at 300 seconds because the run passed
+```
+
 ### Run one failed spec alone with `run-e2e.sh --only`, the one exception to "do not pass `--spec`"
 
 `run-e2e.sh --only {spec name}` (for example `--only inbox`) runs `e2e/specs/{name}.e2e.ts` in one app, builds first (`e2e:build`), and writes no record: it works on a dirty tree, and its output goes to `.claude/e2e/only-{name}.log` (at the owner's instruction, 2026-11-12; #485).
