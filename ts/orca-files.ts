@@ -87,6 +87,8 @@ let openDiff: (relative: string) => void = () => {};
 let branchSwitched: (here: FilesContext, branch: string) => void = () => {};
 // Told that a worktree was picked in the list of branches (A-25): the screen shows it in this pane.
 let worktreePicked: (here: FilesContext, worktree: OrcaGitWorktree) => void = () => {};
+// Told the answer of the list of branches for the worktrees of the project (A-25).
+let worktreesRead: (here: FilesContext, worktrees: OrcaGitWorktree[]) => void = () => {};
 // Told that the list of Orca shows another branch for the worktree than the pane knew (a switch made outside the app): the tabs of its files are read again.
 let branchMoved: () => void = () => {};
 // The branch the app itself just switched the worktree to: the tree and the history were read for it then, so the list that shows it starts no second read.
@@ -823,6 +825,7 @@ function openBranches(anchor: Element) {
       branchSwitched(here, branch);
     },
     (worktree) => worktreePicked(here, worktree),
+    (worktrees) => worktreesRead(here, worktrees),
   );
 }
 
@@ -900,11 +903,12 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: (here: FilesContext, branch: string) => void; picked: (here: FilesContext, worktree: OrcaGitWorktree) => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: (here: FilesContext, branch: string) => void; picked: (here: FilesContext, worktree: OrcaGitWorktree) => void; read: (here: FilesContext, worktrees: OrcaGitWorktree[]) => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
   worktreePicked = on.picked;
+  worktreesRead = on.read;
   branchMoved = on.moved;
   gone = on.deleted;
   hold = on.moving;

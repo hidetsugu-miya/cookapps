@@ -141,7 +141,7 @@ fn start_badge_clock(app: AppHandle) {
 /// What to do with a navigation of the webview or one of its frames.
 #[derive(Debug, PartialEq)]
 enum Navigation {
-    /// The app's own page, a frame's `about:srcdoc`, or the preview server of A-31 on its running port (the frame of the HTML preview).
+    /// The app's own page, a frame's `about:srcdoc`, or the preview server of A-31 on its running port under a token it issued (the frame of the HTML preview).
     Allow,
     /// A link of a mail body: handed to the default browser.
     Browser,
@@ -151,10 +151,22 @@ enum Navigation {
 // wry asks about the navigations of every frame, not only the top window's, and cannot tell a click from a load.
 // A WKWebView check found no load without a click that gets here: a mail's nested iframe, frame, object, embed (stopped by the CSP)
 // and meta refresh (stopped by the sandbox) never reached the delegate.
-fn navigation_of(url: &tauri::Url, preview_port: Option<u16>) -> Navigation {
+// The preview server's address is allowed only under a token it issued (`is_token`, the first part of the path), so a link of a mail that reaches its port without one still goes to the browser instead of replacing the app's page when it targets the top window.
+fn navigation_of(
+    url: &tauri::Url,
+    preview_port: Option<u16>,
+    is_token: impl Fn(&str) -> bool,
+) -> Navigation {
     match (url.scheme(), url.host_str()) {
-        // The frame that previews an HTML file loads from the server of A-31, on its running port alone.
-        ("http", Some("127.0.0.1")) if preview_port.is_some() && url.port() == preview_port => {
+        // The frame that previews an HTML file loads from the server of A-31, on its running port alone, under a token.
+        ("http", Some("127.0.0.1"))
+            if preview_port.is_some()
+                && url.port() == preview_port
+                && url
+                    .path_segments()
+                    .and_then(|mut parts| parts.next())
+                    .is_some_and(is_token) =>
+        {
             Navigation::Allow
         }
         // Only the mail frames' own document; any other about: page would blank the window or a frame.
@@ -174,7 +186,11 @@ fn navigation_of(url: &tauri::Url, preview_port: Option<u16>) -> Navigation {
 fn navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("navigation")
         .on_navigation(|webview, url| {
-            match navigation_of(url, orca_preview::running_port()) {
+            match navigation_of(
+                url,
+                orca_preview::running_port(),
+                orca_preview::is_issued_token,
+            ) {
                 Navigation::Allow => return true,
                 Navigation::Browser => {
                     if let Err(e) = webview.opener().open_url(url.as_str(), None::<&str>) {
@@ -539,7 +555,11 @@ mod tests {
             "tauri://localhost",
             "about:srcdoc",
         ] {
-            assert_eq!(navigation_of(&url(ok), None), Navigation::Allow, "{ok}");
+            assert_eq!(
+                navigation_of(&url(ok), None, |_| true),
+                Navigation::Allow,
+                "{ok}"
+            );
         }
     }
 
@@ -551,7 +571,11 @@ mod tests {
             "HTTPS://example.com/",
             "https://tauri.localhost.example.com/",
         ] {
-            assert_eq!(navigation_of(&url(web), None), Navigation::Browser, "{web}");
+            assert_eq!(
+                navigation_of(&url(web), None, |_| true),
+                Navigation::Browser,
+                "{web}"
+            );
         }
     }
 
@@ -566,7 +590,11 @@ mod tests {
             "ftp://example.com/",
             "about:blank",
         ] {
-            assert_eq!(navigation_of(&url(bad), None), Navigation::Cancel, "{bad}");
+            assert_eq!(
+                navigation_of(&url(bad), None, |_| true),
+                Navigation::Cancel,
+                "{bad}"
+            );
         }
     }
 
@@ -578,7 +606,7 @@ mod tests {
             Navigation::Browser
         };
         assert_eq!(
-            navigation_of(&url("http://tauri.localhost/"), None),
+            navigation_of(&url("http://tauri.localhost/"), None, |_| true),
             expected
         );
     }
@@ -586,8 +614,9 @@ mod tests {
     #[test]
     fn the_preview_server_is_allowed_on_its_running_port_alone() {
         let port = Some(4100);
+        let is_tok = |token: &str| token == "tok";
         assert_eq!(
-            navigation_of(&url("http://127.0.0.1:4100/tok/a.html"), port),
+            navigation_of(&url("http://127.0.0.1:4100/tok/a.html"), port, is_tok),
             Navigation::Allow
         );
         for other in [
@@ -598,15 +627,39 @@ mod tests {
             "http://127.0.0.2:4100/tok/a.html",
         ] {
             assert_eq!(
-                navigation_of(&url(other), port),
+                navigation_of(&url(other), port, is_tok),
                 Navigation::Browser,
                 "{other}"
             );
         }
         // With no server running, nothing on 127.0.0.1 is allowed.
         assert_eq!(
-            navigation_of(&url("http://127.0.0.1:4100/tok/a.html"), None),
+            navigation_of(&url("http://127.0.0.1:4100/tok/a.html"), None, is_tok),
             Navigation::Browser
+        );
+    }
+
+    #[test]
+    fn the_preview_server_is_allowed_under_a_token_it_issued_alone() {
+        let is_tok = |token: &str| token == "tok";
+        for other in [
+            "http://127.0.0.1:4100/",
+            "http://127.0.0.1:4100",
+            "http://127.0.0.1:4100/a.html",
+            "http://127.0.0.1:4100/other/a.html",
+            "http://127.0.0.1:4100/tokx/a.html",
+            "http://127.0.0.1:4100/%74ok/a.html",
+            "http://127.0.0.1:4100//tok/a.html",
+        ] {
+            assert_eq!(
+                navigation_of(&url(other), Some(4100), is_tok),
+                Navigation::Browser,
+                "{other}"
+            );
+        }
+        assert_eq!(
+            navigation_of(&url("http://127.0.0.1:4100/tok/"), Some(4100), is_tok),
+            Navigation::Allow
         );
     }
 }

@@ -1537,16 +1537,10 @@ fn detected_params(repo: &str) -> Value {
     json!({"repo": format!("id:{repo}")})
 }
 
-async fn git_worktrees(
-    rpc: &mut impl Rpc,
-    repo: &str,
-    listed: &[String],
-) -> Result<Vec<DetectedWorktree>, String> {
-    let answer = rpc
-        .call("worktree.detectedList", detected_params(repo))
+async fn detected_list(rpc: &mut impl Rpc, repo: &str) -> Result<Value, String> {
+    rpc.call("worktree.detectedList", detected_params(repo))
         .await
-        .map_err(branch_reason)?;
-    parse_git_worktrees(&answer, listed)
+        .map_err(branch_reason)
 }
 
 /// The id of a repository (`OrcaProject::key`) that Orca may be asked for: not blank, not an SSH host's (`ssh:`), no control character, and not longer than `MAX_REPO`.
@@ -2163,13 +2157,20 @@ pub async fn orca_git_worktrees(
     check_repo(&repo)?;
     check_environment(environment.as_deref())?;
     let (asked_repo, asked_environment) = (repo.clone(), environment.clone());
-    let listed = tokio::task::spawn_blocking(move || {
-        listed_paths_of_project(&asked_repo, asked_environment.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    let mut connection = Connection::open(environment.clone()).await?;
-    let found = git_worktrees(&mut connection, &repo, &listed).await?;
+    // The list of the CLI and the call to Orca are asked side by side, and the paths are marked when both are back.
+    let listed = async {
+        tokio::task::spawn_blocking(move || {
+            listed_paths_of_project(&asked_repo, asked_environment.as_deref())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    let detected = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        detected_list(&mut connection, &repo).await
+    };
+    let (listed, detected) = tokio::try_join!(listed, detected)?;
+    let found = parse_git_worktrees(&detected, &listed)?;
     for one in found.iter().filter(|d| d.worktree.git_only) {
         remember_git_worktree(
             environment.as_deref(),
@@ -3634,7 +3635,8 @@ mod tests {
     #[tokio::test]
     async fn the_git_worktrees_are_asked_of_the_repository_by_its_id() {
         let mut orca = fake(vec![("worktree.detectedList", Ok(detected_answer()))]);
-        let found = git_worktrees(&mut orca, "repo-1", &[]).await.unwrap();
+        let found =
+            parse_git_worktrees(&detected_list(&mut orca, "repo-1").await.unwrap(), &[]).unwrap();
         assert_eq!(found.len(), 4);
         assert_eq!(
             orca.calls,
@@ -3651,7 +3653,7 @@ mod tests {
             )),
         )]);
         assert_eq!(
-            git_worktrees(&mut orca, "gone", &[]).await.unwrap_err(),
+            detected_list(&mut orca, "gone").await.unwrap_err(),
             "プロジェクトが見つかりません"
         );
     }

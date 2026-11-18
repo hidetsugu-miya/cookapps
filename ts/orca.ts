@@ -708,7 +708,7 @@ function syncDefinition(tabs: Tab[]) {
 }
 
 // The git worktrees that the list of branches of the file pane showed and Orca's list lacks (A-25), by target and path: the label of their heading and of the tabs of their files, and the git branch they are on.
-const gitWorktrees = new Map<string, { label: string; gitBranch: string }>();
+const gitWorktrees = new Map<string, { project: string; target: string | null; path: string; label: string; gitBranch: string }>();
 const gitKey = (target: string | null, path: string) => `${target ?? ""}\n${path}`;
 // The worktree picked in the list of branches (A-25): the file pane shows it instead of the selected tab's worktree, for the tab that was selected then of the project then. Another tab, or another project, ends it.
 let pickedWorktree: { project: string; tab: string; target: string | null; path: string; label: string } | null = null;
@@ -1497,9 +1497,15 @@ export function initOrca() {
       const listed = mix.worktrees.find((w) => w.path === worktree.path && placeOf(w) === here.target);
       const name = mix.projects.find((p) => p.key === projectKey)?.name ?? "";
       const label = listed !== undefined ? worktreeLabel(listed) : worktreeLabel({ repo: name, branch: worktree.name });
-      if (listed === undefined) gitWorktrees.set(gitKey(here.target, worktree.path), { label, gitBranch: worktree.gitBranch });
+      if (listed === undefined) gitWorktrees.set(gitKey(here.target, worktree.path), { project: here.project, target: here.target, path: worktree.path, label, gitBranch: worktree.gitBranch });
       pickedWorktree = { project: projectKey, tab: selectedTab() ?? "", target: here.target, path: worktree.path, label };
       draw();
+    },
+    // A-25: a git worktree that the answer of the list of branches does not hold any more is forgotten.
+    read: (here, read) => {
+      for (const [key, git] of gitWorktrees) {
+        if (git.project === here.project && git.target === here.target && !read.some((w) => w.path === git.path)) gitWorktrees.delete(key);
+      }
     },
     moved: rereadTabs,
     // One draw for the whole delete, not one for each entry whose tabs closed.

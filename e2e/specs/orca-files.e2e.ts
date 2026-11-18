@@ -3235,10 +3235,12 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_switch_branch")).toEqual([]);
     expect(await tabTitles()).toEqual(["Write the docs"]);
     // The list of the worktree that is shown has the check on it, and the branches are the ones of that worktree.
+    // The first list read the branches of the worktree of the tab, and `mock` forgets that call: the calls counted are the ones of the list opened now.
+    expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }]);
     await mock("orca_local_branches", [local("feat/w", { current: true }), local("main")]);
     await branchButton().click();
     await waitForCount('.orca-dest-pop .orca-branch-row[data-kind="local"]', 2);
-    expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }, { path: GIT_ONLY, environment: null }]);
+    expect(await callsOf("orca_local_branches")).toEqual([{ path: GIT_ONLY, environment: null }]);
     expect(await worktreeRows()).toEqual([
       ["example-app", "feat/a", null, "false", false],
       ["work", "feat/w", "git", "true", true],

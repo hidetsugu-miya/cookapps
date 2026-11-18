@@ -69,7 +69,7 @@ export interface BranchListOptions {
   pickCurrent: boolean;
   pick: (branch: PickedBranch) => void;
   // The section of the git worktrees of the project above the branches (A-25): `current` is the path the pane shows, and a pick of another one is `pick`'s. The list of A-9 has none.
-  worktrees?: { current: string; pick: (worktree: OrcaGitWorktree) => void };
+  worktrees?: { current: string; pick: (worktree: OrcaGitWorktree) => void; read: (worktrees: OrcaGitWorktree[]) => void };
 }
 
 // Closes the list of branches if it is the menu that is open, and leaves any other menu alone.
@@ -78,13 +78,13 @@ export function closeBranchDialog() {
 }
 
 // Opens the list under `anchor`. A pick closes it; the branch the worktree is on, and the worktree the pane shows, only close it. `pickWorktree` shows the worktree picked.
-export function openBranchDialog(anchor: Element, here: BranchContext, switched: (branch: string) => void, pickWorktree: (worktree: OrcaGitWorktree) => void) {
+export function openBranchDialog(anchor: Element, here: BranchContext, switched: (branch: string) => void, pickWorktree: (worktree: OrcaGitWorktree) => void, worktreesRead: (worktrees: OrcaGitWorktree[]) => void) {
   openBranchList(anchor, here, {
     current: (_kind, _name, checkedOut) => checkedOut,
     refuseInUse: true,
     pickCurrent: false,
     pick: (b) => void switchTo(here, b.kind, b.name, switched),
-    worktrees: { current: here.path, pick: pickWorktree },
+    worktrees: { current: here.path, pick: pickWorktree, read: worktreesRead },
   });
 }
 
@@ -262,7 +262,10 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
   void searchRemote();
   if (options.worktrees) {
     invoke("orca_git_worktrees", { repo: here.repo, environment: here.target }).then(
-      (read) => pop.isConnected && fill(worktreeSection, read.map(worktreeRow), null),
+      (read) => {
+        options.worktrees?.read(read);
+        if (pop.isConnected) fill(worktreeSection, read.map(worktreeRow), null);
+      },
       (e) => pop.isConnected && fill(worktreeSection, [], String(e)),
     );
   }

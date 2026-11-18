@@ -468,6 +468,13 @@ pub(crate) fn running_port() -> Option<u16> {
     SERVER.get().map(|preview| preview.port())
 }
 
+/// Whether `token` is one that the running server issued for a worktree. The navigation check of the window allows an address of the server only under such a token.
+pub(crate) fn is_issued_token(token: &str) -> bool {
+    SERVER
+        .get()
+        .is_some_and(|preview| preview.tokens().worktree_of(token).is_some())
+}
+
 // ---- the command ----
 
 /// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html`, whatever the case, and that has no part starting with `.` (the server would answer it 404).
