@@ -2060,6 +2060,17 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #database-terminal-body > .pending { flex: none; margin: 8px; }
 .database-terminal-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+/* D-9: the strip of the open tabs over the work pane (オブジェクト and a tab for each opened table), made as the tabs of the terminal pane are. */
+#database-work-tabs { flex: none; display: flex; align-items: flex-end; gap: 2px; padding: 0 24px; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+.database-open-item { flex: none; display: flex; align-items: center; max-width: 240px; min-width: 0; height: 36px; box-sizing: border-box; border-bottom: 2px solid transparent; color: var(--muted); }
+.database-open-item[data-selected="true"] { border-bottom-color: var(--accent); color: inherit; }
+.database-open-tab { display: flex; align-items: center; min-width: 0; height: 100%; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.database-open-item[data-selected="true"] .database-open-tab { font-weight: 600; }
+.database-open-tab:hover { color: var(--accent); }
+.database-open-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.database-open-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.database-open-item .database-open-close { flex: none; width: 22px; height: 22px; margin: 0 4px 0 -6px; color: inherit; }
+.database-open-item .database-open-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #database-work { flex: 1; min-height: 0; overflow: auto; }
 .database-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 10px 0 calc(6px + var(--depth, 0) * 16px); border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .database-btn:hover { background: var(--hover); }

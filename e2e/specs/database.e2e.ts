@@ -1446,6 +1446,202 @@ describe("database: tree", () => {
     });
   });
 
+  // D-9: the strip of the open tabs over the work pane.
+  describe("tabs of the tables", () => {
+    const users = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目", tsv: "id\tname\n1\tAlice" });
+    const orders = databaseRecords(["id", "total"], [[databaseCell("7", "number"), databaseCell("980", "number")]], { summary: "7–7 行目", tsv: "id\ttotal\n7\t980" });
+    const strip = "#database-work-tabs";
+    const openTab = (name: string) => $(`${strip} [data-key="open-p1/d/shop/t/${name}"]`);
+    const objectsTab = () => $(`${strip} [data-key="open-objects"]`);
+    const closeOf = (name: string) => $(`${strip} [data-key="close-p1/d/shop/t/${name}"]`);
+    const stripTabs = () => textsOf(`${strip} [role="tab"]`);
+    const selectedTabs = () => browser.execute((s) => [...document.querySelectorAll(`${s} [role="tab"][aria-selected="true"]`)].map((e) => e.textContent), strip);
+    const cells = () => browser.execute(() => [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+
+    // The connection p1 open on its database shop, pressed, with its table list drawn.
+    async function openShop() {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount("#database-work tbody tr", 3);
+    }
+    // Presses the table in the tree and waits for its records.
+    async function pressTable(name: string, records: typeof users, summary: string) {
+      const command = await mock("database_records", records);
+      await row(`p1/d/shop/t/${name}`).click();
+      await waitForCalls(command);
+      await expect($("#database-work .database-range")).toHaveText(summary);
+      return command;
+    }
+
+    it("has the strip with オブジェクト only, selected and with no close button, over the table list of the database", async () => {
+      await openShop();
+      await expect($(strip)).toBeDisplayed();
+      expect(await stripTabs()).toEqual(["オブジェクト"]);
+      expect(await selectedTabs()).toEqual(["オブジェクト"]);
+      expect(await count(`${strip} .database-open-close`)).toBe(0);
+      expect(await count("#database-work table.database-tables")).toBe(1);
+    });
+
+    it("draws no strip while no database is pressed", async () => {
+      await openTree();
+      await expect($(strip)).not.toBeDisplayed();
+      await row("p1/d/shop").click();
+      await expect($(strip)).toBeDisplayed();
+      await row("p1").click();
+      await expect($(strip)).not.toBeDisplayed();
+    });
+
+    it("opens a tab for a table on a press in the tree, selected, with the tabs of the table and a close button", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      expect(await stripTabs()).toEqual(["オブジェクト", "users"]);
+      expect(await selectedTabs()).toEqual(["users"]);
+      await expect(openTab("users")).toHaveAttribute("title", "shop.users");
+      await expect(closeOf("users")).toHaveAttribute("aria-label", "users を閉じる");
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
+      await expect($("#database-work h3")).toHaveText("shop.users");
+      expect(await count("#database-work table.database-tables")).toBe(0);
+    });
+
+    it("opens a tab for a table on a press on a row of the table list", async () => {
+      await openShop();
+      const command = await mock("database_records", users);
+      await $('#database-work [data-key="table-users"]').click();
+      await waitForCalls(command);
+      expect(await stripTabs()).toEqual(["オブジェクト", "users"]);
+      expect(await selectedTabs()).toEqual(["users"]);
+    });
+
+    it("moves to the tab of a table that is open on a second press, with no second tab, and reads the first page again", async () => {
+      await openShop();
+      const command = await pressTable("users", users, "1–1 行目");
+      await pressTable("orders", orders, "7–7 行目");
+      expect(await stripTabs()).toEqual(["オブジェクト", "users", "orders"]);
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls(command, 2);
+      expect(await stripTabs()).toEqual(["オブジェクト", "users", "orders"]);
+      expect(await selectedTabs()).toEqual(["users"]);
+      await expect($("#database-work h3")).toHaveText("shop.users");
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("moves to a tab with its records kept, calling nothing and selecting its row in the tree", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await pressTable("orders", orders, "7–7 行目");
+      expect(await cells()).toEqual([["7", "980"]]);
+      await openTab("users").click();
+      await expect($("#database-work .database-range")).toHaveText("1–1 行目");
+      expect(await cells()).toEqual([["1", "Alice"]]);
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
+      await expect(row("p1/d/shop/t/orders")).toHaveAttribute("aria-pressed", "false");
+      await openTab("orders").click();
+      await expect($("#database-work .database-range")).toHaveText("7–7 行目");
+      expect(await cells()).toEqual([["7", "980"]]);
+      expect(await callsOf("database_records")).toHaveLength(1);
+    });
+
+    it("keeps the selected tab of a table (the structure) in its tab while another tab is selected", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await mock("database_structure", databaseStructure([databaseColumn("id", "bigint")], "1 列 / InnoDB / utf8mb4"));
+      await $('#database-work [data-tab="structure"]').click();
+      await expect($("#database-work .database-range")).toHaveText("1 列 / InnoDB / utf8mb4");
+      await pressTable("orders", orders, "7–7 行目");
+      await expect($('#database-work [data-tab="records"]')).toHaveAttribute("aria-selected", "true");
+      await openTab("users").click();
+      await expect($('#database-work [data-tab="structure"]')).toHaveAttribute("aria-selected", "true");
+      await expect($("#database-work .database-range")).toHaveText("1 列 / InnoDB / utf8mb4");
+      expect(await callsOf("database_structure")).toHaveLength(1);
+    });
+
+    it("selects オブジェクト on a press on its tab: the table list of the database, nothing called, the row of the database pressed", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      const tables = await callsOf("database_tables");
+      await objectsTab().click();
+      expect(await selectedTabs()).toEqual(["オブジェクト"]);
+      await expect($("#database-work h3")).toHaveText("shop");
+      expect(await count("#database-work table.database-tables")).toBe(1);
+      expect(await stripTabs()).toEqual(["オブジェクト", "users"]);
+      await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "true");
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "false");
+      expect(await callsOf("database_tables")).toEqual(tables);
+      await expect($('#database-work [data-tab="tables"]')).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("selects オブジェクト on a press on the database in the tree, and keeps the tabs", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await row("p1/d/shop").click();
+      expect(await selectedTabs()).toEqual(["オブジェクト"]);
+      expect(await stripTabs()).toEqual(["オブジェクト", "users"]);
+      await openTab("users").click();
+      expect(await cells()).toEqual([["1", "Alice"]]);
+    });
+
+    it("closes a tab with its button, calling nothing, and selects オブジェクト when it was the selected one", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await pressTable("orders", orders, "7–7 行目");
+      await closeOf("orders").click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "users"]);
+      expect(await selectedTabs()).toEqual(["オブジェクト"]);
+      await expect($("#database-work h3")).toHaveText("shop");
+      expect(await count("#database-work table.database-tables")).toBe(1);
+      await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "true");
+      expect(await callsOf("database_records")).toHaveLength(1);
+      await closeOf("users").click();
+      expect(await stripTabs()).toEqual(["オブジェクト"]);
+    });
+
+    it("keeps the selected tab when another tab is closed, and opens a closed table again with a read", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await pressTable("orders", orders, "7–7 行目");
+      await closeOf("users").click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "orders"]);
+      expect(await selectedTabs()).toEqual(["orders"]);
+      expect(await cells()).toEqual([["7", "980"]]);
+      const again = await pressTable("users", users, "1–1 行目");
+      expect(await callsOf(again)).toHaveLength(1);
+      expect(await stripTabs()).toEqual(["オブジェクト", "orders", "users"]);
+    });
+
+    it("closes the tabs of a connection that is disconnected, and draws no strip", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await mock("database_disconnect", null);
+      await pickFromMenu("p1", 2);
+      await expect($(strip)).not.toBeDisplayed();
+      expect(await count(`${strip} > *`)).toBe(0);
+      await mock("database_connect", ["information_schema", "shop"]);
+      await row("p1").click();
+      await waitForCount('#database-side-feed [data-key^="p1/d/"]', 2);
+      await row("p1/d/shop").click();
+      await waitForCount("#database-work tbody tr", 3);
+      expect(await stripTabs()).toEqual(["オブジェクト"]);
+    });
+
+    it("closes the tabs of a database whose tree is closed from its menu, and draws no strip", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      await rightPress("p1/d/shop");
+      await $('.menu button[role="menuitem"]:nth-child(2)').click();
+      await expect($(strip)).not.toBeDisplayed();
+      await row("p1/d/shop").click();
+      await waitForCount("#database-work tbody tr", 3);
+      expect(await stripTabs()).toEqual(["オブジェクト"]);
+    });
+
+    it("has no control on the strip but the tabs and the close buttons", async () => {
+      await openShop();
+      await pressTable("users", users, "1–1 行目");
+      expect(await count(`${strip} button`)).toBe(3);
+      expect(await count(`${strip} input, ${strip} textarea, ${strip} [placeholder]`)).toBe(0);
+    });
+  });
+
   describe("structure of a table", () => {
     const page0 = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目 / 約 1,200 行" });
     const comment = "注文を作ったユーザー".repeat(40);
@@ -2138,6 +2334,7 @@ describe("database: tree", () => {
     await expect(row("p1")).toHaveAttribute("aria-pressed", "true");
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
     expect(await count("#database-work > *")).toBe(0);
+    await expect($("#database-work-tabs")).not.toBeDisplayed();
     // A press opens it again, with a new call of database_connect.
     await row("p1").click();
     await waitForCalls("database_connect", 2);
