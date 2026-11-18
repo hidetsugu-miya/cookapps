@@ -128,6 +128,20 @@ def tier(issue):
     return (0 if urgent(issue) else 2) + (0 if has(issue, "importance:high") else 1)
 
 
+PRIORITIES = ("priority:1", "priority:2", "priority:3")
+NO_PRIORITY = len(PRIORITIES) + 1
+
+
+def priority(issue):
+    """The rank that the label `priority:1`, `priority:2` or `priority:3` gives within a tier (.claude/rules/issues.md), 1 first; an issue with none of them is after priority:3 (NO_PRIORITY).
+    An issue with more than one takes the first of them."""
+    return next((k for k, label in enumerate(PRIORITIES, 1) if has(issue, label)), NO_PRIORITY)
+
+
+def priority_label(issue):
+    return "no priority" if priority(issue) == NO_PRIORITY else PRIORITIES[priority(issue) - 1]
+
+
 def tier_label(issue):
     return f"urgency {'high' if urgent(issue) else 'low'}, importance {'high' if tier(issue) % 2 == 0 else 'low'}"
 
@@ -165,8 +179,8 @@ def parse_stream(text):
 # ---- pure: queue ----
 
 def base_key(i):
-    """The basis of the order (.claude/skills/issue-plan/SKILL.md, "Rules"): the tier, then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
-    return (tier(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
+    """The basis of the order (.claude/skills/issue-plan/SKILL.md, "Rules"): the tier, then the priority (`priority:1` first, none last), then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
+    return (tier(i), priority(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
 
 
 def base_order(free):
@@ -275,7 +289,7 @@ def validate_plan(plan, free, fixed, states, parents=frozenset()):
             elif state == "open" and b not in free_by and b not in fixed_nums and b not in parents:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
 
-    # An issue comes before every issue of a lower tier (urgency, then importance), and a bug of 1, 2 or 3 points comes before every other issue of its tier.
+    # An issue comes before every issue of a lower tier (urgency, then importance), in a tier before every issue of a lower priority, and a bug of 1, 2 or 3 points comes before every other issue of its tier and priority.
     # The issues that block it, or that block an earlier issue, may stand before it.
     def front(member, allowed, message):
         needed = set()
@@ -301,9 +315,14 @@ def validate_plan(plan, free, fixed, states, parents=frozenset()):
             lambda n, late: f"order: #{n} ({tier_label(free_by[n])}) is placed after #{late} ({tier_label(free_by[late])})",
         )
     front(
+        lambda i: priority(i) < NO_PRIORITY,
+        lambda m, n: tier(m) != tier(n) or priority(m) <= priority(n),
+        lambda n, late: f"order: #{n} ({priority_label(free_by[n])}) is placed after #{late} ({priority_label(free_by[late])}) in the same tier",
+    )
+    front(
         quick_bug,
-        lambda m, n: quick_bug(m) or tier(m) != tier(n),
-        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}, which is not one, in the same tier",
+        lambda m, n: quick_bug(m) or tier(m) != tier(n) or priority(m) != priority(n),
+        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}, which is not one, in the same tier and priority",
     )
 
     # cycle. A parent closes only when all its parts are out, so a blocker that is a parent waits for each of its parts.
@@ -830,6 +849,7 @@ def issue_json(i):
         "labels": i.labels,
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
+        "priority": None if priority(i) == NO_PRIORITY else priority(i),
         "points": points(i),
         "parent": i.parent,
         "createdAt": i.created_at,

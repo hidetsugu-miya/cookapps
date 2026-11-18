@@ -118,6 +118,29 @@ class Ordering(unittest.TestCase):
         plain = mk(4, ["point:1"])
         self.assertEqual(numbers(pr.base_order([plain, bug])), [1, 4])
 
+    def test_the_priority_is_after_the_tier_and_before_the_quick_bug_and_none_is_last(self):
+        none = mk(1, ["bug", "point:1"])
+        p3 = mk(2, ["point:8", "priority:3"])
+        p2 = mk(3, ["point:8", "priority:2"])
+        p1 = mk(4, ["point:8", "priority:1"], created="2026-11-01T00:00:09Z")
+        self.assertEqual([pr.priority(i) for i in (p1, p2, p3, none)], [1, 2, 3, 4])
+        self.assertEqual(numbers(pr.base_order([none, p3, p2, p1])), [4, 3, 2, 1])
+        # the same priority: the quick bug goes first again
+        plain = mk(5, ["point:1", "priority:2"])
+        bug = mk(6, ["bug", "point:2", "priority:2"])
+        self.assertEqual(numbers(pr.base_order([plain, bug, p2])), [6, 5, 3])
+
+    def test_the_priority_does_not_leave_the_tier(self):
+        important = mk(1, ["importance:high", "point:8"])
+        p1 = mk(2, ["priority:1", "point:1"])
+        self.assertEqual(numbers(pr.base_order([p1, important])), [1, 2])
+
+    def test_a_blocker_of_a_higher_priority_is_taken_before_the_issue_it_blocks(self):
+        blocker = mk(1, ["point:8"])
+        p1 = mk(2, ["priority:1", "point:1"], blocked=[1])
+        p2 = mk(3, ["priority:2", "point:1"])
+        self.assertEqual(numbers(pr.base_order([p2, blocker, p1])), [1, 2, 3])
+
     def test_a_blocker_of_a_higher_tier_is_taken_across_the_tiers(self):
         blocker = mk(1, ["point:8"])
         urgent_ = mk(2, ["urgency:high", "importance:high", "point:2"], blocked=[1])
@@ -171,6 +194,10 @@ class Ordering(unittest.TestCase):
         j = pr.issue_json(mk(2, ["importance:high"]))
         self.assertEqual((j["urgency"], j["importance"], j["points"], j["parent"]), ("normal", "high", None, None))
 
+    def test_the_priority_in_the_snapshot(self):
+        self.assertEqual(pr.issue_json(mk(1, ["priority:2", "point:1"]))["priority"], 2)
+        self.assertIsNone(pr.issue_json(mk(2, ["point:1"]))["priority"])
+
 
 class Validation(unittest.TestCase):
     def setUp(self):
@@ -219,7 +246,7 @@ class Validation(unittest.TestCase):
         free = [mk(1), mk(2, ["bug", "point:2"]), mk(3)]
         states = {1: "open", 2: "open", 3: "open"}
         problems = pr.validate_plan({"order": [1, 2, 3]}, free, [], states)
-        self.assertEqual(problems, ["order: #2 is a bug of 1, 2 or 3 points but is placed after #1, which is not one, in the same tier"])
+        self.assertEqual(problems, ["order: #2 is a bug of 1, 2 or 3 points but is placed after #1, which is not one, in the same tier and priority"])
         self.assertEqual(pr.validate_plan({"order": [2, 1, 3]}, free, [], states), [])
 
     def test_bugs_of_1_2_and_3_points_must_come_first_but_not_those_of_5_and_8(self):
@@ -248,7 +275,7 @@ class Validation(unittest.TestCase):
         states = {n: "open" for n in range(1, 5)}
         self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
         problems = pr.validate_plan({"order": [1, 2, 4, 3]}, free, [], states)
-        self.assertEqual(problems, ["order: #3 is a bug of 1, 2 or 3 points but is placed after #4, which is not one, in the same tier"])
+        self.assertEqual(problems, ["order: #3 is a bug of 1, 2 or 3 points but is placed after #4, which is not one, in the same tier and priority"])
 
     def test_the_four_tiers_must_keep_their_order(self):
         free = [mk(1, ["urgency:high", "importance:high"]), mk(2, ["urgency:high"]), mk(3, ["importance:high"]), mk(4)]
@@ -273,6 +300,50 @@ class Validation(unittest.TestCase):
         # the blocker is needed by an earlier issue, so it may also stand before a later issue of a middle tier
         free = [mk(1), mk(2, ["urgency:high", "importance:high"], blocked=[1]), mk(3, ["urgency:high"])]
         self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
+
+    def test_the_priorities_must_keep_their_order_in_a_tier_and_none_is_last(self):
+        free = [mk(1, ["priority:1"]), mk(2, ["priority:2"]), mk(3, ["priority:3"]), mk(4)]
+        states = {n: "open" for n in range(1, 5)}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
+        problems = pr.validate_plan({"order": [1, 3, 2, 4]}, free, [], states)
+        self.assertEqual(problems, ["order: #2 (priority:2) is placed after #3 (priority:3) in the same tier"])
+        problems = pr.validate_plan({"order": [4, 3, 2, 1]}, free, [], states)
+        self.assertEqual(len(problems), 3)  # one for each of the three priorities
+        problems = pr.validate_plan({"order": [4, 1, 2, 3]}, free, [], states)
+        self.assertEqual(len(problems), 3)  # the one with no priority is before every issue that has one
+
+    def test_a_priority_does_not_carry_an_issue_past_a_higher_tier(self):
+        free = [mk(1, ["importance:high"]), mk(2, ["priority:1"])]
+        states = {1: "open", 2: "open"}
+        self.assertEqual(pr.validate_plan({"order": [1, 2]}, free, [], states), [])
+        problems = pr.validate_plan({"order": [2, 1]}, free, [], states)
+        self.assertEqual(problems, ["order: #1 (urgency low, importance high) is placed after #2 (urgency low, importance low)"])
+
+    def test_a_blocker_of_an_earlier_issue_may_stand_before_an_issue_of_a_higher_priority(self):
+        # #2 (priority:3) blocks #3 of a higher tier, so it may also stand before #1 (priority:1) of its own tier
+        free = [mk(1, ["priority:1"]), mk(2, ["priority:3"]), mk(3, ["importance:high"], blocked=[2])]
+        states = {n: "open" for n in range(1, 4)}
+        plan = {"order": [2, 3, 1], "blocked_by": {"3": [2]}}
+        self.assertEqual(pr.validate_plan(plan, free, [], states), [])
+
+    def test_a_blocker_of_a_lower_priority_may_stand_before_the_issue_it_blocks(self):
+        free = [mk(1, ["priority:3"]), mk(2, ["priority:1"], blocked=[1])]
+        states = {1: "open", 2: "open"}
+        plan = {"order": [1, 2], "blocked_by": {"2": [1]}}
+        self.assertEqual(pr.validate_plan(plan, free, [], states), [])
+
+    def test_a_quick_bug_goes_first_only_within_its_priority(self):
+        free = [mk(1, ["priority:1"]), mk(2, ["bug", "point:2", "priority:2"]), mk(3, ["priority:2"])]
+        states = {n: "open" for n in range(1, 4)}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3]}, free, [], states), [])
+        problems = pr.validate_plan({"order": [3, 2, 1]}, free, [], states)
+        self.assertEqual(
+            problems,
+            [
+                "order: #1 (priority:1) is placed after #3 (priority:2) in the same tier",
+                "order: #2 is a bug of 1, 2 or 3 points but is placed after #3, which is not one, in the same tier and priority",
+            ],
+        )
 
     def test_cycle(self):
         problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"32": [50], "50": [32]}})
@@ -445,6 +516,11 @@ class Next(unittest.TestCase):
         ]
         out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1, 5])
+
+    def test_the_issues_the_plan_lacks_come_by_priority_after_the_tier(self):
+        issues = [mk(1, ["bug", "point:1"]), mk(2, ["point:8", "priority:2"]), mk(3, ["point:8", "priority:1"]), mk(4, ["importance:high", "point:8"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1])
 
     def test_a_parent_is_in_no_list_and_its_parts_start(self):
         issues = [mk(1, ["point:5"], sub=2), mk(2, ["point:3"], parent=1), mk(3, ["point:3", "needs:owner"], sub=1), mk(4, ["point:2"])]

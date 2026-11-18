@@ -74,6 +74,21 @@ Good: the owner writes "this is urgent" in the session -> the agent adds urgency
 Bad:  a bug looks serious to the agent -> the agent adds urgency:high (rate its importance instead)
 ```
 
+### Use `priority:1`, `priority:2` and `priority:3` only on the owner's word
+
+`priority:1`, `priority:2` and `priority:3` order the issues inside a tier: the owner puts one on an issue to say "this one first among the issues of its tier". `priority:1` is the first, and an issue with none of them goes after `priority:3` (at the owner's instruction, 2026-11-18; #988).
+The label is put by the owner, or by an agent that follows the owner's word ("do this one first", "make it priority 1"). An agent never adds one on its own judgment, and removes or changes it only on the owner's word.
+It acts after the tier (urgency, then importance) and never carries an issue past an issue of a higher tier. Inside a tier, an issue with a higher priority comes before one with a lower priority, except the issues that block it; `plan-release.py` refuses a plan that does not follow this, as it does for the tiers.
+The rule that a bug of 1, 2 or 3 points goes first works inside one tier and one priority only.
+An issue with more than one of the three takes the one with the smallest number.
+
+```text
+Good: the owner says "do #40 first among these" -> the agent adds priority:1 and says whose word it was
+Good: #40 has priority:1 and #41 has none, both in the tier of importance:high -> #40 comes first, even if #41 is a bug of 1 point
+Bad:  a bug looks pressing to the agent -> the agent adds priority:1 (rate its importance, or ask the owner)
+Bad:  #40 has priority:1 and no importance label, and it goes ahead of an issue with importance:high
+```
+
 ### Use `session` only on the owner's word
 
 `session` marks an issue that the night run does not take: the owner implements it in a session, in one go (at the owner's instruction, 2026-11-14). It is for a large feature, such as the database screen or the Notion integration, that should not advance a little each night.
