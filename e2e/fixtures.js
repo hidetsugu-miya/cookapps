@@ -174,8 +174,10 @@ const answers = {
   lsp_stop: null,
   lsp_restart: { state: "indexing" },
   lsp_container_start: null,
-  // The server that takes Ruby, of a repository with nothing saved.
-  lsp_server_for: "ruby-lsp",
+  // The key of the server that takes Ruby (its language), of a repository with nothing saved.
+  lsp_server_for: "ruby",
+  // A-34: the languages found in a worktree: none (a spec that checks the finding gives its own).
+  lsp_detect: [],
   // The languages that a server can take (A-21), as `orca_languages` answers them.
   orca_languages: ["plaintext", "python", "ruby", "typescript"],
   lsp_launches: ({ servers }) => servers.map(() => ({ method: "none", candidates: [], service: null, command: null, mount: null })),
@@ -238,8 +240,8 @@ const computed = {
     }
     return { weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) => (firstDay + i) % 7), days };
   },
-  // A-34: the settings of a repository that has none saved (the one server, ruby-lsp, taking Ruby), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
-  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [{ name: "ruby-lsp", languages: ["ruby"], autoStart: true, command: null, mount: null, service: null }] }),
+  // A-34: the settings of a repository that has none saved (the one server, ruby-lsp, of the language ruby), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
+  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [{ language: "ruby", name: "ruby-lsp", autoStart: true, command: null, mount: null, service: null }] }),
   lsp_settings_set: ({ settings }) => settings,
   ssh_hosts: () => [],
   orca_browse_dir: ({ path }) => {

@@ -1,13 +1,13 @@
 //! A-34: starting the container of the service that a language server runs in, when it does not run (the state `containerDown`).
 //!
-//! The app never starts a container by itself: this runs only when the owner presses 「コンテナを起動」. The way of the server named in the call is read from the worktree again (`lsp::plan_for`, the settings of the server applied) and the command is `docker compose up -d {service}`, run in the worktree by the route the server is started by (`run_on`): this machine's `/bin/sh -c`, or, for a saved environment, the ssh in front. Only the method `compose` has a container; any other method, even with a `command` in the settings, is an error before anything is run. The screen starts the server again once this has ended.
+//! The app never starts a container by itself: this runs only when the owner presses 「コンテナを起動」. The way of the server of the language named in the call is read from the worktree again (`lsp::plan_for`, the settings of the server applied) and the command is `docker compose up -d {service}`, run in the worktree by the route the server is started by (`run_on`): this machine's `/bin/sh -c`, or, for a saved environment, the ssh in front. Only the method `compose` has a container; any other method, even with a `command` in the settings, is an error before anything is run. The screen starts the server again once this has ended.
 
 use std::{path::Path, time::Duration};
 
 use tauri::AppHandle;
 
 use super::{
-    check_server, check_worktree, plan_for, run_on, shell_quote, spawn_of, LspLaunch, LspMethod,
+    check_language, check_worktree, plan_for, run_on, shell_quote, spawn_of, LspLaunch, LspMethod,
     Route,
 };
 use crate::{
@@ -43,7 +43,7 @@ fn up_result(ran: &Ran) -> Result<(), String> {
     }
 }
 
-/// Starts the container of the server `server` for the worktree `worktree` of the project `project` of `environment`. `read` runs the commands that decide the way (as `lsp::launches_for` does) and `up` runs the start; each is given the route, the worktree, the command and the most bytes to keep.
+/// Starts the container of the server of the language `server` for the worktree `worktree` of the project `project` of `environment`. `read` runs the commands that decide the way (as `lsp::launches_for` does) and `up` runs the start; each is given the route, the worktree, the command and the most bytes to keep.
 fn start_container(
     dir: &Path,
     environment: Option<&str>,
@@ -77,7 +77,7 @@ pub async fn lsp_container_start(
     worktree: String,
     server: String,
 ) -> Result<(), String> {
-    check_server(&server)?;
+    check_language(&server)?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
@@ -224,7 +224,7 @@ mod tests {
             None,
             "repo-1",
             WT,
-            "ruby-lsp",
+            "ruby",
             |route, worktree, command, _| {
                 read.push((route.clone(), worktree.to_owned()));
                 Ok(if command.contains("docker compose config") {
@@ -285,7 +285,7 @@ mod tests {
             Some("srv"),
             "repo-1",
             WT,
-            "ruby-lsp",
+            "ruby",
             |_, _, command, _| {
                 Ok(if command.contains("docker compose config") {
                     ran(0, &config, "")
@@ -310,14 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn a_server_that_does_not_take_ruby_starts_the_container_of_its_service_all_the_same() {
+    fn a_server_that_is_not_ruby_starts_the_container_of_its_service_all_the_same() {
         let dir = temp_dir("other-server");
         set_settings(
             &dir,
             LspRepoSettings {
                 servers: vec![LspServerSettings {
+                    language: "typescript".into(),
                     name: "ts".into(),
-                    languages: vec!["typescript".into()],
                     command: Some(
                         "docker compose exec -T app typescript-language-server --stdio".into(),
                     ),
@@ -334,7 +334,7 @@ mod tests {
             None,
             "repo-1",
             WT,
-            "ts",
+            "typescript",
             |_, _, command, _| {
                 Ok(if command.contains("docker compose config") {
                     ran(0, &config, "")
@@ -361,7 +361,7 @@ mod tests {
             None,
             "repo-1",
             WT,
-            "ruby-lsp",
+            "ruby",
             |_, _, command, _| {
                 Ok(if command.contains("Gemfile.lock") {
                     ran(0, "DEPENDENCIES\n  ruby-lsp\n", "")
@@ -390,12 +390,12 @@ mod tests {
                 ran(0, "", "")
             })
         };
-        let err = start_container(&dir, None, "repo-1", WT, "ruby-lsp", read, |_, _, _, _| {
+        let err = start_container(&dir, None, "repo-1", WT, "ruby", read, |_, _, _, _| {
             Ok(ran(1, "", "no such service: app"))
         })
         .unwrap_err();
         assert_eq!(err, format!("{NOT_UP}: no such service: app"));
-        let err = start_container(&dir, None, "repo-1", WT, "ruby-lsp", read, |_, _, _, _| {
+        let err = start_container(&dir, None, "repo-1", WT, "ruby", read, |_, _, _, _| {
             Err("ssh を実行できません".into())
         })
         .unwrap_err();

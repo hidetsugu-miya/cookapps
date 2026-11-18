@@ -36,6 +36,7 @@ import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
+import type { LspFound } from "./bindings/LspFound";
 import type { LspLaunch } from "./bindings/LspLaunch";
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspOutsideFile } from "./bindings/LspOutsideFile";
@@ -408,13 +409,15 @@ export interface Commands {
   ssh_hosts: { args: undefined; result: string[] };
   // A-34: the languages of A-21 (`plaintext` too), each once and sorted: the choices of the languages that a language server takes.
   orca_languages: { args: undefined; result: string[] };
-  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, taking `ruby`, with `autoStart` true and nothing replaced).
+  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, of the language `ruby`, with `autoStart` true and nothing replaced). A repository has one server for each language.
   lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
-  // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name that is empty, used twice or over 64 characters, and a language that is not one of A-21, that a server has twice or that two servers have are errors.
+  // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name over 64 characters (an empty one is saved as the name of the app's table for the language, else the language), a language that is not one of A-21 and a language that two servers have are errors.
   lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
-  // A-34: the name of the server of the project `project` of `environment` that takes `language` (a language of A-21), null when none does.
+  // A-34: the key of the server of the project `project` of `environment` that takes `language` (a language of A-21), which is the language itself, null when the repository has no server of it. The key is what every command below takes as `server`.
   lsp_server_for: { args: { environment: string | null; project: string; language: string }; result: string | null };
-  // A-34: how each of the servers `servers` is started in `worktree` of the project `project` of `environment` (null: this machine), in their order: read from the worktree just now, once for all of them (a saved environment's through the ssh Host of its settings), with the settings of each server applied.
+  // A-34: the languages that `worktree` of the project `project` of `environment` (null: this machine) has, each with the server of the app's table (name, command, where it runs, mount, and whether it was `found`, is `missing` or its container is down), read from the worktree just now (a saved environment's through the ssh Host of its settings; in the service of compose that mounts the worktree, when there is one). A language that the worktree does not show is not answered.
+  lsp_detect: { args: { environment: string | null; project: string; worktree: string }; result: LspFound[] };
+  // A-34: how the server of each of the languages `servers` is started in `worktree` of the project `project` of `environment` (null: this machine), in their order: read from the worktree just now, once for all of them (a saved environment's through the ssh Host of its settings), with the settings of each server applied.
   lsp_launches: { args: { environment: string | null; project: string; worktree: string; servers: string[] }; result: LspLaunch[] };
   // A-34: starts the server `server` for `worktree` of the project `project` of `environment` (null: this machine) and answers its state (`indexing`). A server that is there and not stopped is left as it is; a stopped one is started again. How it is started is read from the worktree by Rust; a failure of that or of the process is the state `stopped` with its message, told by the event `lsp-status` (`LspStatusEvent`).
   lsp_start: { args: { environment: string | null; project: string; worktree: string; server: string }; result: LspStatus };
