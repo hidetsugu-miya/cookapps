@@ -560,7 +560,9 @@ describe("orca", () => {
     await pressPlus();
     await pickItem(TERMINAL);
     await waitForCalls(create);
-    await expect($(CARD)).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    // A text that differs makes a second card, put above the first.
+    await expect($$(CARD)[0]).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    expect(await textsOf(CARD)).toEqual(["起動先の worktree が見つかりません。一覧を読み直してください", "Worktree not found"]);
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });

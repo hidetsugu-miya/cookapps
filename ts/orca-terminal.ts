@@ -95,6 +95,8 @@ interface Instance {
   // The keys typed and not sent yet, and a send on its way.
   pending: string;
   sending: boolean;
+  // A send failed and none has worked since: the failure is reported once, not at every key typed.
+  failing: boolean;
   // The writes on their way that draw a screen again (a snapshot, a mirror frame): an OSC 52 request in them is not made.
   replaying: number;
   // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
@@ -306,7 +308,7 @@ function newInstance(source: TermSource, owner: string): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
+  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, failing: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -381,8 +383,10 @@ async function sendKeys(instance: Instance) {
       if (!instance.ended) await invoke("claude_code_input", { id: instance.source.handle, text });
     } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
+    instance.failing = false;
   } catch (e) {
-    onError(e);
+    if (!instance.failing) onError(e);
+    instance.failing = true;
   }
   instance.sending = false;
   // What was typed meanwhile goes next, also when the terminal is no longer shown; a mirror still shown reads the frame that shows the effect soon.

@@ -43,6 +43,15 @@ export function showFailure(source: string, e: unknown) {
 // The cards that ask for a login again, by "{scope}:{account}": the entry is null once its × was pressed, so the card is not made again until the account has logged in and needs it again.
 const logins = new Map<string, HTMLElement | null>();
 
+// Takes the cards of `scope` off, those of `account` only when it is given: an account has logged in again or is gone, and the screen that made the card may not be the one shown. A card that is still needed is made again by the next read of that screen.
+export function clearRelogin(scope: string, account: string | null = null) {
+  for (const [key, node] of [...logins]) {
+    if (!key.startsWith(`${scope}:`) || (account !== null && key !== `${scope}:${account}`)) continue;
+    node?.remove();
+    logins.delete(key);
+  }
+}
+
 // Makes the cards of the accounts of `scope` that must log in again, with the button that logs them in (`run`). A card of an account that no longer needs it goes.
 export function setRelogin(scope: string, accounts: string[], text: (account: string) => string, run: (account: string, button: HTMLButtonElement) => void) {
   for (const [key, node] of [...logins]) {

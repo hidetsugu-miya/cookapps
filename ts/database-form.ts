@@ -3,25 +3,20 @@
 // Saving runs `save`; a refusal (the reason Rust gives, in Japanese) shows under the fields and the pane stays with what was typed. キャンセル and Escape close it.
 // "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers, or the error (with the last lines of the script's standard error), under the fields.
 // The icon at the right end of the header opens and closes the same pane at the right as the icon of the work pane's header (`ts/database-terminal.ts`), whose first tab is Claude Code (A-36; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through tsunagiai-mcp (D-8).
-// Closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) leaves that pane and its process as they are. While the edit pane of a saved connection is open, the list is read at an interval, and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The interval stops when the edit pane is closed or the connection is gone from the list.
+// Closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) leaves that pane and its process as they are. While the edit pane of a saved connection is open, the screen's own read of the list at an interval tells it each list that differs from the one drawn (`syncDatabaseForm`), and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The edit pane reads nothing itself, so it has no timer to stop; a connection that is gone from the list leaves its fields as they are.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { $, composing, tag } from "./dom.js";
 import { isDatabaseTerminalOpen, toggleDatabaseTerminal } from "./database-terminal.js";
-import { periodMs } from "./e2e-timers.js";
 import { closeHint } from "./hint.js";
 import { TERMINAL_SVG } from "./icons.js";
 import { closeMenu } from "./menu.js";
 
-// How often the list is read while the pane of a saved connection is open.
-const WATCH_MS = 2000;
-
-let opened: { opener: HTMLElement | null; timer: number | null } | null = null;
+let opened: { opener: HTMLElement | null; sync: ((profiles: DatabaseProfileView[]) => void) | null } | null = null;
 
 export function closeDatabaseForm() {
   if (!opened) return;
-  const { opener, timer } = opened;
-  if (timer !== null) clearInterval(timer);
+  const { opener } = opened;
   opened = null;
   $("database-edit").replaceChildren();
   $("database-edit").hidden = true;
@@ -64,12 +59,16 @@ const portOf = (text: string) => {
   return Number.isNaN(n) ? 0 : n;
 };
 
-// `initial` is the connection to edit, or null for a new one. `save` answers when it is saved and throws what the user is told when it is not. `test` answers the version of the server, and throws what the user is told when it cannot log in. `list` reads the saved connections, and answers none when it cannot.
+// The list the screen has just read, for the edit pane of a saved connection that is open: its fields that were not changed by hand take what was saved.
+export function syncDatabaseForm(profiles: DatabaseProfileView[]) {
+  opened?.sync?.(profiles);
+}
+
+// `initial` is the connection to edit, or null for a new one. `save` answers when it is saved and throws what the user is told when it is not. `test` answers the version of the server, and throws what the user is told when it cannot log in.
 export function openDatabaseForm(
   initial: DatabaseProfileView | null,
   save: (profile: DatabaseProfile, password: string) => Promise<void>,
   test: (profile: DatabaseProfile, password: string) => Promise<string>,
-  list: () => Promise<DatabaseProfileView[] | null>,
 ) {
   closeDatabaseForm();
   closeHint();
@@ -173,7 +172,7 @@ export function openDatabaseForm(
     if (e.key === "Escape" && !composing(e)) closeDatabaseForm();
   };
 
-  const mine = { opener: document.activeElement as HTMLElement | null, timer: null as number | null };
+  const mine: NonNullable<typeof opened> = { opener: document.activeElement as HTMLElement | null, sync: null };
   opened = mine;
   $("database-edit").append(form);
   $("database-edit").hidden = false;
@@ -182,21 +181,10 @@ export function openDatabaseForm(
 
   if (initial === null) return;
   const { id } = initial;
-  let reading = false;
-  const reload = async () => {
-    if (reading || document.hidden) return;
-    reading = true;
-    const profiles = await list().finally(() => {
-      reading = false;
-    });
-    if (opened !== mine || profiles === null) return;
+  mine.sync = (profiles) => {
     const next = profiles.find((p) => p.id === id);
-    // The connection is gone from the list: nothing is read again, and the pane stays with what it holds.
-    if (!next) {
-      if (mine.timer !== null) clearInterval(mine.timer);
-      mine.timer = null;
-      return;
-    }
+    // The connection is gone from the list: the pane stays with what it holds.
+    if (!next) return;
     const take = (key: string, control: HTMLInputElement | HTMLTextAreaElement, value: string) => {
       if (!byHand.has(key) && control.value !== value) control.value = value;
     };
@@ -206,5 +194,4 @@ export function openDatabaseForm(
     take("dbPort", dbPort, String(next.dbPort || 3306));
     take("script", script, next.script);
   };
-  mine.timer = window.setInterval(() => void reload(), periodMs("databaseProfiles", WATCH_MS));
 }

@@ -5,7 +5,7 @@ import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
-import { openDatabaseForm } from "./database-form.js";
+import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
 import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
@@ -71,7 +71,7 @@ let loadSeq = 0;
 // How often the list is read while the screen is shown (#866): `tsunagiai-mcp` saves a connection in its own process and tells the app nothing (D-8).
 const WATCH_MS = 2000;
 let watcher: number | null = null;
-// The quiet read that is on its way: a quiet read asked meanwhile (the screen's clock and the edit pane's) is this one.
+// The quiet read that is on its way: a quiet read asked meanwhile is this one.
 let quietRead: Promise<DatabaseProfileView[] | null> | null = null;
 
 const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
@@ -146,7 +146,7 @@ const draw = () => {
   drawDatabaseWork(workState(), workActions);
 };
 
-// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the clock's and the edit pane's, at an interval) shows no error, draws nothing when the list is the one drawn, and is one read at a time.
+// Reads the connections from Rust (the file and the keychain are the only copy) and draws them. Answers the list, or none when the read failed or a newer one replaced it. A `quiet` read (the clock's, at an interval) shows no error, draws nothing when the list is the one drawn, and is one read at a time.
 function load(quiet = false): Promise<DatabaseProfileView[] | null> {
   if (!quiet) return read(false);
   quietRead ??= read(true).finally(() => {
@@ -166,6 +166,7 @@ async function read(quiet: boolean): Promise<DatabaseProfileView[] | null> {
     for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
     if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
     if (!quiet || !same) draw();
+    if (!same) syncDatabaseForm(list);
     return list;
   } catch (e) {
     if (seq === loadSeq && !quiet) logError("database", e);
@@ -429,7 +430,7 @@ const actions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
-  edit: (profile) => openDatabaseForm(profile, save, test, () => load(true)),
+  edit: (profile) => openDatabaseForm(profile, save, test),
   disconnect: async (profile) => {
     connections.delete(profile.id);
     if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
@@ -468,7 +469,7 @@ export function showDatabase() {
 export function initDatabase() {
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
-  add.onclick = () => openDatabaseForm(null, save, test, () => load(true));
+  add.onclick = () => openDatabaseForm(null, save, test);
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
   initDatabaseTerminal();
 }

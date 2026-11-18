@@ -1,4 +1,4 @@
-import { account, boot, CARD, CARDS, checked, claudeMissing, count, inbox, logged, mock, onceId, rejects, rowOf, slackLoad, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
+import { account, boot, CARD, CARDS, checked, claudeMissing, count, inbox, logged, mock, onceId, rejects, rowOf, slackLoad, textsOf, waitForCalls, waitForCount, waitForLog, weekOfToday } from "../support";
 
 // A-28: a failure of something the user did is written to the log and shown on a card at the bottom right. The reads and syncs that fail are in the specs of their screens (the log only).
 
@@ -48,6 +48,30 @@ describe("the failure cards", () => {
     await expect($(CARDS)).not.toExist();
   });
 
+  it("keeps the newest card in view when the cards are taller than the stack", async () => {
+    // The cards stand above the list's buttons, so the press is made by the page.
+    for (let i = 0; ; i++) {
+      expect(i).toBeLessThan(30);
+      const failing = await mock("archive", rejects(`failure ${i}`));
+      const button = await rowOf("unread-threads", "First unread").$(".archive-row");
+      await browser.execute((b) => b.click(), button);
+      await waitForCalls(failing);
+      await waitForCount(CARDS, i + 1);
+      await waitForCount("#unread-threads li", 2);
+      const overflows = await browser.execute(() => {
+        const stack = document.getElementById("error-cards")!;
+        return stack.scrollHeight > stack.clientHeight;
+      });
+      if (overflows) break;
+    }
+    const seen = await browser.execute(() => {
+      const stack = document.getElementById("error-cards")!.getBoundingClientRect();
+      const newest = document.querySelector("#error-cards .error-card")!.getBoundingClientRect();
+      return { scrollTop: document.getElementById("error-cards")!.scrollTop, inView: newest.top >= stack.top - 0.5 && newest.bottom <= stack.bottom + 0.5 };
+    });
+    expect(seen).toEqual({ scrollTop: 0, inView: true });
+  });
+
   it("draws a text that a card shows already once, and writes every failure to the log", async () => {
     await mock("archive", rejects("same"));
     await archive("First unread");
@@ -86,6 +110,29 @@ describe("the cards of a login that must be done again", () => {
     await $(`${CARDS} .error-card-login`).click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
     // The account has logged in: its card goes.
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("takes the card of the calendar off when the account logs in again on another screen", async () => {
+    await boot({ inbox: inbox(), calendar_week: { ...weekOfToday(), needsLogin: [account] }, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
+    await $("#nav-calendar").click();
+    await expect($(CARD)).toHaveText(`${account} はカレンダーを読むため再ログインが必要です`);
+    await $("#nav-settings").click();
+    const login = await mock("login", account);
+    await $("#google-add").click();
+    await waitForCalls(login);
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("takes the card of the calendar off when its account is removed", async () => {
+    await boot({ inbox: inbox(), calendar_week: { ...weekOfToday(), needsLogin: [account] } });
+    await $("#nav-calendar").click();
+    await expect($(CARD)).toHaveText(`${account} はカレンダーを読むため再ログインが必要です`);
+    await $("#nav-mail").click();
+    await mock("remove_account", null);
+    await $(`#account-list button[aria-label="${account}"]`).click();
+    await $("button=このアカウントを削除").click();
+    await $("#account-popup").$("button=削除").click();
     await expect($(CARDS)).not.toExist();
   });
 

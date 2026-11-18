@@ -180,7 +180,7 @@ export const textsOf = (selector: string) =>
 export const waitForText = (selector: string, text: string) =>
   browser.waitUntil(async () => (await textsOf(selector)).some((t) => t.includes(text)), { timeoutMsg: `${selector} never showed "${text}"` });
 
-// The failure cards at the bottom right (A-28, ts/error-card.ts): the text of the newest card is the first match of `CARD`, and `CARDS` matches every card.
+// The failure cards at the bottom right (A-28, ts/error-card.ts): `CARD` matches the text of every card (the newest first: `$$(CARD)[0]`, as `$(CARD)` holds only while one card is drawn), and `CARDS` matches every card.
 export const CARD = "#error-cards .error-card-text";
 export const CARDS = "#error-cards .error-card";
 
