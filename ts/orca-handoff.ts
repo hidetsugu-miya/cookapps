@@ -16,7 +16,7 @@ import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
 import { hideTerminals, isShowing, releaseTerminal, showTerminals, type TermSource } from "./orca-terminal.js";
-import { childrenFresh, isChildWorktree, readList } from "./formation-list.js";
+import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, streamsEnvironment, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
@@ -292,8 +292,8 @@ export class HandoffPane {
     if (!force && this.destReading !== 0) return;
     const seq = ++this.readSeq;
     this.lastRead = Date.now();
-    // The children of the formations are left out of the worktrees offered (A-9): their list is read beside, and the choice waits for it only when it is not recent.
-    if (!childrenFresh()) void readList();
+    // The children of the formations are left out of the worktrees offered (A-9): their list is read beside when it is not recent, and only while the form is shown, because a session shows no worktree to choose.
+    if (this.mode() === "form" && !childrenFresh()) void readList();
     const overview = await this.read(force);
     if (seq !== this.readSeq || !this.open) return;
     this.overview = overview;
@@ -471,8 +471,8 @@ export class HandoffPane {
     chip.setAttribute("aria-label", "worktree");
     chip.setAttribute("aria-haspopup", "menu");
     chip.onclick = async () => {
-      // The list of the formations is read first when it is not recent, so that a child launched since is not offered.
-      if (!childrenFresh()) await readList();
+      // The first time, the list of the formations is waited for; after that the menu opens at once with the children held, and the list is read again behind it.
+      await readForChoice();
       const form = this.form();
       const picked = this.pickedWorktree();
       openMenu(

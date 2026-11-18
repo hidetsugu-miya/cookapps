@@ -38,8 +38,12 @@ let failure: string | null = null;
 let inflight: Promise<void> | null = null;
 // When the last read that worked ended (epoch milliseconds; 0: none yet).
 let readAt = 0;
-// The worktrees of the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac. The sessions of the projects and the choices of a worktree leave them out (A-8, A-9, A-16).
+// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac. The sessions of the projects and the choices of a worktree leave them out (A-8, A-9, A-16).
 let childPlaces = new Set<string>();
+// The terminals of the children that work in a folder that was there (`created` false): that folder is the owner's too, so only these sessions leave the projects, `{environment}\nhandle\n{handle}` and `{environment}\npane\n{paneKey}`.
+let childSessions = new Set<string>();
+// Whether a read of the list has ended, with an answer or a failure: before it, the Orca list does not know which work is a child's.
+let settled = false;
 // How long a read stays fresh for the choices of a worktree; it is the period of the Orca list while the screen is shown.
 const FRESH_MS = 10_000;
 // Counts the formations made by this screen: a read that began before one was made does not know it, and its answer is dropped.
@@ -62,19 +66,39 @@ let deleteNotice: string | null = null;
 
 const placeKey = (environment: string | null | undefined, path: string) => `${environment ?? LOCAL}\n${path}`;
 
-// Whether the worktree at `path` on the PC `environment` (null or none: this Mac; else the saved environment's name) is a launched child's, by the last read (A-37).
+// Whether the worktree at `path` on the PC `environment` (null or none: this Mac; else the saved environment's name) is one that tsunagiai made for a launched child, by the last read (A-37).
 export const isChildWorktree = (path: string, environment: string | null | undefined) => childPlaces.has(placeKey(environment, path));
 
-// Holds the worktrees of the children of `formations`; the screens that leave them out are drawn again when they changed.
+// Whether a row or a terminal of the Orca list is a launched child's session, by the last read: it is in a worktree made for a child, or it is the terminal of a child that works in a folder that was there (A-8, A-37).
+export const isChildSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }) =>
+  isChildWorktree(item.path, item.environment) ||
+  (item.handle != null && childSessions.has(placeKey(item.environment, `handle\n${item.handle}`))) ||
+  (item.paneKey != null && childSessions.has(placeKey(item.environment, `pane\n${item.paneKey}`)));
+
+// Whether a read of the list has ended: the Orca list takes work as the owner's only after it.
+export const childrenKnown = () => settled;
+
+const differs = (a: Set<string>, b: Set<string>) => a.size !== b.size || [...a].some((k) => !b.has(k));
+
+// Holds the worktrees and the sessions of the children of `formations`; the screens that leave them out are drawn again when they changed.
 function holdChildren() {
-  const next = new Set(formations.flatMap((f) => f.children.map((c) => placeKey(c.environment, c.path))));
-  const changed = next.size !== childPlaces.size || [...next].some((k) => !childPlaces.has(k));
+  const children = formations.flatMap((f) => f.children);
+  const next = new Set(children.filter((c) => c.created).map((c) => placeKey(c.environment, c.path)));
+  const nextSessions = new Set(children.filter((c) => !c.created).flatMap((c) => [placeKey(c.environment, `handle\n${c.handle}`), placeKey(c.environment, `pane\n${c.paneKey}`)]));
+  const changed = differs(next, childPlaces) || differs(nextSessions, childSessions);
   childPlaces = next;
+  childSessions = nextSessions;
   if (changed) redrawOrca();
 }
 
 // Whether the last read is recent enough for a choice of a worktree to leave the children out of it.
 export const childrenFresh = () => Date.now() - readAt < FRESH_MS;
+
+// Reads the list for a choice of a worktree that leaves the children out: the first time the choice waits for the read to end, and after that it is made at once with the children held, while the list is read again behind it when it is not recent.
+export async function readForChoice() {
+  if (!settled) await readList();
+  else if (!childrenFresh()) void readList();
+}
 
 // Reads the formations now. One call at a time (a call while one is on its way waits for it); a hidden window reads nothing.
 export function readList(): Promise<void> {
@@ -87,6 +111,7 @@ export function readList(): Promise<void> {
 
 async function load() {
   let read = false;
+  let failed = false;
   const before = made;
   try {
     const answer = await invoke("formation_list");
@@ -99,6 +124,12 @@ async function load() {
     }
   } catch (e) {
     failure = String(e);
+    failed = true;
+  }
+  // The first end of a read, whatever it answered: the Orca list is drawn again, because it took no work as the owner's before.
+  if ((read || failed) && !settled) {
+    settled = true;
+    redrawOrca();
   }
   // The shown formation left the list: its flow is read no more, and none is shown.
   if (read && current !== null && !formations.some((f) => f.name === current)) choose(null);

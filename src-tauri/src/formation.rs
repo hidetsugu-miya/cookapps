@@ -3561,7 +3561,7 @@ fn counts_of(rows: &[FormationChild]) -> ChildCounts {
     counts
 }
 
-/// One launched child of a formation as the list draws it under the formation's row (A-37): where it stands, the project it works in and its worktree. `path` and `environment` tell which worktree of which PC is a child's, so that the sessions of the projects can leave it out.
+/// One launched child of a formation as the list draws it under the formation's row (A-37): where it stands, the project it works in and its worktree. `path` and `environment` tell which worktree of which PC is a child's (when `created`), and `handle` and `pane_key` which sessions are, so that the sessions of the projects can leave them out.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -3576,6 +3576,12 @@ pub struct FormationListChild {
     /// The Orca the child runs in, as `FormationChild::environment` has it.
     pub environment: String,
     pub state: FormationState,
+    /// Whether tsunagiai made its worktree (`Launch::created`). A child that works in a folder that was there (`false`) is seen by its terminal and not by its folder, which is the owner's too.
+    pub created: bool,
+    /// The terminal that runs the child (`Launch::handle`), as the record has it also after Orca lists it no more.
+    pub handle: String,
+    /// The `paneKey` of its agent in `orca worktree ps` (`Launch::pane_key`).
+    pub pane_key: String,
 }
 
 /// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed.
@@ -3592,6 +3598,9 @@ fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationL
                 path: launch.path.clone(),
                 environment: row.environment.clone(),
                 state: row.state,
+                created: launch.created,
+                handle: launch.handle.clone(),
+                pane_key: launch.pane_key.clone(),
             })
         })
         .collect()
@@ -8774,6 +8783,27 @@ mod tests {
             }
         );
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_listed_child_tells_whether_its_folder_was_made_and_which_terminal_is_its() {
+        let mut kept = launched("k", "x");
+        kept.launch.as_mut().unwrap().created = false;
+        let made = launched("m", "x");
+        let records = [planned("p", "x"), kept, made];
+        let rows = rows_of(&records, &ps_of(Vec::new()));
+        let listed = listed_children(&records, &rows);
+        // A planned child has no worktree: it is not listed.
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "k");
+        assert!(!listed[0].created);
+        assert_eq!(listed[0].handle, "term_k");
+        assert_eq!(listed[0].pane_key, "tab-k:leaf");
+        assert!(listed[1].created);
+        // The record's handle stays when Orca lists the terminal no more (the child is done): the session is still the child's.
+        assert_eq!(rows[2].handle, None);
+        assert_eq!(listed[1].handle, "term_m");
+        assert_eq!(listed[1].pane_key, "tab-m:leaf");
     }
 
     #[test]

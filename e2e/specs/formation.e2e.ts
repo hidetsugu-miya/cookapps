@@ -3109,12 +3109,13 @@ describe("orchestration mode: the worktrees of the children are left out of the 
   const number = () => textsOf(`${PROJECT} .orca-n`);
   const arrow = () => $('#orca-feed [data-key="arrow:proj_api"]');
 
-  async function openScreen(extra: Record<string, unknown> = {}) {
+  // `ready`: the pill of the count is the sign that the list was read, and a formation with no child has none, so a spec of such a list names its own sign.
+  async function openScreen(extra: Record<string, unknown> = {}, ready = async () => (await count(".formation-row-count")) === 1) {
     await boot({ inbox: inbox(), orca_overview: overview(), formation_list: withChild(), ...timers({ orcaClock: READ }), ...extra });
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
     await expect($(`${ROWS}[data-formation="formation"]`)).toBeDisplayed();
-    await browser.waitUntil(async () => (await count(".formation-row-count")) === 1);
+    await browser.waitUntil(ready);
   }
   // The page's own press of the plus of the work pane (the driver's click takes the focus to the button after the handler).
   async function pressPlus() {
@@ -3132,7 +3133,7 @@ describe("orchestration mode: the worktrees of the children are left out of the 
   });
 
   it("draws every session of the project when no child of the record is in its worktrees", async () => {
-    await openScreen({ formation_list: formationList([formationEntry("formation")]) });
+    await openScreen({ formation_list: formationList([formationEntry("formation")]) }, async () => (await sessionTitles()).length === 3);
     expect(await sessionTitles()).toEqual(["Own session", "Child session", "zsh"]);
     expect(await number()).toEqual(["3"]);
     // A child whose worktree is not the path of any row leaves every session as it is, and so does the same path on another PC.
@@ -3147,6 +3148,25 @@ describe("orchestration mode: the worktrees of the children are left out of the 
     await mock("formation_list", formationList([formationEntry("formation")]));
     await browser.waitUntil(async () => (await sessionTitles()).length === 3, { timeout: 15_000 });
     expect(await number()).toEqual(["3"]);
+  });
+
+  it("keeps the folder of a child that works in a folder that was there, and the owner's session in it, and leaves only the child's own sessions out", async () => {
+    // The child works in the project's own folder (`created` false): its Claude row and its terminal leave the project, and the owner's session in the same folder stays.
+    const inFolder = (name: string, handle: string, paneKey: string) => listedChild(name, "working", { repo: "api", branch: "main", path: MAIN_PATH, created: false, handle, paneKey });
+    const kept = formationList([formationEntry("formation", { children: [inFolder("child-a", "term_child", "tab_child:leaf_1"), inFolder("codex-a", "term_codex", "tab_codex:leaf_1")], counts: { planned: 0, waiting: 0, working: 2, done: 0 } })]);
+    const inOwnFolder = orcaOverview([ownRow(), childRow({ path: MAIN_PATH, branch: "main" })], [orcaWorktree("api", "main"), orcaWorktree("api", "other", { path: OTHER_PATH })], { terminals: [orcaTerminal("api", "zsh", { path: MAIN_PATH, handle: "term_own_sh" }), orcaTerminal("api", "codex", { path: MAIN_PATH, handle: "term_codex" })] });
+    await openScreen({ orca_overview: inOwnFolder, formation_list: kept });
+    await browser.waitUntil(async () => (await sessionTitles()).length === 2);
+    expect(await sessionTitles()).toEqual(["Own session", "zsh"]);
+    expect(await number()).toEqual(["2"]);
+    // The work pane has the owner's tabs only, and the folder stays among the worktrees of the plus.
+    await mock("orca_start", { paneKey: null, handle: null });
+    await pressPlus();
+    await expect($('[data-tab="claude:tab_own:leaf_1"]')).toExist();
+    expect(await count('[data-tab="claude:tab_child:leaf_1"], [data-tab="orca:term_codex"]')).toBe(0);
+    await pickItem("Claude を起動");
+    await expect($(".orca-dest-pop")).toBeDisplayed();
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-dest-pop button[data-path]")].map((b) => b.dataset.path))).toEqual([MAIN_PATH, OTHER_PATH]);
   });
 
   it("leaves the project closed, with no arrow, when only a child works in it", async () => {
