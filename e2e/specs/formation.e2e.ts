@@ -91,7 +91,8 @@ describe("development screen: orchestration", () => {
     const lefts = await browser.execute(() => ["orca-list", "formation-orchestrator", "formation-flow"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().left)));
     expect(lefts[0]).toBeLessThan(lefts[1]);
     expect(lefts[1]).toBeLessThan(lefts[2]);
-    await expect($("#formation-orchestrator h1")).toHaveText("リーダー");
+    await expect($("#formation-tab-leader-main .formation-tab-name")).toHaveText("リーダー");
+    await expect($("#formation-tab-leader-main .formation-tab-effort")).toHaveText("high");
   });
 
   it("shows the work pane again when a project is pressed, and the formation is no longer selected", async () => {
@@ -173,8 +174,8 @@ describe("development screen: orchestration", () => {
     const place = await browser.execute(() => {
       const head = document.getElementById("formation-head")!.getBoundingClientRect();
       const button = document.getElementById("formation-restart")!.getBoundingClientRect();
-      const title = document.querySelector("#formation-head h1")!.getBoundingClientRect();
-      return { fromRight: Math.round(head.right - button.right), afterTitle: button.left >= title.right, children: document.getElementById("formation-head")!.lastElementChild!.id };
+      const tabs = document.getElementById("formation-tabs")!.getBoundingClientRect();
+      return { fromRight: Math.round(head.right - button.right), afterTitle: button.left >= tabs.right, children: document.getElementById("formation-head")!.lastElementChild!.id };
     });
     expect(place.children).toBe("formation-restart");
     expect(place.afterTitle).toBe(true);
@@ -283,7 +284,7 @@ const resolved = (name: string) =>
     probe.remove();
     return color;
   }, name);
-const styleOf = (selector: string, property: "backgroundColor" | "borderRightColor" | "borderTopStyle" | "borderTopColor" | "animationName") =>
+const styleOf = (selector: string, property: "backgroundColor" | "borderRightColor" | "borderTopStyle" | "borderTopColor" | "borderLeftStyle" | "color" | "animationName") =>
   browser.execute((s, p) => getComputedStyle(document.querySelector(s)!)[p], selector, property);
 
 async function openFlow(children: unknown, extra: Record<string, unknown> = {}) {
@@ -300,14 +301,15 @@ const mixed = () => [
 ];
 
 describe("orchestration mode: the flow pane", () => {
-  it("heads the pane with the counts and starts the tree with the orchestrator's card", async () => {
+  it("heads the pane 流れ, with no count, and starts the column with the leader's card", async () => {
     await openFlow(mixed());
-    await expect($("#formation-flow-head h2")).toHaveText("チームメイト");
-    await expect($("#formation-flow")).toHaveAttribute("aria-label", "チームメイト");
-    await browser.waitUntil(async () => (await $("#formation-flow-count").getText()) === "子 3 · 予定 2");
+    await expect($("#formation-flow-head h2")).toHaveText("流れ");
+    await expect($("#formation-flow")).toHaveAttribute("aria-label", "流れ");
+    await browser.waitUntil(async () => (await cardNames()).length === 5);
+    expect(await count("#formation-flow-count")).toBe(0);
     expect(await textsOf("#formation-flow-root .formation-card-name")).toEqual(["formation"]);
     expect(await textsOf("#formation-flow-root .formation-card-role")).toEqual(["リーダー"]);
-    // The orchestrator's card is above the children's, and "私" is not drawn.
+    // The leader's card is above the children's, and "私" is not drawn.
     const [root, first] = [await rectOf("#formation-flow-root"), await rectOf("#formation-flow-list .formation-card")];
     expect(root.bottom).toBeLessThanOrEqual(first.top);
     expect(await browser.execute(() => document.getElementById("formation-flow")!.textContent!.includes("私"))).toBe(false);
@@ -342,9 +344,10 @@ describe("orchestration mode: the flow pane", () => {
     expect(await styleOf(`${planned} .formation-dot`, "backgroundColor")).toBe("rgba(0, 0, 0, 0)");
     expect(await browser.execute((s) => document.querySelector(s)!.tagName, planned)).toBe("DIV");
     expect(await browser.execute((s) => document.querySelector(s)!.querySelectorAll("time, .formation-card-msg").length, planned)).toBe(0);
-    // The press of a planned card selects nothing: the child that waits stays the one marked.
+    // The press of a planned card selects nothing: the leader's card stays the one marked.
     await (await $$(planned))[0].click();
-    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-list [aria-pressed="true"]')].map((e) => (e as HTMLElement).dataset.child))).toEqual(["web-update"]);
+    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-list [aria-pressed="true"]')].map((e) => (e as HTMLElement).dataset.child))).toEqual([]);
+    expect(await pressed("#formation-flow-root")).toBe("true");
     // A launched child's card is a solid button.
     expect(await styleOf('#formation-flow-list .formation-card[data-state="working"]', "borderTopStyle")).toBe("solid");
     expect(await browser.execute(() => document.querySelector('#formation-flow-list .formation-card[data-state="working"]')!.tagName)).toBe("BUTTON");
@@ -369,7 +372,9 @@ describe("orchestration mode: the flow pane", () => {
     await browser.waitUntil(async () => (await cardStates()).join() === "完了,承認待ち,作業中,作業中,予定");
     expect(await cardNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
     expect(await browser.execute(() => document.querySelectorAll("#formation-flow-list button.formation-card").length)).toBe(4);
-    await expect($("#formation-flow-count")).toHaveText("子 4 · 予定 1");
+    // The tabs follow the cards: a tab that is pressed for each launched child, and a tab that is not for the planned one.
+    expect(await count('#formation-tabs-mates button[role="tab"]')).toBe(4);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
   });
 
   it("draws a card again when the state or the reply changes, and leaves the others as they are", async () => {
@@ -387,7 +392,7 @@ describe("orchestration mode: the flow pane", () => {
     expect(await textsOf("#formation-flow-list .formation-card-time")).toEqual(["25 分前", "1 分未満", "1 分未満"]);
   });
 
-  it("keeps the pressed card, and moves the selection to the first child with a terminal when its child is gone", async () => {
+  it("keeps the pressed card, and moves the selection to the leader's tab when its child is gone", async () => {
     await openFlow(mixed());
     await browser.waitUntil(async () => (await cardNames()).length === 5);
     await $('#formation-flow-list [data-child="batch-update"]').click();
@@ -402,7 +407,9 @@ describe("orchestration mode: the flow pane", () => {
     await expect($('#formation-flow-list [data-child="batch-update"]')).toHaveAttribute("aria-pressed", "false");
     await mock("formation_children", [formationChild("api-update", "working")]);
     await browser.waitUntil(async () => (await cardNames()).length === 1);
-    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-list [aria-pressed="true"]')].map((e) => (e as HTMLElement).dataset.child))).toEqual(["api-update"]);
+    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-list [aria-pressed="true"]')].map((e) => (e as HTMLElement).dataset.child))).toEqual([]);
+    expect(await pressed("#formation-flow-root")).toBe("true");
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
   });
 
   it("scrolls the tree alone, keeps the heading in place, and keeps the scroll when it is read again", async () => {
@@ -415,12 +422,10 @@ describe("orchestration mode: the flow pane", () => {
     });
     expect(measures).toEqual({ overflows: true, pageScrolls: false, scroll: "auto" });
     const headTop = (await rectOf("#formation-flow-head")).top;
-    const sessionTop = (await rectOf("#formation-session")).top;
     await browser.execute(() => {
       document.getElementById("formation-flow-body")!.scrollTop = 120;
     });
     expect((await rectOf("#formation-flow-head")).top).toBe(headTop);
-    expect((await rectOf("#formation-session")).top).toBe(sessionTop);
     const scrolled = await browser.execute(() => document.getElementById("formation-flow-body")!.scrollTop);
     expect(scrolled).toBeGreaterThan(0);
     // A read that changes the cards (the time of each) keeps the position.
@@ -478,23 +483,15 @@ describe("orchestration mode: the flow pane", () => {
     await waitForCalls("formation_children", 1);
   });
 
-  it("has one button in the heading, at its right end, that closes the pane, and the pane is open at first", async () => {
+  it("has one button in the heading, 自動で追う at its right end, and nothing that closes the pane or a strip that stays", async () => {
     await openFlow(mixed());
     await expect($("#formation-flow")).toBeDisplayed();
-    for (const id of ["formation-tabbar-toggle", "formation-tabbar", "formation-tabs", "formation-children"]) expect(await browser.execute((i) => document.getElementById(i), id)).toBeNull();
-    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-head button, #formation-flow-head [role="button"]')].map((e) => e.id))).toEqual(["formation-flow-toggle"]);
-    const toggle = $("#formation-flow-toggle");
-    await expect(toggle).toHaveAttribute("aria-label", "チームメイトを閉じる");
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(toggle).toHaveElementClass("icon-btn");
-    expect(await toggle.getText()).toBe("");
-    expect(await count("#formation-flow-toggle svg")).toBe(1);
-    const [head, button] = [await rectOf("#formation-flow-head"), await rectOf("#formation-flow-toggle")];
+    for (const id of ["formation-flow-toggle", "formation-strip", "formation-strip-open", "formation-flow-split", "formation-session", "formation-child-term", "formation-flow-count"]) expect(await browser.execute((i) => document.getElementById(i), id)).toBeNull();
+    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-head button, #formation-flow-head [role="button"]')].map((e) => e.id))).toEqual(["formation-follow"]);
+    const [head, button] = [await rectOf("#formation-flow-head"), await rectOf("#formation-follow")];
     expect(head.right - button.right).toBeLessThan(24);
     expect(button.top).toBeGreaterThanOrEqual(head.top);
     expect(button.bottom).toBeLessThanOrEqual(head.bottom);
-    await expect($("#formation-strip")).not.toBeDisplayed();
-    await expect($("#formation-flow-split")).toBeDisplayed();
   });
 
   it("says that a read failed in the pane, keeps the tree, and clears the text when a read works", async () => {
@@ -510,10 +507,12 @@ describe("orchestration mode: the flow pane", () => {
     expect(await cardNames()).toEqual(["api-update"]);
   });
 
-  it("shows no flow pane when the first read failed, because no child is known", async () => {
+  it("shows the leader's card alone in the pane when the first read failed, because no child is known", async () => {
     await openFlow(rejects("Orca に届きません"));
     await waitForCalls("formation_children", 1);
-    await expect($("#formation-flow")).not.toBeDisplayed();
+    await expect($("#formation-flow")).toBeDisplayed();
+    await expect($("#formation-flow-root")).toBeDisplayed();
+    expect(await headName()).toBe("formation");
     expect(await cardNames()).toEqual([]);
   });
 
@@ -531,104 +530,62 @@ describe("orchestration mode: the flow pane", () => {
 // A-37: the right pane appears with the first child.
 
 describe("orchestration mode: the panes beside the list", () => {
-  it("shows the orchestrator alone, with the whole width, while no child is recorded", async () => {
+  it("shows the right pane with the leader's card alone while no child is recorded, 260px wide at the right end, with no divider before it", async () => {
     await openFlow([]);
     await waitForCalls("formation_children", 1);
     await expect($("#formation-orchestrator")).toBeDisplayed();
-    await expect($("#formation-flow")).not.toBeDisplayed();
-    await expect($("#formation-flow-split")).not.toBeDisplayed();
-    await expect($("#formation-strip")).not.toBeDisplayed();
-    const [pane, divider, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#orca-split"), await rectOf("#orca")];
-    expect(Math.abs(pane.left - divider.right)).toBeLessThan(1);
-    expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
-  });
-
-  it("shows the right pane when a child, a planned one too, is recorded, with a divider before it, 37% of the screen wide (half of what the list leaves)", async () => {
-    await openFlow([]);
-    await waitForCalls("formation_children", 1);
-    await expect($("#formation-flow")).not.toBeDisplayed();
-    await mock("formation_children", [formationChild("api-update", "planned")]);
     await expect($("#formation-flow")).toBeDisplayed();
-    const [orchestrator, divider, flow, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-flow-split"), await rectOf("#formation-flow"), await rectOf("#orca")];
-    expect(Math.abs(orchestrator.right - divider.left)).toBeLessThan(1);
-    expect(Math.abs(divider.right - flow.left)).toBeLessThan(1);
+    expect(await headName()).toBe("formation");
+    await expect($("#formation-flow-root .formation-card-role")).toHaveText("リーダー");
+    expect(await cardNames()).toEqual([]);
+    const [orchestrator, flow, screen, divider] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-flow"), await rectOf("#orca"), await rectOf("#orca-split")];
+    expect(Math.abs(orchestrator.left - divider.right)).toBeLessThan(1);
+    expect(Math.abs(orchestrator.right - flow.left)).toBeLessThan(1);
     expect(Math.abs(flow.right - screen.right)).toBeLessThan(1);
-    expect((flow.right - flow.left) / (screen.right - screen.left)).toBeCloseTo(0.37, 2);
-    // The formation has the orchestrator, the divider before the right pane, the pane and the strip (not shown while the pane is open), and no column of tabs beside them; the list and its divider are the Orca screen's.
-    expect(await browser.execute(() => [...document.getElementById("formation")!.children].map((e) => e.id))).toEqual(["formation-orchestrator", "formation-flow-split", "formation-flow", "formation-strip"]);
+    expect(Math.round(flow.right - flow.left)).toBe(260);
+    // The formation has the middle pane and the right pane alone: no divider, no strip. The list and its divider are the Orca screen's.
+    expect(await browser.execute(() => [...document.getElementById("formation")!.children].map((e) => e.id))).toEqual(["formation-orchestrator", "formation-flow"]);
     expect(await browser.execute(() => [...document.getElementById("orca")!.children].map((e) => e.id))).toEqual(["orca-list", "orca-split", "orca-session", "formation"]);
   });
 
-  it("has a divider before the right pane that starts at 37% of the screen and moves with the arrow keys, within 20% and 50%", async () => {
-    await openFlow([formationChild("api-update", "planned")]);
-    await expect($("#formation-flow")).toBeDisplayed();
-    const share = () => browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("orca")!.getBoundingClientRect().width);
-    const split = $("#formation-flow-split");
-    await expect(split).toHaveAttribute("role", "separator");
-    await expect(split).toHaveAttribute("aria-label", "チームメイトの幅");
-    await expect(split).toHaveAttribute("aria-valuemin", "20");
-    await expect(split).toHaveAttribute("aria-valuemax", "50");
-    await expect(split).toHaveAttribute("aria-valuenow", "37");
-    expect(await share()).toBeCloseTo(0.37, 2);
-    expect(await browser.execute(() => document.getElementById("formation-flow-split")!.classList.contains("split-bar"))).toBe(true);
-    // The arrow that points away from the pane's edge widens it.
-    await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("formation-flow-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowLeft");
-    await expect(split).toHaveAttribute("aria-valuenow", "39");
-    expect(await share()).toBeCloseTo(0.39, 2);
-    // The list's divider is not moved by it.
-    await expect($("#orca-split")).toHaveAttribute("aria-valuenow", "25");
-  });
-
-  it("hides the right pane again when the children are gone, and the orchestrator takes the width", async () => {
-    await openFlow([formationChild("api-update", "working")]);
-    await expect($("#formation-flow")).toBeDisplayed();
-    await mock("formation_children", []);
-    await expect($("#formation-flow")).not.toBeDisplayed();
-    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#orca")];
-    expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
-  });
-
-  it("fits the orchestrator's terminal to its new width when the right pane appears", async () => {
+  it("draws the cards under the leader's card when a child, a planned one too, is recorded, and takes them away when the children are gone, with the pane as it was", async () => {
     await openFlow([]);
-    const [start] = await waitForCalls("claude_code_start");
-    const wide = (start as { viewport: { cols: number } }).viewport.cols;
-    await mock("claude_code_resize", null);
+    await waitForCalls("formation_children", 1);
+    const width = async () => {
+      const r = await rectOf("#formation-flow");
+      return Math.round(r.right - r.left);
+    };
+    expect(await width()).toBe(260);
     await mock("formation_children", [formationChild("api-update", "planned")]);
-    const [resize] = await waitForCalls("claude_code_resize");
-    expect((resize as { viewport: { cols: number } }).viewport.cols).toBeLessThan(wide);
-  });
-
-  it("fits the orchestrator's terminal to its width again when the right pane goes", async () => {
-    await openFlow([]);
-    const [start] = await waitForCalls("claude_code_start");
-    const wide = (start as { viewport: { cols: number } }).viewport.cols;
-    // The pane appears and makes the orchestrator narrower; the fit of that is waited for, then the pane goes.
-    await mock("claude_code_resize", null);
-    await mock("formation_children", [formationChild("api-update", "planned")]);
-    const [narrowed] = await waitForCalls("claude_code_resize");
-    const narrow = (narrowed as { viewport: { cols: number } }).viewport.cols;
-    expect(narrow).toBeLessThan(wide);
-    await mock("claude_code_resize", null);
+    await browser.waitUntil(async () => (await cardNames()).join() === "api-update");
+    expect(await width()).toBe(260);
     await mock("formation_children", []);
-    const [resize] = await waitForCalls("claude_code_resize");
-    expect((resize as { viewport: { cols: number } }).viewport.cols).toBeGreaterThan(narrow);
+    await browser.waitUntil(async () => (await cardNames()).length === 0);
+    await expect($("#formation-flow")).toBeDisplayed();
+    await expect($("#formation-flow-root")).toBeDisplayed();
+    expect(await width()).toBe(260);
+    const [pane, flow] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-flow")];
+    expect(Math.abs(pane.right - flow.left)).toBeLessThan(1);
   });
 });
 
 // A-37: the view of the flow, and the session of the selected child under it.
 const selectedCard = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>('#formation-flow-list [aria-pressed="true"]')].map((e) => e.dataset.child ?? null));
 const card = (name: string) => $(`#formation-flow-list [data-child="${name}"]`);
-const screenText = () => $("#formation-child-term .orca-term-box:not([hidden]) .xterm-rows").getText();
+const screenText = () => $("#formation-teammate-term .orca-term-box:not([hidden]) .xterm-rows").getText();
 const readHandles = async () => [...new Set((await callsOf("orca_terminal_read")).map((c) => (c as { handle: string }).handle))];
 const MIRROR = 250;
 
 async function openSession(children: unknown, extra: Record<string, unknown> = {}) {
   await openFlow(children, { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 確認します"], ...extra });
   await browser.waitUntil(async () => (await cardNames()).length > 0);
+  // 「自動で追う」 is off when a formation is opened, and most of these specs follow: it is pressed on first.
+  await $("#formation-follow").click();
+  await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
 }
 
 describe("orchestration mode: the view of the flow", () => {
-  it("puts the orchestrator's card on top and the children side by side under it", async () => {
+  it("puts the leader's card on top and the children in one column under it, joined by a line at their left", async () => {
     await openFlow([formationChild("a-update", "working"), formationChild("b-update", "planned")]);
     await browser.waitUntil(async () => (await cardNames()).length === 2);
     const rects = await browser.execute(() => {
@@ -640,209 +597,149 @@ describe("orchestration mode: the view of the flow", () => {
     });
     expect(rects.cards.length).toBe(2);
     for (const c of rects.cards) expect(c.top).toBeGreaterThanOrEqual(rects.root.bottom);
-    // One row: the cards share a top and follow each other from the left.
-    expect(new Set(rects.cards.map((c) => Math.round(c.top))).size).toBe(1);
-    expect(rects.cards[0].right).toBeLessThanOrEqual(rects.cards[1].left);
-    // The orchestrator's card is over the middle of the row.
-    const middle = (rects.cards[0].left + rects.cards[1].right) / 2;
-    expect(Math.abs((rects.root.left + rects.root.right) / 2 - middle)).toBeLessThan(4);
-    // One branch goes down from the orchestrator's card to the frame that holds the cards.
-    expect(await browser.execute(() => getComputedStyle(document.getElementById("formation-flow-list")!, "::before").borderLeftWidth)).toBe("2px");
-    expect(await styleOf("#formation-flow-list", "borderTopStyle")).toBe("solid");
+    // One column: the cards share a left and a width, and follow each other from the top; the column is under the leader's card, a little to the right of it.
+    expect(new Set(rects.cards.map((c) => Math.round(c.left))).size).toBe(1);
+    expect(new Set(rects.cards.map((c) => Math.round(c.right - c.left))).size).toBe(1);
+    expect(rects.cards[0].bottom).toBeLessThanOrEqual(rects.cards[1].top);
+    expect(rects.cards[0].left).toBeGreaterThan(rects.root.left);
+    // The line at the left of the column joins the cards to the leader's card.
+    expect(await styleOf("#formation-flow-list", "borderLeftStyle")).toBe("solid");
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("formation-flow-list")!).borderLeftWidth)).toBe("1.5px");
+    const [list, root] = [await rectOf("#formation-flow-list"), await rectOf("#formation-flow-root")];
+    expect(Math.abs(list.top - root.bottom)).toBeLessThan(1);
   });
 
-  it("wraps the cards that do not fit in one row, and holds the view to a height of its own", async () => {
+  it("stacks the cards in one column that scrolls inside the pane", async () => {
     await openSession(Array.from({ length: 24 }, (_, i) => formationChild(`child-${String(i).padStart(2, "0")}`, "working")));
     await browser.waitUntil(async () => (await cardNames()).length === 24);
     const tops = await browser.execute(() => [...new Set([...document.querySelectorAll("#formation-flow-list .formation-card")].map((c) => Math.round(c.getBoundingClientRect().top)))]);
-    expect(tops.length).toBeGreaterThan(2);
-    const [body, flow] = [await rectOf("#formation-flow-body"), await rectOf("#formation-flow")];
-    expect(body.bottom - body.top).toBeLessThanOrEqual(300);
-    expect(body.bottom - body.top).toBeLessThanOrEqual((flow.bottom - flow.top) / 2 + 1);
-  });
-
-  it("shows the session band with the dot and the name of the selected child, and the terminal under it", async () => {
-    await openSession(mixed());
-    await expect($("#formation-session")).toBeDisplayed();
-    await expect($("#formation-session-name")).toHaveText("web-update");
-    await expect($("#formation-session-head")).toHaveAttribute("data-state", "waiting");
-    expect(await browser.execute(() => document.querySelectorAll("#formation-session-head .formation-dot").length)).toBe(1);
-    const [body, head, term, flow] = [await rectOf("#formation-flow-body"), await rectOf("#formation-session-head"), await rectOf("#formation-child-term"), await rectOf("#formation-flow")];
-    expect(body.bottom).toBeLessThanOrEqual(head.top);
-    expect(head.bottom).toBeLessThanOrEqual(term.top);
-    expect(Math.abs(term.bottom - flow.bottom)).toBeLessThan(1);
-    expect(term.right - term.left).toBeGreaterThan(200);
-    expect(await styleOf("#formation-session-head .formation-dot", "backgroundColor")).toBe(await resolved("--agent-question"));
-    // The band is the form of the orchestrator's header band: the same height, padding, ground and weight of the title.
-    const form = (head: string, title: string) =>
-      browser.execute(
-        (h, t) => {
-          const band = document.querySelector(h)!;
-          const style = getComputedStyle(band);
-          const text = getComputedStyle(document.querySelector(t)!);
-          return { height: Math.round(band.getBoundingClientRect().height), padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`, background: style.backgroundColor, size: text.fontSize, weight: text.fontWeight };
-        },
-        head,
-        title,
-      );
-    expect(await form("#formation-session-head", "#formation-session-name")).toEqual(await form("#formation-head", "#formation-head h1"));
-    // The band follows the state of the child.
-    await mock("formation_children", [...mixed().slice(0, 1), formationChild("web-update", "working", { minutes: 1 }), ...mixed().slice(2)]);
-    await browser.waitUntil(async () => (await $("#formation-session-head").getAttribute("data-state")) === "working");
-  });
-
-  it("shows no session while only children with no terminal are there, and the view takes the height of the pane", async () => {
-    await openSession([formationChild("a-update", "planned"), formationChild("b-update", "done", { handle: null })]);
-    await expect($("#formation-session")).not.toBeDisplayed();
-    const [body, head, flow] = [await rectOf("#formation-flow-body"), await rectOf("#formation-flow-head"), await rectOf("#formation-flow")];
+    expect(tops.length).toBe(24);
+    const [body, flow, head] = [await rectOf("#formation-flow-body"), await rectOf("#formation-flow"), await rectOf("#formation-flow-head")];
     expect(Math.abs(body.bottom - flow.bottom)).toBeLessThan(1);
     expect(body.top).toBeGreaterThanOrEqual(head.bottom);
-    await browser.pause(MIRROR * 3);
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
-    // A child that gets a terminal brings the session under the view.
-    await mock("formation_children", [formationChild("a-update", "working")]);
-    await expect($("#formation-session")).toBeDisplayed();
-    await expect($("#formation-session-name")).toHaveText("a-update");
-    // And it goes again when no child has a terminal.
-    await mock("formation_children", [formationChild("a-update", "planned")]);
-    await expect($("#formation-session")).not.toBeDisplayed();
   });
-});
 
-describe("orchestration mode: close and open the right pane", () => {
-  const close = () => $("#formation-flow-toggle").click();
-  const reopen = () => $("#formation-strip-open").click();
-  const marks = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#formation-strip-marks .formation-strip-mark")].map((m) => [m.dataset.name, m.dataset.state, m.getAttribute("aria-label")]));
-
-  it("closes to a strip of 40px at the right end, and the orchestrator takes the width up to it", async () => {
+  it("puts a tab for each child in the header of the middle pane after the leader's, with the mark of its state and its effort", async () => {
     await openSession(mixed());
-    await close();
-    await expect($("#formation-flow")).not.toBeDisplayed();
-    await expect($("#formation-flow-split")).not.toBeDisplayed();
-    await expect($("#formation-strip")).toBeDisplayed();
-    const [strip, orchestrator, screen] = [await rectOf("#formation-strip"), await rectOf("#formation-orchestrator"), await rectOf("#formation")];
-    expect(Math.round(strip.right - strip.left)).toBe(40);
-    expect(Math.abs(strip.right - screen.right)).toBeLessThan(1);
-    expect(Math.abs(orchestrator.right - strip.left)).toBeLessThan(1);
-    // The open button is at the top of the strip, in the height of the headings, and the marks are in a column under it.
-    const button = $("#formation-strip-open");
-    await expect(button).toHaveElementClass("icon-btn");
-    await expect(button).toHaveAttribute("aria-expanded", "false");
-    expect(await button.getText()).toBe("");
-    const [open, head] = [await rectOf("#formation-strip-open"), await rectOf("#formation-strip-head")];
-    expect(open.bottom).toBeLessThanOrEqual(head.bottom);
-    expect(await browser.execute(() => document.getElementById("formation-strip")!.firstElementChild!.id)).toBe("formation-strip-head");
-    const lefts = await browser.execute(() => [...document.querySelectorAll("#formation-strip-marks .formation-strip-mark")].map((m) => Math.round(m.getBoundingClientRect().left)));
-    expect(new Set(lefts).size).toBe(1);
-    const tops = await browser.execute(() => [...document.querySelectorAll("#formation-strip-marks .formation-strip-mark")].map((m) => m.getBoundingClientRect().top));
-    expect(tops).toEqual([...tops].sort((x, y) => x - y));
-    expect(tops[0]).toBeGreaterThanOrEqual(head.bottom);
+    expect(await textsOf("#formation-tabs .formation-tab-name")).toEqual(["リーダー", "api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    expect(await textsOf("#formation-tabs .formation-tab-effort")).toEqual(["high", "medium", "medium", "medium", "medium", "medium"]);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-mark")).toEqual(["✓", "●", "◐", "○", "○"]);
+    expect(await browser.execute(() => document.getElementById("formation-tabs")!.getAttribute("role"))).toBe("tablist");
+    const marks = (state: string) => `#formation-tabs-mates .formation-tab[data-state="${state}"] .formation-tab-mark`;
+    expect(await styleOf(marks("done"), "color")).toBe(await resolved("--agent-done"));
+    expect(await styleOf(marks("waiting"), "color")).toBe(await resolved("--agent-question"));
+    expect(await styleOf(marks("working"), "color")).toBe(await resolved("--agent-working"));
+    // The tabs are in the header, level with the restart button at its right end, and the header is above the terminal.
+    const [head, tabs, term] = [await rectOf("#formation-head"), await rectOf("#formation-tabs"), await rectOf("#formation-teammate-term")];
+    expect(tabs.top).toBeGreaterThanOrEqual(head.top);
+    expect(tabs.bottom).toBeLessThanOrEqual(head.bottom + 1);
+    expect(head.bottom).toBeLessThanOrEqual(term.top + 1);
   });
 
-  it("names the numbers of the children that work, wait and are planned in the label of the open button, and keeps them as the reads go", async () => {
+  it("draws a planned child's tab dashed and not pressed, and a done child's with a ✓ and a ×", async () => {
+    await openSession([formationChild("a-update", "planned"), formationChild("b-update", "done"), formationChild("c-update", "done", { handle: null })]);
+    const planned = '#formation-tabs-mates .formation-tab[data-state="planned"]';
+    expect(await styleOf(planned, "borderTopStyle")).toBe("dashed");
+    expect(await browser.execute((s) => document.querySelector(`${s} .formation-tab-main`)!.tagName, planned)).toBe("SPAN");
+    expect(await count(`${planned} .formation-tab-close`)).toBe(0);
+    // A done child has the × beside its name, whether or not its terminal is still listed; a done child with no terminal is shown and not pressed.
+    expect(await textsOf("#formation-tabs-mates .formation-tab-close")).toEqual(["×", "×"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-tabs-mates .formation-tab-close")].map((b) => b.getAttribute("aria-label")))).toEqual(["b-update を閉じる", "c-update を閉じる"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-tabs-mates .formation-tab")].map((t) => t.querySelector(".formation-tab-main")!.tagName))).toEqual(["SPAN", "BUTTON", "SPAN"]);
+    // The cards of the done children have it too, and the card of a child that works has none.
+    expect(await count("#formation-flow-list .formation-card-close")).toBe(2);
+  });
+
+  it("shows the terminal of the selected child under the tabs, in place of the leader's", async () => {
     await openSession(mixed());
-    await close();
-    await expect($("#formation-strip-open")).toHaveAttribute("aria-label", "チームメイトを開く（作業中 1 · 承認待ち 1 · 予定 2）");
-    await mock("formation_children", [formationChild("api-update", "working"), formationChild("web-update", "working", { minutes: 1 }), formationChild("batch-update", "planned")]);
-    await browser.waitUntil(async () => (await $("#formation-strip-open").getAttribute("aria-label")) === "チームメイトを開く（作業中 2 · 予定 1）");
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    await expect($("#formation-term")).not.toBeDisplayed();
+    await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "false");
+    const [head, term, flow, orchestrator] = [await rectOf("#formation-head"), await rectOf("#formation-teammate-term"), await rectOf("#formation-flow"), await rectOf("#formation-orchestrator")];
+    expect(head.bottom).toBeLessThanOrEqual(term.top + 1);
+    expect(Math.abs(term.bottom - orchestrator.bottom)).toBeLessThan(1);
+    expect(Math.abs(term.right - flow.left)).toBeLessThan(1);
+    expect(term.right - term.left).toBeGreaterThan(200);
+    // The terminal is under the tabs: nothing of it is in the right pane.
+    expect(await browser.execute(() => document.getElementById("formation-flow")!.querySelectorAll(".orca-term-box").length)).toBe(0);
+    // The restart button restarts the leader, so it is off while a child's tab is the selected one.
+    await expect($("#formation-restart")).toBeDisabled();
   });
 
-  it("draws a mark with the dot of its state for each child, in the order of the cards, and draws them again with each read", async () => {
+  it("selects the leader's tab with its tab and with its card, shows its terminal, and turns 自動で追う off", async () => {
     await openSession(mixed());
-    await close();
-    expect(await marks()).toEqual([
-      ["api-update", "done", "api-update（完了）"],
-      ["web-update", "waiting", "web-update（承認待ち）"],
-      ["batch-update", "working", "batch-update（作業中）"],
-      ["e2e-check", "planned", "e2e-check（予定）"],
-      ["summary", "planned", "summary（予定）"],
-    ]);
-    const dot = (state: string) => `#formation-strip-marks .formation-strip-mark[data-state="${state}"] .formation-dot`;
-    expect(await styleOf(dot("waiting"), "backgroundColor")).toBe(await resolved("--agent-question"));
-    expect(await styleOf(dot("done"), "backgroundColor")).toBe(await resolved("--agent-done"));
-    expect(await styleOf(dot("working"), "borderTopStyle")).toBe("solid");
-    expect(await styleOf(dot("working"), "animationName")).not.toBe("none");
-    expect(await styleOf(dot("planned"), "borderTopStyle")).toBe("solid");
-    expect(await styleOf(dot("planned"), "backgroundColor")).toBe("rgba(0, 0, 0, 0)");
-    await mock("formation_children", [formationChild("api-update", "waiting", { minutes: 2 }), formationChild("new-one", "working")]);
-    await browser.waitUntil(async () => (await marks()).length === 2);
-    expect(await marks()).toEqual([
-      ["api-update", "waiting", "api-update（承認待ち）"],
-      ["new-one", "working", "new-one（作業中）"],
-    ]);
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    await $("#formation-tab-leader-main").click();
+    await expect($("#formation-term")).toBeDisplayed();
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    expect(await pressed("#formation-flow-root")).toBe("true");
+    expect(await pressed("#formation-follow")).toBe("false");
+    await expect($("#formation-restart")).toBeEnabled();
+    // The card of a child brings its tab and its terminal back, and the leader's card does the leader's.
+    await card("batch-update").click();
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    await expect($("#formation-term")).not.toBeDisplayed();
+    await expect($('#formation-tabs-mates [data-child="batch-update"]')).toHaveAttribute("aria-selected", "true");
+    await $("#formation-flow-root").click();
+    await expect($("#formation-term")).toBeDisplayed();
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("opens again with the button of the strip, and the session shows its terminal again", async () => {
+  it("selects a child with its tab, as with its card", async () => {
     await openSession(mixed());
-    await browser.waitUntil(async () => (await readHandles()).includes("term_web-update"));
-    await close();
-    await expect($("#formation-strip-open")).toBeFocused();
-    // The terminal of the session is hidden while the pane is closed, so its screen is read no more.
-    await browser.pause(MIRROR * 2);
-    const reads = (await callsOf("orca_terminal_read")).length;
-    await browser.pause(MIRROR * 4);
-    expect((await callsOf("orca_terminal_read")).length).toBe(reads);
-    await reopen();
-    await expect($("#formation-flow")).toBeDisplayed();
-    await expect($("#formation-flow-split")).toBeDisplayed();
-    await expect($("#formation-strip")).not.toBeDisplayed();
-    await expect($("#formation-flow-toggle")).toBeFocused();
-    await expect($("#formation-flow-toggle")).toHaveAttribute("aria-expanded", "true");
-    // The selection and 自動で追う are as they were, and the terminal of the selected child is read again.
-    expect(await selectedCard()).toEqual(["web-update"]);
-    await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
-    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).length > reads);
-    expect(await $("#formation-child-term .orca-term-box:not([hidden]) .xterm-rows").getText()).toContain("確認します");
-  });
-
-  it("keeps the width that the divider gave when the pane is closed and opened, and stays closed when the mode is left and shown again", async () => {
-    await openSession(mixed());
-    await browser.execute((id) => window.__e2e_once__(id) && document.getElementById("formation-flow-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true })), onceId());
-    await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "43");
-    await close();
-    await $(PROJECT).click();
-    await $(ROW("formation")).click();
-    await expect($("#formation-strip")).toBeDisplayed();
-    await expect($("#formation-flow")).not.toBeDisplayed();
-    await reopen();
-    await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "43");
-    expect(await browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("formation")!.getBoundingClientRect().width)).toBeCloseTo(0.43, 2);
-  });
-
-  it("shows no strip while no child is recorded, and the pane stays closed when the children come again", async () => {
-    await openFlow([]);
-    await waitForCalls("formation_children", 1);
-    await expect($("#formation-strip")).not.toBeDisplayed();
-    await mock("formation_children", [formationChild("api-update", "working")]);
-    await expect($("#formation-flow")).toBeDisplayed();
-    await close();
-    await mock("formation_children", []);
-    await expect($("#formation-strip")).not.toBeDisplayed();
-    await expect($("#formation-flow")).not.toBeDisplayed();
-    await mock("formation_children", [formationChild("api-update", "working")]);
-    await expect($("#formation-strip")).toBeDisplayed();
-    await expect($("#formation-flow")).not.toBeDisplayed();
+    await $('#formation-tabs-mates [data-child="batch-update"]').click();
+    await expect($('#formation-tabs-mates [data-child="batch-update"]')).toHaveAttribute("aria-selected", "true");
+    expect(await selectedCard()).toEqual(["batch-update"]);
+    expect(await pressed("#formation-follow")).toBe("false");
+    await mock("orca_terminal_read", ["$ npm test", "実行中"]);
+    await browser.waitUntil(async () => (await screenText()).includes("実行中"));
+    expect(await readHandles()).toEqual(["term_batch-update"]);
   });
 });
 
 describe("orchestration mode: the session of a child", () => {
-  it("starts with 自動で追う on, as an icon button at the right end of the session's band, and selects the child that waits", async () => {
-    await openSession(mixed());
+  it("starts with 自動で追う off, as an icon button at the right end of the heading of the right pane, and keeps the leader's tab until it is pressed on", async () => {
+    await openFlow(mixed());
+    await browser.waitUntil(async () => (await cardNames()).length === 5);
     const follow = $("#formation-follow");
     await expect(follow).toHaveAttribute("aria-label", "自動で追う");
-    await expect(follow).toHaveAttribute("aria-pressed", "true");
+    await expect(follow).toHaveAttribute("aria-pressed", "false");
     await expect(follow).toHaveElementClass("icon-btn");
     expect(await follow.getText()).toBe("");
     expect(await count("#formation-follow svg")).toBe(1);
-    expect(await selectedCard()).toEqual(["web-update"]);
-    // It is not in the heading of the pane any more: the band of the session has it at its right end, after the dot and the name.
-    expect(await count("#formation-flow-head #formation-follow")).toBe(0);
-    expect(await browser.execute(() => document.getElementById("formation-session-head")!.lastElementChild!.id)).toBe("formation-follow");
-    const [head, button, name] = [await rectOf("#formation-session-head"), await rectOf("#formation-follow"), await rectOf("#formation-session-name")];
+    // A child waits, and the middle pane stays on the leader's tab, where the owner types: nothing is selected.
+    await browser.pause(WAIT * 2);
+    expect(await selectedCard()).toEqual([]);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-term")).toBeDisplayed();
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
+    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    // The heading has it at its right end, after the title.
+    expect(await browser.execute(() => document.getElementById("formation-flow-head")!.lastElementChild!.id)).toBe("formation-follow");
+    const [head, button, title] = [await rectOf("#formation-flow-head"), await rectOf("#formation-follow"), await rectOf("#formation-flow-head h2")];
     expect(head.right - button.right).toBeLessThan(40);
-    expect(name.right).toBeLessThanOrEqual(button.left);
+    expect(title.right).toBeLessThanOrEqual(button.left);
     expect(button.top).toBeGreaterThanOrEqual(head.top);
     expect(button.bottom).toBeLessThanOrEqual(head.bottom);
+    // Pressed on, it selects the child that waits, and its tab.
+    await follow.click();
+    await expect(follow).toHaveAttribute("aria-pressed", "true");
+    expect(await selectedCard()).toEqual(["web-update"]);
+    await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("turns 自動で追う off again when another formation is opened", async () => {
+    await openList({ formation_children: mixed() });
+    await browser.waitUntil(async () => (await cardNames()).length === 5);
+    await $("#formation-follow").click();
+    await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
+    await row("won-2485").click();
+    await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "false");
+    await browser.pause(READ * 2);
+    expect(await selectedCard()).toEqual([]);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
   });
 
   it("shows 自動で追う on with a pale green ground and a green icon, and off with none", async () => {
@@ -873,17 +770,19 @@ describe("orchestration mode: the session of a child", () => {
     await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("selects the first child that has a terminal when no child waits or works and nothing was selected", async () => {
+  it("keeps the leader's tab when no child waits or works, and nothing was selected", async () => {
     await openSession([formationChild("p-update", "planned"), formationChild("a-update", "done"), formationChild("b-update", "done")]);
-    expect(await selectedCard()).toEqual(["a-update"]);
-    await expect($("#formation-session-name")).toHaveText("a-update");
+    expect(await selectedCard()).toEqual([]);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-term")).toBeDisplayed();
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
   });
 
   it("selects a card that is pressed, turns 自動で追う off, and turns it on again with the button", async () => {
     await openSession(mixed());
     await card("api-update").click();
     expect(await selectedCard()).toEqual(["api-update"]);
-    await expect($("#formation-session-name")).toHaveText("api-update");
+    await expect($('#formation-tabs-mates [data-child="api-update"]')).toHaveAttribute("aria-selected", "true");
     await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "false");
     await expect(card("api-update")).toHaveAttribute("aria-pressed", "true");
     // Another child waits now: the selection stays.
@@ -893,7 +792,7 @@ describe("orchestration mode: the session of a child", () => {
     await $("#formation-follow").click();
     await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
     expect(await selectedCard()).toEqual(["batch-update"]);
-    await expect($("#formation-session-name")).toHaveText("batch-update");
+    await expect($('#formation-tabs-mates [data-child="batch-update"]')).toHaveAttribute("aria-selected", "true");
   });
 
   it("selects nothing when the card of a child with no terminal is pressed", async () => {
@@ -926,7 +825,7 @@ describe("orchestration mode: the session of a child", () => {
     await mock("orca_terminal_read", ["$ npm test", "実行中"]);
     await browser.waitUntil(async () => (await screenText()).includes("実行中"));
     expect(await readHandles()).toEqual(["term_batch-update"]);
-    expect(await browser.execute(() => document.querySelectorAll("#formation-child-term .orca-term-box:not([hidden])").length)).toBe(1);
+    expect(await browser.execute(() => document.querySelectorAll("#formation-teammate-term .orca-term-box:not([hidden])").length)).toBe(1);
   });
 
   it("sends the keys typed in the terminal to its child through orca_terminal_input", async () => {
@@ -935,7 +834,7 @@ describe("orchestration mode: the session of a child", () => {
     // The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
     await browser.execute(() => document.querySelector<HTMLElement>('#formation-flow-list [data-child="batch-update"]')!.click());
     // The press gives the terminal of the session the keyboard.
-    expect(await browser.execute(() => document.getElementById("formation-child-term")!.contains(document.activeElement))).toBe(true);
+    expect(await browser.execute(() => document.getElementById("formation-teammate-term")!.contains(document.activeElement))).toBe(true);
     await browser.keys(["c", "d"]);
     await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_batch-update")).toBe(true);
@@ -973,13 +872,13 @@ describe("orchestration mode: the session of a child", () => {
     await sendStream(streamList([], []));
     const [call] = await streamed();
     expect(call.handle).toBe("term_lab-update");
-    const host = await rectOf("#formation-child-term");
+    const host = await rectOf("#formation-teammate-term");
     expect(call.viewport.cols).toBeGreaterThan(10);
     expect(call.viewport.cols).toBeLessThan(Math.ceil(host.right - host.left));
     await sendTerm({ kind: "snapshot", data: "\x1b[31m$ claude\x1b[0m\r\n> 確認します", cols: 80, rows: 24 });
     await browser.waitUntil(async () => (await screenText()).includes("確認します"), { timeoutMsg: "the streamed screen never showed" });
     // The color of the stream is drawn (red is the color 1 of the palette).
-    expect(await browser.execute(() => document.querySelectorAll("#formation-child-term .xterm-fg-1").length)).toBeGreaterThan(0);
+    expect(await browser.execute(() => document.querySelectorAll("#formation-teammate-term .xterm-fg-1").length)).toBeGreaterThan(0);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
   });
 
@@ -1048,12 +947,15 @@ describe("orchestration mode: the session of a child", () => {
     expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
   });
 
-  it("does not take the keyboard when the follow moves the selection", async () => {
-    await openSession([formationChild("a-update", "working"), formationChild("b-update", "working")]);
+  it("does not give the terminal of the child the keyboard when the follow moves the selection to it, and the press of a tab does", async () => {
+    await openSession([formationChild("a-update", "planned")]);
     await $("#formation-term .orca-term-box:not([hidden]) .xterm-screen").click();
-    await mock("formation_children", [formationChild("a-update", "working"), formationChild("b-update", "waiting")]);
-    await browser.waitUntil(async () => (await selectedCard())[0] === "b-update");
-    expect(await browser.execute(() => document.querySelector("#formation-term")!.contains(document.activeElement))).toBe(true);
+    await mock("formation_children", [formationChild("a-update", "working"), formationChild("b-update", "working")]);
+    await browser.waitUntil(async () => (await selectedCard())[0] === "a-update");
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    expect(await browser.execute(() => document.getElementById("formation-teammate-term")!.contains(document.activeElement))).toBe(false);
+    await browser.execute(() => document.querySelector<HTMLElement>('#formation-tabs-mates [data-child="b-update"]')!.click());
+    expect(await browser.execute(() => document.getElementById("formation-teammate-term")!.contains(document.activeElement))).toBe(true);
   });
 
   it("stops reading the terminal of a child that is gone from the list, and draws the next one", async () => {
@@ -1067,7 +969,8 @@ describe("orchestration mode: the session of a child", () => {
     expect(await readHandles()).toEqual(["term_batch-update"]);
     // No child: no read at all.
     await mock("formation_children", []);
-    await expect($("#formation-session")).not.toBeDisplayed();
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
+    await expect($("#formation-term")).toBeDisplayed();
     await mock("orca_terminal_read", ["$ none"]);
     await browser.pause(MIRROR * 3);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
@@ -1111,7 +1014,8 @@ const ROWS = "#formation-list-feed .formation-row";
 const rowNames = () => textsOf(`${ROWS} .formation-row-name`);
 const row = (name: string) => $(`${ROWS}[data-formation="${name}"]`);
 const pressedRows = () => browser.execute((s) => [...document.querySelectorAll<HTMLElement>(`${s}[aria-pressed="true"]`)].map((e) => e.dataset.formation), ROWS);
-const headName = () => $("#formation-head-name").getText();
+// The name of the formation that is shown: the leader's card has it, which is drawn when the formation is selected (the pane is shown from the first child on).
+const headName = () => browser.execute(() => document.querySelector("#formation-flow-root .formation-card-name")!.textContent);
 const listed = () =>
   formationList([
     formationEntry("formation"),
@@ -1178,8 +1082,8 @@ describe("orchestration mode: close a child from its card", () => {
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false, path: null }]);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
     await expect(confirm()).not.toExist();
-    // The session goes to the next child, and the terminal of the closed one is read no more.
-    await expect($("#formation-session-name")).toHaveText("batch-update");
+    // The selection goes to the next child, and the terminal of the closed one is read no more.
+    await expect($('#formation-tabs-mates [data-child="batch-update"]')).toHaveAttribute("aria-selected", "true");
     await mock("orca_terminal_read", ["$ next"]);
     await browser.waitUntil(async () => (await readHandles()).join() === "term_batch-update");
     await browser.pause(MIRROR * 3);
@@ -1211,6 +1115,44 @@ describe("orchestration mode: close a child from its card", () => {
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "summary", force: false, path: null }]);
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update,web-update,batch-update,e2e-check");
+  });
+
+  it("closes a done child with the × of its tab, after the same confirmation, and takes its tab and its card away", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", gone);
+    await mock("formation_children", without("api-update"));
+    await $('#formation-tabs-mates [data-close="api-update"]').click();
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("api-update を削除しますか？");
+    expect(await callsOf(close)).toEqual([]);
+    await yes().click();
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "api-update", force: false, path: null }]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "web-update,batch-update,e2e-check,summary");
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["web-update", "batch-update", "e2e-check", "summary"]);
+  });
+
+  it("closes a done child with the × of its card the same way, and a tab of a child that is not done has no ×", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", gone);
+    await mock("formation_children", without("api-update"));
+    expect(await count('#formation-tabs-mates [data-close="web-update"]')).toBe(0);
+    expect(await count('#formation-flow-list [data-close="web-update"]')).toBe(0);
+    await $('#formation-flow-list [data-close="api-update"]').click();
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("api-update を削除しますか？");
+    await yes().click();
+    expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "api-update", force: false, path: null }]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "web-update,batch-update,e2e-check,summary");
+  });
+
+  it("asks for the force when git keeps the worktree of the child whose × was pressed, and keeps the tab", async () => {
+    await openSession(mixed());
+    const close = await mock("formation_close_child", kept);
+    await $('#formation-tabs-mates [data-close="api-update"]').click();
+    await yes().click();
+    await waitForCalls(close);
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("api-update を削除できませんでした");
+    await expect(yes()).toHaveText("強制削除");
+    expect(await count('#formation-tabs-mates [data-close="api-update"]')).toBe(1);
+    expect(await cardNames()).toHaveLength(5);
   });
 
   it("says why it was kept and what is lost, keeps the card, and calls nothing more on キャンセル", async () => {
@@ -1432,8 +1374,9 @@ describe("orchestration mode: the list of the formations", () => {
     await mock("formation_children", holds);
     await waitForCalls("formation_children", 1);
     await row("won-2485").click();
-    // The cards, the session and the pane go at once, before the read of the new formation answers.
-    await expect($("#formation-flow")).not.toBeDisplayed();
+    // The cards go at once, before the read of the new formation answers; the pane keeps the leader's card, with the name of the new formation.
+    await expect($("#formation-flow")).toBeDisplayed();
+    expect(await headName()).toBe("won-2485");
     expect(await cardNames()).toEqual([]);
     // The new formation is read when the read of the last one has ended, not beside it: Orca is not asked twice at once.
     await browser.pause(READ * 2);
@@ -1445,7 +1388,7 @@ describe("orchestration mode: the list of the formations", () => {
       return calls.length === 2 && (calls[1] as { name: string }).name === "won-2485";
     });
     expect(await cardNames()).toEqual([]);
-    await expect($("#formation-flow")).not.toBeDisplayed();
+    expect(await headName()).toBe("won-2485");
     // The read of the new formation is answered, and its children are drawn.
     await mock("formation_children", [formationChild("api-update", "working")]);
     await release("formation_children", [formationChild("api-update", "working")]);
@@ -2241,6 +2184,8 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await cardNames()).toEqual(["api-update", "docs-update"]);
     expect(await cardStates()).toEqual(["作業中", "予定"]);
     await expect($("#formation-flow")).toBeDisplayed();
+    // 「自動で追う」 is off, and the terminal of a child is read when its tab is the selected one: the child is followed.
+    await $("#formation-follow").click();
     await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_api-update" && (c as { environment?: string }).environment === "mac-studio"), { timeoutMsg: "the terminal of the child was not read in its environment" });
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
     expect(await starts()).toBe(0);
