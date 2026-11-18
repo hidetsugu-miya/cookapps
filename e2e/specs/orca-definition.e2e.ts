@@ -941,6 +941,36 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf(close)).toEqual([]);
   });
 
+  it("keeps the pane of Claude Code while Orca's list has the worktree with no tab of it open, and closes it when the list has not (A-34, #976)", async () => {
+    await openWithoutSession();
+    await mock("lsp_settings", unset());
+    await mock("lsp_launches", launchesOf(composeLaunch(), 1));
+    await mock("lsp_status", status("running"));
+    await mock("lsp_detect", []);
+    await mode("言語サーバー").click();
+    await waitForCalls("lsp_launches");
+    await mock("lsp_claude_request", askText);
+    await $("#orca-lsp-ask").click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await showAgain();
+    await expect(paneOf()).toBeDisplayed();
+    await browser.pause(300);
+    expect(await callsOf(close)).toEqual([]);
+    await mock("orca_overview", orcaOverview([], [orcaWorktree("example-api", "main")]));
+    await showAgain();
+    expect(await waitForCalls(close)).toEqual([{ id: "lsp-claude", launch: 1 }]);
+  });
+
+  it("draws no card of JavaScript while the repository has a server of TypeScript, which takes its files (A-34, #976)", async () => {
+    const javascript = foundOf("javascript", { name: "typescript-language-server" });
+    await showServer(composeLaunch(), unset(), status("running"), 600000, [foundOf("typescript", { name: "typescript-language-server" }), javascript]);
+    await expect(card("javascript")).toBeDisplayed();
+    await card("typescript").$(".orca-lsp-use").click();
+    await expect(card("typescript")).toHaveAttribute("data-kind", "server");
+    await expect(card("javascript")).not.toExist();
+  });
+
   it("draws the server that Claude saved on the card of its language at the next read of the settings (A-34, #976)", async () => {
     await showServer(composeLaunch(), unset(), status("running"), 250, [foundOf("typescript", { name: "typescript-language-server" })]);
     await expect(card("typescript")).toHaveAttribute("data-kind", "found");

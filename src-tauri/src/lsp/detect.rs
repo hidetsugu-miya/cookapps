@@ -220,6 +220,17 @@ fn parse_probe(text: &str) -> Probe {
     probe
 }
 
+/// Whether the standard error of `docker compose exec` says that the Docker daemon cannot be reached (`Cannot connect to the Docker daemon`, `Is the docker daemon running?`): nothing runs then, as with a container that is down. Only the last line is read, as `container_down` does.
+fn docker_unreachable(stderr: &str) -> bool {
+    let last = stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .to_lowercase();
+    last.contains("cannot connect to the docker daemon") || last.contains("docker daemon running")
+}
+
 /// Runs the script in `place`: `run` runs a command in the worktree on its route. A container that does not run is `Reach::Down`; any other failure is an error.
 pub(crate) fn probe(
     run: &mut impl FnMut(&str, usize) -> Result<Ran, String>,
@@ -238,7 +249,9 @@ pub(crate) fn probe(
     };
     let ran = run(&command, READ_MAX + 1)?;
     if ran.code != Some(0) {
-        if matches!(place, Place::Compose { .. }) && super::server::container_down(&ran.stderr) {
+        if matches!(place, Place::Compose { .. })
+            && (super::server::container_down(&ran.stderr) || docker_unreachable(&ran.stderr))
+        {
             return Ok(Reach::Down);
         }
         return Err(failure(&ran, NOT_PROBED));
@@ -443,8 +456,12 @@ pub(crate) fn detect_with(
         Reach::Up(host) => host,
         Reach::Down => Probe::default(),
     };
+    // The service is asked only when a language of the worktree has a command to look for (ruby's is not looked for): the others take the host's answer, which `found_from` does not read for them.
+    let needed = TABLE
+        .iter()
+        .any(|known| marked(known, &host) && known.needs_probe());
     let container = match services.first() {
-        Some(first) => Some(probe(
+        Some(first) if needed => Some(probe(
             &mut here,
             &Place::Compose {
                 service: first.service.clone(),
@@ -452,6 +469,7 @@ pub(crate) fn detect_with(
             },
             false,
         )?),
+        Some(_) => Some(Reach::Up(Probe::default())),
         None => None,
     };
     Ok(found_from(worktree, &services, &host, container.as_ref()))
@@ -814,6 +832,43 @@ mod tests {
     }
 
     #[test]
+    fn a_service_is_not_asked_when_no_language_of_the_worktree_has_a_command_to_look_for() {
+        let dir = temp_dir("ruby-only");
+        let config = compose_config();
+        let mut commands = Vec::new();
+        let found = detect_with(&dir, None, "repo-1", WT, |_, _, command, _| {
+            commands.push(command.to_owned());
+            Ok(if command.contains("docker compose config") {
+                ran(0, &config, "")
+            } else {
+                ran(0, "lock     ruby-lsp (0.26.9)\n", "")
+            })
+        })
+        .unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].state, LspFoundState::Found);
+        assert_eq!(
+            found[0].command.as_deref(),
+            Some("docker compose exec -T -w /app app bundle exec ruby-lsp")
+        );
+    }
+
+    #[test]
+    fn a_daemon_that_cannot_be_reached_is_told_from_the_last_line() {
+        assert!(docker_unreachable(
+            "Cannot connect to the Docker daemon at unix:///x.sock. Is the docker daemon running?\n"
+        ));
+        assert!(docker_unreachable("Is the docker daemon running?\n\n"));
+        assert!(!docker_unreachable(""));
+        assert!(!docker_unreachable("OCI runtime exec failed\n"));
+        // Said earlier by a command that ended for another reason.
+        assert!(!docker_unreachable(
+            "Is the docker daemon running?\nOCI runtime exec failed\n"
+        ));
+    }
+
+    #[test]
     fn with_no_compose_service_only_the_host_is_asked() {
         let dir = temp_dir("host");
         let mut commands = Vec::new();
@@ -860,6 +915,22 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.contains("OCI runtime exec failed"), "{err}");
+        // A Docker daemon that cannot be reached is a container that is down, not an error that takes the other languages' answers.
+        let found = detect_with(&dir, None, "repo-1", WT, |_, _, command, _| {
+            Ok(if command.contains("docker compose config") {
+                ran(0, &config, "")
+            } else if command.starts_with("docker compose exec") {
+                ran(
+                    1,
+                    "",
+                    "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n",
+                )
+            } else {
+                ran(0, "mark go.mod\n", "")
+            })
+        })
+        .unwrap();
+        assert_eq!(found[0].state, LspFoundState::ContainerDown);
         // A host that fails is an error too (the container is told only for a service).
         let err = detect_with(&dir, None, "repo-1", WT, |_, _, _, _| {
             Ok(ran(1, "", "service \"app\" is not running\n"))

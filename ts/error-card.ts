@@ -8,9 +8,12 @@ import { setScreen } from "./nav.js";
 // The text of a failure as the log and the card hold it: Rust's errors arrive as text, any other is made one.
 const textOf = (e: unknown) => String(e);
 
+// Where Rust puts what the script of a database connection printed on its standard error (`database/script.rs`): the log keeps the text up to it, since what a program printed is not written to the log (A-28).
+const STDERR_MARK = "。標準エラーの最後の行";
+
 // Writes a failure to the log. `source` names where it happened (the module). A log that cannot be written is left alone: it must not make another failure.
 export function logError(source: string, e: unknown) {
-  invoke("log_write", { level: "error", source, message: textOf(e) }).catch(() => {});
+  invoke("log_write", { level: "error", source, message: textOf(e).split(STDERR_MARK)[0] }).catch(() => {});
 }
 
 function card(text: string, extra: (HTMLElement | null)[]) {

@@ -32,7 +32,7 @@ use tokio::{
 use ts_rs::TS;
 
 use super::{
-    check_language, check_worktree, plan_for,
+    check_language, check_worktree, languages_taken, plan_for,
     protocol::{
         answer_request, classify, encode, error_response, initialize_params, locations,
         notification, read_frame, request, response, server_path, uri_of, Frame, Incoming,
@@ -691,7 +691,7 @@ fn plan(
             route,
             method: launch.method,
             service: launch.service,
-            extensions: extensions_of(&[language]),
+            extensions: extensions_of(&languages_taken(&language)),
         },
     ))
 }

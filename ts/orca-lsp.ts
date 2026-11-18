@@ -104,8 +104,8 @@ const methodOf = (launch: LspLaunch) => (launch.method === "compose" ? `compose 
 const placeOf = (place: LspFound["place"]) => (place.kind === "compose" ? `compose の ${place.service}` : "ホスト");
 // The server that 「使う」 saves for a language found: the one of the table, with nothing replaced.
 const autoServer = (f: LspFound): LspServerSettings => ({ language: f.language, name: f.name, autoStart: true, command: null, mount: null, service: null });
-// The cards of the languages that the worktree has and the repository has no server of, unless 「使わない」 hid them.
-const foundCards = () => (found ?? []).filter((f) => savedServer(f.language) === null && !dismissed.has(f.language));
+// The cards of the languages that the worktree has and the repository has no server of, unless 「使わない」 hid them. JavaScript has none while the repository has a server of TypeScript: that server takes its files too (`server_for`, #976), so a second process is not offered.
+const foundCards = () => (found ?? []).filter((f) => savedServer(f.language) === null && !dismissed.has(f.language) && !(f.language === "javascript" && savedServer("typescript") !== null));
 
 // ---- drawing ----
 
@@ -738,9 +738,9 @@ export async function ensureServer(place: LspPlace, server: string) {
   if (pane?.target === place.target && pane?.path === place.path) drawState();
 }
 
-// Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree).
-export function syncServers(gone: (target: string | null, path: string) => boolean) {
-  if (claude !== null && gone(claude.target, claude.path)) closeClaude();
+// Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree). The pane of Claude Code is closed only when `listed` says that Orca's list has not its worktree: the file pane shows a worktree with no tab open.
+export function syncServers(gone: (target: string | null, path: string) => boolean, listed: (target: string | null, path: string) => boolean) {
+  if (claude !== null && listed(claude.target, claude.path)) closeClaude();
   for (const [key, place] of started) {
     if (!gone(place.target, place.path)) continue;
     started.delete(key);

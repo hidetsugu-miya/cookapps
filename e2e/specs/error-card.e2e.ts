@@ -33,6 +33,14 @@ describe("the failure cards", () => {
     expect(place).toEqual({ right: 16, aboveFooter: true, belowMiddle: true });
   });
 
+  it("shows the whole text on the card and writes it to the log without what a script printed on its standard error", async () => {
+    await mock("archive", rejects("接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required"));
+    await archive("First unread");
+    await waitForLog("接続のスクリプトが、準備ができる前に終了しました（終了コード 1）");
+    expect(await logged()).toEqual([{ level: "error", source: "inbox", message: "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）" }]);
+    await expect($(CARD)).toHaveText("接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required");
+  });
+
   it("puts the newest card on top, and keeps each until its close button is pressed", async () => {
     await mock("archive", rejects("one"));
     await archive("First unread");

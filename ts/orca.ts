@@ -883,11 +883,18 @@ function serverGone(environment: string | null, path: string) {
   const listed = environment === view?.target || (environment === null && here !== null);
   const kept = () => hasFileIn(environment, path) || hasDiffIn(environment, path) || hasDefinitionIn(environment, path);
   if (!listed) return !kept();
-  const read = environment === view?.target ? view?.state === "ready" : here?.state === "ready";
-  if (!read) return false;
-  if (!mix.worktrees.some((w) => w.path === path && placeOf(w) === environment)) return true;
+  if (!listRead(environment)) return false;
+  if (worktreeGone(environment, path)) return true;
   const open = mix.rows.some((r) => r.paneKey !== null && r.path === path && placeOf(r) === environment) || mix.terminals.some((t) => t.path === path && placeOf(t) === environment);
   return !open && !kept();
+}
+
+// Whether the list of `environment` is on the screen and was read well.
+const listRead = (environment: string | null) => (environment === view?.target ? view?.state === "ready" : environment === null && here?.state === "ready");
+
+// Whether Orca's list, read well, has not the worktree at `path` of `environment` any more (A-34: the pane of Claude Code of the language servers closes by this alone, and not with the last tab of the worktree). A list that is not on the screen or not read well does not say it.
+function worktreeGone(environment: string | null, path: string) {
+  return listRead(environment) && !mix.worktrees.some((w) => w.path === path && placeOf(w) === environment);
 }
 
 // The modal of A-40 shows the session it was opened for as the list has it now, and closes when the list no longer has it, when its project was selected, or when the screen is not shown.
@@ -901,7 +908,7 @@ function syncPeek() {
 }
 
 function draw() {
-  syncServers(serverGone);
+  syncServers(serverGone, worktreeGone);
   drawBadge();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();

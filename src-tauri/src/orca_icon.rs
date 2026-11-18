@@ -140,6 +140,14 @@ fn lookup(table: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
         .map(|(_, icon)| *icon)
 }
 
+/// `lookup` that takes no notice of the case of ASCII letters (the keys of the table are lowercase), so the name is not copied.
+fn lookup_ignore_case(table: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
+    table
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+        .map(|(_, icon)| *icon)
+}
+
 /// The icon of the language `language` of A-21 (the card of a language server, A-34), or none.
 pub fn language_icon(language: &str) -> Option<&'static str> {
     lookup(LANGUAGE_TO_ICON, language)
@@ -151,7 +159,7 @@ pub fn file_icon(name: &str) -> Option<&'static str> {
         return Some(icon);
     }
     if let Some((_, extension)) = name.rsplit_once('.') {
-        if let Some(icon) = lookup(EXTENSION_TO_ICON, &extension.to_lowercase()) {
+        if let Some(icon) = lookup_ignore_case(EXTENSION_TO_ICON, extension) {
             return Some(icon);
         }
     }
@@ -165,6 +173,12 @@ mod tests {
 
     fn icon_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/vendor/jetbrains-icons")
+    }
+
+    #[test]
+    fn an_extension_takes_no_notice_of_case() {
+        assert_eq!(file_icon("Photo.PNG"), file_icon("photo.png"));
+        assert_eq!(file_icon("Cargo.TOML"), Some("toml"));
     }
 
     #[test]

@@ -40,6 +40,8 @@ const VERSION: u32 = 3;
 const MAX_NAME: usize = 64;
 /// The language whose servers have the automatic way of ruby-lsp, and the name of the server that a repository with nothing saved has.
 const RUBY: &str = "ruby";
+const TYPESCRIPT: &str = "typescript";
+const JAVASCRIPT: &str = "javascript";
 const DEFAULT_SERVER: &str = "ruby-lsp";
 /// The longest text of a setting, in characters.
 const MAX_TEXT: usize = 4096;
@@ -180,11 +182,25 @@ impl LspRepoSettings {
     }
 }
 
-/// The key of the server of `settings` that takes `language` (a language of A-21), which is the language itself, none when the repository has no server of it (A-34).
+/// The key of the server of `settings` that takes `language` (a language of A-21), which is the language itself, none when the repository has no server of it (A-34). JavaScript with no server of its own is taken by the server of TypeScript (one typescript-language-server process for both, #976).
 pub(crate) fn server_for(settings: &LspRepoSettings, language: &str) -> Option<String> {
     settings
         .server(language)
+        .or_else(|| {
+            (language == JAVASCRIPT)
+                .then(|| settings.server(TYPESCRIPT))
+                .flatten()
+        })
         .map(|server| server.language.clone())
+}
+
+/// The languages whose files the server of `language` is told about: its own, and JavaScript's for the server of TypeScript (`server_for`).
+pub(crate) fn languages_taken(language: &str) -> Vec<String> {
+    let mut taken = vec![language.to_owned()];
+    if language == TYPESCRIPT {
+        taken.push(JAVASCRIPT.to_owned());
+    }
+    taken
 }
 
 // ---- the decision ----
@@ -855,13 +871,14 @@ pub(crate) struct Planned {
     pub language: String,
 }
 
-/// The way the server of `settings` is started, from what `collect` read: where it runs (`decide`), and the command of the table when the settings have none (`detect::auto_command`, which asks the place through `run`, once for each place with `cache`).
+/// The way the server of `settings` is started, from what `collect` read: where it runs (`decide`), and the command of the table when the settings have none (`detect::auto_command`, which asks the place through `run`, once for each place with `cache`). With `lenient` a place that cannot be asked leaves the command out (the card of that server shows no way) instead of failing the whole read; the start (`plan_for`) is not lenient, so it says why.
 fn launch_of(
     run: &mut impl FnMut(&str, usize) -> Result<Ran, String>,
     worktree: &str,
     inputs: &Inputs,
     settings: &LspServerSettings,
     cache: &mut HashMap<detect::Place, detect::Reach>,
+    lenient: bool,
 ) -> Result<LspLaunch, String> {
     // Only ruby reads the lock (as `collect` does).
     let lock = inputs
@@ -873,7 +890,10 @@ fn launch_of(
         inputs.compose.as_deref(),
         host_runs(settings, lock),
     )?;
-    let auto = detect::auto_command(run, &launch, settings, cache)?;
+    let auto = match detect::auto_command(run, &launch, settings, cache) {
+        Err(_) if lenient => None,
+        auto => auto?,
+    };
     Ok(resolve(launch, settings, worktree, auto.as_deref()))
 }
 
@@ -894,7 +914,14 @@ fn plan_for(
     let route = route_of(environment, project, &settings)?;
     let mut here = |command: &str, limit: usize| run(&route, worktree, command, limit);
     let inputs = collect(&mut here, worktree, server.is_ruby())?;
-    let launch = launch_of(&mut here, worktree, &inputs, server, &mut HashMap::new())?;
+    let launch = launch_of(
+        &mut here,
+        worktree,
+        &inputs,
+        server,
+        &mut HashMap::new(),
+        false,
+    )?;
     Ok(Planned {
         route,
         launch,
@@ -931,7 +958,7 @@ fn launches_for(
     let mut cache = HashMap::new();
     chosen
         .into_iter()
-        .map(|server| launch_of(&mut here, worktree, &inputs, server, &mut cache))
+        .map(|server| launch_of(&mut here, worktree, &inputs, server, &mut cache, true))
         .collect()
 }
 
@@ -1501,8 +1528,36 @@ mod tests {
             server_for(&repo, "typescript").as_deref(),
             Some("typescript")
         );
-        assert_eq!(server_for(&repo, "javascript"), None);
+        // JavaScript with no server of its own is taken by the server of TypeScript, and has its own when the repository has one.
+        assert_eq!(
+            server_for(&repo, "javascript").as_deref(),
+            Some("typescript")
+        );
+        assert_eq!(
+            server_for(
+                &LspRepoSettings {
+                    servers: vec![server_of("javascript")],
+                    ..settings()
+                },
+                "typescript"
+            ),
+            None
+        );
+        assert_eq!(
+            server_for(
+                &LspRepoSettings {
+                    servers: vec![server_of("typescript"), server_of("javascript")],
+                    ..settings()
+                },
+                "javascript"
+            )
+            .as_deref(),
+            Some("javascript")
+        );
         assert_eq!(server_for(&repo, "python"), None);
+        assert_eq!(languages_taken("typescript"), ["typescript", "javascript"]);
+        assert_eq!(languages_taken("javascript"), ["javascript"]);
+        assert_eq!(languages_taken("ruby"), ["ruby"]);
         assert_eq!(server_for(&repo, ""), None);
         // A repository with nothing saved has ruby-lsp for ruby.
         assert_eq!(server_for(&settings(), "ruby").as_deref(), Some("ruby"));
@@ -2752,6 +2807,61 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, "言語サーバー「gone」の設定がありません");
         assert_eq!(runs, 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_service_that_cannot_be_asked_leaves_the_command_out_of_its_server_only() {
+        let dir = temp_dir("launch-lenient");
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![
+                    server(),
+                    LspServerSettings {
+                        language: "rust".into(),
+                        name: String::new(),
+                        ..server()
+                    },
+                ],
+                ..settings()
+            },
+        )
+        .unwrap();
+        let config = compose(json!({"app": {"volumes": [bind(WT, "/app")]}}));
+        let got = launches_for(
+            &dir,
+            None,
+            "repo-1",
+            WT,
+            &["ruby".to_owned(), "rust".to_owned()],
+            |_, _, command, _| {
+                Ok(if command.contains("docker compose config") {
+                    ran(0, &config, "")
+                } else {
+                    ran(2, "", "OCI runtime exec failed\n")
+                })
+            },
+        )
+        .unwrap();
+        // Ruby's command is not looked for, so it keeps its way; the rust server shows no command, and its start says why.
+        assert_eq!(
+            got[0].command.as_deref(),
+            Some("docker compose exec -T -w /app app bundle exec ruby-lsp")
+        );
+        assert_eq!(
+            (got[1].method, got[1].command.clone()),
+            (LspMethod::Compose, None)
+        );
+        let err = plan_for(&dir, None, "repo-1", WT, "rust", |_, _, command, _| {
+            Ok(if command.contains("docker compose config") {
+                ran(0, &config, "")
+            } else {
+                ran(2, "", "OCI runtime exec failed\n")
+            })
+        })
+        .unwrap_err();
+        assert!(err.contains("OCI runtime exec failed"), "{err}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
