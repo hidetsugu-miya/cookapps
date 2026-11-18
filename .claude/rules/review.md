@@ -180,8 +180,8 @@ Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
 
 ### Let a release-only commit keep the pass
 
-The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need CI and E2E on that HEAD (the records are per HEAD, so the exemption below covers only the review pass record), and no release-verifier launch (an Opus launch for a mechanical check).
-`pre-git.sh` takes the newest commit of the push range that has a pass record, or else the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
+The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need no review pass record and no release-verifier launch (an Opus launch for a mechanical check), and no CI or E2E record either, because the diff holds nothing that the static checks or E2E read (at the owner's instruction, 2026-11-18; #931. Before it, the records were needed on that HEAD, because they are per HEAD; `testing.md`).
+`pre-git.sh` takes, for the review, the newest commit of the push range that has a pass record, and, for CI and E2E, the newest commit that has both passing records, or else in both cases the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. A HEAD that has its own records needs no such diff. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
 - `README.md`, `CHANGELOG.md` and anything under `docs/`
 
 Any other path, or a deleted or missing side, is offending, and the push stops with the paths listed.
@@ -189,9 +189,9 @@ A feature branch that takes in a moved main is not release-only, and it goes thr
 Only release-verifier still writes pass records.
 
 ```text
-Good: release/next writes CHANGELOG -> run-e2e.sh (its run-ci.sh beside wdio) -> push (the diff is release-only)
+Good: release/next writes CHANGELOG -> push (the diff is release-only, so no CI, E2E or pass record is asked)
 Bad:  a feature branch merges main with other commits in -> push without a review
-Bad:  release/next writes CHANGELOG -> push without run-e2e.sh (and the CI run beside it)
+Bad:  release/next also changes a file under `src-tauri/` -> push without run-e2e.sh (the diff is not release-only)
 ```
 
 ## Scope of a version

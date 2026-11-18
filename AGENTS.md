@@ -146,7 +146,7 @@ scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo
 ```
 
 `.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E, and runs `run-ci.sh` beside its wdio run after `e2e:build` when HEAD has no passing CI record.
-Before a push, `pre-git.sh` only checks that both records exist for HEAD.
+Before a push, `pre-git.sh` only checks that both records exist for HEAD, unless the diff from an earlier commit that has them (or from the range base) holds only `README.md`, `CHANGELOG.md` and `docs/`, as the commits of the Release PR do (`.claude/rules/testing.md`).
 
 ## CI
 

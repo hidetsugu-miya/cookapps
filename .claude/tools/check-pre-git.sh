@@ -90,18 +90,30 @@ else echo "ok   未コミットの変更ありで tag と push（別のコマン
 git -C "$work" reset -q dirty.txt
 rm "$work/dirty.txt"
 
-# リリース作業だけの新しいコミット: 合格記録がなくても通り、レビューのゲートの行が exit=0 で残る
+# リリース作業だけの新しいコミット: 合格記録も CI・E2E の記録もなくても通り、CI・E2E とレビューのゲートの行が exit=0 で残る（#931）
 echo "## v0.0.1" > "$work/CHANGELOG.md"
 git -C "$work" add CHANGELOG.md
 git -C "$work" commit -q -m "release"
-rsha=$(git -C "$work" rev-parse HEAD)
-jq -n --arg sha "$rsha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$rsha"
-jq -n --arg sha "$rsha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$rsha"
+check_logged_pass "CI・E2E\\(リリース作業だけ\\)" "リリース作業だけの新しいコミットで push（CI・E2E の記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
 check_logged_pass "レビュー" "リリース作業だけの新しいコミットで push（合格記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+# 記録のあるコミットから HEAD までにリリース作業の外の変更があれば、CI と E2E の記録のない HEAD は止まる
+echo change2 > "$work/change2.txt"
+git -C "$work" add change2.txt
+git -C "$work" commit -q -m "change2"
+check_gate "CI" "リリース作業の外の変更を含む新しいコミットで push（CI・E2E の記録なし）" "$work" "git push -u origin HEAD" "CI の記録が無いか"
+git -C "$work" reset -q --hard HEAD~1
+# 記録のあるコミットが範囲になく、範囲の基点から HEAD までがリリース作業だけでも通る（基点はリモートにある）
+git -C "$work" push -q -u origin HEAD 2>/dev/null || { echo "FAIL リモートへの push の準備"; fail=1; }
+echo "## v0.0.2" > "$work/CHANGELOG.md"
+git -C "$work" add CHANGELOG.md
+git -C "$work" commit -q -m "release 2"
+check_logged_pass "CI・E2E\\(リリース作業だけ\\)" "範囲の基点からリリース作業だけの新しいコミットで push（範囲に記録なし）" "$work" "git push origin HEAD"
 check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"
 check 0 "無関係なコマンド" "$work" "git status"
 
 # main の checkout の HEAD に記録が無ければ、従来どおり止まる
-git -C "$main" commit -q --allow-empty -m "empty"
+echo main-change > "$main/main-change.txt"
+git -C "$main" add main-change.txt
+git -C "$main" commit -q -m "main change"
 check 2 "main の checkout で push（記録なし）" "$main" "git push origin main"
 exit $fail

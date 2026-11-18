@@ -72,13 +72,30 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree|handover)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"
   # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and release-verifier's pass record (.claude/rules/review.md).
-  # The CI and E2E records are needed on a release-only HEAD too: the records are per HEAD.
   # A push with no new commit (a tag on a commit already on the remote) needs none of them.
-  # Only release-verifier's pass record may be on an earlier commit of the range when only the release work (README, CHANGELOG, docs) comes after it.
+  # None of the three is needed on HEAD when only the release work (README, CHANGELOG, docs) comes after an earlier commit that has them (#931).
+  # That earlier commit is the newest of the range with both passing CI and E2E records (for the review: the newest with a pass record), or else the range base.
   if ! git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1 || [ -n "$(git rev-list -n 1 "$range")" ]; then
     main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
-    gate "CI" "$main/.claude/tools/check-ci.sh"
-    gate "E2E" "$main/.claude/tools/check-e2e.sh"
+    t=$(hook_log_now)
+    skip_ci=0
+    if ! { "$main/.claude/tools/check-ci.sh" >/dev/null 2>&1 && "$main/.claude/tools/check-e2e.sh" >/dev/null 2>&1; }; then
+      base=""
+      for c in $(git rev-list "$range" 2>/dev/null); do
+        jq -e --arg sha "$c" '.sha == $sha and .clean == true and .passed == true' "$main/.claude/ci/$c" >/dev/null 2>&1 \
+          && jq -e --arg sha "$c" '.sha == $sha and .clean == true and .passed == true' "$main/.claude/e2e/$c" >/dev/null 2>&1 \
+          && { base=$c; break; }
+      done
+      # The range base is already on the remote, so it passed this gate: release work on top of it (a Release PR) needs no record of its own.
+      [ -n "$base" ] || base="${range%..*}"
+      [ -n "$base" ] && "$main/.claude/tools/release-only-diff.sh" "$base" HEAD >/dev/null 2>&1 && skip_ci=1
+    fi
+    if [ "$skip_ci" -eq 1 ]; then
+      hook_log_gate "CI・E2E(リリース作業だけ)" "$t" 0
+    else
+      gate "CI" "$main/.claude/tools/check-ci.sh"
+      gate "E2E" "$main/.claude/tools/check-e2e.sh"
+    fi
     t=$(hook_log_now)
     if [ ! -f "$main/.claude/reviews/$(git rev-parse HEAD)" ]; then
       base=""
