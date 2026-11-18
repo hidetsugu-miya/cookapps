@@ -40,6 +40,8 @@ const statuses = new Map<string, LspStatus>();
 let pane: LspPlace | null = null;
 let loaded = false;
 let settings: LspRepoSettings | null = null;
+// The Hosts of this Mac's `~/.ssh/config`, read with the settings of a worktree of a saved environment (empty for this machine's).
+let sshHosts: string[] = [];
 let launch: LspLaunch | null = null;
 let launchError: string | null = null;
 // The message of a save, a restart or a start of the container that failed.
@@ -103,8 +105,19 @@ function drawFields() {
   };
   set("orca-lsp-command", launch?.command ?? "");
   set("orca-lsp-mount", launch?.mount ?? "");
-  set("orca-lsp-ssh", settings?.sshHost ?? "");
-  ($("orca-lsp-ssh") as HTMLInputElement).disabled = settings === null;
+  // The Hosts, with the saved one when the file does not have it (it stays the chosen value).
+  const saved = settings?.sshHost ?? "";
+  const hosts = saved === "" || sshHosts.includes(saved) ? sshHosts : [...sshHosts, saved];
+  const ssh = $("orca-lsp-ssh") as HTMLSelectElement;
+  ssh.replaceChildren(
+    ...["", ...hosts].map((host) => {
+      const option = tag("option", "", host);
+      option.value = host;
+      return option;
+    }),
+  );
+  ssh.value = saved;
+  ssh.disabled = settings === null;
   $("orca-lsp-ssh-row").hidden = pane.target === null;
   const candidates = launch?.candidates ?? [];
   $("orca-lsp-service-row").hidden = candidates.length < 2;
@@ -160,6 +173,9 @@ async function load() {
     const read = await invoke("lsp_settings", { environment: here.target, project: here.project });
     if (mine !== generation) return;
     settings = read;
+    // The list is read when the field is shown, which is for a saved environment only.
+    sshHosts = here.target === null ? [] : await invoke("ssh_hosts");
+    if (mine !== generation) return;
     const name = read.servers[0]?.name;
     if (name !== undefined) {
       const status = await invoke("lsp_status", { environment: here.target, worktree: here.path, server: name });
@@ -206,7 +222,7 @@ const save = (patch: Patch) => {
 };
 
 // The text of a field as a setting: none when it is empty.
-const textOf = (id: string) => ($(id) as HTMLInputElement).value.trim() || null;
+const textOf = (id: string) => ($(id) as HTMLInputElement | HTMLSelectElement).value.trim() || null;
 
 // ---- starting and stopping ----
 
@@ -300,6 +316,7 @@ export function syncLsp(next: LspPlace | null, visible: boolean) {
     pane = next;
     loaded = false;
     settings = null;
+    sshHosts = [];
     launch = null;
     launchError = null;
     note = null;

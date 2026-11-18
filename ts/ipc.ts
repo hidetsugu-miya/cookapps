@@ -404,6 +404,8 @@ export interface Commands {
   orca_files_delete: { args: { path: string; entries: OrcaDeleteEntry[]; environment: string | null }; result: OrcaDeleted };
   // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
+  // A-34: the names of the Hosts of this Mac's `~/.ssh/config` (and of the files it includes), in the order they come, with no pattern (`*`, `?`, `!`) and no name that ssh is not given; the choices of the ssh Host of a repository. No file is an empty list.
+  ssh_hosts: { args: undefined; result: string[] };
   // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, taking `ruby`, with `autoStart` true and nothing replaced).
   lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
   // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name that is empty, used twice or over 64 characters, and a language that is not one of A-21, that a server has twice or that two servers have are errors.

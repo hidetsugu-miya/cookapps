@@ -236,6 +236,7 @@ const computed = {
   // A-34: the settings of a repository that has none saved (the one server, ruby-lsp, taking Ruby), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
   lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [{ name: "ruby-lsp", languages: ["ruby"], autoStart: true, command: null, mount: null, service: null }] }),
   lsp_settings_set: ({ settings }) => settings,
+  ssh_hosts: () => [],
   orca_browse_dir: ({ path }) => {
     const resolvedPath = path.trim() === "" || path.trim() === "~" ? "/home/dev" : path;
     if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";

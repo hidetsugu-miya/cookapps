@@ -428,6 +428,8 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf("lsp_settings")).toEqual([{ environment: null, project: repo }]);
     expect(await callsOf("lsp_launch")).toEqual([worktreeArgs]);
     expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree, server: "ruby-lsp" }]);
+    // The Hosts of ~/.ssh/config are read for a saved environment's field only.
+    expect(await callsOf("ssh_hosts")).toEqual([]);
   });
 
   it("reads nothing while the definition is not what the pane shows (A-34)", async () => {
@@ -553,20 +555,40 @@ describe("orca: definition (A-34)", () => {
     await expect($("#orca-lsp-mount")).toHaveValue("/application");
   });
 
-  it("asks for the ssh host only for a saved environment, and saves it with that environment (A-34)", async () => {
+  it("asks for the ssh host only for a saved environment, chooses it from the Hosts of ~/.ssh/config, and saves it with that environment (A-34)", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: [], ...timers({ orcaClock: 600000 }) });
     await project("example-app").click();
     await filesToggle().click();
     await waitForCount("#orca-files-tree .orca-file", 2);
     await mock("lsp_settings", unset({ environment: "Studio", sshHost: "dev" }));
     await mock("lsp_launch", composeLaunch());
+    await mock("ssh_hosts", ["dev", "build"]);
     await mode("定義").click();
     await expect($("#orca-lsp-ssh-row")).toBeDisplayed();
+    expect(await textsOf("#orca-lsp-ssh option")).toEqual(["", "dev", "build"]);
     await expect($("#orca-lsp-ssh")).toHaveValue("dev");
+    expect(await callsOf("ssh_hosts")).toEqual([null]);
     expect(await callsOf("lsp_settings")).toEqual([{ environment: "Studio", project: repo }]);
     expect(await callsOf("lsp_launch")).toEqual([{ environment: "Studio", project: repo, worktree, server: "ruby-lsp" }]);
     await change("orca-lsp-ssh", "build");
     expect(await waitForCalls("lsp_settings_set")).toEqual([{ settings: unset({ environment: "Studio", sshHost: "build" }) }]);
+    // The empty choice takes the Host away.
+    const set = await mock("lsp_settings_set", unset({ environment: "Studio", sshHost: null }));
+    await change("orca-lsp-ssh", "");
+    expect(await waitForCalls(set)).toEqual([{ settings: unset({ environment: "Studio", sshHost: null }) }]);
+  });
+
+  it("shows a saved ssh host that ~/.ssh/config does not have as the chosen value (A-34)", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: [], ...timers({ orcaClock: 600000 }) });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await mock("lsp_settings", unset({ environment: "Studio", sshHost: "gone" }));
+    await mock("lsp_launch", composeLaunch());
+    await mock("ssh_hosts", ["dev"]);
+    await mode("定義").click();
+    expect(await textsOf("#orca-lsp-ssh option")).toEqual(["", "dev", "gone"]);
+    await expect($("#orca-lsp-ssh")).toHaveValue("gone");
   });
 
   it("restarts the server with one command that replaces it, and keeps the state it answers (A-34)", async () => {

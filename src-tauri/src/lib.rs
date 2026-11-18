@@ -405,6 +405,7 @@ pub fn run() {
             lsp::container::lsp_container_start,
             lsp::view::lsp_word,
             lsp::view::lsp_places,
+            ssh::ssh_hosts,
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,
