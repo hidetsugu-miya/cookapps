@@ -108,7 +108,7 @@ After `e2e:build`, `run-e2e.sh` starts `run-ci.sh` of its own checkout in the ba
 
 ### Let runs overlap, because each app takes its own port
 
-One run starts five apps, one per capability, and `onPrepare` in `wdio.conf.ts` gives each app a free WebDriver port.
+One run starts six apps, one per capability, and `onPrepare` in `wdio.conf.ts` gives each app a free WebDriver port.
 Each checkout has its own E2E binary and `e2e/dist`.
 So runs from the main checkout and from the worktree can overlap, and there is no need to wait for the other.
 Do not set a fixed port: the service waits for any WebDriver server on its port, so a second run on the same port drives the first run's app and reports on the wrong code.
@@ -118,7 +118,7 @@ Good: the main checkout and the worktree run run-e2e.sh at the same time
 Bad:  set embeddedPort to the fixed value 4445 in wdio.conf.ts
 ```
 
-### Split the specs among the five apps in `wdio.conf.ts`, and do not pass `--spec`
+### Split the specs among the six apps in `wdio.conf.ts`, and do not pass `--spec`
 
 The capabilities name their specs, and a spec named nowhere runs in the last app, so a new spec needs no change there.
 `--spec` overrides the specs of the capabilities, so the same spec runs in several apps and the passing count grows.
@@ -126,6 +126,21 @@ The capabilities name their specs, and a spec named nowhere runs in the last app
 ```text
 Good: add e2e/specs/foo.e2e.ts and let it run in the last app
 Bad:  wdio run wdio.conf.ts --spec e2e/specs/inbox.e2e.ts, which runs inbox in more than one app
+```
+
+### Keep every app under 180 seconds: even out the split first, and add an app when that is not enough
+
+After a full run, sum the seconds of each app from its log (the lines `[webkit … #{app}-{n}] N passing ({time})` in `.claude/e2e/{HEAD SHA}.log`).
+When an app takes more than 180 seconds, move specs among the apps in `namedSpecs` so that the sums come close, and write the new seconds in the comment of `wdio.conf.ts` (at the owner's instruction, 2026-11-18; #930).
+When the seconds of all the specs divided by the number of apps are still over 180, add one capability, measure the next full run, and keep it only when wdio got shorter.
+No app is shorter than its longest spec: split such a spec by its parts instead ("Keep one `e2e/specs/{screen}.e2e.ts` per screen").
+The slowest app sets the length of every run, and every round of the review waits for E2E: on 2026-11-18 the last app held ten specs and took 345 of wdio's 351 seconds, while the other four ended in 128 to 161.
+An app costs about 1 GB of memory (measured on 2026-11-18: five apps took about 5 GB of the 64 GB), so the cost of one more is the competition for the cores, which only a run shows.
+
+```text
+Good: an app takes 205 seconds and the five sum to 850 -> move specs so that each is near 170
+Good: the five sum to 1,000 seconds -> add a sixth capability, and keep it only if wdio got shorter
+Bad:  add a capability without measuring, or leave an app at 300 seconds because the run passed
 ```
 
 ### Run one failed spec alone with `run-e2e.sh --only`, the one exception to "do not pass `--spec`"

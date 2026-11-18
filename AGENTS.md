@@ -147,12 +147,12 @@ scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo
 ```
 
 `.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E, and runs `run-ci.sh` beside its wdio run after `e2e:build` when HEAD has no passing CI record.
-Before a push, `pre-git.sh` only checks that both records exist for HEAD.
+Before a push, `pre-git.sh` only checks that both records exist for HEAD, unless the diff from an earlier commit that has them (or from the range base) holds only `README.md`, `CHANGELOG.md` and `docs/`, as the commits of the Release PR do (`.claude/rules/testing.md`).
 
 ## CI
 
 The release is `.github/workflows/release.yml`, and only a pushed tag `v*` and the owner's merge of the Release PR (a closed pull request from `release/next` into main, merged by the repository's owner) start it (at the owner's instruction, 2026-11-09; #303).
-Static, unit and E2E checks run on the developer's machine before a push (`run-ci.sh` and `run-e2e.sh`, with a record for each HEAD that `pre-git.sh` checks), not in GitHub Actions, so a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
+Static, unit and E2E checks run on the developer's machine before a push (`run-ci.sh` and `run-e2e.sh`, with a record for each HEAD that `pre-git.sh` checks, except a HEAD whose diff from an earlier commit that has them holds only `README.md`, `CHANGELOG.md` and `docs/`, which passes with no record), not in GitHub Actions, so a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
 A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`.
 A release is the owner's merge of the Release PR, the pull request that writes the new version at the top of `CHANGELOG.md` (an agent prepares it, `.claude/rules/issues.md`), which `release.yml` tags and releases at once, in the run that the merge starts; the next agent to act watches that run through (an agent tags by hand only when the workflow did not, `.claude/rules/issues.md`).

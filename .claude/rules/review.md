@@ -2,17 +2,20 @@
 
 ## Roles
 
-### Reviewers find, release-verifier decides, and `pre-git.sh` gates
+### Reviewers find, release-verifier decides, `range-check.sh` checks the range of a Low fix, and `pre-git.sh` gates
 
 Reviewers (security, performance, code) find and rate findings, and edit nothing.
-release-verifier decides whether a finding is real and whether it stops the release, checks the CI and E2E records with `check-ci.sh` and `check-e2e.sh`, and alone writes the pass record.
+release-verifier decides whether a finding is real and whether it stops the release, checks the CI and E2E records with `check-ci.sh` and `check-e2e.sh`, and writes the pass record of a reviewed HEAD.
 It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only, and whoever fixes one confirms it then.
+`range-check.sh` is the mechanical check of a fix of non-blocking findings made after a pass: it does for that range what release-verifier did, with no launch, and writes the pass record when the check passes ("Send the fixes for non-blocking findings…" below; at the owner's instruction, 2026-11-18; #932: the range check passed 15 times in 15, and never changed a result. It replaces the instruction of 2026-10-29, which had release-verifier do it).
 `pre-git.sh` is the mechanical gate: it checks the CI, E2E and pass records of HEAD, runs none of the checks itself, and never judges a finding.
 Without this split, the reviewers and the verifier both checked whether a finding was fixed, and the verifier read the code for every Low.
 
 ```text
 Good: a reviewer reports a finding -> release-verifier reads the code and rates it -> pre-git.sh checks the record
+Good: Low fixed after the pass -> range-check.sh checks the diff against the list of findings -> pre-git.sh checks the record
 Bad:  the reviewer and release-verifier both check in round 2 that the same finding is fixed
+Bad:  launch release-verifier only to check that a Low fix stays inside the files of the findings
 ```
 
 ## Flow
@@ -131,20 +134,23 @@ Bad:  pass -> push with Low left, and ask the owner whether to fix it
 
 ### Send the fixes for non-blocking findings through the next round when the round failed, and through the range check when it passed
 
-A fix made after a pass is not sent through the reviewers.
-Launch only release-verifier, and pass it the range (from the passed HEAD to the new HEAD) and the list of fixed findings.
-release-verifier checks that the diff is only fixes for the findings on the list, and writes the pass record for the new HEAD. It does not review the content of the findings.
-If a change not on the list is mixed in, it fails, and that diff goes through the first-round flow.
+A fix made after a pass is not sent through the reviewers, and release-verifier is not launched.
+Write the fixed findings in a file, one to a line, each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
+A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
+Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh {passed HEAD} {list file}` by the main checkout's path, from the worktree (`worktree.md`).
+`range-check.sh` stops, with the reason on stderr and exit 1, unless all of these hold: the working tree is clean, the passed commit has a pass record or is `origin/main` or its ancestor, it is an ancestor of HEAD and not HEAD, HEAD has passing CI and E2E records (`check-ci.sh`, `check-e2e.sh`), and every path of `git diff --name-only --no-renames {passed HEAD} HEAD` appears in the list. It prints each path outside the list, and that diff goes through the first-round flow. It does not review the content of the findings.
+When all hold, it writes the pass record for the new HEAD with `.claude/hooks/record-review.sh`.
 Put the fixes in the same pull request.
-A pull request where the owner asked only for fixes to non-blocking findings (such as findings on an already merged version) also passes with only the range check. The range is `origin/main..HEAD`.
+A pull request that fixes only non-blocking findings of an already merged version also passes with only the range check: the passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main (`range-check.sh origin/main {list file}`; at the owner's instruction, 2026-10-29).
 A fix made inside a failed round is not this: it is part of the blocking fix, and the second round reads it.
 At the owner's instruction (2026-10-29). Running a review for every small fix produced too many reviews.
-The check of the pass record (`pre-git.sh`) stays. The writer stays limited to release-verifier, so that the range check alone can let a change through.
+The check of the pass record (`pre-git.sh`) stays. The writers are release-verifier and `range-check.sh` alone, so that no other command can let a change through.
 
 ```text
-Good: after a1b2c3d passed, fix Low -> pass release-verifier a1b2c3d..HEAD and the list of findings -> pass record -> push
+Good: after a1b2c3d passed, fix Low and commit -> run-e2e.sh -> `range-check.sh a1b2c3d findings.txt` -> pass record -> push
 Bad:  after a pass, fix Low and run the performance and code reviews again
-Bad:  add a new feature to a Low fix and push with only the range check
+Bad:  after a pass, fix Low and launch release-verifier to check the range
+Bad:  add a new feature to a Low fix and push with only the range check (a path outside the list stops it)
 ```
 
 ### Keep fixes to the minimum at the finding's location
@@ -168,11 +174,11 @@ Bad:  start run-ci.sh after the reviewers have read the code, and fix its failur
 
 ### Rerun CI and E2E every time a commit is added
 
-A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`) before handing it to release-verifier.
+A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`) before handing it to release-verifier, or to `range-check.sh` for a Low fix after a pass.
 The records are per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
 
 ```text
-Good: pass -> fix Low and commit -> run-e2e.sh (its CI beside wdio) -> release-verifier (range check) -> push
+Good: pass -> fix Low and commit -> run-e2e.sh (its CI beside wdio) -> range-check.sh -> push
 Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
 ```
 
@@ -180,18 +186,18 @@ Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
 
 ### Let a release-only commit keep the pass
 
-The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need CI and E2E on that HEAD (the records are per HEAD, so the exemption below covers only the review pass record), and no release-verifier launch (an Opus launch for a mechanical check).
-`pre-git.sh` takes the newest commit of the push range that has a pass record, or else the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
+The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need no review pass record and no release-verifier launch (an Opus launch for a mechanical check), and no CI or E2E record either, because the diff holds nothing that the static checks or E2E read (at the owner's instruction, 2026-11-18; #931. Before it, the records were needed on that HEAD, because they are per HEAD; `testing.md`).
+`pre-git.sh` takes, for the review, the newest commit of the push range that has a pass record, and, for CI and E2E, the newest commit that has both passing records, or else in both cases the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. A HEAD that has its own records needs no such diff. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
 - `README.md`, `CHANGELOG.md` and anything under `docs/`
 
 Any other path, or a deleted or missing side, is offending, and the push stops with the paths listed.
 A feature branch that takes in a moved main is not release-only, and it goes through the first round.
-Only release-verifier still writes pass records.
+Only release-verifier and `range-check.sh` still write pass records.
 
 ```text
-Good: release/next writes CHANGELOG -> run-e2e.sh (its run-ci.sh beside wdio) -> push (the diff is release-only)
+Good: release/next writes CHANGELOG -> push (the diff is release-only, so no CI, E2E or pass record is asked)
 Bad:  a feature branch merges main with other commits in -> push without a review
-Bad:  release/next writes CHANGELOG -> push without run-e2e.sh (and the CI run beside it)
+Bad:  release/next also changes a file under `src-tauri/` -> push without run-e2e.sh (the diff is not release-only)
 ```
 
 ## Scope of a version
@@ -204,14 +210,16 @@ In v0.10.1, features kept being added during the review, and the range to read a
 
 ## Pass record
 
-### Only release-verifier writes the pass record
+### Only release-verifier and `range-check.sh` write the pass record
 
 The record is `.claude/reviews/{HEAD SHA}` in the main checkout, and `.claude/hooks/record-review.sh` writes it.
-`guard-review.sh` stops anyone other than release-verifier from touching these two.
+`guard-review.sh` stops anyone other than release-verifier from touching these two directly, by the words of the command.
+`range-check.sh` calls `record-review.sh` itself after its checks, and the command that runs it names neither, so the guard lets it pass (at the owner's instruction, 2026-11-18; #932. It replaces "only release-verifier" of 2026-10-29).
 
 ```text
 Good: release-verifier calls record-review.sh
-Bad:  the main agent creates a file in .claude/reviews/
+Good: the main agent runs range-check.sh, which calls record-review.sh after its checks
+Bad:  the main agent creates a file in .claude/reviews/, or calls record-review.sh itself
 ```
 
 ## After the push

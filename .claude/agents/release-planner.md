@@ -1,6 +1,6 @@
 ---
 name: release-planner
-description: "つなぎAIの issue の並びを決める役。開いている issue の本文と関連するコードを読み、関連性から順番と依存を理由付きで JSON で返す。版の番号もリリースの時期も決めない（リリースはオーナーが Release PR をマージして行う）。編集しない。issue の作成時と未決定の解消時と並べ直しのときに、issue-plan の手順の中で起動する。"
+description: "つなぎAIの issue の並びを決める役。開いている issue の本文と関連するコードを読み、関連性から順番と依存を理由付きで JSON で返す。版の番号もリリースの時期も決めない（リリースはオーナーが Release PR をマージして行う）。編集しない。ship の開始時と、オーナーが頼んだ並べ直しのときに、issue-plan の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---

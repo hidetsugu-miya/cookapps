@@ -60,7 +60,7 @@ Read every photo with `Read` before committing it. Add a new photo only if the R
 1. Create the issue with `issue-plan`, label it `documentation`, and work on a `docs/{summary}` branch of the worktree (`use-worktree.sh`, `worktree.md`).
 2. Take the photos if a screen changed, and rewrite what the request asks.
 3. Check that every local link and image in the README exists.
-4. Commit, `run-ci.sh`, `run-e2e.sh`, push, `gh pr create` with `Closes #{n}`, `post-checks.sh`, `gh pr merge --merge`, fast-forward the main checkout, `use-worktree.sh --park`. Only `README.md` and `docs/` in the diff is release-only, so no reviewers run (`review.md`). Anything else in the diff goes through `review.md`.
+4. Commit, push, `gh pr create` with `Closes #{n}`, `post-checks.sh`, `gh pr merge --merge`, fast-forward the main checkout, `use-worktree.sh --park`. A diff of only `README.md`, `CHANGELOG.md` and `docs/` is release-only, so no `run-ci.sh`, no `run-e2e.sh` and no reviewers run: the push and `post-checks.sh` ask no record for it (`testing.md`, `review.md`). Anything else in the diff goes through `review.md`, with `run-e2e.sh` (and its `run-ci.sh`) first.
 5. Report what changed, what was not checked (the page as GitHub draws it, unless it was looked at), and the URL.
 
 When the Release PR is prepared ("After the owner merges the Release PR", step 1, in `issues.md`), read the README against the changes that go out. When one makes a photo or a claim out of date, do steps 2 and 3 in `release/next`, and let the Release PR carry them instead of steps 1 and 4. When none does, change nothing, and say so in the Release PR body.

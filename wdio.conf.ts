@@ -26,17 +26,20 @@ const freePorts = async (count: number) => {
   return ports;
 };
 
-// The service starts one app for each capability, so the specs are split into five capabilities and run in five apps at once.
-// The first four capabilities name their specs. The tests of the Orca screen are two specs, orca and orca-files (the file pane and the editor), each in an app of its own with one short spec beside it, so that the two halves run at the same time.
-// The other specs are spread so that the apps take about the same time, by the seconds of the first run of the five apps (2026-11-14, HEAD 86c2265; wdio took 134 seconds in all, and 205 before with four apps): orca 112, orca-files 92, slack-list 105, todo 71, slack-thread 40, orca-handoff 41, settings 38, inbox 39, sidebar 38, slack-compose 23, thread 12, calendar 9, todo-prompt 9, todo-claude 6; that is 117 for orca and todo-claude, 128 for slack-list and slack-compose, 133 for orca-files and orca-handoff, 132 for todo and its three, and 124 for the last app.
-// Every spec not named here (a new one included) runs in the last one, which is settings, inbox, sidebar and calendar today.
-// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (five apps for an unnamed spec, four for a named one).
+// The service starts one app for each capability, so the specs are split into six capabilities and run in six apps at once.
+// The first five capabilities name their specs. The tests of the Orca screen are two specs, orca and orca-files (the file pane and the editor), each in an app of its own with other specs beside it, so that the two halves run at the same time.
+// The other specs are spread so that the apps take about the same time, by the seconds of the last full run of the five apps (2026-11-18, HEAD 622e1f5; wdio took 196 seconds in all, and the apps took 188, 190, 192, 180 and 183 seconds, four of them over the 180 of `.claude/rules/e2e.md`; the 20 specs add up to 933 seconds, 156 for each of six apps): orca 125, orca-files 122, formation 111 (117 since it grew to 166 tests, below), slack-list 107, todo 83, database 62, settings 50, orca-handoff 45, slack-thread 45, sidebar 41, orca-definition 25, inbox 25, slack-compose 24, thread 19, footer 12, calendar 10, todo-prompt 10, orca-peek 6, todo-claude 6, claude-code 4; that is 157 for orca, thread and footer, 158 for slack-list, orca-handoff and todo-claude, 156 for orca-files, slack-compose and todo-prompt, 156 for formation and slack-thread, 155 for todo, database and calendar, and 152 for the last app.
+// Every spec not named here (a new one included) runs in the last one, which is settings, sidebar, orca-definition, inbox, orca-peek and claude-code today, so it has the least seconds to give a new spec room; when a new spec makes it the longest, name some of its specs in the first five.
+// The sixth app is kept because the first full run of the six (2026-11-18, HEAD f989ef0) made wdio shorter than the 196 seconds of the five: 155 seconds, with the apps at 153, 153, 152, 151, 151 and 148 (`.claude/rules/e2e.md`, "Keep every app under 180 seconds"). After formation grew from 145 tests to 166, the run of HEAD 6672d63 took 160 seconds, with the apps at 151, 152, 150, 159 (formation 117 and slack-thread 42), 149 and 146.
+// The seconds of a spec stayed within a few seconds in six full runs from 5cd81f6 to 51f88fe, except formation (102 to 151).
+// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (six apps for an unnamed spec, five for a named one).
 // `wdio:maxInstances: 1` keeps two workers out of one app.
 const namedSpecs = [
-  ["./e2e/specs/orca.e2e.ts", "./e2e/specs/todo-claude.e2e.ts"],
-  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/slack-compose.e2e.ts"],
-  ["./e2e/specs/orca-files.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts"],
-  ["./e2e/specs/todo.e2e.ts", "./e2e/specs/slack-thread.e2e.ts", "./e2e/specs/thread.e2e.ts", "./e2e/specs/todo-prompt.e2e.ts"],
+  ["./e2e/specs/orca.e2e.ts", "./e2e/specs/thread.e2e.ts", "./e2e/specs/footer.e2e.ts"],
+  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts", "./e2e/specs/todo-claude.e2e.ts"],
+  ["./e2e/specs/orca-files.e2e.ts", "./e2e/specs/slack-compose.e2e.ts", "./e2e/specs/todo-prompt.e2e.ts"],
+  ["./e2e/specs/formation.e2e.ts", "./e2e/specs/slack-thread.e2e.ts"],
+  ["./e2e/specs/todo.e2e.ts", "./e2e/specs/database.e2e.ts", "./e2e/specs/calendar.e2e.ts"],
 ];
 const appCapability = (specs: { "wdio:specs": string[] } | { "wdio:exclude": string[] }) => ({
   browserName: "tauri",
@@ -57,7 +60,7 @@ if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec
 export const config = {
   runner: "local",
   specs: ["./e2e/specs/**/*.e2e.ts"],
-  maxInstances: 5,
+  maxInstances: 6,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   capabilities:
     onlySpec !== undefined
