@@ -40,7 +40,7 @@ To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `sh
 
 - Version numbers and checks: `plan-release.py`
 - What counts as related: `.claude/agents/release-planner.md`
-- Releasing: the owner merges the Release PR (`issues.md`). The order does not start a release.
+- Releasing: the owner merges the Release PR (`.claude/skills/release/SKILL.md`). The order does not start a release.
 - Implementing: the `ship` skill
 
 ## When it runs
@@ -54,7 +54,7 @@ To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `sh
 ### Order every issue, and give a feature its own parent issue, with `issue-plan`
 
 A parent issue is a feature, not a version: it is the large issue itself, with its parts as sub-issues, and a closed one is a feature that has been released (at the owner's instruction, 2026-11-09, as a milestone; Discussion #293. It became a parent issue in #814). Only a `point:5` or `point:8` issue becomes one.
-`issue-plan` splits such an issue into issues of `point:3` or less, makes them its sub-issues, and keeps the large issue open as their parent with a comment that lists the parts, through `plan-release.py split`, which checks everything before it writes (an issue that already has a parent, or sub-issues that are none of the parts, is not split). When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change in the night run ("Run `ship`" in the "Rules" of `.claude/skills/ship/SKILL.md`, and "Keep one Release PR open" in `.claude/rules/issues.md`). When the large issue has `session`, it gives every part `session` too ("Use `session` only on the owner's word" in `.claude/rules/issues.md`). An issue that cannot be split into parts that merge one by one stays one issue and gets the label `whole`.
+`issue-plan` splits such an issue into issues of `point:3` or less, makes them its sub-issues, and keeps the large issue open as their parent with a comment that lists the parts, through `plan-release.py split`, which checks everything before it writes (an issue that already has a parent, or sub-issues that are none of the parts, is not split). When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change in the night run ("Run `ship`" in the "Rules" of `.claude/skills/ship/SKILL.md`, and "Keep one Release PR open while changes wait" in `.claude/skills/release/SKILL.md`). When the large issue has `session`, it gives every part `session` too ("Use `session` only on the owner's word" in `.claude/rules/issues.md`). An issue that cannot be split into parts that merge one by one stays one issue and gets the label `whole`.
 An issue of `point:3` or less that belongs to no feature has no parent. A parent does not decide the order, a version or the release: it is not ordered, not started and not counted as a change, and its parts are.
 `plan-release.py close` closes a parent once all its sub-issues are closed and released.
 The milestones that were made before #814 stay, closed, as history; no new one is made.

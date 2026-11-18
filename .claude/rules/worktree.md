@@ -86,7 +86,7 @@ Bad:  rm -rf .claude/worktrees/work while a night run is using it
 ### On a worktree branch, do not write a version
 
 The source holds no version (`versioning.md`: `0.0.0` in `Cargo.toml` and `Cargo.lock`, none in `tauri.conf.json`), and `scripts/check-version.sh` fails when a branch changes it (at the owner's instruction, 2026-11-09; Discussion #293).
-Only the Release PR writes `docs/features.md` and `CHANGELOG.md`, with the heading of the new version (`issues.md`). The tag is made on its merge commit (`versioning.md`).
+Only the Release PR writes `docs/features.md` and `CHANGELOG.md`, with the heading of the new version (`.claude/skills/release/SKILL.md`). The tag is made on its merge commit (`versioning.md`).
 If the branch of a night and the Release PR each wrote them, the same lines would conflict at every merge.
 
 ```text

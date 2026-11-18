@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; issues.md for the release).
+"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; .claude/skills/release/SKILL.md for the release).
 
 Usage:
   plan-release.py snapshot
@@ -493,7 +493,7 @@ def release_facts(issues, release_pr, last_tag):
     """The figures a run needs to prepare the Release PR.
     `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
     `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; the run tells the owner at once.
-    `minor`: a change adds a requirement ID (issues.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
+    `minor`: a change adds a requirement ID (.claude/skills/release/SKILL.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
     changes = release_changes(issues)
     labels = (release_pr or {}).get("labels", [])
     minor = any(has(i, "adds:requirement") for i in changes)
@@ -542,7 +542,7 @@ def newest_release(merged_prs, read_version):
 
 def tag_due(merged_prs, tag_names, read_version):
     """-> the newest merged Release PR (see newest_release) when its version has no tag yet, else None.
-    release.yml tags the merge commit at the merge (issues.md), so this shows only until it has, or when the workflow did not: the way back is a tag by hand."""
+    release.yml tags the merge commit at the merge (.claude/skills/release/SKILL.md), so this shows only until it has, or when the workflow did not: the way back is a tag by hand."""
     due = newest_release(merged_prs, read_version)
     return due if due and due["tag"] not in tag_names else None
 
