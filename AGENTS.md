@@ -104,7 +104,7 @@ tmp/           scratch files, gitignored except .keep
   - `auth.rs` (the OAuth login and the tokens), `keychain.rs` (the OS keychain, which every module reads, writes and deletes its secrets through; it moves the items of the old identifier on their first read, #750), `identity.rs` (the identifier, the config folder and the move of the old one, #750)
   - `mail_address.rs` (splits a From or To header into a name and an address, and works out who a reply goes to, M-10), `mail_send.rs` (builds the message of a new mail or a reply and sends it, the command `send_mail`)
   - `images.rs` (the images in HTML mail, with `images/macos.rs`, which fetches an external image with NSURLSession) with `image_senders.rs` (the senders whose external images are shown without asking)
-  - `disk_cache.rs` (the kept copies of the last mail list, calendar weeks and Todo that the screen draws first at startup)
+  - `disk_cache.rs` (the kept copies of the last calendar weeks that the screen draws first at startup; the mail list is no longer kept, #739)
   - `markdown_patch.rs` (puts an edit of the rich Markdown editor into the original text by lines, A-26; the mail of M-10 and the Slack posts of S-6 and S-21 also use it)
   - `update.rs` (the self-update and its settings, U-1 and U-2)
 - Internal functions take the config directory (`&Path`), not an `AppHandle`, so `tsunagiai-mcp` can share them.

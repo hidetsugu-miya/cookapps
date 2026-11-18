@@ -1,4 +1,4 @@
-//! Kept copies of the last fetched mail list, calendar weeks and Todo in the settings folder.
+//! Kept copies of the last fetched calendar weeks in the settings folder.
 //! The screen draws them first at startup, then the fetch redraws; they are only a head start, so a broken file is as good as none.
 
 use std::{path::Path, sync::Mutex};
@@ -24,20 +24,6 @@ fn all_listed<'a>(listed: &[String], used: impl IntoIterator<Item = &'a str>) ->
 /// An unreadable account list counts as no.
 fn registered<'a>(dir: &Path, used: impl IntoIterator<Item = &'a str>) -> bool {
     matches!(accounts::load(dir), Ok(Some(listed)) if all_listed(&listed, used))
-}
-
-/// Keeps `value`, unless an account in `used` has been removed meanwhile.
-pub(crate) fn save<'a, T: Serialize>(
-    dir: &Path,
-    file: &str,
-    value: &T,
-    used: impl IntoIterator<Item = &'a str>,
-) -> Result<(), String> {
-    let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
-    if !registered(dir, used) {
-        return Ok(());
-    }
-    write(dir, file, value)
 }
 
 /// Replaces the kept value (a default one when none is readable) with `change` of it; `None` leaves the file alone.
@@ -118,6 +104,16 @@ mod tests {
 
     const A: &str = "a@example.com";
 
+    /// Keeps `value` as `update` does, from nothing.
+    fn save<'a, T: Serialize + DeserializeOwned + Default>(
+        dir: &Path,
+        file: &str,
+        value: T,
+        used: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), String> {
+        update(dir, file, used, |_| Some(value))
+    }
+
     fn register(dir: &Path, listed: &[&str]) {
         accounts::save(
             dir,
@@ -138,10 +134,10 @@ mod tests {
     #[test]
     fn nothing_is_kept_for_a_removed_account_or_without_an_account_list() {
         let dir = temp_dir("removed");
-        save(&dir, "a.json", &vec![1], [A]).unwrap();
+        save(&dir, "a.json", vec![1], [A]).unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), None);
         register(&dir, &["b@example.com"]);
-        save(&dir, "a.json", &vec![1], [A]).unwrap();
+        save(&dir, "a.json", vec![1], [A]).unwrap();
         update(&dir, "a.json", [A], |v: Vec<u32>| Some(v)).unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), None);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -151,7 +147,7 @@ mod tests {
     fn update_that_returns_none_leaves_the_file_alone() {
         let dir = temp_dir("none");
         register(&dir, &[A]);
-        save(&dir, "a.json", &vec![1], [A]).unwrap();
+        save(&dir, "a.json", vec![1], [A]).unwrap();
         update(&dir, "a.json", [A], |_: Vec<u32>| None).unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), Some(vec![1]));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -162,7 +158,7 @@ mod tests {
         let dir = temp_dir("round-trip");
         register(&dir, &[A]);
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), None);
-        save(&dir, "a.json", &vec![1, 2], [A]).unwrap();
+        save(&dir, "a.json", vec![1, 2], [A]).unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), Some(vec![1, 2]));
         assert!(!dir.join("a.json.tmp").exists());
         remove(&dir, "a.json").unwrap();

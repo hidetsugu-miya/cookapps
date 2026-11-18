@@ -279,7 +279,6 @@ pub fn run() {
             calendar::calendar_choices,
             calendar::set_calendar_shown,
             gmail::inbox,
-            gmail::inbox_cached,
             gmail::thread,
             gmail::thread_held,
             gmail::thread_refresh,

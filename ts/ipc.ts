@@ -137,7 +137,6 @@ export interface Commands {
   calendar_choices: { args: undefined; result: CalendarChoices };
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   inbox: { args: undefined; result: Inbox };
-  inbox_cached: { args: undefined; result: Inbox | null };
   sync: { args: Account & { startHistoryId: string }; result: Sync };
   thread: { args: Thread; result: ThreadDetail | null };
   thread_held: { args: Thread; result: HeldThread | null };

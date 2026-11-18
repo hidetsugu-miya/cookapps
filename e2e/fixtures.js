@@ -39,7 +39,6 @@ const fixtures = JSON.parse(sessionStorage.getItem("e2e-fixtures") ?? "{}");
 // The periods of the timers that a spec shortens (`timers` in e2e/support.ts): the app reads them with `periodMs` (ts/e2e-timers.ts), and only this build has them.
 window.__e2e_timers__ = fixtures.e2e_timers;
 const answers = {
-  inbox_cached: null,
   thread_held: null,
   calendar_cached: [],
   calendar_first_day: 0,
