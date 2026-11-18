@@ -2,7 +2,7 @@
 # 合格のあとに止めない指摘（Medium・Low）を直した差分の範囲確認（.claude/rules/review.md）。release-verifier を起動せずに、決まった処理で確かめて HEAD の合格記録を書く（#932）。
 # 使い方: range-check.sh {合格したコミット} {指摘の一覧のファイル}
 # 一覧のファイルは 1 行 1 件で、各行に直した指摘の `path` か `path:line` を含む（行の残りは自由。例: `[L-1] ts/slack.ts:120 空の返事を描かない`）。
-# 確かめる順: 作業ツリーがクリーン、合格したコミットに合格記録がある、そのコミットが HEAD の祖先で HEAD と異なる、HEAD の CI と E2E の記録が合格、
+# 確かめる順: 作業ツリーがクリーン、合格したコミットが合格記録を持つか origin/main の祖先か同じ（main のコミットは main に入るときゲートを通っている。マージ済みの版の指摘だけを直す PR は `range-check.sh origin/main {一覧}` で通す）、そのコミットが HEAD の祖先で HEAD と異なる、HEAD の CI と E2E の記録が合格、
 # 合格したコミットから HEAD までの変更のパスがすべて一覧のパスのどれかに一致する。すべて通れば record-review.sh で HEAD の合格記録を書く。
 # 記録は main の checkout の .claude/reviews/{SHA} に書かれる。どのチェックアウトから呼んでもよく、呼んだ場所の HEAD を見る。
 # 終了コード: 0 は合格（記録を書いた）、1 は止めた（理由を標準エラーに出す）、2 は使い方の誤り。
@@ -23,7 +23,7 @@ stop() {
 }
 
 [ -z "$(git status --porcelain)" ] || stop "コミットしていない変更があります。HEAD と作業ツリーが一致しません"
-[ -f "$main/.claude/reviews/$passed" ] || stop "${passed:0:7} の合格記録がありません。合格したコミットを渡してください"
+[ -f "$main/.claude/reviews/$passed" ] || git merge-base --is-ancestor "$passed" origin/main 2>/dev/null || stop "${passed:0:7} の合格記録がなく、origin/main の祖先でもありません。合格したコミットを渡してください"
 [ "$passed" != "$head" ] || stop "合格したコミットと HEAD が同じです。範囲確認は合格のあとに直したコミットに対して行います"
 git merge-base --is-ancestor "$passed" "$head" || stop "${passed:0:7} は HEAD の祖先ではありません"
 ci=$("$tools/check-ci.sh" 2>&1) || stop "$ci"

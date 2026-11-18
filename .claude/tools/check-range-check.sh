@@ -96,7 +96,16 @@ run 0 "記録を戻すと通る" "$base" "ts/a.ts"
 reset_to "$base"
 commit ts/a.ts
 rm -f "$main/.claude/reviews/$base"
-run 1 "合格したコミットに合格記録がない" "$base" "ts/a.ts" "合格記録がありません"
+run 1 "合格したコミットに合格記録がない" "$base" "ts/a.ts" "合格記録がなく"
+# origin/main 上のコミット（main に入るときゲートを通っている）は、記録がなくても合格したコミットとして通る
+git -C "$work" update-ref refs/remotes/origin/main "$base"
+run 0 "合格したコミットが origin/main 上にある（記録なし）" "$base" "ts/a.ts"
+h1=$(git -C "$work" rev-parse HEAD)
+rm -f "$main/.claude/reviews/$h1"
+commit ts/b.ts
+run 1 "記録がなく origin/main の祖先でもないコミット" "$h1" $'ts/a.ts\nts/b.ts' "origin/main の祖先でもありません"
+reset_to "$h1"
+git -C "$work" update-ref -d refs/remotes/origin/main
 pass_record "$base"
 pass_record HEAD
 err=$(cd "$work" && printf 'ts/a.ts\n' > "$tmp/list.txt" && "$rc" HEAD "$tmp/list.txt" 2>&1 >/dev/null); got=$?

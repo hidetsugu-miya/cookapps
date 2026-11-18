@@ -73,7 +73,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
     && gate "range-check.sh の自己テスト" "$top/.claude/tools/check-range-check.sh"
   grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree|handover)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"
-  # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and release-verifier's pass record (.claude/rules/review.md).
+  # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and the pass record, written by release-verifier or range-check.sh (.claude/rules/review.md).
   # A push with no new commit (a tag on a commit already on the remote) needs none of them.
   # None of the three is needed on HEAD when only the release work (README, CHANGELOG, docs) comes after an earlier commit that has them (#931).
   # That earlier commit is the newest of the range with both passing CI and E2E records (for the review: the newest with a pass record), or else the range base.

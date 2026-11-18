@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # HEAD の e2e と review の合格を、GitHub の commit status で送る（.claude/rules/issues.md）。main の ruleset がこの 2 つを必須にしている。
-# 手元の CI と E2E の記録があるときだけ送るので、合格記録を書ける release-verifier の役割は変わらない。指摘の中身は送らない。
+# 手元の CI と E2E の記録があるときだけ送るので、合格記録を書けるのは release-verifier と range-check.sh だけで、この役割は変わらない。指摘の中身は送らない。
 # CI・E2E・review は、HEAD の記録か、origin/main から HEAD までがリリース作業だけ（Release PR）であることで満たす（#931）。
 # HEAD を push してから呼ぶ。どのチェックアウトからでもよく、呼んだ場所の HEAD を見る。
 set -uo pipefail
