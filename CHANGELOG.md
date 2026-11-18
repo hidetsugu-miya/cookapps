@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.84.1
+
+A-35: the unread count of the bell in the footer is a badge on the top right of the bell, with the size, the color and the shape of the counts on the green icon column, instead of a number beside it (#938).
+
 ## v0.84.0
 
 A-41: the leader can run `feature-dev` (#918, #919, #925 to #929). Type `feature-dev` to the leader, with or without an instruction, and it takes a feature through the requirement, the design, the implementation (one for each repository) and the specification, by giving each unit to a teammate, one after another. The leader does no unit work itself: it launches the teammate of the unit, serves its messages, checks the record of the case (`.feature-dev/current/case.json`) when the teammate reports, and goes on to the next unit. The leader's skill and the plugin of the teammates (the unit procedures and seven agents) are in the app and are written again at each start of the leader (the skill in the leader's folder `formations/{name}/.claude/skills/feature-dev/`, the plugin in `formation-plugin/` of the config folder, only when it differs), so a leader on a saved environment's PC gets them too. A teammate starts with `--plugin-dir`, so the unit procedures and agents are there. The leader installs `yomiyasu` and `natural-japanese` at the user scope when they are missing, before it launches the first teammate.
