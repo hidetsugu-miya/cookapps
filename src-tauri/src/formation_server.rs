@@ -4,7 +4,7 @@
 //! The pieces, from the bottom up.
 //! - The frame: XSalsa20-Poly1305 under a key for each direction, with a nonce that is the direction and a counter, so that a replayed, reordered or reused frame does not open.
 //! - The handshake: each side sends an ephemeral public key, and the keys are derived from the DH of the ephemeral keys and the DH of the two pinned (static) keys together with the transcript, so that one who does not know its static key cannot derive them.
-//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `stop`).
+//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `page.read`, `page.answer`, `stop`).
 //! - The server (`serve`, the daemon of `--serve`) and the client (`Client`), which the app uses.
 //!
 //! A key is in no error text and no `Debug` output (the types that hold one derive none).
@@ -39,7 +39,10 @@ use tokio_tungstenite::{
 };
 use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
 
-use crate::formation::{self, Child, CHILDREN_FILE};
+use crate::{
+    formation::{self, Child, CHILDREN_FILE},
+    formation_page::{self, DecisionPage, PageRecord},
+};
 
 /// The one port the server listens on, at the address `--bind` names.
 pub const PORT: u16 = 47823;
@@ -336,6 +339,27 @@ struct ReadParams {
 }
 
 #[derive(Deserialize)]
+struct PagesParams {
+    formation: String,
+}
+
+#[derive(Deserialize)]
+struct PageParams {
+    formation: String,
+    child: String,
+    /// The cards alone: the evidence is checked for its shape and not read (`formation_page::build_input`). A client that does not send it gets the page with its evidence.
+    #[serde(default)]
+    light: bool,
+}
+
+#[derive(Deserialize)]
+struct AnswerParams {
+    formation: String,
+    child: String,
+    at: u64,
+}
+
+#[derive(Deserialize)]
 struct DropParams {
     formation: String,
     names: Vec<String>,
@@ -458,6 +482,44 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
                 Err(e) => Reply::error(&e),
             }
         }
+        "pages.read" => {
+            let Ok(params) = serde_json::from_value::<PagesParams>(request.params) else {
+                return bad_params();
+            };
+            if let Err(e) = formation::check_name(&params.formation) {
+                return Reply::error(&e);
+            }
+            Reply::ok(json!({"pages": formation_page::read_pages(config, &params.formation)}))
+        }
+        "page.read" => {
+            let Ok(params) = serde_json::from_value::<PageParams>(request.params) else {
+                return bad_params();
+            };
+            match formation_page::read_here_at(
+                config,
+                &params.formation,
+                &params.child,
+                !params.light,
+            ) {
+                Ok((page, at)) => Reply::ok(json!({"page": page, "at": at})),
+                Err(e) => Reply::error(&e),
+            }
+        }
+        "page.answer" => {
+            let Ok(params) = serde_json::from_value::<AnswerParams>(request.params) else {
+                return bad_params();
+            };
+            match formation_page::mark_answered(
+                config,
+                &params.formation,
+                &params.child,
+                params.at,
+                formation::now_ms(),
+            ) {
+                Ok(()) => Reply::ok(json!({"answered": true})),
+                Err(e) => Reply::error(&e),
+            }
+        }
         "stop" => Reply {
             stop: true,
             ..Reply::ok(json!({"stopping": true}))
@@ -533,7 +595,11 @@ where
         let frame = timeout(limit, next_binary(&mut socket)).await.ok()??;
         limit = IDLE_LIMIT;
         let request = channel.open(&frame)?;
-        let reply = dispatch(&setup.config, &setup.version, &request);
+        // `page.read` runs `orca` and `git`, so a request is served on a thread that may block.
+        let (config, version) = (setup.config.clone(), setup.version.clone());
+        let reply = tokio::task::spawn_blocking(move || dispatch(&config, &version, &request))
+            .await
+            .ok()?;
         let sealed = sealed_reply(&mut channel, &reply.body)?;
         socket.send(Message::Binary(sealed.into())).await.ok()?;
         if reply.stop {
@@ -690,6 +756,59 @@ impl Client {
             .as_u64()
             .and_then(|n| usize::try_from(n).ok())
             .ok_or_else(|| "サーバーの答えの形式が正しくありません".to_owned())
+    }
+
+    /// The decision pages that the PC records for `formation` (A-41, `pages.json`).
+    pub async fn pages_read(&mut self, formation: &str) -> Result<Vec<PageRecord>, String> {
+        let result = self
+            .call("pages.read", json!({"formation": formation}))
+            .await?;
+        serde_json::from_value(result["pages"].clone())
+            .map_err(|_| "サーバーの答えの形式が正しくありません".to_owned())
+    }
+
+    /// The page that waits on `child`, checked and with its evidence resolved on that PC (A-41). A refusal is the violations, one on each line.
+    pub async fn page_read(
+        &mut self,
+        formation: &str,
+        child: &str,
+    ) -> Result<DecisionPage, String> {
+        self.page_read_at(formation, child, false)
+            .await
+            .map(|(page, _)| page)
+    }
+
+    /// `page_read`, and the time the PC recorded the page at (#923). `light` asks for the cards alone, with the evidence's shape and none of its content (the reply of the owner's answers needs no more).
+    pub async fn page_read_at(
+        &mut self,
+        formation: &str,
+        child: &str,
+        light: bool,
+    ) -> Result<(DecisionPage, u64), String> {
+        let result = self
+            .call(
+                "page.read",
+                json!({"formation": formation, "child": child, "light": light}),
+            )
+            .await?;
+        let bad = || "サーバーの答えの形式が正しくありません".to_owned();
+        let page = serde_json::from_value(result["page"].clone()).map_err(|_| bad())?;
+        Ok((page, result["at"].as_u64().ok_or_else(bad)?))
+    }
+
+    /// Marks the page of `child` recorded at `at` as answered on that PC, so that it no longer waits (#923). A page that was replaced or is answered already is refused with the reason.
+    pub async fn page_answered(
+        &mut self,
+        formation: &str,
+        child: &str,
+        at: u64,
+    ) -> Result<(), String> {
+        self.call(
+            "page.answer",
+            json!({"formation": formation, "child": child, "at": at}),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Stops the server.
@@ -1172,6 +1291,7 @@ mod tests {
             name: name.to_owned(),
             repo: "repo".to_owned(),
             environment: "pc".to_owned(),
+            agent: formation::FormationAgent::Claude,
             launch: None,
         }
     }
@@ -1572,6 +1692,100 @@ mod tests {
     }
 
     #[test]
+    fn the_pages_of_a_formation_are_read_by_name_and_a_page_that_is_not_there_is_refused() {
+        let config = temp_dir("api-pages");
+        write_record(&config, "api-work", &["one"]);
+        let none = call(&config, "pages.read", json!({"formation": "api-work"}));
+        assert_eq!(none.body, json!({"ok": true, "result": {"pages": []}}));
+        let page = json!({"child": "one", "path": "/p.json", "title": "t", "page_kind": "approval", "subject": "design", "at": 5});
+        std::fs::write(
+            formation::dir(&config, "api-work").join("pages.json"),
+            json!({"pages": [page]}).to_string(),
+        )
+        .unwrap();
+        let read = call(&config, "pages.read", json!({"formation": "api-work"}));
+        assert_eq!(read.body["result"]["pages"], json!([page]));
+        // A name that leaves the folder, and arguments that do not fit, are refused and nothing is read.
+        assert_eq!(
+            call(&config, "pages.read", json!({"formation": "../x"})).body["ok"],
+            false
+        );
+        assert_eq!(call(&config, "pages.read", json!({})).body["ok"], false);
+        assert_eq!(
+            call(&config, "page.read", json!({"formation": "api-work"})).body["ok"],
+            false
+        );
+        // A child with no page waiting (its launch is after the page, or it has none) is refused before Orca is asked.
+        let missing = call(
+            &config,
+            "page.read",
+            json!({"formation": "api-work", "child": "two"}),
+        );
+        assert_eq!(missing.body["ok"], false);
+        assert!(missing.body["error"].as_str().unwrap().contains("two"));
+        let bad = call(
+            &config,
+            "page.read",
+            json!({"formation": "api-work", "child": "../x"}),
+        );
+        assert_eq!(bad.body["ok"], false);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_page_read_is_for_the_whole_page_unless_it_asks_for_the_cards_alone() {
+        let params: PageParams =
+            serde_json::from_value(json!({"formation": "f", "child": "c"})).unwrap();
+        assert!(!params.light);
+        let params: PageParams =
+            serde_json::from_value(json!({"formation": "f", "child": "c", "light": true})).unwrap();
+        assert!(params.light);
+    }
+
+    #[test]
+    fn a_page_is_marked_answered_by_the_time_it_was_recorded_at_and_by_no_other() {
+        let config = temp_dir("api-answer");
+        write_record(&config, "api-work", &["one"]);
+        let page = json!({"child": "one", "path": "/p.json", "title": "t", "page_kind": "approval", "subject": "design", "at": 5});
+        std::fs::write(
+            formation::dir(&config, "api-work").join("pages.json"),
+            json!({"pages": [page]}).to_string(),
+        )
+        .unwrap();
+        let ask = |at: u64| {
+            call(
+                &config,
+                "page.answer",
+                json!({"formation": "api-work", "child": "one", "at": at}),
+            )
+        };
+        // A page that was replaced (another time) is refused and the record stays as it was.
+        assert_eq!(ask(4).body["ok"], false);
+        let pages = call(&config, "pages.read", json!({"formation": "api-work"}));
+        assert_eq!(pages.body["result"]["pages"], json!([page]));
+        assert_eq!(
+            ask(5).body,
+            json!({"ok": true, "result": {"answered": true}})
+        );
+        let pages = call(&config, "pages.read", json!({"formation": "api-work"}));
+        assert!(pages.body["result"]["pages"][0]["answered_at"].is_u64());
+        // The second answer of the same page is refused.
+        assert_eq!(ask(5).body["ok"], false);
+        // A name that leaves the folder, and arguments that do not fit, are refused.
+        let bad = call(
+            &config,
+            "page.answer",
+            json!({"formation": "../x", "child": "one", "at": 5}),
+        );
+        assert_eq!(bad.body["ok"], false);
+        assert_eq!(
+            call(&config, "page.answer", json!({"formation": "api-work"})).body["ok"],
+            false
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn the_records_are_read_by_name_and_a_missing_one_is_none() {
         let config = temp_dir("api-read");
         write_record(&config, "api-work", &["one", "two"]);
@@ -1737,6 +1951,48 @@ mod tests {
             .await
             .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn the_pages_and_the_page_of_a_child_are_read_over_the_socket() {
+        let served = served("net-pages").await;
+        write_record(&served.config, "api-work", &["one"]);
+        let mut client = served.client().await;
+        assert_eq!(client.pages_read("api-work").await.unwrap(), []);
+        let page = json!({"child": "one", "path": "/p.json", "title": "t", "page_kind": "approval", "subject": "design", "at": 5});
+        std::fs::write(
+            formation::dir(&served.config, "api-work").join("pages.json"),
+            json!({"pages": [page]}).to_string(),
+        )
+        .unwrap();
+        let pages = client.pages_read("api-work").await.unwrap();
+        assert_eq!((pages[0].child.as_str(), pages[0].at), ("one", 5));
+        assert!(client.pages_read("../x").await.is_err());
+        // The page of a child whose record has no launch is refused with the reason, before Orca is asked.
+        let error = client.page_read("api-work", "one").await.unwrap_err();
+        assert!(error.contains("one"), "{error}");
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_page_is_marked_answered_over_the_socket_and_a_replaced_one_is_refused() {
+        let served = served("net-answer").await;
+        write_record(&served.config, "api-work", &["one"]);
+        let page = json!({"child": "one", "path": "/p.json", "title": "t", "page_kind": "approval", "subject": "design", "at": 5});
+        std::fs::write(
+            formation::dir(&served.config, "api-work").join("pages.json"),
+            json!({"pages": [page]}).to_string(),
+        )
+        .unwrap();
+        let mut client = served.client().await;
+        assert!(client.page_answered("api-work", "one", 4).await.is_err());
+        client.page_answered("api-work", "one", 5).await.unwrap();
+        let pages = client.pages_read("api-work").await.unwrap();
+        assert!(pages[0].answered_at.is_some());
+        assert!(client.page_answered("api-work", "one", 5).await.is_err());
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
     }
 
     #[tokio::test]

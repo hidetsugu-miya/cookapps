@@ -2248,6 +2248,37 @@ async fn send_keys(
     check_accepted(&result)
 }
 
+/// Types each of `steps` into the terminal `handle` of the saved environment `environment` as it is, one `terminal.send` after another over one WebSocket, with `pause` between two. The reply to a decision page is a bracketed paste and then Enter, which must not arrive in the same send (A-41).
+pub(crate) async fn type_in_steps(
+    environment: &str,
+    handle: &str,
+    steps: &[String],
+    pause: std::time::Duration,
+) -> Result<(), String> {
+    check_handle(handle)?;
+    for step in steps {
+        check_keys(step)?;
+    }
+    let mut link = crate::orca_link::connect_environment(environment.to_owned()).await?;
+    send_steps(&mut link, handle, steps, pause).await
+}
+
+/// `steps` as one `terminal.send` each, in order, with `pause` between two; the first send that Orca does not take ends it.
+async fn send_steps(
+    link: &mut crate::orca_link::WsLink,
+    handle: &str,
+    steps: &[String],
+    pause: std::time::Duration,
+) -> Result<(), String> {
+    for (i, step) in steps.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(pause).await;
+        }
+        send_keys(link, handle, step).await?;
+    }
+    Ok(())
+}
+
 /// Types `text` into the terminal `handle` as it is, as `terminal.send`: of this machine over its unix socket, of the saved environment `environment` over a WebSocket of its own, so the keys are in no argument of a process.
 #[tauri::command]
 pub async fn orca_terminal_input(
@@ -4224,6 +4255,48 @@ mod tests {
         assert!(send_keys(&mut link, "term_1", "\u{3}--json").await.is_ok());
         assert!(send_keys(&mut link, "term_1", "\u{3}--json").await.is_err());
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_paste_and_its_enter_are_two_sends_in_order_and_a_refused_paste_sends_no_enter() {
+        use crate::{
+            orca_e2ee::testing::Desktop,
+            orca_link::{
+                ws_testing::{bind, FakeDesktop},
+                WsLink,
+            },
+        };
+        let paste = "\u{1b}[200~one\ntwo\u{1b}[201~".to_owned();
+        let steps = [paste.clone(), "\r".to_owned()];
+        for (second, refuse) in [(true, false), (false, true)] {
+            let (listener, url) = bind().await;
+            let desktop = Desktop::new([31; 32]);
+            let key = desktop.public_key_b64();
+            let expected = paste.clone();
+            let server = tokio::spawn(async move {
+                let mut server =
+                    FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+                for (i, text) in [expected, "\r".to_owned()].iter().enumerate() {
+                    if i == 1 && !second {
+                        break;
+                    }
+                    let send = server.request().await;
+                    assert_eq!(send["method"], "terminal.send");
+                    assert_eq!(
+                        send["params"],
+                        input_params("term_1", text, "tsunagiai", None)
+                    );
+                    let accepted = !(refuse && i == 0);
+                    server
+                        .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": accepted}}}))
+                        .await;
+                }
+            });
+            let mut link = WsLink::connect(&url, "device-token", &key).await.unwrap();
+            let sent = send_steps(&mut link, "term_1", &steps, std::time::Duration::ZERO).await;
+            assert_eq!(sent.is_ok(), !refuse);
+            server.await.unwrap();
+        }
     }
 
     #[test]

@@ -140,6 +140,30 @@ const answers = {
   formation_close_child: { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null },
   // A-37: one formation, `formation`, with no project and no child (no row is selected until one is pressed).
   formation_list: { formations: [{ name: "formation", projects: [], environment: "local", createdAt: null, counts: { planned: 0, waiting: 0, working: 0, done: 0 } }], readError: null },
+  // A-41: the page that waits on a child (a spec that opens one gives its own with `decisionPage` of e2e/support.ts): an `open-questions` page with nothing on it.
+  formation_page_read: {
+    pageKind: "open-questions",
+    subject: "requirement",
+    contextLabel: "",
+    title: "",
+    what: null,
+    roots: {},
+    previousReply: null,
+    questions: [],
+    approvalScope: [],
+    changes: [],
+    needsUserDecision: [],
+    residualMustFix: [],
+    structuralProposals: [],
+    adr: null,
+    risks: null,
+    settledDecisions: [],
+    qualityLoop: null,
+    unmetCriteria: [],
+    pr: null,
+  },
+  // A-41 (#923): the reply that the answers of a page make was put into the leader's terminal.
+  formation_page_answer: null,
   // A-37 (#893): no PC has the owner's consent yet; a spec that needs one gives `formationConsent` of e2e/support.ts, and one that presses 「同意する」 or 「取り消す」 mocks `formation_consent` or `formation_consent_revoke`.
   formation_consents: [],
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.

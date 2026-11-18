@@ -40,6 +40,8 @@ const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The text of the orchestrator's `CLAUDE.md`: its role and its steps, with `{name}` where its own name goes. It holds nothing that comes from outside.
 const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
 const FORMATION_NAME_MARK: &str = "{name}";
+/// A-41: the leader's skill is `feature-dev`, in `.claude/skills/` of the orchestrator's folder.
+const LEADER_SKILL_FOLDER: &str = "feature-dev";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the orchestrator (`formation_*`), which the panes' own `mcp.json` does not pass. The name of the formation follows it.
 const FORMATION_MCP_ARG: &str = "--formation";
 /// The name the MCP server has in Claude Code (`mcp__tsunagiai__...`), as in `.mcp.json` of the repository.
@@ -236,7 +238,7 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json`, the launch script and an empty `.claude/settings.json` in `formations/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script, an empty `.claude/settings.json` and the leader's skill `.claude/skills/feature-dev/` (A-41, replaced as a whole) in `formations/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
 /// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
 fn write_formation_files(
     config: &Path,
@@ -256,6 +258,7 @@ fn write_formation_files(
         &formation_script(claude, &dir.join(MCP_FILE), name),
     )?;
     write_empty_settings(&dir.join(".claude"))?;
+    write_leader_skill(&dir.join(".claude"))?;
     Ok(dir.join(SCRIPT_FILE))
 }
 
@@ -293,21 +296,32 @@ fn formation_start_with(
     })
 }
 
+/// Removes `path` when it is a link, so that a write there does not follow it. The orchestrator can write in its folder, so a link it placed is what this meets.
+fn drop_link(path: &Path) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        std::fs::remove_file(path).map_err(|e| format!("{} を外せません: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Writes `{}` as `settings.json` in `claude_dir`. The orchestrator can write in its folder, so a link it placed there (the folder, the file or its temporary file) is removed first, and what it leads to is not written.
 fn write_empty_settings(claude_dir: &Path) -> Result<(), String> {
-    let drop_link = |path: &Path| {
-        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-            std::fs::remove_file(path)
-                .map_err(|e| format!("{} を外せません: {e}", path.display()))?;
-        }
-        Ok::<(), String>(())
-    };
     drop_link(claude_dir)?;
     std::fs::create_dir_all(claude_dir)
         .map_err(|e| format!("{} を作れません: {e}", claude_dir.display()))?;
     drop_link(&claude_dir.join("settings.json.tmp"))?;
     drop_link(&claude_dir.join("settings.json"))?;
     crate::accounts::write_atomic(claude_dir, "settings.json", "{}")
+}
+
+/// Replaces `skills/feature-dev/` in `claude_dir` with the leader's skill (A-41), as a whole: a file that the skill no longer has does not stay. A link in the place of `skills/` is removed first, as for the settings.
+fn write_leader_skill(claude_dir: &Path) -> Result<(), String> {
+    let skills = claude_dir.join("skills");
+    drop_link(&skills)?;
+    crate::formation_assets::replace_dir(
+        &skills.join(LEADER_SKILL_FOLDER),
+        crate::formation_assets::LEADER_SKILL,
+    )
 }
 
 // ---- the pseudo terminal ----
@@ -704,6 +718,23 @@ impl ClaudeCode {
         if let Some(session) = self.inner.lock().get(id) {
             let _ = session.input.send(text);
         }
+    }
+
+    /// Types `text` into the terminal of the orchestrator of the formation `name` (the pane `formation:{name}`), as it is: a failure when it has no process, or has ended, so that a reply for the leader is never taken for sent when nobody is there to read it (A-41).
+    pub fn input_formation(&self, name: &str, text: String) -> Result<(), String> {
+        check_input(&text)?;
+        let gone = || {
+            "リーダーの Claude Code が動いていません。リーダーを始めてから、もう一度送ってください"
+                .to_owned()
+        };
+        let sessions = self.inner.lock();
+        let session = sessions
+            .get(format!("{FORMATION_ID_PREFIX}{name}").as_str())
+            .ok_or_else(gone)?;
+        if session.ended.load(Ordering::SeqCst) {
+            return Err(gone());
+        }
+        session.input.send(text).map_err(|_| gone())
     }
 
     /// Gives the terminal of `id` a new size; nothing happens when it has ended.
@@ -1282,6 +1313,58 @@ mod tests {
     }
 
     #[test]
+    fn the_leaders_skill_is_replaced_as_a_whole_at_each_write() {
+        let config = temp_dir("formation-skill");
+        let claude = Path::new("/bin/claude");
+        let mcp = Path::new("/app/tsunagiai-mcp");
+        let skill = config.join("formations/api-work/.claude/skills/feature-dev");
+        // A file of an older skill, and a skill the owner put beside it.
+        std::fs::create_dir_all(skill.join("references")).unwrap();
+        std::fs::write(skill.join("references/removed.md"), "old").unwrap();
+        std::fs::write(skill.join("SKILL.md"), "old").unwrap();
+        std::fs::create_dir_all(config.join("formations/api-work/.claude/skills/other")).unwrap();
+        for _ in 0..2 {
+            write_formation_files(&config, "api-work", claude, mcp).unwrap();
+            assert!(!skill.join("references/removed.md").exists());
+            for (path, text) in crate::formation_assets::LEADER_SKILL {
+                assert_eq!(&std::fs::read_to_string(skill.join(path)).unwrap(), text);
+            }
+            let mut names: Vec<_> = std::fs::read_dir(skill.parent().unwrap())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            // No folder of the writing stays beside the skill.
+            assert_eq!(names, ["feature-dev", "other"]);
+        }
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_place_of_the_skills_folder_is_removed_and_not_written_through() {
+        let config = temp_dir("formation-skill-link");
+        let elsewhere = config.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let claude_dir = config.join("formations/api-work/.claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, claude_dir.join("skills")).unwrap();
+        write_formation_files(
+            &config,
+            "api-work",
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+        )
+        .unwrap();
+        assert!(claude_dir.join("skills").is_dir());
+        assert!(!std::fs::symlink_metadata(claude_dir.join("skills"))
+            .unwrap()
+            .is_symlink());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
     fn the_files_of_a_formation_are_written_in_its_own_folder_and_name_it_in_mcp_json() {
         let config = temp_dir("formation-named");
         let claude = Path::new("/bin/claude");
@@ -1701,6 +1784,43 @@ mod tests {
         code.input("a", "hello\r".to_owned());
         let (text, _) = until(&rx, "got:hello");
         assert!(text.contains("got:hello"), "{text:?}");
+    }
+
+    #[test]
+    fn the_reply_for_a_leader_reaches_the_terminal_of_its_formation_in_order_and_fails_where_nobody_reads(
+    ) {
+        let code = ClaudeCode::default();
+        // No pane, and a pane of another formation, take nothing.
+        assert!(code.input_formation("api-work", "x".to_owned()).is_err());
+        let (sink, rx) = collecting();
+        code.start(
+            "formation:api-work",
+            &spec("read line; echo \"got:$line\""),
+            None,
+            sink,
+        )
+        .unwrap();
+        assert!(code.input_formation("other", "x".to_owned()).is_err());
+        // The text, and then Enter in a send of its own, as a reply is typed.
+        code.input_formation("api-work", "reply-text".to_owned())
+            .unwrap();
+        code.input_formation("api-work", "\r".to_owned()).unwrap();
+        let (text, _) = until(&rx, "got:reply-text");
+        assert!(text.contains("got:reply-text"), "{text:?}");
+        // More than one send of a pane takes is refused.
+        let long = "あ".repeat(INPUT_LIMIT + 1);
+        assert!(code.input_formation("api-work", long).is_err());
+    }
+
+    #[test]
+    fn a_leader_whose_process_has_ended_takes_no_reply() {
+        let code = ClaudeCode::default();
+        let (sink, rx) = collecting();
+        code.start("formation:api-work", &spec("echo done"), None, sink)
+            .unwrap();
+        until(&rx, "done");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(code.input_formation("api-work", "x".to_owned()).is_err());
     }
 
     #[test]
