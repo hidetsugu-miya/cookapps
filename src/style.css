@@ -66,7 +66,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* A-35: a low footer under every screen, the bell at its right end; the count is the unread of the inbox and of the Slack list added up. */
 #footer { flex: none; box-sizing: border-box; height: var(--footer-h); display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; border-top: 1px solid var(--line); background: var(--bar); }
-.footer-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
+.footer-btn { position: relative; display: inline-flex; align-items: center; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
 .footer-btn:hover { background: var(--soft); }
 .footer-btn svg { width: 20px; height: 20px; }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
