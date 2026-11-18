@@ -1,7 +1,7 @@
 //! The connection to a MySQL server (D-2, #631): the one function that opens a session, and the error told in words.
 //!
 //! `connect` is what the connection test and the later screens of the database (tables, records, SQL) open a session with.
-//! The session is made read only at once (`SET SESSION TRANSACTION READ ONLY`), so that MySQL itself refuses a write.
+//! The session is not made read only: what the user runs on it (D-6) is committed as the server's own autocommit does.
 //! TLS is the one the app already has (rustls with `aws_lc_rs`, the feature `tls-rustls-aws-lc-rs` of sqlx): it is used when the server offers it (`MySqlSslMode::Preferred`),
 //! which is also what carries the password of `caching_sha2_password`; the RSA path of sqlx (the crate `rsa`) is not built in.
 //! A connection that goes over a network (a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
@@ -13,12 +13,11 @@ use std::time::Duration;
 
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlConnection, MySqlDatabaseError, MySqlSslMode},
-    ConnectOptions, Connection, Executor,
+    ConnectOptions, Connection,
 };
 
 /// From the start of the connection to the answer of the first query, TLS and login included.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-pub const READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
 const ERROR_MAX: usize = 300;
 
 /// `text` trimmed and cut to `ERROR_MAX` characters, with an ellipsis when it was longer: what an error shows of a message that comes from outside.
@@ -151,7 +150,7 @@ fn ssl_mode_of(endpoint: &Endpoint) -> MySqlSslMode {
     }
 }
 
-/// A read only session on `endpoint`, or the reason it could not be opened. The password is not logged and is not in any error.
+/// A session on `endpoint`, or the reason it could not be opened. The password is not logged and is not in any error.
 async fn open(
     endpoint: &Endpoint,
     username: &str,
@@ -169,19 +168,14 @@ async fn open(
     if !password.is_empty() {
         options = options.password(password);
     }
-    let opened = tokio::time::timeout(limit, async {
-        let mut connection = options.connect().await?;
-        connection.execute(READ_ONLY).await?;
-        Ok::<_, sqlx::Error>(connection)
-    })
-    .await;
+    let opened = tokio::time::timeout(limit, options.connect()).await;
     match opened {
         Err(_) => Err(Failure::Timeout),
         Ok(result) => result.map_err(|e| classify(&e)),
     }
 }
 
-/// Opens a read only session on `endpoint`. The error is in Japanese.
+/// Opens a session on `endpoint`. The error is in Japanese.
 pub async fn connect(
     endpoint: &Endpoint,
     username: &str,
@@ -508,12 +502,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_session_that_is_opened_is_made_read_only_before_anything_else_is_asked() {
+    async fn a_session_that_is_opened_is_not_made_read_only() {
         let (endpoint, server) = serve(Server::Allow).await;
         let connection = open(&endpoint, "reader", "", SECOND).await.unwrap();
         connection.close().await.unwrap();
         let queries = server.await.unwrap();
-        assert_eq!(queries.last().map(String::as_str), Some(READ_ONLY));
+        assert!(!queries.is_empty());
+        for query in &queries {
+            assert!(!query.to_uppercase().contains("READ ONLY"), "{query}");
+        }
     }
 
     #[tokio::test]

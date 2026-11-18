@@ -1,6 +1,6 @@
 //! The sessions that the database screen keeps open (D-3, #632): one MySQL session for each connection that is open, reused until it is closed, and the reads the tree and the table list make on it.
 //!
-//! A session is opened by `database::open_session` (the script of the connection when it has one, then `mysql::connect`, read only) and put here under the id of the connection.
+//! A session is opened by `database::open_session` (the script of the connection when it has one, then `mysql::connect`) and put here under the id of the connection.
 //! It lives until `disconnect` (the menu of the row, a save of the connection, a delete, a query that shows the stream broken, a script that has ended) or the app's exit (`close_all`, called from `lib.rs` before the scripts are ended).
 //! `disconnect` also ends the script of the session (`script::Scripts::close`).
 //! A script that ends after it was ready closes its session (D-1): `reap` looks for such sessions before a session is looked up or listed, and a query that fails because of it is told with the words of the script's end.

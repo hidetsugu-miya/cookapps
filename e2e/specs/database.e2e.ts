@@ -1794,12 +1794,26 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-note")).toBe(0);
     });
 
+    it("draws the rows a write changed as the footer, as Rust worded it, with no grid and the copy off", async () => {
+      await openSql();
+      await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      const command = await mock("database_sql", databaseSqlResult([], [], "3 行を変更 / 12 ms"));
+      await runText("UPDATE users SET name = 'x' WHERE id < 4");
+      expect(await waitForCalls(command)).toEqual([ran("UPDATE users SET name = 'x' WHERE id < 4")]);
+      await expect(range()).toHaveText("3 行を変更 / 12 ms");
+      expect(await count("#database-work .database-grid")).toBe(0);
+      expect(await count("#database-work .database-note")).toBe(0);
+      await expect($('#database-work [data-key="copy"]')).toBeDisabled();
+    });
+
     it("shows the error of MySQL in the danger color, drops the old result, keeps the text and the connection, and runs again", async () => {
       await openSql();
       await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
-      const message = "この接続は読み取り専用です。データを書き換える文は実行できません (1792): Cannot execute statement in a READ ONLY transaction.";
+      const message = "MySQL サーバーが読み取り専用のため、データを書き換える文は実行できません (1290): The MySQL server is running with the --read-only option so it cannot execute this statement";
       await mock("database_sql", rejects(message));
       await mock("database_connections", ["p1"]);
       await input().setValue("DELETE FROM users");
