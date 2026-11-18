@@ -438,6 +438,7 @@ pub struct PromptEdit {
 /// Claude's answer to a request about the text of a Slack post (S-4): the `PromptEdit` fields, and `actions`, the things to do that were not posted when the request was sent, as the answer made them
 /// (a destination it chose, or the list it wrote; `None` when it left them as they are and nothing was posted). The ones Rust posted for the request (S-23) carry `posted`.
 /// `post_error` is the failure that stopped the posts after at least one was sent; `post_refused` is true when the model asked for a post and Rust refused it, so that the screen can say that nothing was posted.
+/// `post_confirm` is true when the rules allowed two posts or more: nothing was posted, and the screen asks the owner where each one after the first goes before it posts them (S-23, `slack::needs_confirmation`).
 /// `plan` is the posts to make, decided by `parse_slack_edit`, and never reaches the screen.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -448,6 +449,7 @@ pub struct SlackEdit {
     pub edit: PromptEdit,
     pub actions: Option<Vec<crate::slack::SlackAction>>,
     pub post_refused: bool,
+    pub post_confirm: bool,
     pub post_error: Option<String>,
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
@@ -1601,7 +1603,7 @@ fn edit_of(output: &Value, current: &str) -> Result<PromptEdit, SummaryError> {
 
 /// The answer of the proofreading of a Slack post: `parse_edit`, and the things to do as the answer made them (`slack::answered_actions`: a destination outside `candidates`, or no list, changes nothing,
 /// and a text the answer wrote keeps only the broadcast words of `instruction`), for the list `actions` that the screen sent.
-/// `plan` is the posts to make (S-23) and `post_refused` whether a post was asked for and refused: see `slack::post_decision`, which gets the list as the answer made it, the list the screen sent (a written text that is in neither it nor the request is not posted), and `linked`, the destinations that the Slack links of the request lead to.
+/// `plan` is the posts to make (S-23; empty when there are two or more, which `post_confirm` says are left to the owner) and `post_refused` whether a post was asked for and refused: see `slack::post_decision`, which gets the list as the answer made it, the list the screen sent (a written text that is in neither it nor the request is not posted), and `linked`, the destinations that the Slack links of the request lead to.
 /// Nothing is posted here; the command makes the posts of `plan`.
 fn parse_slack_edit(
     out: &str,
@@ -1640,10 +1642,13 @@ fn parse_slack_edit(
         PostDecision::Post(plan) => (plan, false),
         PostDecision::Refused => (vec![], true),
     };
+    let post_confirm = crate::slack::needs_confirmation(&plan);
+    let plan = if post_confirm { vec![] } else { plan };
     Ok(SlackEdit {
         edit,
         actions: new,
         post_refused,
+        post_confirm,
         post_error: None,
         plan,
     })
@@ -2642,6 +2647,7 @@ pub async fn claude_edit_todo_prompt(
 /// The model has no tools, so it only answers; a destination it names that is not in the list it was given is dropped. When it answers `post: true` and the rules of `slack::post_decision` allow it (S-23),
 /// Rust posts the things to do that are not posted, from the top down, by the path of "投稿" (`slack::post_planned`): the original message (the new text, or `text` when the answer did not change it) as the mail's content, where nothing is made a mention,
 /// and a written text as one. The answer's `actions` then say which were posted; a first post that fails is the command's error, and a later one is `post_error`. What the model says never reaches the log.
+/// When the rules allow two posts or more, nothing is posted: `post_confirm` tells the screen to ask where each one after the first goes, and the owner's press posts them (`slack_post`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn claude_proofread_slack(
@@ -6913,24 +6919,15 @@ mod tests {
             "@here お疲れ様です と投稿して、そのスレッドにメールを貼って",
             &candidates,
         );
-        assert_eq!(
-            got.plan,
-            vec![
-                PlannedPost {
-                    index: 0,
-                    to: PostTo::Target(chip.clone()),
-                    text: "@here お疲れ様です".into(),
-                    written: true,
-                },
-                PlannedPost {
-                    index: 1,
-                    to: PostTo::ThreadOf(0),
-                    text: "A".into(),
-                    written: false,
-                },
-            ]
-        );
+        // Two posts are allowed by the rules, and so wait: nothing is posted, nothing is refused, and the screen asks where the second goes.
+        assert!(got.plan.is_empty());
+        assert!(got.post_confirm);
+        assert!(!got.post_refused);
         assert_eq!(got.actions.as_ref().map(Vec::len), Some(2));
+        // One post is made as it is, and asks nothing.
+        let got = parse(to_chip.clone(), "要点だけ投稿して", &candidates);
+        assert!(!got.post_confirm);
+        assert_eq!(got.plan.len(), 1);
         // Refused, and said to be: no post word, another destination not named, a blank request,
         // no candidates, a body that adds a link, a written text with a broadcast word that the request does not hold, and a new written text that the request does not hold. The rest of the answer stands.
         for (output, instruction, list) in [

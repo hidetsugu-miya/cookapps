@@ -10,7 +10,7 @@ import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
 // What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, the things to do as it made them and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; actions?: SlackAction[] | null; postRefused?: boolean; draft?: string | null };
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; actions?: SlackAction[] | null; postRefused?: boolean; postConfirm?: boolean; draft?: string | null };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -33,6 +33,8 @@ export interface ChatConfig {
   cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
   // Draws the draft of a post an answer carries, under its reply; without it `draft` is not drawn.
   draft?: (draft: string) => HTMLElement;
+  // Called after `answered` and after a proposal was put in at once (`autoApply`), with an answer that is kept: the frame to draw under its reply, as a function that draws it again at every redraw (the frame keeps its own state), or null for none (the Slack compose screen's question of S-23 about where the posts go).
+  confirm?: (answer: ChatAnswer) => (() => HTMLElement) | null;
   // The lines (one per task) that tell Claude what an earlier answer proposed; they are added to that answer's text in the history it is sent, because the cards are not text. Without it only the text is sent.
   tasksText?: (tasks: TodoTaskProposal[]) => string;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
@@ -67,6 +69,7 @@ export interface Turn {
   proposal?: Proposal;
   tasks?: TodoTaskProposal[];
   draft?: string;
+  confirm?: () => HTMLElement;
 }
 
 // The oldest turns are dropped past this many. Rust keeps the last CHAT_TURNS of what it is sent.
@@ -171,6 +174,7 @@ export function createChat(cfg: ChatConfig) {
     if (t.proposal) node.append(diffCard(t.proposal));
     if (t.tasks?.length && cfg.cards) node.append(cfg.cards(t.tasks));
     if (t.draft && cfg.draft) node.append(cfg.draft(t.draft));
+    if (t.confirm) node.append(t.confirm());
     return node;
   }
 
@@ -252,6 +256,8 @@ export function createChat(cfg: ChatConfig) {
       proposal.state = "applied";
       proposal.auto = true;
     }
+    // After the text was put in: the frame reads the text as it is now.
+    if (answer) turn.confirm = cfg.confirm?.(answer) ?? undefined;
     addTurn(turn);
     draw();
   }

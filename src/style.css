@@ -1364,6 +1364,14 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .slack-ask-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .slack-ask-buttons .text-btn { justify-content: center; height: 28px; padding: 0 16px; border-radius: 14px; }
 .slack-ask-buttons .text-btn:disabled { opacity: .4; cursor: default; }
+.slack-confirm { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.slack-confirm-first { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.slack-confirm-where { font-weight: 700; overflow-wrap: anywhere; }
+.slack-confirm-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.slack-confirm-ask { font-weight: 700; }
+.slack-confirm-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.slack-confirm .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
+.slack-confirm .diff-foot { padding: 0; background: none; justify-content: flex-start; }
 .orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }

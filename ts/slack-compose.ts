@@ -10,7 +10,7 @@ import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import type { Workspace } from "./bindings/Workspace";
 import { showModelSlot } from "./claude.js";
-import { createChat } from "./claude-chat.js";
+import { type ChatAnswer, createChat } from "./claude-chat.js";
 import { createComposer } from "./composer.js";
 import { $, composing, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
@@ -72,6 +72,8 @@ const slackDate = (ms: number) => {
 
 // The things to do as they were when the request that is on its way was sent: what Claude's answer makes of them is put in only if they are still that.
 let askedActions = "";
+// The original message as it was when that request was sent.
+let askedText = "";
 // A request to Claude of this screen is on its way, and may post: "投稿" waits for it, so nothing is posted twice.
 let asking = false;
 
@@ -99,6 +101,7 @@ const chat = createChat({
     const d = draft;
     const actions = d?.actions.map((a) => ({ ...a })) ?? [];
     askedActions = JSON.stringify(actions);
+    askedText = text;
     asking = true;
     refreshSlackCompose();
     try {
@@ -133,6 +136,8 @@ const chat = createChat({
       else toast("投稿されませんでした");
     }
   },
+  // An answer for which Rust posted nothing because two things to do or more were allowed: the question of where each one after the first goes, under the reply (S-23).
+  confirm: (answer) => (answer.postConfirm ? confirmFrame(answer) : null),
   changed: refreshSlackCompose,
   locked: () => posting,
   keyHint: false,
@@ -483,11 +488,41 @@ function back() {
   requestAnimationFrame(() => ($("main").scrollTop = threadScroll));
 }
 
-// The dialog of "投稿" for two things to do or more (#905): for each one after the first that is not posted, "N をどこに送りますか", the thread of the one before it or the other choice, chosen with a radio button: the card's own destination when it has one, else the channel of the one before it; nothing is chosen for one that continues the thread of an earlier post other than the one before it.
+// The things to do of `d` after the first one that is not posted and not posted themselves: the ones whose destination is asked when two or more are to be posted (#905, #906).
+function laterIndexes(d: Draft) {
+  const first = d.actions.findIndex((a) => !a.posted);
+  return d.actions.map((_, i) => i).filter((i) => i > first && !d.actions[i].posted);
+}
+
+// The two choices for the thing to do `i`: the thread of the one before it, or the other: the card's own destination when it has one, else the channel of the one before it.
+function destinationChoices(d: Draft, i: number) {
+  const a = d.actions[i];
+  return [
+    ["thread", `${i} のスレッドに投稿`],
+    // A card with a destination of its own keeps it; one that continues a thread goes to the channel of the card before it.
+    ["channel", a.after === null ? `${whereLabel(a)} に投稿` : `#${channelOf(d, i - 1)!.name} に投稿`],
+  ] as const;
+}
+
+// Fixes the chosen destinations in the cards `indexes` of `d`.
+function fixDestinations(d: Draft, choices: Map<number, string>) {
+  // Every channel is read before any card changes: a card that continued a thread has the channel of the one before it.
+  const channels = new Map([...choices.keys()].map((i) => [i, channelOf(d, i - 1)]));
+  for (const [i, choice] of choices) {
+    const a = d.actions[i];
+    if (choice === "thread") [a.after, a.byClaude] = [i - 1, false];
+    else if (a.after === null) a.byClaude = false;
+    else [a.target, a.after, a.byClaude] = [channels.get(i)!, null, false];
+  }
+  $("slack-error").hidden = true;
+  drawActions();
+  refreshSlackCompose();
+}
+
+// The dialog of "投稿" for two things to do or more (#905): for each one after the first that is not posted, "N をどこに送りますか", the thread of the one before it or the other choice, chosen with a radio button; nothing is chosen for one that continues the thread of an earlier post other than the one before it.
 // "投稿" of the dialog fixes the chosen destinations in the cards and resolves true; "やめる", Escape and a press on the dimmed screen resolve false and change nothing.
 function askDestinations(d: Draft): Promise<boolean> {
-  const first = d.actions.findIndex((a) => !a.posted);
-  const indexes = d.actions.map((_, i) => i).filter((i) => i > first && !d.actions[i].posted);
+  const indexes = laterIndexes(d);
   const dialog = tag("div", "slack-ask");
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
@@ -498,13 +533,7 @@ function askDestinations(d: Draft): Promise<boolean> {
     const group = tag("fieldset", "slack-ask-item");
     group.append(tag("legend", "", `${i + 1} をどこに送りますか`));
     const current = a.after === i - 1 ? "thread" : a.after === null ? "channel" : "";
-    const inputs = (
-      [
-        ["thread", `${i} のスレッドに投稿`],
-        // A card with a destination of its own keeps it; one that continues a thread goes to the channel of the card before it.
-        ["channel", a.after === null ? `${whereLabel(a)} に投稿` : `#${channelOf(d, i - 1)!.name} に投稿`],
-      ] as const
-    ).map(([value, text]) => {
+    const inputs = destinationChoices(d, i).map(([value, text]) => {
       const input = tag("input");
       input.type = "radio";
       input.name = `slack-ask-${i}`;
@@ -550,17 +579,7 @@ function askDestinations(d: Draft): Promise<boolean> {
       close(false);
     };
     go.onclick = () => {
-      // Every channel is read before any card changes: a card that continued a thread has the channel of the one before it.
-      const channels = new Map(indexes.map((i) => [i, channelOf(d, i - 1)]));
-      for (const i of indexes) {
-        const a = d.actions[i];
-        if (chosen(i) === "thread") [a.after, a.byClaude] = [i - 1, false];
-        else if (a.after === null) a.byClaude = false;
-        else [a.target, a.after, a.byClaude] = [channels.get(i)!, null, false];
-      }
-      $("slack-error").hidden = true;
-      drawActions();
-      refreshSlackCompose();
+      fixDestinations(d, new Map(indexes.map((i) => [i, chosen(i)!])));
       close(true);
     };
     sync();
@@ -569,6 +588,70 @@ function askDestinations(d: Draft): Promise<boolean> {
     document.body.append(scrim);
     (indexes.map((i) => radios.get(i)![0])[0] ?? go).focus();
   });
+}
+
+// The things to do not posted, as text: what a frame below was made for. It differs once the owner changed a card, a destination or the draft's text.
+const pendingKey = (d: Draft) => JSON.stringify([d.text, d.actions.filter((a) => !a.posted)]);
+
+// The frame under the answer of Claude that did not post two things to do or more (#906, S-23): the first one's destination and text, and for each one after it "N をどこに送りますか" with the two choices of the dialog of "投稿".
+// Once every one after the first has a choice, the choices are fixed in the cards and the things to do are posted by `post` (`slack_post`), from the top down. The rules of S-23 were passed by Rust on the answer's list, so the frame works only while the cards are still that list:
+// after a change of the cards, the text or the draft it is closed, and the owner posts with "投稿" as usual.
+function confirmFrame(answer: ChatAnswer): (() => HTMLElement) | null {
+  const d = draft;
+  // The cards are the answer's list: put in by `answered` (or left as the screen sent them), and not changed while the request was on its way.
+  const wrote = answer.actions ? JSON.stringify(d?.actions.filter((a) => !a.posted)) === JSON.stringify(answer.actions) : JSON.stringify(d?.actions) === askedActions;
+  // The text Rust checked is the one the cards paste: the answer's new text, put in, or the one the request was sent with.
+  const checked = d?.text === (answer.body ?? askedText);
+  if (!d || posting || !wrote || !checked) return null;
+  const indexes = laterIndexes(d);
+  if (indexes.length === 0 || !pendingOf(d).ready) return null;
+  const first = d.actions.findIndex((a) => !a.posted);
+  const [where, text] = [`${first + 1}. ${whereLabel(d.actions[first])}`, d.actions[first].paste ? d.text : d.actions[first].text];
+  const key = pendingKey(d);
+  const choices = new Map<number, string>();
+  const labels = new Map(indexes.map((i) => [i, destinationChoices(d, i)]));
+  let state: "open" | "done" | "stale" = "open";
+  const choose = async (i: number, value: string) => {
+    if (state !== "open" || posting || asking) return;
+    if (draft !== d || pendingKey(d) !== key) {
+      state = "stale";
+      chat.draw();
+      return;
+    }
+    choices.set(i, value);
+    if (choices.size < indexes.length) return chat.draw();
+    state = "done";
+    fixDestinations(d, choices);
+    chat.draw();
+    await post();
+  };
+  return () => {
+    const frame = tag("div", "slack-confirm");
+    const head = tag("div", "slack-confirm-first");
+    head.append(tag("div", "slack-confirm-where", where), tag("div", "slack-confirm-text", text));
+    frame.append(head);
+    if (state !== "open") {
+      const foot = tag("div", "diff-foot");
+      foot.append(tag("span", "diff-state", state === "done" ? "送り先を選びました" : "行うことが変わったため投稿できません"));
+      frame.append(foot);
+      return frame;
+    }
+    for (const i of indexes) {
+      const group = tag("div", "slack-ask-item");
+      group.append(tag("div", "slack-confirm-ask", `${i + 1} をどこに送りますか`));
+      const buttons = tag("div", "slack-confirm-buttons");
+      for (const [value, label] of labels.get(i)!) {
+        const button = tag("button", "text-btn", label);
+        button.type = "button";
+        button.setAttribute("aria-pressed", String(choices.get(i) === value));
+        button.onclick = () => choose(i, value);
+        buttons.append(button);
+      }
+      group.append(buttons);
+      frame.append(group);
+    }
+    return frame;
+  };
 }
 
 // "投稿": with one thing to do not posted it posts at once, and with more the dialog above asks first (#905), then `post`.
