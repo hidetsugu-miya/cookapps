@@ -730,6 +730,7 @@ a.c-file:hover { background: var(--hover); }
 .menu-text { display: flex; flex-direction: column; min-width: 0; }
 .menu-sub { font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 .menu[role="menu"] button svg { width: 16px; height: 16px; flex: none; }
+.menu[role="menu"] button svg.orca-start-claude { color: var(--claude); }
 
 /* Settings: a tab per service, and its card (head, connected rows, add row). The heading and the tabs stay at the top (the underline of the tabs is the only divider) while the card scrolls under them. */
 #settings { flex: 1; min-height: 0; overflow-y: auto; padding: 0 32px 32px; }

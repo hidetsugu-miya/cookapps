@@ -469,6 +469,18 @@ describe("orca", () => {
     // Each item draws its own icon in place of the dot.
     expect(await count('.menu[role="menu"] button svg')).toBe(3);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    // Only the Claude icon is in the Claude color; the other two keep the color of the line.
+    const colors = await browser.execute(() => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--claude)";
+      document.body.append(probe);
+      const claude = getComputedStyle(probe).color;
+      probe.remove();
+      return { claude, icons: [...document.querySelectorAll('.menu[role="menu"] button svg')].map((svg) => getComputedStyle(svg).color) };
+    });
+    expect(colors.icons[0]).toBe(colors.claude);
+    expect(colors.icons[1]).not.toBe(colors.claude);
+    expect(colors.icons[2]).not.toBe(colors.claude);
     await expect($(".orca-plus")).toHaveAttribute("aria-expanded", "true");
     // Escape closes it, and nothing was started.
     await browser.keys("Escape");
