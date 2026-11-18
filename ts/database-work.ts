@@ -1,4 +1,4 @@
-// The work pane of the database screen (D-3, D-4): the database that was pressed last, with the tabs テーブル (its tables with their estimated rows, size and engine, a row opens its table) and SQL, or, when a table was pressed in the tree, the tabs of that table.
+// The work pane of the database screen (D-3, D-4, D-9): the strip of the open tabs (オブジェクト, which cannot be closed, and one tab for each table that was opened) and under it the body of the selected one: for オブジェクト the database that was pressed last, with the tabs テーブル (its tables with their estimated rows, size and engine, a row opens its table) and SQL, and for a table the tabs of that table.
 // Drawing only. The tabs of a table are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here; the tabs of a database are `DATABASE_TABS`, and its SQL tab is the one of D-6.
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
@@ -6,7 +6,7 @@ import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { gridNode } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
-import { CHEVRON_LEFT_SVG, CHEVRON_SVG, COPY_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
+import { CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
 import { copyText } from "./view.js";
 
 // The page of records that was asked for last. `data` stays while the next page is read, and is none after an error.
@@ -33,7 +33,17 @@ export interface SqlState {
   data: DatabaseSqlResult | null;
 }
 
+// A tab of the strip that is a table: `key` names it to the actions, `title` is its database and table.
+export interface OpenTab {
+  key: string;
+  table: string;
+  title: string;
+}
+
 export interface WorkState {
+  // The tables that were opened, in the order they were opened, and the key of the selected one (none: オブジェクト is selected).
+  tabs: OpenTab[];
+  active: string | null;
   // The connection the database belongs to; with the database, the table and the tab it names the grid whose column widths are kept.
   connection: string;
   database: string;
@@ -42,7 +52,7 @@ export interface WorkState {
   tables: DatabaseTable[];
   // The selected tab of the database, while no table is open: "tables" or "sql".
   databaseTab: string;
-  // The table that was pressed in the tree, or none; with it, the selected tab and the state of its records.
+  // The table of the selected tab of the strip, or none for オブジェクト; with it, the selected tab and the state of its records.
   table: string | null;
   tab: string;
   records: RecordsState | null;
@@ -52,6 +62,10 @@ export interface WorkState {
 }
 
 export interface WorkActions {
+  // Selects the tab of the strip with the key (none: オブジェクト).
+  openTab: (key: string | null) => void;
+  // Closes the tab of the strip with the key.
+  closeOpenTab: (key: string) => void;
   // Reads the page `page` of the records of the table (the reload is the page that is shown).
   page: (page: number) => void;
   // Reads the page that the text of the page field names; Rust checks the text.
@@ -132,6 +146,38 @@ function tabsNode(tabs: { id: string; label: string }[], active: string, pick: (
     bar.append(button);
   }
   return bar;
+}
+
+// The strip over the pane (D-9): オブジェクト first, which has no close button, then a tab for each open table. The close button is beside the tab, not in it, so that pressing it never selects the tab.
+function openTabsNode(state: WorkState, actions: WorkActions) {
+  const item = (key: string, label: string, title: string, selected: boolean, pick: () => void, close: (() => void) | null) => {
+    const wrap = tag("div", "database-open-item");
+    wrap.setAttribute("role", "presentation");
+    wrap.dataset.selected = String(selected);
+    const button = tag("button", "database-open-tab");
+    button.type = "button";
+    button.dataset.key = `open-${key}`;
+    button.title = title;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(selected));
+    button.append(tag("span", "database-open-title", label));
+    button.onclick = pick;
+    wrap.append(button);
+    if (close !== null) {
+      const x = tag("button", "icon-btn database-open-close");
+      x.type = "button";
+      x.dataset.key = `close-${key}`;
+      x.setAttribute("aria-label", `${label} を閉じる`);
+      x.innerHTML = CLOSE_SVG;
+      x.onclick = close;
+      wrap.append(x);
+    }
+    return wrap;
+  };
+  return [
+    item("objects", "オブジェクト", "オブジェクト", state.active === null, () => actions.openTab(null), null),
+    ...state.tabs.map((t) => item(t.key, t.table, t.title, t.key === state.active, () => actions.openTab(t.key), () => actions.closeOpenTab(t.key))),
+  ];
 }
 
 function pagerButton(key: string, label: string, disabled: boolean, onclick: () => void) {
@@ -277,11 +323,15 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   if (key === drawn) return;
   drawn = key;
   const box = $("database-work");
+  const strip = $("database-work-tabs");
+  const active = document.activeElement as HTMLElement | null;
+  const focused = active?.dataset?.key;
+  const inStrip = active !== null && strip.contains(active);
+  strip.hidden = state === null;
+  strip.replaceChildren(...(state === null ? [] : openTabsNode(state, actions)));
   // A body that fills the pane (the tabs of a table, or the SQL tab of a database) scrolls inside it, with its footer kept.
   box.classList.toggle("database-fill", state !== null && (state.table !== null || state.databaseTab === "sql"));
   if (state === null) return box.replaceChildren();
-  const active = document.activeElement as HTMLElement | null;
-  const focused = active?.dataset?.key;
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
   const nodes: Node[] = [];
@@ -307,7 +357,7 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   }
   box.replaceChildren(...nodes);
   if (focused) {
-    const again = box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`);
+    const again = (inStrip ? strip : box).querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`);
     again?.focus({ preventScroll: true });
     if (caret !== null && again instanceof HTMLTextAreaElement) again.setSelectionRange(caret[0], caret[1]);
   }

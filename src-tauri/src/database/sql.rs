@@ -1,25 +1,29 @@
 //! The SQL tab (D-6, #635): the text the user typed, run as it is on the open session, and its rows turned into the cells of D-4.
 //!
-//! The session is read only (D-2), so MySQL itself refuses a write; this module only words that refusal (`server_message`) and keeps the run small.
+//! The session is not read only (D-2): a write (INSERT, UPDATE, DELETE and the like) is run as it is and is committed at once (autocommit, the server's own default). This module words the errors of the server (`server_message`) and keeps the run small.
 //! One statement is run at a time, as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. The text is not rewritten: only the whitespace and the semicolons at its end are cut (`statement`).
 //! The database the tree has selected is chosen before the run by a `USE` of its own (the name quoted by `records::quote_identifier`), never put in the text of the user.
-//! Before the run, one round trip (`prepare_sql`) puts the session read only again (the text of the user may have set it to read write: the run after it would write), sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
-//! After the run, whatever came of it (a failed `USE` too), `RESTORE` puts the read only and the limits back,
+//! Before the run, one round trip (`prepare_sql`) sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
+//! After the run, whatever came of it (a failed `USE` too), `RESTORE` turns autocommit on again and puts the limits back,
+//! a statement that gives no row is told by the rows it changed (`format_summary`),
 //! and the rows are read as a stream that stops after `ROWS_MAX` of them (`collect_limited`), so the rows past the limit are never held.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 
-use futures_util::{Stream, StreamExt, TryStreamExt};
+use futures_util::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 use sqlx::{
     mysql::{MySqlConnection, MySqlDatabaseError, MySqlRow},
-    AssertSqlSafe, Column, Row,
+    AssertSqlSafe, Column, Either, Executor, Row,
 };
 #[cfg(test)]
 use ts_rs::TS;
 
 use super::{
-    mysql::{query_failure, shorten, QueryFailure, READ_ONLY},
+    mysql::{query_failure, shorten, QueryFailure},
     records::{cells_of, cells_tsv, quote_identifier, DatabaseCell},
     session::format_rows,
 };
@@ -30,10 +34,13 @@ pub const ROWS_MAX: usize = 1000;
 pub const SERVER_LIMIT: Duration = Duration::from_secs(30);
 /// How long the app waits for the whole run (the preface, the statement, the restore) before it closes the connection: for what `SERVER_LIMIT` does not stop (a statement that is not a SELECT, a server that does not answer).
 pub const CLIENT_LIMIT: Duration = Duration::from_secs(35);
-/// Puts the session read only again and the limits back to the server's own, so that the reads of the tree and of the tabs after a run are as they were, whatever the text of the user set.
-/// It starts with `READ_ONLY` (a test checks that).
-const RESTORE: &str = "SET SESSION TRANSACTION READ ONLY; SET SESSION max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
+/// Turns autocommit on again and puts the limits back to the server's own, so that the reads of the tree and of the tabs after a run are as they were, and a `SET autocommit = 0` of the text of the user does not outlive its run (turning it on commits what the run left open).
+const RESTORE: &str =
+    "SET SESSION autocommit = 1, max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
 const EMPTY: &str = "SQL を入力してください";
+const TIMED_OUT: &str =
+    "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください";
+const TIMED_OUT_WRITE: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。書き込みの文は、サーバーで確定している場合があります。もう一度開いてください";
 
 /// The result of a run: the columns and the rows as D-4's cells, and the line under the table. A statement that gives no row has no column.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -63,11 +70,11 @@ pub fn use_sql(database: &str) -> String {
     format!("USE {}", quote_identifier(database))
 }
 
-/// What is set on the session before a run, in one round trip: read only again, the time MySQL lets a SELECT run, the rows a SELECT with no LIMIT gives (one more than are kept), and the database of the tree.
+/// What is set on the session before a run, in one round trip: the time MySQL lets a SELECT run, the rows a SELECT with no LIMIT gives (one more than are kept), and the database of the tree.
 /// The statements stop at the first that fails, so a `USE` that fails leaves the limits set, and `RESTORE` follows every run.
 pub fn prepare_sql(database: &str) -> String {
     format!(
-        "{READ_ONLY}; SET SESSION max_execution_time = {}, sql_select_limit = {}; {}",
+        "SET SESSION max_execution_time = {}, sql_select_limit = {}; {}",
         SERVER_LIMIT.as_millis(),
         ROWS_MAX + 1,
         use_sql(database)
@@ -84,10 +91,14 @@ pub fn format_elapsed(elapsed: Duration) -> String {
 }
 
 /// The line under the table: the rows and the time, and where the rows were cut, that they were and that the rest was not read.
-pub fn format_summary(shown: usize, truncated: bool, elapsed: Duration) -> String {
+/// A statement that gave no row and changed some (`changed`, the rows MySQL says it affected) is told by them: "3 行を変更 / 12 ms".
+/// MySQL says 0 for a SELECT as well, so a statement that changed none reads as "0 行 / 12 ms".
+pub fn format_summary(shown: usize, truncated: bool, changed: u64, elapsed: Duration) -> String {
     let rows = format_rows(Some(shown as u64));
     let time = format_elapsed(elapsed);
-    if truncated {
+    if shown == 0 && changed > 0 {
+        format!("{} 行を変更 / {time}", format_rows(Some(changed)))
+    } else if truncated {
         format!("先頭の {rows} 行だけを表示しています（残りは読み込んでいません） / {time}")
     } else {
         format!("{rows} 行 / {time}")
@@ -95,11 +106,14 @@ pub fn format_summary(shown: usize, truncated: bool, elapsed: Duration) -> Strin
 }
 
 /// An error that MySQL answered to the text of the user, in words for the person who typed it: what it is, its number and the server's message.
-/// The error of a write on the read only session (1792, and 1290 of a server that is read only) is the one the owner meets most.
+/// The refusal of a write (1792, in a transaction the text started READ ONLY, and 1290 of a server that is read only) is told with the same ending.
 pub fn server_message(number: u16, message: &str) -> String {
     let words = match number {
-        1792 => "この接続は読み取り専用です。データを書き換える文は実行できません".to_owned(),
-        1290 => "MySQL サーバーが読み取り専用のため、この文は実行できません".to_owned(),
+        1792 => "読み取り専用のトランザクションの中のため、データを書き換える文は実行できません"
+            .to_owned(),
+        1290 => {
+            "MySQL サーバーが読み取り専用のため、データを書き換える文は実行できません".to_owned()
+        }
         1044 | 1142 | 1143 | 1227 => "このユーザーには、この操作の権限がありません".to_owned(),
         1064 => "SQL の文法が正しくありません。1 回に実行できる文は 1 つです".to_owned(),
         1295 => "この種類の文は実行できません".to_owned(),
@@ -114,6 +128,15 @@ pub fn server_message(number: u16, message: &str) -> String {
         _ => "MySQL がエラーを返しました".to_owned(),
     };
     format!("{words} ({number}): {}", shorten(message))
+}
+
+/// The words of a run that the app stopped at `CLIENT_LIMIT`. `body_started` is that the text of the user had been sent (the preface was over): a write may then have been committed on the server (autocommit), so the words say so.
+pub fn timed_out(body_started: bool) -> &'static str {
+    if body_started {
+        TIMED_OUT_WRITE
+    } else {
+        TIMED_OUT
+    }
 }
 
 /// What a run that failed is. An error that MySQL answered is worded by `server_message` and leaves the session as it was; the others are the words of every query (`mysql::query_failure`).
@@ -152,28 +175,37 @@ pub(super) fn column_names(row: &MySqlRow) -> Vec<String> {
     row.columns().iter().map(|c| c.name().to_owned()).collect()
 }
 
-/// The rows of `text` on the session, up to `ROWS_MAX`, as cells; the columns are those of the first row. The statement is not kept in sqlx's cache of prepared statements.
-async fn read(
-    connection: &mut MySqlConnection,
-    text: &str,
-) -> Result<(Vec<String>, Vec<Vec<DatabaseCell>>, bool), sqlx::Error> {
+/// What a run read: the columns (those of the first row), the rows up to `ROWS_MAX` as cells, whether the rows were cut, and the rows the statement changed.
+type Read = (Vec<String>, Vec<Vec<DatabaseCell>>, bool, u64);
+
+/// The rows of `text` on the session, up to `ROWS_MAX`, as cells, and the rows it changed. The statement is not kept in sqlx's cache of prepared statements.
+async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx::Error> {
     let mut columns: Option<Vec<String>> = None;
-    let rows = sqlx::query(AssertSqlSafe(text.to_owned()))
-        .persistent(false)
-        .fetch(&mut *connection)
-        .map_ok(|row| {
-            columns.get_or_insert_with(|| column_names(&row));
-            cells_of(&row)
-        });
+    let mut changed = 0u64;
+    let query = sqlx::query(AssertSqlSafe(text.to_owned())).persistent(false);
+    let rows = (&mut *connection).fetch_many(query).try_filter_map(|item| {
+        ready(Ok(match item {
+            Either::Left(done) => {
+                changed += done.rows_affected();
+                None
+            }
+            Either::Right(row) => {
+                columns.get_or_insert_with(|| column_names(&row));
+                Some(cells_of(&row))
+            }
+        }))
+    });
     let (rows, truncated) = collect_limited(Box::pin(rows), ROWS_MAX).await?;
-    Ok((columns.unwrap_or_default(), rows, truncated))
+    Ok((columns.unwrap_or_default(), rows, truncated, changed))
 }
 
 /// Runs `text` (already checked by `statement`) in `database` on the session, under the limits of MySQL, and puts the limits back.
+/// `body_started` is set once the preface is over and the text is about to be sent, so that the caller that stops the run at `CLIENT_LIMIT` knows how to word it (`timed_out`).
 pub async fn run(
     connection: &mut MySqlConnection,
     database: &str,
     text: &str,
+    body_started: &AtomicBool,
 ) -> Result<DatabaseSqlResult, sqlx::Error> {
     // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
     let prepared = sqlx::raw_sql(AssertSqlSafe(prepare_sql(database)))
@@ -181,18 +213,21 @@ pub async fn run(
         .await;
     let started = Instant::now();
     let read = match prepared {
-        Ok(_) => read(connection, text).await,
+        Ok(_) => {
+            body_started.store(true, Ordering::Relaxed);
+            read(connection, text).await
+        }
         Err(e) => Err(e),
     };
     let elapsed = started.elapsed();
     // After a failure that MySQL answered (a `USE` that failed too) the session is still there and is put back; after a broken one this fails as well, and the failure of the run is the one told.
     let restored = sqlx::raw_sql(RESTORE).execute(&mut *connection).await;
-    let (columns, rows, truncated) = read?;
+    let (columns, rows, truncated, changed) = read?;
     restored?;
     Ok(DatabaseSqlResult {
         tsv: cells_tsv(&columns, &rows),
         columns,
-        summary: format_summary(rows.len(), truncated, elapsed),
+        summary: format_summary(rows.len(), truncated, changed, elapsed),
         rows,
     })
 }
@@ -237,22 +272,37 @@ mod tests {
     }
 
     #[test]
-    fn the_session_is_read_only_and_limited_before_a_run_and_put_back_after_it() {
+    fn the_session_is_limited_before_a_run_and_put_back_after_it_and_is_not_made_read_only() {
         assert_eq!(
             prepare_sql("shop"),
-            "SET SESSION TRANSACTION READ ONLY; SET SESSION max_execution_time = 30000, sql_select_limit = 1001; USE `shop`"
+            "SET SESSION max_execution_time = 30000, sql_select_limit = 1001; USE `shop`"
         );
         assert_eq!(
             RESTORE,
-            "SET SESSION TRANSACTION READ ONLY; SET SESSION max_execution_time = DEFAULT, sql_select_limit = DEFAULT"
+            "SET SESSION autocommit = 1, max_execution_time = DEFAULT, sql_select_limit = DEFAULT"
         );
-        // A text of the user may have set the session to read write: both put it back, before anything else.
-        assert!(prepare_sql("shop").starts_with(READ_ONLY));
-        assert!(RESTORE.starts_with(READ_ONLY));
+        // Nothing of the run says READ ONLY: a write is run as it is.
+        assert!(!prepare_sql("shop").to_uppercase().contains("READ ONLY"));
+        assert!(!RESTORE.to_uppercase().contains("READ ONLY"));
         // The name of the database is quoted in the preface too.
         assert!(prepare_sql("a`b").ends_with("USE `a``b`"));
         // The client waits longer than MySQL, so that MySQL's own stop is the one that comes first.
         assert!(CLIENT_LIMIT > SERVER_LIMIT);
+    }
+
+    #[test]
+    fn a_run_stopped_by_the_app_says_that_a_write_may_have_been_committed_only_once_the_text_was_sent(
+    ) {
+        let before = timed_out(false);
+        assert_eq!(
+            before,
+            "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください"
+        );
+        assert!(!before.contains("書き込みの文は"));
+        let after = timed_out(true);
+        assert!(after.contains("書き込みの文は、サーバーで確定している場合があります"));
+        assert!(after.starts_with("実行が時間内に終わらなかったため、MySQL との接続を閉じました。"));
+        assert!(after.ends_with("もう一度開いてください"));
     }
 
     #[test]
@@ -276,24 +326,48 @@ mod tests {
     #[test]
     fn the_line_under_the_table_has_the_rows_and_the_time_and_says_where_the_rows_were_cut() {
         let ms = Duration::from_millis;
-        assert_eq!(format_summary(0, false, ms(3)), "0 行 / 3 ms");
-        assert_eq!(format_summary(1, false, ms(40)), "1 行 / 40 ms");
-        assert_eq!(format_summary(999, false, ms(1500)), "999 行 / 1.50 秒");
+        assert_eq!(format_summary(0, false, 0, ms(3)), "0 行 / 3 ms");
+        assert_eq!(format_summary(1, false, 0, ms(40)), "1 行 / 40 ms");
+        assert_eq!(format_summary(999, false, 0, ms(1500)), "999 行 / 1.50 秒");
         assert_eq!(
-            format_summary(ROWS_MAX, true, ms(120)),
+            format_summary(ROWS_MAX, true, 0, ms(120)),
             "先頭の 1,000 行だけを表示しています（残りは読み込んでいません） / 120 ms"
         );
     }
 
     #[test]
-    fn a_write_on_the_read_only_session_is_told_in_japanese_with_the_number_and_the_message_of_the_server(
-    ) {
+    fn a_statement_with_no_row_is_told_by_the_rows_it_changed() {
+        let ms = Duration::from_millis;
+        assert_eq!(format_summary(0, false, 3, ms(12)), "3 行を変更 / 12 ms");
+        assert_eq!(
+            format_summary(0, false, 1, ms(1500)),
+            "1 行を変更 / 1.50 秒"
+        );
+        assert_eq!(
+            format_summary(0, false, 12_345, ms(7)),
+            "12,345 行を変更 / 7 ms"
+        );
+        // Rows that were read are told as rows, whatever the server says it affected.
+        assert_eq!(format_summary(2, false, 5, ms(12)), "2 行 / 12 ms");
+        assert_eq!(
+            format_summary(ROWS_MAX, true, 5, ms(120)),
+            "先頭の 1,000 行だけを表示しています（残りは読み込んでいません） / 120 ms"
+        );
+        // A statement that changed none is the same line as a SELECT that found none.
+        assert_eq!(format_summary(0, false, 0, ms(3)), "0 行 / 3 ms");
+    }
+
+    #[test]
+    fn a_refused_write_is_told_in_japanese_with_the_number_and_the_message_of_the_server() {
         let text = server_message(1792, "Cannot execute statement in a READ ONLY transaction.");
         assert_eq!(
             text,
-            "この接続は読み取り専用です。データを書き換える文は実行できません (1792): Cannot execute statement in a READ ONLY transaction."
+            "読み取り専用のトランザクションの中のため、データを書き換える文は実行できません (1792): Cannot execute statement in a READ ONLY transaction."
         );
-        assert!(server_message(1290, "--read-only").starts_with("MySQL サーバーが読み取り専用"));
+        assert_eq!(
+            server_message(1290, "--read-only"),
+            "MySQL サーバーが読み取り専用のため、データを書き換える文は実行できません (1290): --read-only"
+        );
     }
 
     #[test]

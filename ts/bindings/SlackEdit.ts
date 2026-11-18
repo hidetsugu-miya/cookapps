@@ -6,6 +6,7 @@ import type { SlackAction } from "./SlackAction";
  * Claude's answer to a request about the text of a Slack post (S-4): the `PromptEdit` fields, and `actions`, the things to do that were not posted when the request was sent, as the answer made them
  * (a destination it chose, or the list it wrote; `None` when it left them as they are and nothing was posted). The ones Rust posted for the request (S-23) carry `posted`.
  * `post_error` is the failure that stopped the posts after at least one was sent; `post_refused` is true when the model asked for a post and Rust refused it, so that the screen can say that nothing was posted.
+ * `post_confirm` is true when the rules allowed two posts or more: nothing was posted, and the screen asks the owner where each one after the first goes before it posts them (S-23, `slack::needs_confirmation`).
  * `plan` is the posts to make, decided by `parse_slack_edit`, and never reaches the screen.
  */
-export type SlackEdit = { actions: Array<SlackAction> | null, postRefused: boolean, postError: string | null, reply: string, body: string | null, diff: Array<DiffLine>, };
+export type SlackEdit = { actions: Array<SlackAction> | null, postRefused: boolean, postConfirm: boolean, postError: string | null, reply: string, body: string | null, diff: Array<DiffLine>, };

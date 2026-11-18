@@ -539,7 +539,7 @@ fn login_unchanged(
     }
 }
 
-/// Starts the script and opens the read only session of `profile` and keeps it in `sessions`. A script started for a session that cannot be logged in to is ended again.
+/// Starts the script and opens the session of `profile` and keeps it in `sessions`. A script started for a session that cannot be logged in to is ended again.
 async fn open_session(
     sessions: &session::Sessions,
     scripts: &script::Scripts,
@@ -664,7 +664,7 @@ pub async fn database_profile_delete(
     Ok(())
 }
 
-/// Opens the connection of `id` when it is not open (the script, then the read only session with the saved password) and answers the names of its databases.
+/// Opens the connection of `id` when it is not open (the script, then the session with the saved password) and answers the names of its databases.
 /// A connection whose databases cannot be read is closed again.
 #[tauri::command]
 pub async fn database_connect(

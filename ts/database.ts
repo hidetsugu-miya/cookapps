@@ -1,6 +1,6 @@
-// The database screen (D-1, D-3 to D-6): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure, SQL) of the table that was pressed.
+// The database screen (D-1, D-3 to D-6, D-9): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the strip of the open tabs: オブジェクト (the tables of the database that was pressed last) and a tab for each table that was opened, which has the tabs (records, structure, SQL) of the table.
 // This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the edit pane (database-form.ts) only asks for the fields.
-// Rust holds the open connections (the session and its script); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only, and the SQL text and result for the connection and database that were selected last.
+// Rust holds the open connections (the session and its script); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory in the tab of the table, and the SQL text and result for the connection and database that were selected last.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
@@ -34,18 +34,15 @@ interface ConnectionState {
   byName: Map<string, DatabaseState>;
 }
 
-// The structure of the table whose tab 構造 was pressed last, with the table it belongs to; dropped when another table is pressed.
-interface StructureView extends StructureState {
+// A table that was opened (D-9): its tab of the strip, the selected tab of the table, and what its tabs hold. The records are read again at a press on its row, and kept at a press on its tab; the structure is read at every press of 構造 and dropped at a press on its row. A read that ends after the tab was closed or another read replaced it is dropped.
+interface TableTab {
+  key: string;
   id: string;
   database: string;
   table: string;
-}
-
-// The records of the table that was pressed last, with the table they belong to. A read that ends after another press has replaced this is dropped.
-interface RecordsView extends RecordsState {
-  id: string;
-  database: string;
-  table: string;
+  tab: string;
+  records: RecordsState | null;
+  structure: StructureState | null;
 }
 
 // The SQL tab of a connection and database: what was typed and the result of the last run. It stays when another table of the same database is pressed, and is dropped when the tree selects another connection or database and the field is used.
@@ -55,12 +52,11 @@ interface SqlView extends SqlState {
 }
 
 let profiles: DatabaseProfileView[] = [];
-let records: RecordsView | null = null;
-let structure: StructureView | null = null;
+// The tables that were opened, in the order they were opened, and the selected one (none: オブジェクト is selected).
+let openTabs: TableTab[] = [];
+let active: TableTab | null = null;
 let sql: SqlView | null = null;
-// The selected tab of the table that is pressed. The table press selects the records.
-let tab = "records";
-// The selected tab of the database while no table is open. A press on another database, or on a table's database from its tabs, selects the tables.
+// The selected tab of the database while オブジェクト is selected. A press on another database, or on a table's database from its tabs, selects the tables.
 let databaseTab = "tables";
 let selected: Selected | null = null;
 const connections = new Map<string, ConnectionState>();
@@ -78,6 +74,8 @@ const emptyConnection = (): ConnectionState => ({ expanded: false, connected: fa
 const emptySql: SqlState = { view: 0, text: "", loading: false, error: null, data: null };
 // The number of the last SQL view made: a new query makes a new view, which is drawn again whatever was typed in the one before.
 let sqlViews = 0;
+// The key of a tab is the key of the table row of the tree.
+const tabKey = (id: string, database: string, table: string) => `${id}/d/${database}/t/${table}`;
 const databaseOf = (c: ConnectionState, name: string) => {
   let d = c.byName.get(name);
   if (!d) {
@@ -86,6 +84,15 @@ const databaseOf = (c: ConnectionState, name: string) => {
   }
   return d;
 };
+
+// Closes the tabs of the tables that `drop` names, for a connection or a database that is gone. When the selected one is among them, オブジェクト is selected, and the row that was pressed stays the database of the table.
+function dropTabs(drop: (t: TableTab) => boolean) {
+  openTabs = openTabs.filter((t) => !drop(t));
+  const was = active;
+  if (was === null || openTabs.includes(was)) return;
+  active = null;
+  if (selected?.id === was.id && selected.database === was.database && selected.table === was.table) selected = { id: was.id, database: was.database, table: null };
+}
 
 function sideState(): SideState {
   return {
@@ -120,24 +127,26 @@ function sqlView(): SqlView | null {
   return sql;
 }
 
-// The tables of the database that was pressed last, or the tabs of the table that was pressed; none while a connection or a connection's databases are all that was pressed.
+// The strip of the open tabs and the body of the selected one: the tables of the database that was pressed last, or the tabs of the table of the selected tab; none while a connection or a connection's databases are all that was pressed.
 function workState(): WorkState | null {
   if (selected?.database == null) return null;
   const d = connections.get(selected.id)?.byName.get(selected.database);
   if (!d) return null;
-  const mine = selected.table !== null && records?.id === selected.id && records.database === selected.database && records.table === selected.table;
+  const mine = active !== null && selected.table === active.table && selected.id === active.id && selected.database === active.database ? active : null;
   return {
+    tabs: openTabs.map((t) => ({ key: t.key, table: t.table, title: `${t.database}.${t.table}` })),
+    active: mine?.key ?? null,
     connection: selected.id,
     database: selected.database,
     loading: d.loading,
     error: d.error,
     tables: d.tables,
     databaseTab,
-    table: mine ? selected.table : null,
-    tab,
-    records: mine && records ? { page: records.page, loading: records.loading, error: records.error, data: records.data } : null,
+    table: mine ? mine.table : null,
+    tab: mine ? mine.tab : "records",
+    records: mine?.records ? { page: mine.records.page, loading: mine.records.loading, error: mine.records.error, data: mine.records.data } : null,
     sql: sqlState(),
-    structure: mine && structure?.id === selected.id && structure.database === selected.database && structure.table === selected.table ? { loading: structure.loading, error: structure.error, data: structure.data } : null,
+    structure: mine?.structure ? { loading: mine.structure.loading, error: mine.structure.error, data: mine.structure.data } : null,
   };
 }
 
@@ -164,6 +173,7 @@ async function read(quiet: boolean): Promise<DatabaseProfileView[] | null> {
     profiles = list;
     // A connection that is gone from the list has nothing open any more (Rust closed it with the delete).
     for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
+    dropTabs((t) => !profiles.some((p) => p.id === t.id));
     if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
     if (!quiet || !same) draw();
     if (!same) syncDatabaseForm(list);
@@ -183,6 +193,7 @@ async function dropClosed(): Promise<string[]> {
     return [];
   }
   const dropped = [...connections].filter(([id, c]) => c.connected && !open.includes(id)).map(([id]) => id);
+  dropTabs((t) => dropped.includes(t.id));
   for (const id of dropped) {
     connections.delete(id);
     if (selected?.id === id) selected = { id, database: null, table: null };
@@ -242,11 +253,13 @@ async function openConnection(profile: DatabaseProfileView) {
     c.connected = true;
     c.databases = names;
     for (const name of [...c.byName.keys()]) if (!names.includes(name)) c.byName.delete(name);
+    dropTabs((t) => t.id === profile.id && !names.includes(t.database));
   } catch (e) {
     if (connections.get(profile.id) !== c) return;
     c.connected = false;
     c.databases = [];
     c.byName.clear();
+    dropTabs((t) => t.id === profile.id);
     c.error = String(e);
   }
   c.loading = false;
@@ -278,11 +291,11 @@ async function openDatabase(profile: DatabaseProfileView, c: ConnectionState, na
   draw();
 }
 
-// Reads the page `page` of the records of a table (D-4), or, when `typed` is given, the page that this text of the page field names (`page` is then the page that is shown). The page that was shown stays until the new one comes; an error drops it.
-async function readRecords(id: string, database: string, table: string, page: number, typed?: string) {
-  const same = records?.id === id && records.database === database && records.table === table;
-  const mine: RecordsView = { id, database, table, page, loading: true, error: null, data: same ? (records?.data ?? null) : null };
-  records = mine;
+// Reads the page `page` of the records of the table of a tab (D-4), or, when `typed` is given, the page that this text of the page field names (`page` is then the page that is shown). The page that was shown stays until the new one comes; an error drops it.
+async function readRecords(t: TableTab, page: number, typed?: string) {
+  const { id, database, table } = t;
+  const mine: RecordsState = { page, loading: true, error: null, data: t.records?.data ?? null };
+  t.records = mine;
   draw();
   try {
     mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null, ...(typed === undefined ? {} : { typed }) });
@@ -291,9 +304,8 @@ async function readRecords(id: string, database: string, table: string, page: nu
     mine.data = null;
     mine.error = String(e);
     // A stream that broke closes the connection: its tree closes and says why.
-    if (records === mine && (await dropClosed()).includes(id)) {
+    if (t.records === mine && (await dropClosed()).includes(id)) {
       connections.set(id, { ...emptyConnection(), expanded: true, error: mine.error });
-      records = null;
       draw();
       return;
     }
@@ -302,20 +314,19 @@ async function readRecords(id: string, database: string, table: string, page: nu
   draw();
 }
 
-// Reads the structure of a table (D-5), at every press of the tab 構造.
-async function readStructure(id: string, database: string, table: string) {
-  const mine: StructureView = { id, database, table, loading: true, error: null, data: null };
-  structure = mine;
+// Reads the structure of the table of a tab (D-5), at every press of the tab 構造.
+async function readStructure(t: TableTab) {
+  const { id, database, table } = t;
+  const mine: StructureState = { loading: true, error: null, data: null };
+  t.structure = mine;
   draw();
   try {
     mine.data = await invoke("database_structure", { id, database, table });
   } catch (e) {
     mine.error = String(e);
     // A stream that broke closes the connection: its tree closes and says why.
-    if (structure === mine && (await dropClosed()).includes(id)) {
+    if (t.structure === mine && (await dropClosed()).includes(id)) {
       connections.set(id, { ...emptyConnection(), expanded: true, error: mine.error });
-      records = null;
-      structure = null;
       draw();
       return;
     }
@@ -339,8 +350,6 @@ async function runSql() {
     // A stream that broke closes the connection: its tree closes and says why.
     if (sql === mine && (await dropClosed()).includes(mine.id)) {
       connections.set(mine.id, { ...emptyConnection(), expanded: true, error: mine.error });
-      records = null;
-      structure = null;
       sql = null;
       draw();
       return;
@@ -352,17 +361,37 @@ async function runSql() {
 
 const workActions: WorkActions = {
   page: (page) => {
-    if (records) readRecords(records.id, records.database, records.table, page);
+    if (active?.records) readRecords(active, page);
   },
   pageInput: (text) => {
-    if (records) readRecords(records.id, records.database, records.table, records.page, text);
+    if (active?.records) readRecords(active, active.records.page, text);
   },
   // The table stays: only the tab changes. The records are kept as they are, and the structure is read at every press of its tab.
   tab: (id) => {
-    if (id === tab || selected?.table == null) return;
-    tab = id;
-    if (id === "structure") readStructure(selected.id, selected.database ?? "", selected.table);
+    if (active === null || id === active.tab) return;
+    active.tab = id;
+    if (id === "structure") void readStructure(active);
     else draw();
+  },
+  // A press on a tab of the strip calls nothing: the records and the structure of a table tab are kept in it.
+  openTab: (key) => {
+    const t = key === null ? null : openTabs.find((o) => o.key === key);
+    if (t === undefined || t === active) return;
+    if (t === null) {
+      if (active === null) return;
+      selected = { id: active.id, database: active.database, table: null };
+      databaseTab = "tables";
+    } else {
+      selected = { id: t.id, database: t.database, table: t.table };
+    }
+    active = t;
+    draw();
+  },
+  // The tab closes with what it held; when it was the selected one, オブジェクト is selected, with the database of the table.
+  closeOpenTab: (key) => {
+    const t = openTabs.find((o) => o.key === key);
+    if (t) dropTabs((o) => o === t);
+    draw();
   },
   databaseTab: (id) => {
     if (id === databaseTab) return;
@@ -398,6 +427,7 @@ const actions: SideActions = {
     // A press on the database that its pane already shows keeps the tab; from anywhere else the pane shows its tables.
     if (selected?.id !== profile.id || selected.database !== name || selected.table !== null) databaseTab = "tables";
     selected = { id: profile.id, database: name, table: null };
+    active = null;
     const c = connections.get(profile.id);
     if (!c) return draw();
     const d = databaseOf(c, name);
@@ -408,16 +438,24 @@ const actions: SideActions = {
     }
     openDatabase(profile, c, name);
   },
-  // The tabs of the table open in the work pane, with the first page of its records, read again at every press.
+  // The table opens in a tab of the strip (a table that is open has its tab selected), with the first page of its records, read again at every press.
   pressTable: (profile, database, table) => {
     selected = { id: profile.id, database, table };
-    tab = "records";
-    structure = null;
-    readRecords(profile.id, database, table, 0);
+    const key = tabKey(profile.id, database, table);
+    let t = openTabs.find((o) => o.key === key);
+    if (!t) {
+      t = { key, id: profile.id, database, table, tab: "records", records: null, structure: null };
+      openTabs.push(t);
+    }
+    t.tab = "records";
+    t.structure = null;
+    active = t;
+    void readRecords(t, 0);
   },
   // The SQL tab of the database with an empty field and no result, and the caret in the field.
   newQuery: (profile, database) => {
     selected = { id: profile.id, database, table: null };
+    active = null;
     databaseTab = "sql";
     sql = { id: profile.id, database, ...emptySql, view: ++sqlViews };
     draw();
@@ -427,12 +465,14 @@ const actions: SideActions = {
   closeDatabase: (profile, database) => {
     const d = connections.get(profile.id)?.byName.get(database);
     if (d) d.expanded = false;
+    dropTabs((t) => t.id === profile.id && t.database === database);
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
   edit: (profile) => openDatabaseForm(profile, save, test),
   disconnect: async (profile) => {
     connections.delete(profile.id);
+    dropTabs((t) => t.id === profile.id);
     if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
     closing.add(profile.id);
     draw();

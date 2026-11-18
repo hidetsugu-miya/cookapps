@@ -456,10 +456,23 @@ async fn start(orca: impl Orca) -> Result<Arc<Preview>, String> {
     Ok(preview)
 }
 
+static SERVER: tokio::sync::OnceCell<Arc<Preview>> = tokio::sync::OnceCell::const_new();
+
 /// The app's one server, started at the first open and running until the app ends.
 async fn server() -> Result<Arc<Preview>, String> {
-    static SERVER: tokio::sync::OnceCell<Arc<Preview>> = tokio::sync::OnceCell::const_new();
     SERVER.get_or_try_init(|| start(Live)).await.map(Arc::clone)
+}
+
+/// The port the server listens on, `None` while it has not been started. The navigation check of the window lets the frame of the preview load from this port alone.
+pub(crate) fn running_port() -> Option<u16> {
+    SERVER.get().map(|preview| preview.port())
+}
+
+/// Whether `token` is one that the running server issued for a worktree. The navigation check of the window allows an address of the server only under such a token.
+pub(crate) fn is_issued_token(token: &str) -> bool {
+    SERVER
+        .get()
+        .is_some_and(|preview| preview.tokens().worktree_of(token).is_some())
 }
 
 // ---- the command ----
@@ -475,7 +488,20 @@ fn check_html(relative: &str) -> Result<(), String> {
     }
 }
 
-/// Opens the HTML file `relative` of the worktree at `path` in the default browser (A-31): the worktree is checked against the target's list read just now (an SSH host is refused), the server is started when it does not run yet, and the address of the file is handed to the system. The address, which holds the token, is not returned, logged or put in an error.
+/// The address of the HTML file `relative` of the worktree at `path`: the worktree is checked against the target's list read just now (an SSH host is refused), and the server is started when it does not run yet. The address holds the token, so it is not logged or put in an error.
+async fn preview_url(
+    path: &str,
+    relative: &str,
+    environment: Option<&str>,
+) -> Result<String, String> {
+    check_html(relative)?;
+    host_of(path, environment).await?;
+    let preview = server().await?;
+    let token = preview.tokens().token_for(environment, path, new_token()?);
+    Ok(preview.url(&token, relative))
+}
+
+/// Opens the HTML file `relative` of the worktree at `path` in the default browser (A-31): the address of the file (`preview_url`) is handed to the system, and not returned, logged or put in an error (a failed open is 「ブラウザで開けません」).
 #[tauri::command]
 pub async fn orca_file_open_in_browser(
     app: AppHandle,
@@ -483,15 +509,20 @@ pub async fn orca_file_open_in_browser(
     relative: String,
     environment: Option<String>,
 ) -> Result<(), String> {
-    check_html(&relative)?;
-    host_of(&path, environment.as_deref()).await?;
-    let preview = server().await?;
-    let token = preview
-        .tokens()
-        .token_for(environment.as_deref(), &path, new_token()?);
+    let url = preview_url(&path, &relative, environment.as_deref()).await?;
     app.opener()
-        .open_url(preview.url(&token, &relative), None::<&str>)
+        .open_url(url, None::<&str>)
         .map_err(|_| NOT_OPENED.to_owned())
+}
+
+/// The address of the HTML file `relative` of the worktree at `path`, for the frame that previews it in the editor (A-31): the same checks and the same server as `orca_file_open_in_browser`. The address goes to the page of the app for that frame alone, and is not logged or put in an error.
+#[tauri::command]
+pub async fn orca_file_preview_url(
+    path: String,
+    relative: String,
+    environment: Option<String>,
+) -> Result<String, String> {
+    preview_url(&path, &relative, environment.as_deref()).await
 }
 
 #[cfg(test)]

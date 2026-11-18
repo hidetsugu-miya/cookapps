@@ -1811,6 +1811,12 @@ pub fn post_decision(
         .map_or(PostDecision::Refused, PostDecision::Post)
 }
 
+/// Whether the posts that `post_decision` allowed (S-23) wait for the owner: two or more are not made by the answer. The screen asks where each one after the first goes (the thread of the one before it, or the channel),
+/// and the owner's press posts them by the path of "投稿" (`slack_post`), so that an answer of the model alone never sends a second post to a place it chose. One post goes out as it is.
+pub fn needs_confirmation(plan: &[PlannedPost]) -> bool {
+    plan.len() > 1
+}
+
 /// The workspace's joined channels: the list kept in memory if it is fresh, else read from Slack (and kept).
 async fn joined_channels(
     auth: &Auth,
@@ -12668,6 +12674,49 @@ mod tests {
             decide("投稿して", &many[..ACTIONS_MAX]),
             PostDecision::Post(_)
         ));
+    }
+
+    #[test]
+    fn two_posts_or_more_wait_for_the_owner_and_one_post_goes_out() {
+        let (sales, other) = (named("sales"), named("random"));
+        let list = listed(&[&sales, &other]);
+        let plan_of = |actions: &[SlackAction]| match post_decision(
+            &json!(true),
+            "投稿して",
+            actions,
+            actions,
+            &list,
+            &[],
+            "MAIL",
+            "MAIL",
+        ) {
+            PostDecision::Post(plan) => plan,
+            other => panic!("the rules allow the posts: {other:?}"),
+        };
+        let first = pasting(Some(&sales));
+        // One thing to do is posted as it is.
+        assert!(!needs_confirmation(&plan_of(std::slice::from_ref(&first))));
+        // Two or more wait, whether the second goes to a thread or to a channel of its own.
+        assert!(needs_confirmation(&plan_of(&[
+            first.clone(),
+            writing(0, "補足です")
+        ])));
+        assert!(needs_confirmation(&plan_of(&[
+            first.clone(),
+            pasting(Some(&sales))
+        ])));
+        assert!(needs_confirmation(&plan_of(&[
+            first.clone(),
+            writing(0, "補足です"),
+            writing(1, "もう一つ")
+        ])));
+        // Only the ones not posted count: a posted first one leaves one to post.
+        let done = posted(first.clone(), "1761785520.000100");
+        assert!(!needs_confirmation(&plan_of(&[
+            done,
+            writing(0, "補足です")
+        ])));
+        assert!(!needs_confirmation(&[]));
     }
 
     #[test]

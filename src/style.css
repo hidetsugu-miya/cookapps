@@ -1338,6 +1338,10 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-pop .orca-branch-row:disabled:hover { background: transparent; }
 .orca-dest-pop .orca-branch-mark { flex: none; display: flex; color: var(--accent); }
 .orca-branch-mark svg { width: 14px; height: 14px; }
+/* The rows of the git worktrees at the top of the list of branches (A-25): the branch it is on, a `git` chip for one that Orca's list lacks, and the check mark of the one the pane shows. */
+.orca-dest-pop .orca-wt-tail { flex: none; display: flex; align-items: center; gap: 6px; max-width: 60%; }
+.orca-dest-pop .orca-wt-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.orca-dest-pop .orca-wt-git { flex: none; }
 /* The headings of the list of branches (A-25) stay at the top of the list while its rows scroll; each is inside its own section, so the next one takes its place. */
 .orca-dest-section + .orca-dest-section { margin-top: 6px; }
 .orca-dest-sec { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; margin: 0; padding: 4px 10px; border-radius: 6px; background: var(--soft); color: var(--accent-text); font-size: calc(13px * var(--fs)); font-weight: 700; }
@@ -1364,6 +1368,14 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .slack-ask-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .slack-ask-buttons .text-btn { justify-content: center; height: 28px; padding: 0 16px; border-radius: 14px; }
 .slack-ask-buttons .text-btn:disabled { opacity: .4; cursor: default; }
+.slack-confirm { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.slack-confirm-first { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.slack-confirm-where { font-weight: 700; overflow-wrap: anywhere; }
+.slack-confirm-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.slack-confirm-ask { font-weight: 700; }
+.slack-confirm-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.slack-confirm .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
+.slack-confirm .diff-foot { padding: 0; background: none; justify-content: flex-start; }
 .orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }
@@ -2048,6 +2060,17 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #database-terminal-body > .pending { flex: none; margin: 8px; }
 .database-terminal-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+/* D-9: the strip of the open tabs over the work pane (オブジェクト and a tab for each opened table), made as the tabs of the terminal pane are. */
+#database-work-tabs { flex: none; display: flex; align-items: flex-end; gap: 2px; padding: 0 24px; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+.database-open-item { flex: none; display: flex; align-items: center; max-width: 240px; min-width: 0; height: 36px; box-sizing: border-box; border-bottom: 2px solid transparent; color: var(--muted); }
+.database-open-item[data-selected="true"] { border-bottom-color: var(--accent); color: inherit; }
+.database-open-tab { display: flex; align-items: center; min-width: 0; height: 100%; padding: 0 12px; border: 0; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.database-open-item[data-selected="true"] .database-open-tab { font-weight: 600; }
+.database-open-tab:hover { color: var(--accent); }
+.database-open-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.database-open-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.database-open-item .database-open-close { flex: none; width: 22px; height: 22px; margin: 0 4px 0 -6px; color: inherit; }
+.database-open-item .database-open-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #database-work { flex: 1; min-height: 0; overflow: auto; }
 .database-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 10px 0 calc(6px + var(--depth, 0) * 16px); border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .database-btn:hover { background: var(--hover); }

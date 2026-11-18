@@ -71,6 +71,7 @@ import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import type { OrcaGitChange } from "./bindings/OrcaGitChange";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
+import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import type { OrcaLocalBranch } from "./bindings/OrcaLocalBranch";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
@@ -452,6 +453,8 @@ export interface Commands {
   orca_commit_files: { args: { path: string; commitId: string; environment: string | null }; result: OrcaCommitFiles };
   // A-27: the diff of the file `relative` in the commit `commitId` from `parentId` (none for the first commit), as the diff tab draws it (`oldRelative`: where a renamed file came from).
   orca_commit_file_diff: { args: { path: string; commitId: string; parentId: string | null; relative: string; oldRelative: string | null; environment: string | null }; result: OrcaFileDiff };
+  // A-25: the git worktrees of the project `repo` (`OrcaProject.key`): the ones Orca lists and, marked `gitOnly`, the ones only git has (Orca hides `.claude/worktrees/`). The file calls accept the path of a `gitOnly` one for a while after this.
+  orca_git_worktrees: { args: { repo: string; environment: string | null }; result: OrcaGitWorktree[] };
   // A-25: the local branches of the worktree at `path`, the current one first, each with whether another worktree has it checked out.
   orca_local_branches: { args: { path: string; environment: string | null }; result: OrcaLocalBranch[] };
   // A-25: the remote branches (at most 50) whose names hold `query`, of the project `repo` (`OrcaProject.key`) of the worktree at `path`. With an empty `query` the ones picked before come first, the newest first.
@@ -464,6 +467,8 @@ export interface Commands {
   orca_file_download: { args: { path: string; relative: string; environment: string | null }; result: string | null };
   // A-31: opens the HTML file `relative` of the worktree in the default browser of this PC, from the server of the app. It answers nothing: the address is never given to the page.
   orca_file_open_in_browser: { args: { path: string; relative: string; environment: string | null }; result: null };
+  // A-31: starts the same server and answers the address of the HTML file `relative` of the worktree, for the preview frame of the editor only.
+  orca_file_preview_url: { args: { path: string; relative: string; environment: string | null }; result: string };
   // A-18: the settings of the editor: how long after the typing stops the file is saved.
   editor_settings: { args: undefined; result: EditorSettings };
   // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.
@@ -514,9 +519,9 @@ export interface Commands {
   // Saves a connection (a new one with an empty `id`); an empty `password` leaves the saved one as it is. Answers it as saved.
   database_profile_save: { args: { profile: DatabaseProfile; password: string }; result: DatabaseProfileView };
   database_profile_delete: { args: { id: string }; result: null };
-  // Tries the connection as typed (D-2): starts its script when it has one, logs in read only, reads `SELECT VERSION()`, ends the script. An empty `password` is the saved one of `profile.id`. Answers the version.
+  // Tries the connection as typed (D-2): starts its script when it has one, logs in, reads `SELECT VERSION()`, ends the script. An empty `password` is the saved one of `profile.id`. Answers the version.
   database_test: { args: { profile: DatabaseProfile; password: string }; result: string };
-  // D-3: opens the connection `id` when it is not open (its script when it has one, then a read only session) and answers the names of its databases. Called at every opening of its row: an open connection is reused.
+  // D-3: opens the connection `id` when it is not open (its script when it has one, then a session) and answers the names of its databases. Called at every opening of its row: an open connection is reused.
   database_connect: { args: { id: string }; result: string[] };
   // D-3: the tables of a database of the open connection `id`, each with its estimated rows, size and engine as text.
   database_tables: { args: { id: string; database: string }; result: DatabaseTable[] };
@@ -524,7 +529,7 @@ export interface Commands {
   database_structure: { args: { id: string; database: string; table: string }; result: DatabaseStructure };
   // D-4: a page of the records of a table of the open connection `id` (`page` counts from 0), each value already text; one more row is read to tell whether a next page exists. The estimated rows are read with the page 0 only; `estimate` is the one that the page shown holds (null for none), which a later page answers again.
   database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null; typed?: string }; result: DatabaseRecords };
-  // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is MySQL's error (the session is read only).
+  // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is committed at once (D-2).
   database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
   // D-3: closes the connection `id` and ends its script.
   database_disconnect: { args: { id: string }; result: null };

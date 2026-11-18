@@ -33,6 +33,8 @@ async function postThrough(...hows: ("thread" | "channel")[]) {
   await askGo().click();
   await expect(ask()).not.toExist();
 }
+// The frame under an answer that did not post two things to do or more (#906): the choice `how` of the `n`th thing to do (from 2), and its text.
+const confirmChoice = (n: number, how: "thread" | "channel") => $(`.slack-confirm > :nth-child(${n}) .slack-confirm-buttons button:nth-child(${how === "thread" ? 1 : 2})`);
 // The destination chip of the first thing to do.
 const target = () => where(1);
 // What `slack_post` answers: the time of the posted message.
@@ -1018,6 +1020,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect(what(2)).toHaveAttribute("aria-pressed", "true");
     expect(await count(`${cards}:nth-child(2) textarea`)).toBe(0);
     expect(await count(`${cards} .slack-done`)).toBe(0);
+    expect(await count(".slack-confirm")).toBe(0);
     expect(await callsOf(slackPost)).toEqual([]);
     // The owner reads them and presses 投稿: the written text first, then the original message in its thread.
     await manual();
@@ -1124,6 +1127,82 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect($("#slack-compose")).toBeDisplayed();
     await expect(briefWhere(1)).toHaveText("Example Team ・ #general");
     expect(await callsOf(slackPost)).toEqual([]);
+  });
+
+  // The screen after a request that Claude answered with two things to do (a written greeting to #general, then the original message in its thread) that Rust allowed and did not post (#906, S-23).
+  async function answerToConfirm(actions: SlackAction[] = [{ ...pasteTo(general), paste: false, text: "@here お疲れ様です" }, { ...pasteTo(null), after: 0 }]) {
+    await openCompose();
+    await pickGeneral();
+    const slackPost = await mock("slack_post", postedTs);
+    const edit = await mock("claude_proofread_slack", { reply: "投稿します", body: null, diff: [], actions, postRefused: false, postConfirm: true, postError: null });
+    const request = "@here お疲れ様です と投稿して、そのスレッドにメールを貼って";
+    await $("#slack-input").setValue(request);
+    await $("#slack-send").click();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: request, actions: [pasteTo(general)] }]);
+    await waitForCount(".slack-confirm", 1);
+    return slackPost;
+  }
+
+  it("asks where the second thing to do goes under the answer when Rust did not post two things to do, with the first one's destination and text, and posts nothing", async () => {
+    const slackPost = await answerToConfirm();
+    await expect($(".slack-confirm .slack-confirm-where")).toHaveText("1. Example Team ・ #general");
+    await expect($(".slack-confirm .slack-confirm-text")).toHaveText("@here お疲れ様です");
+    expect(await textsOf(".slack-confirm .slack-confirm-ask")).toEqual(["2 をどこに送りますか"]);
+    expect(await textsOf(".slack-confirm-buttons button")).toEqual(["1 のスレッドに投稿", "#general に投稿"]);
+    // The cards are the answer's, in the column, and it is the screen's own question: no dialog, no post, no error line.
+    await waitForCount(cards, 2);
+    await expect(briefWhere(2)).toHaveText("1 のスレッド");
+    expect(await count(".slack-ask")).toBe(0);
+    expect(await callsOf(slackPost)).toEqual([]);
+    await expect($("#slack-error")).not.toBeDisplayed();
+  });
+
+  it("posts from the top down, the second in the thread of the first, when the thread is pressed in the frame", async () => {
+    const slackPost = await answerToConfirm();
+    await confirmChoice(2, "thread").click();
+    expect(await waitForCalls(slackPost, 2)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "@here お疲れ様です", written: true },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: slackPreview, written: false },
+    ]);
+    await waitForCount(`${cards} .slack-done`, 2);
+    await expect($(".slack-confirm .diff-state")).toHaveText("送り先を選びました");
+    expect(await count(".slack-confirm-buttons")).toBe(0);
+  });
+
+  it("posts the second to the channel, with no thread, and fixes its card, when the channel is pressed in the frame", async () => {
+    const slackPost = await answerToConfirm();
+    await confirmChoice(2, "channel").click();
+    expect(await waitForCalls(slackPost, 2)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "@here お疲れ様です", written: true },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: slackPreview, written: false },
+    ]);
+    await expect(briefWhere(2)).toHaveText("Example Team ・ #general");
+  });
+
+  it("asks for each thing to do after the first, and posts only when every one has a choice", async () => {
+    const slackPost = await answerToConfirm([{ ...pasteTo(general), paste: false, text: "@here お疲れ様です" }, writeAfter(0, "補足です"), writeAfter(1, "以上です")]);
+    expect(await textsOf(".slack-confirm .slack-confirm-ask")).toEqual(["2 をどこに送りますか", "3 をどこに送りますか"]);
+    expect(await textsOf(".slack-confirm-buttons button")).toEqual(["1 のスレッドに投稿", "#general に投稿", "2 のスレッドに投稿", "#general に投稿"]);
+    await confirmChoice(2, "thread").click();
+    await expect(confirmChoice(2, "thread")).toHaveAttribute("aria-pressed", "true");
+    expect(await callsOf(slackPost)).toEqual([]);
+    await confirmChoice(3, "channel").click();
+    expect(await waitForCalls(slackPost, 3)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "@here お疲れ様です", written: true },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: "補足です", written: true },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: "以上です", written: true },
+    ]);
+  });
+
+  it("posts nothing from the frame once a card was changed, and says so", async () => {
+    const slackPost = await answerToConfirm();
+    await manual();
+    await written(1).setValue("@here 変えました");
+    await claudeMode();
+    await confirmChoice(2, "thread").click();
+    await expect($(".slack-confirm .diff-state")).toHaveText("行うことが変わったため投稿できません");
+    expect(await callsOf(slackPost)).toEqual([]);
+    expect(await count(`${cards} .slack-done`)).toBe(0);
   });
 
   it("keeps 投稿 off while a request to Claude is on its way, and frees it when the answer comes", async () => {
