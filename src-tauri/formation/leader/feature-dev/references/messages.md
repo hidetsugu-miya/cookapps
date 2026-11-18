@@ -49,6 +49,13 @@ When the `DONE` is the specification's and `{case root}/case.json` is gone, the 
 
 A decision of the case itself (a requirement question, a design choice, the acceptance of an implementation) does not come as a `QUESTION`: the child puts it on a decision page.
 
+### A `QUESTION` that waits for the business side
+
+A `QUESTION requirement` whose first line says that the requirement waits for the business side's answers is a hold. Research cannot settle it, so skip steps 1 and 2.
+Tell the owner in Japanese the titles of the questions and the text for the business side, which follows `Text for the business side:` in the message (each line with its leading `> ` taken off), word for word, and wait.
+When the owner brings the business side's answers, or decides the questions themselves (option B), send them as `ANSWER requirement`, word for word. Never answer in the place of the owner or the business side.
+The same child is still waiting for that `ANSWER`, so do not launch another.
+
 ## The owner's reply to a page
 
 The owner answers a page in the app and presses the button that sends the reply to you.

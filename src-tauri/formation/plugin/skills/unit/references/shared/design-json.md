@@ -44,7 +44,7 @@ An empty file to start from:
 | `name` | text | The name. |
 | `kind` | enum | `機能` or `前提改修` (a change that other DESIGN items need, with no requirement of its own). |
 | `repository` | text | Exactly one repository name. |
-| `release` | positive integer, optional | Not used by this flow beyond ordering. When one DESIGN item writes it, every one does, and the values run from 1 without a gap. A DESIGN item depends on none of a later release. |
+| `release` | positive integer, optional | The release the item reaches production in. Stage 7 of the design unit cuts the stages of a repository by it: an item is in a later stage than every item of the same repository of an earlier release. It does not order one repository against another. When one DESIGN item writes it, every one does, and the values run from 1 without a gap. A DESIGN item depends on none of a later release. |
 | `requirements` | array of `REQ-NN` | The REQs this item realizes. The only place the trace from a REQ to a DESIGN is stored. Empty for a `前提改修`. |
 | `depends_on` | array of `{id, reason}` | The DESIGN items this one depends on. `reason` is text. |
 | `purpose`, `approach` | md | The purpose, and the approach. |

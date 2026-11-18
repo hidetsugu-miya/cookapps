@@ -26,7 +26,7 @@ When this is refused, send `BLOCKED`. Do not merge or rebase by guess.
 
 ### Commit the case root
 
-Stage only the paths you changed, one by one: `.feature-dev/current/case.json`, the deliverable you wrote (`requirement.json`, `design.json`), the reopen records you wrote (`records/reopen-*.md` and `records/design-base.json`), and your unit's records (`records/{unit}/`). Never `git add .` or `git add -A`.
+Stage only the paths you changed, one by one: `.feature-dev/current/case.json`, the deliverable you wrote (`requirement.json`, `design.json`), the notes of the investigation (`technical-notes.md`, `code-facts-base.json`, `creator-facts.md`), the reopen records you wrote (`records/reopen-*.md` and `records/design-base.json`), and your unit's records (`records/{unit}/`). A path that you removed (`records/design-base.json` after the design redo used it) is staged the same way, by its path, and its removal goes in the commit. Never `git add .` or `git add -A`.
 
 ```sh
 git -C "{docs worktree}" add -- ".feature-dev/current/case.json" ".feature-dev/current/records/{unit}"
@@ -96,7 +96,7 @@ git -C "{folder}" push origin --delete "{child branch}"
 ```
 
 The local child branch and its folder stay: the owner closes them. Do not use `--delete-branch`, because the branch is checked out in your folder.
-Then record the merge with the `child` recipe, merged form (the status must already be `受入待ち` or `完了`), and, when this repository is the docs repository, `git -C "{docs worktree}" pull --ff-only origin "{base branch}"` before the next case-root commit.
+When this repository is the docs repository, first run `git -C "{docs worktree}" pull --ff-only origin "{base branch}"`, so that the pull meets no uncommitted `case.json`; when it is refused, send `BLOCKED`. Then record the merge with the `child` recipe, merged form (the status must already be `受入待ち` or `完了`).
 
 ## The aggregate pull request
 

@@ -14,7 +14,7 @@ You do not write, read for its content, judge or change a page.
 
    `{child name}` is the child that sent the message, the one you launched.
 2. The app checks the file and, when it is valid, shows it as a tab of the middle pane. The child's card says that it waits for a judgment.
-3. Tell the owner in one or two lines, in Japanese, that a page is ready for `{unit}` and what it asks (take it from the child's message, not from the file). Then end your turn and wait. Do not poll.
+3. Tell the owner in one line, in Japanese, that a page of `{child}` is ready. The message of a child holds only the path, so do not read the file for what it asks. Then end your turn and wait. Do not poll.
 4. The owner answers and presses the button that sends the reply to you. It reaches you as text that starts with `判断ページの返信（{child}）`, and you send it on as a `REPLY` ([messages](messages.md)).
 
 ## When `formation_page` refuses

@@ -14,12 +14,12 @@ This file says how.
 3. **Write the page JSON** to `{case root}/records/{unit}/page-{nn}.json`, with `nn` two digits, one more than the last page of the unit (`01` for the first). Make the folder if needed. The page is a record of the unit: it stays, and it is committed with the unit's other records ([branch-and-pr](branch-and-pr.md)). Pages are not committed before they are answered.
 4. **Polish the text.** Launch the `feature-dev:prose-polisher` agent with every Japanese text the page shows as `sections` (one section for each text, headed by its place in the page), `body_only` `true`, and as `materials` the deliverable files and the items the texts rest on. Write each returned draft into the page as it stands, line by line. The leader's page tool refuses a Japanese line that is not in the final draft of a recorded polishing run, so polish first, then write the page from the drafts, and do not edit a line by hand afterwards. Do not polish the texts that the page copies from a source (a path, a quoted line of code).
 5. **Send** `PAGE {absolute path}` to the leader, and stop.
-6. **When `PAGE-REFUSED {path}` comes**, its lines are the violations. Fix the page. When a line was refused as unpolished, run step 4 again for those lines only. Then send `PAGE` again. When a violation names a `ref` that it cannot resolve, name that element by its index in the array (`requirement.json#/requirements/2`) instead of its `id`.
+6. **When `PAGE-REFUSED {absolute path}` comes**, its lines are the violations. Fix the page. When a line was refused as unpolished, run step 4 again for those lines only. Then send `PAGE` again. When a violation names a `ref` that it cannot resolve, name that element by its index in the array (`requirement.json#/requirements/2`) instead of its `id`.
 7. **When `REPLY` comes**, read it as "Reading the reply" below.
 
 ## The page
 
-The file is one JSON object. Keys that are not listed here are refused.
+The file is one JSON object. Keys that are not listed here are refused. Every text field that is given is a non-empty string, and `null` counts as absent.
 
 ### Top level
 
@@ -28,19 +28,19 @@ The file is one JSON object. Keys that are not listed here are refused.
 | `schema_version` | `1` |
 | `page_kind` | `open-questions`, `approval` or `code-review`. |
 | `subject` | `requirement` or `design` for `open-questions` and `approval`; `code` for `code-review`. |
-| `context_label` | One line over the title naming the kind of confirmation and the ticket, for example `要件定義の承認依頼 ・ チケット PROJ-101`. |
-| `title` | What the page is about, in one plain heading. |
+| `context_label` | Required. One line over the title naming the kind of confirmation and the ticket, for example `要件定義の承認依頼 ・ チケット PROJ-101`. |
+| `title` | Required. What the page is about, in one plain heading. |
 | `what` | Required on `approval` and `code-review`, absent on `open-questions`. One to three sentences: the point of what this requirement, design or change adds or changes. No internal identifiers and no counts. |
-| `roots` | An object that maps a root name to an absolute folder. The case root is `deliverables`. Name a repository root after the repository, and add one for each repository an evidence item cites. |
+| `roots` | Required. An object that maps a root name to an absolute folder, which must be inside a repository of the formation or one of its worktrees (the case root is). The case root is `deliverables`. Name a repository root after the repository, and add one for each repository an evidence item cites. |
 | `previous_reply` | Optional. The reply text of the owner to an earlier page of the same items, verbatim. The page starts from its answers. |
 
 By page kind:
 
 - `open-questions`: `questions`, an array of one or more `question` cards.
 - `approval`:
-  - `approval_scope` (required): an array of `{heading, items}` groups. An item is `{root, ref, description}` for a node of the deliverable, or `{root, path, description}` for another file. `root` is optional and defaults to `deliverables`. Together the groups cover every requirement (or design) item, shared material and appendix, each as one `ref` item. The description of a REQ or DESIGN item is `{ID} {name}。{summary}`. On `design`, put the DESIGN items in a group of their own that holds nothing else.
+  - `approval_scope` (required): an array of `{heading, items}` groups. An item is `{root, ref, description}` for a node of the deliverable, or `{root, path, description, extras}` for another file, where `extras` is an optional array of more paths of the same root. Give `ref` or `path`, never both. `root` is optional and defaults to `deliverables`. A group holds at least one item. Together the groups cover every requirement (or design) item, shared material and appendix, each as one `ref` item. The description of a REQ or DESIGN item is `{ID} {name}。{summary}`. On `design`, put the DESIGN items in a group of their own that holds nothing else.
   - `quality_loop` (required): `{rounds, must_fix_resolved}`, both integers: the review rounds that ran, and the must-fix findings they fixed.
-  - Optional: `changes` (change sections, below), `needs_user_decision` (`nr` cards), `residual_must_fix` (`must-fix` cards), `structural_proposals` (`structural-proposal` cards, design only), `adr` (one `adr` card, design only), `risks` (`{items, evidence}`, where `items` is an array of `{title, text}`: one sentence for the risk, and its supplement, and `evidence` is an optional array of evidence items), `settled_decisions` (an array of `{id, decision, reason, evidence, provisional}` for the `UD-NN` decisions the deliverable records; `provisional` is `true` for one that waits for the business side).
+  - Optional: `changes` (change sections, below), `needs_user_decision` (`nr` cards), `residual_must_fix` (`must-fix` cards), `structural_proposals` (`structural-proposal` cards, design only), `adr` (one `adr` card, design only), `risks` (`{items, evidence}`, where `items` is an array of at least one `{title, text}`: `title` is one sentence for the risk and is required, `text` is its supplement and is optional, and `evidence` is an optional array of evidence items), `settled_decisions` (an array of `{id, decision, reason, evidence, provisional}` for the `UD-NN` decisions the deliverable records; `id`, `decision` and `reason` are required, `evidence` and `provisional` optional; `provisional` is `true` for one that waits for the business side).
 - `code-review`: optional `changes`, `residual_must_fix` (`review-must-fix` cards), `unmet_criteria` (`unmet-criterion` cards), `needs_user_decision` (`review-decision` cards), and `pr` (`{url, note}`: `url` is `null` with a `note` that says why when no pull request exists).
 
 A change section is `{heading, blocks}`: what changes, in one plain heading, and blocks that open with who does what and what happens to them.
@@ -49,17 +49,18 @@ A change section is `{heading, blocks}`: what changes, in one plain heading, and
 
 | Key | Content |
 | --- | --- |
-| `kind` | `question` (`open-questions`); `nr`, `must-fix`, `structural-proposal`, `adr` (`approval`); `review-must-fix`, `review-decision`, `unmet-criterion` (`code-review`). |
-| `number` | The id of the item (`UD-NN`, `NR-N`, `MF-N`, `SI-N`, `AD-1`, a review finding id). A `question` with none is `論点{n}`, numbered in the order passed. It is shown on the card and echoed in the reply. |
+| `kind` | Required, and it must be the kind of the array the card is in. `question` (`open-questions`); `nr`, `must-fix`, `structural-proposal`, `adr` (`approval`); `review-must-fix`, `review-decision`, `unmet-criterion` (`code-review`). |
+| `number` | Required. The id of the item (`UD-NN`, `NR-N`, `MF-N`, `SI-N`, `AD-1`, a review finding id). A `question` with none is `論点{n}`, numbered in the order passed. It is shown on the card and echoed in the reply. |
 | `title` | The card's header. On `question`, `nr` and `review-decision`, it is the one question the card asks, a sentence that ends in `？`, in the words of what the owner decides. |
 | `summary` | What is decided, in one or two sentences, with no recommendation. The page does not show it on `question`, `nr` and `review-decision`, but it is required. |
 | `background` | Optional. The gap or premise the decision needs, in one or two plain sentences. |
 | `facts` | Optional. An array of `{label, value}` (below). |
 | `blocks` | Optional. Blocks shown after the facts. |
 | `options` | Required on `question`, `nr` and `review-decision`, absent elsewhere. An array of `{key, label, detail}`: `key` is `A`, `B`, `C` in order, `label` the option's name, `detail` optional (what happens when it is chosen, then what it gives up or risks). One or more options. |
-| `recommendation` | Required on every kind but `unmet-criterion`. `A` on `question`, `nr` and `review-decision`, and a fixed-choice key on the other kinds (below). |
+| `recommendation` | Required on every kind but `unmet-criterion`, which refuses it and `recommendation_reason`. `A` on `question`, `nr` and `review-decision`, and a fixed-choice key on the other kinds (below). |
 | `recommendation_reason` | Required with `recommendation`. Why, in words the card itself shows, so that it reads without opening anything. |
 | `evidence` | Optional. An array of evidence items. |
+| `cards` | Only on `unmet-criterion`, optional. An array of the `number`s of the cards that cause the unmet criterion. |
 
 The fixed choices of the other kinds: `must-fix` has `fix` and `skip`; `structural-proposal` has `approve`, `reject` and `hold`; `adr` has `keep` and `decline`; `review-must-fix` has `fix` and `accept`. `unmet-criterion` has no answer.
 The page adds the fixed rows `調べてから決めて` (`investigate`) and `その他` (`other`) to a `question`, `その他` to an `nr`, and `今回は対応しない` (`defer`) and `その他` to a `review-decision`.
@@ -85,21 +86,22 @@ Each block is an object with a `type`:
 - `table`: `header` (array of texts, optional) and `rows` (array of rows; a cell is a text, or `{text, changed: true}` to mark what changes).
 - `before-after`: `before` and `after` (arrays of blocks), with `before_caption` (default `今`) and `after_caption` (default `変更後`).
 - `folded`: `summary` and `blocks`, a group the owner opens.
-- `diagram`: `mermaid` and `caption` (optional). Its first line names the type: `flowchart` (or `graph`), `sequenceDiagram` or `stateDiagram` (or `stateDiagram-v2`). A syntax error is refused.
+- `diagram`: `mermaid` and `caption` (optional). Its first line names the type: `flowchart` (or `graph`), `sequenceDiagram` or `stateDiagram` (or `stateDiagram-v2`). The check reads that first word only, so check the rest of the syntax yourself.
 - `evidence`: `items`, evidence items, shown folded.
 
+A `list` has at least one item, a `table` at least one row, and an `evidence` block at least one item. Blocks nest at most 6 deep.
 A text field is plain Japanese. `**...**` is the only inline markup.
 
 ### Evidence items
 
 Each item is an object with a `type`:
 
-- `excerpt`: `root`, `path`, `start`, `end` (default `start`), `highlight` (line numbers, default every line), `note`. Cite the smallest range that grounds a statement.
+- `excerpt`: `root`, `path`, `start` (1 or more), `end` (default `start`, at most 400 lines after `start`), `highlight` (line numbers inside the range, default every line), `note`. Cite the smallest range that grounds a statement.
 - `diff`: `summary`, `name`, `before` and `after` (arrays of short lines), `note`.
-- `git-diff`: `summary`, `root` (a git repository), `path`, `base` (a revision), `head` (a revision, or `null` for the working tree), `note`. On a `code-review` page, show changed code with this, never with lines you copied.
-- `node`: `root`, `ref`, `note`. A node of `requirement.json` or `design.json`, as `{file}#{pointer}`, for example `requirement.json#/requirements/REQ-03` or `design.json#/designs/DESIGN-02`. Cite the deliverables with this, never with `excerpt`.
+- `git-diff`: `summary`, `root` (a git repository), `path`, `base` (a revision), `head` (required: a revision, or `null` for the working tree), `note`. A diff with no change is refused. On a `code-review` page, show changed code with this, never with lines you copied.
+- `node`: `root`, `ref`, `note`. A node of `requirement.json` or `design.json` (a file that ends in `.json`), as `{file}#{pointer}`, for example `requirement.json#/requirements/REQ-03` or `design.json#/designs/DESIGN-02`. Cite the deliverables with this, never with `excerpt`.
 
-A `path` is relative to the folder of its `root`, with `/`. A cited file or range that does not exist is refused.
+A `path` is relative to the folder of its `root`, with `/`. A cited file or range that does not exist is refused. A page holds at most 200 evidence items.
 
 Not part of the page: images, screenshots, samples, a count of cards, a glossary, and any key not listed above.
 

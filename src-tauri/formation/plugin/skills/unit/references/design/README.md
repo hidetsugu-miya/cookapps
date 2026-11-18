@@ -11,16 +11,7 @@ Asking the owner is [decision-page](../shared/decision-page.md), and the review 
 
 ## Setup of this unit
 
-The jq programs of this unit are in the files of this folder. Extract them into the same `{jq dir}`, once:
-
-```sh
-for f in {skill dir}/references/design/*.md; do
-  awk -v d="{jq dir}" '/^```jq [a-z-]+$/{out=d"/"$2".jq"; f=1; next} /^```$/{f=0; close(out)} f{print > out}' "$f"
-done
-ls "{jq dir}"
-```
-
-You should now see `design-changed-nodes.jq`, `design-diagram.jq`, `design-form.jq`, `impl-generate.jq` and `impl-precheck.jq` besides the two of the skill.
+The jq programs of this unit, `design-changed-nodes.jq`, `design-diagram.jq`, `design-form.jq`, `impl-generate.jq` and `impl-precheck.jq`, are in the files of this folder. The setup of the skill already extracted them into `{jq dir}`.
 `{scratch}` is a folder outside every repository, `${TMPDIR:-/tmp}/feature-dev-design/{base branch with each / turned into -}`. Make it once with `mkdir -p`. Nothing in it is committed.
 `{records}` is `{case root}/records/design`. Make it when you first write there.
 

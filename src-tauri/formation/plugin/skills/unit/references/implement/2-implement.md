@@ -30,6 +30,8 @@ Keep for Stage 4 and Stage 5, from each report:
 
 ## Branch on the report
 
+The report's first line is `completion:`. Branch on its value.
+
 - `implementation-completed`: go on.
 - `implementation-completed` with no changed path at all: the code already meets the criteria. Say why in the summary, and go on to Stage 3 with the commits the folder already holds (Stage 3 reviews them as they are).
 - `implementation-blocked`, `test-failure-aborted` or `environment-anomaly-aborted`: read its `Interruption record`.

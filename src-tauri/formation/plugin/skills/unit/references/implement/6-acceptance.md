@@ -67,7 +67,7 @@ Then classify the reply. Judge the hold and the send-back from the reply first.
 
 ## Send-back
 
-1. Settle the unit to reopen: the one the reply names (`requirement`, `design`, or the key of an earlier implementation, an earlier stage of this repository included). When the reply does not name it, send `QUESTION {key}` and wait.
+1. Settle the unit to reopen: the one the reply names (`requirement`, `design`, or the key of an earlier implementation, an earlier stage of this repository included). When the reply does not name it, send `QUESTION {key}: {which earlier unit the reply points to, in one line}`, with the options and your recommendation on the next lines, and wait.
 2. Run the `reopen` recipe of [case-json](../shared/case-json.md) with the owner's words as the reason, and commit the case root. This implementation stays `受入待ち`; the commits stay on the child branch.
 3. Send `REOPENED {unit}: {reason}` and stop.
 

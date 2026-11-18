@@ -25,7 +25,6 @@ The change is not committed yet, or it holds commits of an earlier session: the 
    - `criteria`: the location of `{contract}`, and the locations of the DESIGN items and REQs.
    - `review_round`: the round counter (1 to 3).
    - Round 2 or later: `previous_ledger` (the rows of the ledger) and `target_files` (the paths the last fix changed). In round 2 or later it looks only at them and at the effects of the fix.
-   - A change that is only tests, or only comments and documents, may name the perspectives to run in a confirmation round (tests and readability, or documentation and readability). A round that follows a fix of production code runs all of them.
 2. Write the report to `{records}/review-{nn}.md` and add each finding to the ledger.
 3. In round 1, decide whether to ask for a review by codex. Ask for it when the change touches an interface that other code or other repositories depend on, stored data, authentication, secrets or concurrency, and do not ask otherwise. Ask once, now, before any fix, as [codex-review](../shared/codex-review.md) says: the target is `git diff {review base}` in `{folder}`, the contract and the DESIGN locations, and the faults that matter for this unit. Check each of its findings, add the ones that hold to the ledger as `CX-n` (a correctness, data or security fault is a must-fix, anything else a recommendation), and mark the others `declined` with the reason. When it fails, say so in the summary and go on.
 4. Sort the open findings:
