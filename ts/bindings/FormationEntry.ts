@@ -13,4 +13,8 @@ environment: string,
 /**
  * When it was created (epoch milliseconds); `None` for a formation that has no `formation.json`.
  */
-createdAt: number | null, counts: ChildCounts, };
+createdAt: number | null, counts: ChildCounts, 
+/**
+ * Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`mark_waiting`); the list of `list_with` and the answer of `formation_create` have `false`.
+ */
+waiting: boolean, };

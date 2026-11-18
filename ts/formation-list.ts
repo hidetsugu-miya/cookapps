@@ -15,6 +15,8 @@ export const STATE_LABELS: Record<FormationState, string> = { working: "作業�
 
 // The environment of this Mac in `FormationEntry.environment`.
 const LOCAL = "local";
+// The label at the right of a row whose leader waits for input, as Orca's list words it (`STATUS_LABELS.question` of orca.ts, which imports this file).
+const WAITING_LABEL = "入力待ち";
 
 // The name of the formation the screen shows: none at each start of the app, in memory only.
 let current: string | null = null;
@@ -147,14 +149,27 @@ function row(f: FormationEntry): HTMLButtonElement {
   // The menu and its confirmation are anchored on the name, which the button's own state does not touch.
   node.oncontextmenu = (e) => openRowMenu(f, name, e);
   node.append(tag("i", "formation-row-dot"), name);
+  // The leader waits for input: the dot is filled and a label says so (`FormationEntry.waiting`, #915).
+  if (f.waiting) {
+    node.dataset.waiting = "true";
+    node.append(span("formation-row-waiting", WAITING_LABEL));
+  }
   return node;
 }
 
+// The mark of the leader's tab in the middle pane: the same state as the row of the shown formation.
+function drawLeaderMark() {
+  const waiting = formations.find((f) => f.name === current)?.waiting ?? false;
+  $("formation-tab-leader").dataset.state = waiting ? "waiting" : "";
+  $("formation-tab-leader-mark").hidden = !waiting;
+}
+
 function draw() {
+  drawLeaderMark();
   const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
-  const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects])]);
+  const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects, f.waiting])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.

@@ -1288,6 +1288,65 @@ describe("orchestration mode: the list of the formations", () => {
     })).toEqual({ background: "rgba(0, 0, 0, 0)", border: "1.5px", radius: "50%" });
   });
 
+  it("fills the ring orange and puts 入力待ち at the right of the row whose leader waits for input, and takes both off when it does not wait any more", async () => {
+    const waitingList = (waiting: boolean) => formationList([formationEntry("formation"), formationEntry("won-2485", { minutes: 12, repos: ["wonder-api"], waiting }), formationEntry("mail-summary", { minutes: 90 })]);
+    await openList({ formation_list: waitingList(true) }, null);
+    const mark = () =>
+      browser.execute((s) => {
+        const text = (e: Element | null) => e?.textContent ?? null;
+        const style = (name: string) => {
+          const dot = document.querySelector(`${s}[data-formation="${name}"] .formation-row-dot`)!;
+          const look = getComputedStyle(dot);
+          return { filled: look.backgroundColor !== "rgba(0, 0, 0, 0)", halo: look.boxShadow !== "none", radius: look.borderTopLeftRadius };
+        };
+        return { labels: [...document.querySelectorAll(s)].map((e) => text(e.querySelector(".formation-row-waiting"))), waiting: style("won-2485"), idle: style("formation") };
+      }, ROWS);
+    expect(await mark()).toEqual({
+      labels: [null, "入力待ち", null],
+      waiting: { filled: true, halo: true, radius: "50%" },
+      idle: { filled: false, halo: false, radius: "50%" },
+    });
+    // The label is at the right end of the row, and the name stays at the left.
+    const place = await browser.execute((s) => {
+      const r = document.querySelector(`${s}[data-formation="won-2485"]`)!.getBoundingClientRect();
+      const label = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-waiting`)!.getBoundingClientRect();
+      const name = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-name`)!.getBoundingClientRect();
+      return { right: r.right - label.right < 16, beside: name.right <= label.left };
+    }, ROWS);
+    expect(place).toEqual({ right: true, beside: true });
+    await mock("formation_list", waitingList(false));
+    await browser.waitUntil(async () => (await mark()).labels.join() === ",,");
+    expect(await mark()).toMatchObject({ waiting: { filled: false, halo: false } });
+    // The row of a leader that waits shows nothing else.
+    await mock("formation_list", waitingList(true));
+    await browser.waitUntil(async () => (await mark()).labels[1] === "入力待ち");
+  });
+
+  it("marks the leader's tab with the dot of a waiting teammate while the shown formation's leader waits, and not otherwise", async () => {
+    const waitingList = (waiting: boolean) => formationList([formationEntry("formation", { waiting }), formationEntry("won-2485", { waiting: !waiting })]);
+    await openList({ formation_list: waitingList(true) });
+    const tab = () =>
+      browser.execute(() => {
+        const mark = document.getElementById("formation-tab-leader-mark")!;
+        return { state: document.getElementById("formation-tab-leader")!.dataset.state, shown: !mark.hidden, text: mark.textContent, color: getComputedStyle(mark).color };
+      });
+    const orange = await browser.execute(() => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--agent-question)";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    expect(await tab()).toEqual({ state: "waiting", shown: true, text: "●", color: orange });
+    // The row of another formation that waits does not mark this tab.
+    await mock("formation_list", waitingList(false));
+    await browser.waitUntil(async () => (await tab()).state === "");
+    expect(await tab()).toMatchObject({ shown: false });
+    await mock("formation_list", waitingList(true));
+    await browser.waitUntil(async () => (await tab()).state === "waiting");
+  });
+
   it("selects nothing at the start, shows the work pane of Orca and starts and reads nothing", async () => {
     await openList({ formation_children: mixed() }, null);
     expect(await pressedRows()).toEqual([]);

@@ -3329,6 +3329,8 @@ pub struct FormationEntry {
     #[cfg_attr(test, ts(type = "number | null"))]
     pub created_at: Option<u64>,
     pub counts: ChildCounts,
+    /// Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`mark_waiting`); the list of `list_with` and the answer of `formation_create` have `false`.
+    pub waiting: bool,
 }
 
 /// The answer of `formation_list`.
@@ -3439,12 +3441,76 @@ fn list_with(config: &Path, read: &Read<'_>, pull: &PullEnv<'_>) -> Result<Forma
             projects: meta.projects,
             created_at: meta.created_at,
             counts: counts_of(own),
+            waiting: false,
         });
     }
     Ok(FormationList {
         formations,
         read_error,
     })
+}
+
+/// The mark that Claude Code puts first in the title of its terminal while it waits for the owner's input; while it works the title starts with a spinner character instead (measured with Claude Code 2.1.327 in a pseudo terminal, 2026-11-18: `✳` at the prompt, `◐` and `◑` while it works, and the same in the titles of `orca terminal list`).
+const WAITING_MARK: char = '✳';
+
+/// Whether the title of a terminal that runs Claude Code says it waits for input. A title that is empty or not known yet is not waiting: the leader is taken for working unless its terminal says otherwise.
+pub(crate) fn title_waits(title: &str) -> bool {
+    title.trim_start().starts_with(WAITING_MARK)
+}
+
+/// Whether the terminal `handle` is in `list` (`orca terminal list`, its `result`) and its title says it waits for input. Orca follows the title that the program writes (OSC 0) also for a terminal that was made with `--title` (measured on the floating terminal, 2026-11-18).
+fn terminal_waits(list: &Value, handle: &str) -> bool {
+    list["terminals"].as_array().into_iter().flatten().any(|t| {
+        orca::text_of(t, "handle") == Some(handle)
+            && t["orphaned"] != true
+            && orca::text_of(t, "title").is_some_and(title_waits)
+    })
+}
+
+/// Sets `waiting` of each formation in `list` (#915): the leader of this Mac's formation is the pane `formation:{name}`, whose title `local_title` gives; the leader of a formation of a saved environment is its recorded terminal (`Meta::orchestrator_terminal`), found in that Orca's `terminal list` (of every terminal, as `all_terminals_args`), read once for each environment, the environments side by side. A terminal list that cannot be read, a leader that was never started and one that is not listed are not waiting.
+fn mark_waiting(
+    config: &Path,
+    list: &mut FormationList,
+    local_title: &dyn Fn(&str) -> Option<String>,
+    read: &Read<'_>,
+) {
+    let mut groups: BTreeMap<String, Vec<(usize, String)>> = BTreeMap::new();
+    for (at, entry) in list.formations.iter_mut().enumerate() {
+        if entry.environment == LOCAL {
+            entry.waiting = local_title(&entry.name).is_some_and(|title| title_waits(&title));
+        } else if let Some(handle) = read_meta(config, &entry.name)
+            .ok()
+            .and_then(|meta| meta.orchestrator_terminal)
+        {
+            groups
+                .entry(entry.environment.clone())
+                .or_default()
+                .push((at, handle));
+        }
+    }
+    let waiting: Vec<usize> = std::thread::scope(|scope| {
+        let runs: Vec<_> = groups
+            .iter()
+            .map(|(environment, leaders)| {
+                let run =
+                    scope.spawn(move || read(&all_terminals_args(environment), SAVED_PS_TIMEOUT));
+                (leaders, run)
+            })
+            .collect();
+        runs.into_iter()
+            .filter_map(|(leaders, run)| Some((leaders, joined(run).ok()?)))
+            .flat_map(|(leaders, terminals)| {
+                leaders
+                    .iter()
+                    .filter(|(_, handle)| terminal_waits(&terminals, handle))
+                    .map(|(at, _)| *at)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    });
+    for at in waiting {
+        list.formations[at].waiting = true;
+    }
 }
 
 /// The environment of `wanted` among `view`, by its name or its id: exactly one, and one whose repositories were read.
@@ -3629,6 +3695,7 @@ fn create_with(
         projects: meta.projects,
         created_at: meta.created_at,
         counts: ChildCounts::default(),
+        waiting: false,
     })
 }
 
@@ -4012,16 +4079,27 @@ pub async fn formation_orchestrator(
     .await?
 }
 
-/// The formations of the screen (A-37): each with its projects, when it was created and the number of its children in each state.
+/// The formations of the screen (A-37): each with its projects, when it was created, the number of its children in each state and whether its leader waits for input (#915).
 #[tauri::command]
-pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, String> {
+pub async fn formation_list(
+    app: tauri::AppHandle,
+    sessions: tauri::State<'_, crate::claude_code::ClaudeCode>,
+) -> Result<FormationList, String> {
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
+    let claude = sessions.inner().clone();
     orca::blocking(move || {
         let open = pc_connect(&dir, &version, false);
-        list_with(&dir, &screen_read, &|environment, items| {
+        let mut list = list_with(&dir, &screen_read, &|environment, items| {
             screen_pull_env(environment, items, &open)
-        })
+        })?;
+        mark_waiting(
+            &dir,
+            &mut list,
+            &|name| claude.formation_title(name),
+            &screen_read,
+        );
+        Ok(list)
     })
     .await?
 }
@@ -11542,6 +11620,130 @@ mod tests {
         // A file that cannot be read may belong to the PC: it is not skipped.
         std::fs::write(dir(&config, "on-mini").join(FORMATION_FILE), "nope").unwrap();
         assert!(formations_on(&config, "mac-pro").is_err());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_leader_waits_when_its_title_starts_with_the_mark_of_claude_code() {
+        assert!(title_waits("✳ Claude Code"));
+        assert!(title_waits("  ✳ 一語での挨拶"));
+        assert!(title_waits("✳"));
+        // A spinner is work, and so is a title that is empty or has the mark elsewhere.
+        assert!(!title_waits("◐ Claude Code"));
+        assert!(!title_waits("◑ 一語での挨拶"));
+        assert!(!title_waits("⠂ Claude Code"));
+        assert!(!title_waits(""));
+        assert!(!title_waits("api-work ✳"));
+    }
+
+    #[test]
+    fn a_terminal_waits_when_it_is_listed_with_a_title_that_says_so() {
+        let list = json!({"terminals": [
+            {"handle": "term_a", "title": "✳ api-work", "orphaned": false},
+            {"handle": "term_b", "title": "◐ api-work", "orphaned": false},
+            {"handle": "term_c", "title": "✳ api-work", "orphaned": true},
+            {"handle": "term_d"},
+        ]});
+        assert!(terminal_waits(&list, "term_a"));
+        assert!(!terminal_waits(&list, "term_b"));
+        assert!(!terminal_waits(&list, "term_c"));
+        assert!(!terminal_waits(&list, "term_d"));
+        assert!(!terminal_waits(&list, "term_gone"));
+        assert!(!terminal_waits(&json!({}), "term_a"));
+    }
+
+    fn entry_of(name: &str, environment: &str) -> FormationEntry {
+        FormationEntry {
+            name: name.into(),
+            projects: Vec::new(),
+            environment: environment.into(),
+            created_at: None,
+            counts: ChildCounts::default(),
+            waiting: false,
+        }
+    }
+
+    #[test]
+    fn the_leader_of_this_mac_waits_by_the_title_of_its_pane() {
+        let config = temp_dir("waiting-local");
+        let mut list = FormationList {
+            formations: vec![
+                entry_of("idle", LOCAL),
+                entry_of("busy", LOCAL),
+                entry_of("untitled", LOCAL),
+                entry_of("none", LOCAL),
+            ],
+            read_error: None,
+        };
+        let titles = |name: &str| match name {
+            "idle" => Some("✳ Claude Code".to_owned()),
+            "busy" => Some("◑ Claude Code".to_owned()),
+            "untitled" => Some(String::new()),
+            _ => None,
+        };
+        // This Mac's leaders ask no Orca.
+        mark_waiting(&config, &mut list, &titles, &|_, _| {
+            panic!("no Orca is asked")
+        });
+        let waiting: Vec<_> = list.formations.iter().map(|f| f.waiting).collect();
+        assert_eq!(waiting, [true, false, false, false]);
+    }
+
+    #[test]
+    fn the_leader_of_a_saved_environment_waits_by_the_title_of_its_recorded_terminal() {
+        let config = temp_dir("waiting-saved");
+        let started = |name: &str, handle: &str| {
+            unstarted_remote_formation(&config, name);
+            update_meta(&config, name, |m| {
+                m.orchestrator_terminal = Some(handle.into());
+            })
+            .unwrap();
+        };
+        started("idle", "term_idle");
+        started("busy", "term_busy");
+        started("closed", "term_closed");
+        unstarted_remote_formation(&config, "unstarted");
+        let mut list = FormationList {
+            formations: ["busy", "closed", "idle", "unstarted"]
+                .map(|name| entry_of(name, "mac-studio"))
+                .to_vec(),
+            read_error: None,
+        };
+        let calls = Mutex::new(Vec::new());
+        let read = |args: &[String], limit: Duration| {
+            calls.lock().unwrap().push((args.to_vec(), limit));
+            Ok(json!({"terminals": [
+                {"handle": "term_idle", "title": "✳ idle", "orphaned": false},
+                {"handle": "term_busy", "title": "◐ busy", "orphaned": false},
+            ]}))
+        };
+        mark_waiting(&config, &mut list, &|_| None, &read);
+        let waiting: Vec<_> = list.formations.iter().map(|f| f.waiting).collect();
+        assert_eq!(waiting, [false, false, true, false]);
+        // One read of every terminal of that Orca for the three leaders, with the time of a saved environment.
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [(all_terminals_args("mac-studio"), SAVED_PS_TIMEOUT)]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_leader_of_a_saved_environment_whose_terminals_cannot_be_read_does_not_wait() {
+        let config = temp_dir("waiting-unread");
+        unstarted_remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_idle".into());
+        })
+        .unwrap();
+        let mut list = FormationList {
+            formations: vec![entry_of("api-work", "mac-studio")],
+            read_error: None,
+        };
+        mark_waiting(&config, &mut list, &|_| None, &|_, _| {
+            Err("no answer".into())
+        });
+        assert!(!list.formations[0].waiting);
         std::fs::remove_dir_all(&config).unwrap();
     }
 }

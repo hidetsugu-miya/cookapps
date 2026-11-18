@@ -1012,8 +1012,10 @@ button.status:hover { filter: brightness(.95); }
 .formation-row[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
 .formation-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .formation-row[aria-busy="true"] { opacity: .5; }
-/* The ring before the name: gray (the leader waits for nothing that the list knows of). */
+/* The ring before the name: gray; while the leader waits for input (#915) it is filled orange with a pale ring around it, and a label stands at the right end of the row. */
 .formation-row-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 3px; border: 1.5px solid var(--muted); border-radius: 50%; }
+.formation-row[data-waiting="true"] .formation-row-dot { border-color: var(--agent-question); background: var(--agent-question); box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-question) 25%, var(--surface)); }
+.formation-row-waiting { flex: none; margin-left: auto; padding: 2px 7px; border-radius: 10px; background: color-mix(in srgb, var(--agent-question) 14%, var(--surface)); color: color-mix(in srgb, var(--agent-question) 75%, #000); font-size: calc(11px * var(--fs)); font-weight: 600; }
 .formation-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 /* The projects of a formation at the top of the menu of its row: headings that are not pressed, in the monospace of the names. */
 .menu button:disabled:has(> .formation-menu-mark) { opacity: 1; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); cursor: default; }

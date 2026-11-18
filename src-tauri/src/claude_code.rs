@@ -419,9 +419,72 @@ fn stop_later(pgid: i32, ended: Arc<AtomicBool>) {
     std::thread::spawn(move || stop_groups(&[(pgid, ended)], GRACE));
 }
 
+/// The title that the program in a pane's terminal last wrote (OSC 0 or 2), as the pane's reader keeps it; `None` until it writes one.
+type Title = Arc<Mutex<Option<String>>>;
+
+/// The longest part of an unfinished title sequence that is kept for the next read; a longer one is no title.
+const TITLE_CARRY_LIMIT: usize = 1024;
+
+/// Finds the titles in the text a terminal prints (`ESC ] 0 ; title BEL`, `ESC ] 2 ; title ESC \`), also when a read cuts one in two (#915: Claude Code writes `✳` first in it while it waits for input, `formation::title_waits`).
+#[derive(Default)]
+struct TitleScan {
+    carry: String,
+}
+
+impl TitleScan {
+    /// Takes the next text and answers the last complete title in it, if there is one.
+    fn feed(&mut self, text: &str) -> Option<String> {
+        let all = std::mem::take(&mut self.carry) + text;
+        let mut last = None;
+        let mut rest = all.as_str();
+        while let Some(at) = rest.find('\x1b') {
+            let from_escape = &rest[at..];
+            let Some(body) = from_escape.strip_prefix("\x1b]") else {
+                if from_escape.len() == 1 {
+                    self.keep(from_escape);
+                    break;
+                }
+                rest = &from_escape[1..];
+                continue;
+            };
+            let Some(end) = body.find(['\x07', '\x1b']) else {
+                self.keep(from_escape);
+                break;
+            };
+            let after = &body[end + 1..];
+            if body.as_bytes()[end] == 0x1b {
+                if after.is_empty() {
+                    self.keep(from_escape);
+                    break;
+                }
+                if !after.starts_with('\\') {
+                    rest = &body[end..];
+                    continue;
+                }
+            }
+            if let Some(("0" | "2", title)) = body[..end].split_once(';') {
+                last = Some(title.to_owned());
+            }
+            rest = if body.as_bytes()[end] == 0x1b {
+                &after[1..]
+            } else {
+                after
+            };
+        }
+        last
+    }
+
+    fn keep(&mut self, tail: &str) {
+        if tail.len() <= TITLE_CARRY_LIMIT {
+            self.carry = tail.to_owned();
+        }
+    }
+}
+
 /// A pane's process. Dropping it closes the terminal; the plugin folder of the pane's skill goes with it.
 struct Session {
     seq: u64,
+    title: Title,
     master: Box<dyn MasterPty + Send>,
     input: mpsc::Sender<String>,
     pgid: i32,
@@ -436,6 +499,7 @@ struct Reader {
     sink: Sink,
     pgid: i32,
     ended: Arc<AtomicBool>,
+    title: Title,
 }
 
 #[derive(Default)]
@@ -465,11 +529,15 @@ impl Reader {
         let mut buffer = vec![0u8; READ_BUFFER];
         let mut pending = Vec::new();
         let mut taken = true;
+        let mut scan = TitleScan::default();
         loop {
             match self.reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let data = take_text(&mut pending, &buffer[..n]);
+                    if let Some(title) = scan.feed(&data) {
+                        *self.title.lock().unwrap_or_else(|e| e.into_inner()) = Some(title);
+                    }
                     if !data.is_empty() && !(self.sink)(ClaudeCodeEvent::Output { data }) {
                         taken = false;
                         break;
@@ -574,8 +642,10 @@ fn open(
             }
         }
     });
+    let title = Title::default();
     let session = Session {
         seq,
+        title: title.clone(),
         master: pair.master,
         input,
         pgid,
@@ -588,6 +658,7 @@ fn open(
         sink,
         pgid,
         ended,
+        title,
     };
     Ok((session, reader))
 }
@@ -657,6 +728,18 @@ impl ClaudeCode {
         if let Some(session) = session {
             stop_later(session.pgid, session.ended.clone());
         }
+    }
+
+    /// The title that the leader of the formation `name` (the pane `formation:{name}`) last wrote in its terminal; `None` when it has no process or has written none (#915).
+    pub fn formation_title(&self, name: &str) -> Option<String> {
+        let sessions = self.inner.lock();
+        let session = sessions.get(format!("{FORMATION_ID_PREFIX}{name}").as_str())?;
+        let title = session
+            .title
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        title
     }
 
     /// Ends the process of the orchestrator of the formation `name` (the pane `formation:{name}`), whichever start made it: the formation is deleted (A-37), so no pane is left to close it with its number.
@@ -1410,6 +1493,65 @@ mod tests {
         assert_eq!(pending, &bytes[3..4]);
         assert_eq!(take_text(&mut pending, &bytes[4..]), "い");
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn the_scan_gives_the_last_title_of_osc_0_and_2_ended_by_bel_or_st() {
+        let mut scan = TitleScan::default();
+        assert_eq!(scan.feed("plain text"), None);
+        assert_eq!(
+            scan.feed("\u{1b}]0;✳ Claude Code\u{7}"),
+            Some("✳ Claude Code".into())
+        );
+        assert_eq!(
+            scan.feed("\u{1b}]2;◐ work\u{1b}\\ \u{1b}]0;✳ done\u{7}"),
+            Some("✳ done".into())
+        );
+        assert_eq!(scan.feed("\u{1b}]2;◐ work\u{1b}\\"), Some("◐ work".into()));
+        // Other sequences are no title: a link (OSC 8), a query (OSC 11), and a color.
+        assert_eq!(
+            scan.feed("\u{1b}]8;id=a;https://x\u{7}\u{1b}]11;?\u{7}\u{1b}[31m"),
+            None
+        );
+        // An empty title is a title: the program cleared it.
+        assert_eq!(scan.feed("\u{1b}]0;\u{7}"), Some(String::new()));
+    }
+
+    #[test]
+    fn the_scan_joins_a_title_that_a_read_cut_in_two() {
+        let text = "\u{1b}]0;✳ Claude\u{1b}\\";
+        for cut in 1..text.len() {
+            if !text.is_char_boundary(cut) {
+                continue;
+            }
+            let mut scan = TitleScan::default();
+            assert_eq!(scan.feed(&text[..cut]), None, "cut at {cut}");
+            assert_eq!(
+                scan.feed(&text[cut..]),
+                Some("✳ Claude".into()),
+                "cut at {cut}"
+            );
+        }
+        // A cut that falls inside a sequence that is no title ends it too.
+        let mut scan = TitleScan::default();
+        assert_eq!(scan.feed("\u{1b}"), None);
+        assert_eq!(scan.feed("[0m\u{1b}]0;a\u{7}"), Some("a".into()));
+    }
+
+    #[test]
+    fn the_scan_drops_what_is_not_a_title_and_what_is_too_long() {
+        let mut scan = TitleScan::default();
+        // An ESC that ends a body but is not followed by a backslash aborts the sequence.
+        assert_eq!(
+            scan.feed("\u{1b}]0;lost\u{1b}[0m\u{1b}]0;kept\u{7}"),
+            Some("kept".into())
+        );
+        assert_eq!(
+            scan.feed(&format!("\u{1b}]0;{}", "a".repeat(TITLE_CARRY_LIMIT))),
+            None
+        );
+        assert_eq!(scan.feed("tail\u{7}"), None);
+        assert_eq!(scan.feed("\u{1b}]0;next\u{7}"), Some("next".into()));
     }
 
     #[test]
