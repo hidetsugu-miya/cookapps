@@ -15,6 +15,6 @@ environment: string,
  */
 createdAt: number | null, counts: ChildCounts, 
 /**
- * Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`mark_waiting`); the list of `list_with` and the answer of `formation_create` have `false`.
+ * Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`list_core` with the titles); the list of `list_with` and the answer of `formation_create` have `false`.
  */
 waiting: boolean, };

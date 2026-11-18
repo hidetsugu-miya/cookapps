@@ -434,9 +434,16 @@ struct TitleScan {
 impl TitleScan {
     /// Takes the next text and answers the last complete title in it, if there is one.
     fn feed(&mut self, text: &str) -> Option<String> {
-        let all = std::mem::take(&mut self.carry) + text;
+        // Only a read that follows a cut one is joined to it; the others are scanned as they are, with no copy of the output.
+        let joined;
+        let all = if self.carry.is_empty() {
+            text
+        } else {
+            joined = std::mem::take(&mut self.carry) + text;
+            joined.as_str()
+        };
         let mut last = None;
-        let mut rest = all.as_str();
+        let mut rest = all;
         while let Some(at) = rest.find('\x1b') {
             let from_escape = &rest[at..];
             let Some(body) = from_escape.strip_prefix("\x1b]") else {
@@ -529,13 +536,14 @@ impl Reader {
         let mut buffer = vec![0u8; READ_BUFFER];
         let mut pending = Vec::new();
         let mut taken = true;
-        let mut scan = TitleScan::default();
+        // Only the leader of a formation has its title read (`formation_title`).
+        let mut scan = formation_of(id).map(|_| TitleScan::default());
         loop {
             match self.reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let data = take_text(&mut pending, &buffer[..n]);
-                    if let Some(title) = scan.feed(&data) {
+                    if let Some(title) = scan.as_mut().and_then(|scan| scan.feed(&data)) {
                         *self.title.lock().unwrap_or_else(|e| e.into_inner()) = Some(title);
                     }
                     if !data.is_empty() && !(self.sink)(ClaudeCodeEvent::Output { data }) {

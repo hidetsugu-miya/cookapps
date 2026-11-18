@@ -1101,6 +1101,7 @@ button.formation-card { cursor: pointer; }
 .list-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 #orca-header .list-toggle { margin-right: auto; }
 .orca-tabbar .list-toggle { margin-left: 6px; }
+#formation-head .list-toggle { align-self: center; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
 button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }

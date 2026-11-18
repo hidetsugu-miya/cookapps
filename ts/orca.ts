@@ -777,6 +777,11 @@ const startWaits = () => started !== null && (started.paneKey !== null || starte
 function claimStarted() {
   if (!startWaits()) return;
   const wait = started!;
+  // A formation is selected meanwhile: the session is not selected, because that would take the screen back to the work pane (the start is dropped).
+  if (currentFormation() !== null) {
+    started = null;
+    return;
+  }
   if (Date.now() > wait.until) {
     started = null;
     return;
@@ -993,8 +998,9 @@ export async function readDestination(environment: string | null, force: boolean
   }
 }
 
-// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the selection as it is.
+// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
 export function openInOrca(paneKey: string | null) {
+  deselectFormation();
   const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
   if (row) {
     setProject(row.projectKey);
@@ -1255,6 +1261,13 @@ function toggleFilesAndDraw() {
   }
 }
 
+// The button that opens the list again while a formation is shown (A-23, A-37): the tab strip of the work pane, which has it otherwise, is hidden then, so the head of the leader's pane has the same button, only while the list is closed.
+function drawFormationToggle() {
+  const button = $("formation-list-toggle");
+  button.hidden = listOpen;
+  drawListToggle(button, listOpen);
+}
+
 // Closes the list of projects with its divider, or opens it again (A-23). The divider's ratio is kept, so the list opens at the width it had.
 // The pressed button is hidden by it, so the focus goes on to the button that is shown now.
 function toggleList() {
@@ -1263,6 +1276,7 @@ function toggleList() {
   $("orca-list").hidden = !listOpen;
   $("orca-split").hidden = !listOpen;
   drawListToggle($("orca-list-toggle"), listOpen);
+  drawFormationToggle();
   draw();
   if (focused) {
     const shown = [...document.querySelectorAll<HTMLElement>(".list-toggle")].find((b) => b.offsetParent !== null);
@@ -1384,6 +1398,10 @@ export function initOrca() {
   toggle.id = "orca-list-toggle";
   drawListToggle(toggle, listOpen);
   $("orca-header").prepend(toggle);
+  const inFormation = listToggle("プロジェクト一覧", toggleList);
+  inFormation.id = "formation-list-toggle";
+  $("formation-head").prepend(inFormation);
+  drawFormationToggle();
   const add = $("orca-add");
   // The places are this Mac and the target when it is a saved environment: those are the lists the screen reads again after the add (A-33).
   add.onclick = () => openAddProject(add, view !== null && view.target !== null && view.environments.includes(view.target) ? [view.target] : [], () => void load("full", true));

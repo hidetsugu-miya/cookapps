@@ -123,6 +123,24 @@ describe("development screen: orchestration", () => {
     expect(await width()).toBe(after);
   });
 
+  it("shows the button that opens the list again in the head of the leader's pane while the list is closed and a formation is shown", async () => {
+    await openFormation();
+    // The list is open: the button of the header of the list is the only one.
+    await expect($("#formation-list-toggle")).not.toBeDisplayed();
+    await $("#orca-list-toggle").click();
+    await expect($("#orca-list")).not.toBeDisplayed();
+    const button = $("#formation-list-toggle");
+    await expect(button).toBeDisplayed();
+    await expect(button).toHaveAttribute("aria-label", "プロジェクト一覧");
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+    // It is the first thing in the head, before the tabs.
+    expect(await browser.execute(() => document.getElementById("formation-head")!.firstElementChild!.id)).toBe("formation-list-toggle");
+    await button.click();
+    await expect($("#orca-list")).toBeDisplayed();
+    await expect($("#formation-list-toggle")).not.toBeDisplayed();
+    await expect($("#orca-list-toggle")).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("starts the orchestrator with the pane id of its formation, Claude Code's own tools, no skill and no project, in the size of the left pane", async () => {
     await openFormation();
     const [start] = await waitForCalls("claude_code_start");
@@ -576,12 +594,16 @@ const screenText = () => $("#formation-teammate-term .orca-term-box:not([hidden]
 const readHandles = async () => [...new Set((await callsOf("orca_terminal_read")).map((c) => (c as { handle: string }).handle))];
 const MIRROR = 250;
 
+// 「自動で追う」 is off when a formation is opened, and most of these specs follow: it is pressed on.
+async function followOn() {
+  await $("#formation-follow").click();
+  await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
+}
+
 async function openSession(children: unknown, extra: Record<string, unknown> = {}) {
   await openFlow(children, { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 確認します"], ...extra });
   await browser.waitUntil(async () => (await cardNames()).length > 0);
-  // 「自動で追う」 is off when a formation is opened, and most of these specs follow: it is pressed on first.
-  await $("#formation-follow").click();
-  await expect($("#formation-follow")).toHaveAttribute("aria-pressed", "true");
+  await followOn();
 }
 
 describe("orchestration mode: the view of the flow", () => {
@@ -604,7 +626,8 @@ describe("orchestration mode: the view of the flow", () => {
     expect(rects.cards[0].left).toBeGreaterThan(rects.root.left);
     // The line at the left of the column joins the cards to the leader's card.
     expect(await styleOf("#formation-flow-list", "borderLeftStyle")).toBe("solid");
-    expect(await browser.execute(() => getComputedStyle(document.getElementById("formation-flow-list")!).borderLeftWidth)).toBe("1.5px");
+    // 1.5px in the style sheet; the window of the E2E build has one device pixel to a pixel, which draws it as 1px.
+    expect(await browser.execute(() => Number.parseFloat(getComputedStyle(document.getElementById("formation-flow-list")!).borderLeftWidth))).toBeGreaterThanOrEqual(1);
     const [list, root] = [await rectOf("#formation-flow-list"), await rectOf("#formation-flow-root")];
     expect(Math.abs(list.top - root.bottom)).toBeLessThan(1);
   });
@@ -919,6 +942,8 @@ describe("orchestration mode: the session of a child", () => {
     await $(PROJECT).click();
     expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
     await $(ROW("formation")).click();
+    // 自動で追う is off each time a formation is opened.
+    await followOn();
     const [, second] = await streamed(2);
     expect(second.handle).toBe("term_lab-update");
     await $("#nav-mail").click();
@@ -940,6 +965,7 @@ describe("orchestration mode: the session of a child", () => {
 
   it("closes the stream of a child of the formation that was shown when another formation is pressed", async () => {
     await openList({ formation_children: studioChildren(), ...timers({ formationFlow: READ, orcaMirror: MIRROR }), ...STUDIO });
+    await followOn();
     await waitForCalls("orca_stream_open");
     const [first] = await streamed();
     await mock("formation_children", []);
@@ -984,6 +1010,7 @@ describe("orchestration mode: the session of a child", () => {
     await browser.pause(MIRROR * 3);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
     await $(ROW("formation")).click();
+    await followOn();
     expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_web-update" });
     await $("#nav-mail").click();
     await mock("orca_terminal_read", ["$"]);
@@ -1284,8 +1311,8 @@ describe("orchestration mode: the list of the formations", () => {
     // The ring is gray and hollow.
     expect(await browser.execute(() => {
       const style = getComputedStyle(document.querySelector(".formation-row-dot")!);
-      return { background: style.backgroundColor, border: style.borderTopWidth, radius: style.borderTopLeftRadius };
-    })).toEqual({ background: "rgba(0, 0, 0, 0)", border: "1.5px", radius: "50%" });
+      return { background: style.backgroundColor, ringed: Number.parseFloat(style.borderTopWidth) >= 1, radius: style.borderTopLeftRadius };
+    })).toEqual({ background: "rgba(0, 0, 0, 0)", ringed: true, radius: "50%" });
   });
 
   it("fills the ring orange and puts 入力待ち at the right of the row whose leader waits for input, and takes both off when it does not wait any more", async () => {
