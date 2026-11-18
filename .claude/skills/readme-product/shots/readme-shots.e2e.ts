@@ -22,8 +22,6 @@ import {
   para,
   plain,
   rowOf,
-  sendStream,
-  sendTerm,
   setClock,
   slackThread,
   span,
@@ -33,12 +31,11 @@ import {
   timelineMessage,
   timelineReply,
   unreadRepliesOf,
-  waitForCalls,
   waitForCount,
   watchedMessage,
   weekOfToday,
 } from "../support";
-import { orcaOverview, streamList } from "../orca-support";
+import { orcaOverview } from "../orca-support";
 
 const OUT = process.env.SHOT_OUT!;
 const now = new Date();
@@ -156,85 +153,7 @@ const worktreeList = (): OrcaWorktree[] => [
 ];
 // The instruction typed in the pane of the handoff photo (A-9).
 const INSTRUCTION = "この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。";
-// The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors. `orcaOverview` and `streamList` of `orca-support.ts` put each item in it, as Rust does.
-const ENVIRONMENT = "build-server";
-const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT] });
-const terminals = () => [orcaTerminal("billing-api", "zsh", { branch: "feat/csv-export", path: path("billing-api", "feat/csv-export") })];
 const overview = () => orcaOverview(rows(), worktreeList(), { terminals: [orcaTerminal("billing-api", "zsh", { branch: "fix/invoice-discount" })] });
-
-// The screen of Claude Code at work on the session of billing-api, feat/csv-export, as the terminal prints it.
-const SHOT_SESSION = 2;
-const sgr = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
-const dim = (text: string) => sgr("2", text);
-const bullet = (text: string) => `${sgr("32", "●")} ${text}`;
-const result = (text: string) => `  ${dim("⎿")}  ${dim(text)}`;
-const claudeScreen = (cols: number, rows: number) => {
-  const rule = dim("─".repeat(cols));
-  const inner = 44;
-  const boxRow = (plain: string, styled: string) => `│ ${styled}${" ".repeat(inner - plain.length)} │`;
-  const box = [
-    `╭${"─".repeat(inner + 2)}╮`,
-    boxRow("✻ Welcome to Claude Code", `${sgr("33", "✻")} Welcome to ${sgr("1", "Claude Code")}`),
-    boxRow("", ""),
-    boxRow("cwd: /work/billing-api/feat-csv-export", dim("cwd: /work/billing-api/feat-csv-export")),
-    `╰${"─".repeat(inner + 2)}╯`,
-  ];
-  const lines = [
-    ...box,
-    "",
-    `${sgr("1;36", ">")} ${sgr("1", "請求データを CSV で出力したい")}`,
-    "",
-    bullet("請求データを CSV で出力する機能を作ります。まず、今の集計の形と、金額の持ち方を確認します。"),
-    "",
-    bullet(`${sgr("1", "Read")}(package.json)`),
-    result("Read 38 lines"),
-    bullet(`${sgr("1", "Read")}(src/invoice/summary.ts)`),
-    result("Read 96 lines"),
-    bullet(`${sgr("1", "Read")}(src/invoice/types.ts)`),
-    result("Read 52 lines"),
-    bullet(`${sgr("1", "Search")}(pattern: "toRows")`),
-    result("Found 4 files"),
-    bullet(`${sgr("1", "Search")}(pattern: "Format")`),
-    result("Found 2 files"),
-    bullet(`${sgr("1", "Bash")}(git log --oneline -3)`),
-    result("e4f1a92 請求書の端数の丸めを直す"),
-    result("b7c3d05 集計の行に消費税の欄を足す"),
-    result("9a02e6f 請求の集計を別のファイルに分ける"),
-    "",
-    bullet("集計は行の配列に直したあと、画面に出しています。この行をそのまま CSV にします。"),
-    "",
-    bullet(`${sgr("1", "Update Todos")}`),
-    result("☒ 今の集計の形を確認する"),
-    result("☐ 行を CSV にする関数を作る"),
-    result("☐ 出力するコマンドを足す"),
-    result("☐ テストを書いて実行する"),
-    "",
-    bullet("行を CSV にする関数を足します。金額は桁区切りを付けず、数字だけで書き出します。"),
-    "",
-    bullet(`${sgr("1", "Write")}(src/invoice/csv.ts)`),
-    result("Wrote 38 lines to src/invoice/csv.ts"),
-    bullet(`${sgr("1", "Update")}(src/invoice/summary.ts)`),
-    result("Updated src/invoice/summary.ts with 6 additions and 1 removal"),
-    `       ${dim("41")}  ${sgr("31", "- export function toRows(summary: Summary) {")}`,
-    `       ${dim("41")}  ${sgr("32", '+ export function toRows(summary: Summary, format: Format = "table") {')}`,
-    "",
-    bullet(`${sgr("1", "Write")}(test/invoice/csv.test.ts)`),
-    result("Wrote 54 lines to test/invoice/csv.test.ts"),
-    bullet(`${sgr("1", "Bash")}(npm test -- invoice)`),
-    result("PASS test/invoice/csv.test.ts"),
-    "",
-    `${sgr("33", "✻")} ${sgr("33", "テストを実行しています…")} ${dim("(esc to interrupt · 1m 12s · ↓ 2.3k tokens)")}`,
-    "",
-    rule,
-    "> ",
-    rule,
-    `  ${dim("? for shortcuts")}`,
-  ];
-  // The last lines fill the pane from the bottom.
-  const fit = lines.slice(-rows);
-  // The cursor goes up from the last line to the prompt.
-  return [...Array(Math.max(0, rows - fit.length)).fill(""), ...fit].join("\r\n") + "\x1b[2A\x1b[3G";
-};
 
 // ---- calendar ----
 
@@ -474,23 +393,6 @@ describe("readme shots", () => {
     await $("#mail-handoff textarea").setValue(INSTRUCTION);
     await expect($("#mail-handoff .ho-form .chat-send")).toBeEnabled();
     await shot("handoff");
-  });
-
-  it("orca", async () => {
-    await start({ orca_overview: streamOverview() });
-    await $("#nav-orca").click();
-    await expect($("#orca")).toBeDisplayed();
-    await waitForCalls("orca_stream_open");
-    await sendStream(streamList(rows(), worktreeList(), terminals(), ENVIRONMENT));
-    await waitForCount("#orca-feed .orca-project", 12);
-    await $(`#orca-feed .orca-project[data-key="proj_billing-api"]`).click();
-    await $(`.orca-tabs [data-tab="claude:tab_${SHOT_SESSION}:leaf_1"] .orca-tab-btn`).click();
-    const last = async () => ((await waitForCalls("orca_stream_terminal")).at(-1) ?? {}) as { handle?: string; viewport: { cols: number; rows: number } };
-    await browser.waitUntil(async () => (await last()).handle === `term_${SHOT_SESSION}`, { timeoutMsg: "the terminal of the session was never subscribed" });
-    const { cols, rows: termRows } = (await last()).viewport;
-    await sendTerm({ kind: "snapshot", data: claudeScreen(cols, termRows), cols, rows: termRows });
-    await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("テストを実行しています"), { timeoutMsg: "the terminal never showed the screen" });
-    await shot("orca");
   });
 
   it("inbox", async () => {
