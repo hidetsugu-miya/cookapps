@@ -15,6 +15,7 @@ import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { DecisionPage } from "./bindings/DecisionPage";
+import type { PageAnswer } from "./bindings/PageAnswer";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
@@ -362,6 +363,8 @@ export interface Commands {
   formation_children: { args: { name: string }; result: FormationChild[] };
   // A-41: the decision page that waits on the child `child` of the formation `name` (the child's `pendingPage` is set), checked again and with its evidence resolved now: a formation of a saved environment has its PC's server do it. A failure carries the message: the violations of the page, one on each line, or why it could not be read.
   formation_page_read: { args: { name: string; child: string }; result: DecisionPage };
+  // A-41 (#923): sends the owner's answers to the page that waits on `child` as the reply to the leader's terminal (the pane of this Mac, or the terminal of the formation's PC in its Orca) and takes the page off the waiting. `atMs` is the time of the mark the page was drawn for: a page that was replaced meanwhile is refused. The page is read again and the reply is made in Rust; a required card with no answer, a key the card does not offer and a leader that is not running are failures with the message, and the page stays waiting.
+  formation_page_answer: { args: { name: string; child: string; atMs: number; answers: PageAnswer[] }; result: null };
   // A-37: the environments (this Mac first, then the saved ones) with the repositories of each, read from Orca; an environment that could not be read has `ok` false and its `error`, and the others are read.
   formation_environments: { args: undefined; result: EnvironmentsView };
   // A-37: the terminal of the orchestrator of the formation `name`, which belongs to a saved environment (its `environment` in `formation_list` is not `local`): the one `formation.json` records while that Orca lists it, else a new one that Rust makes in the first project's repository there, waits for and gives the projects as its first instruction. `restart` closes the recorded one first. A failure carries the message the pane shows.

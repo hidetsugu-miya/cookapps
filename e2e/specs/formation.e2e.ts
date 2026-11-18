@@ -2505,8 +2505,8 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect($(`${card} input[value="other"]`)).not.toBeSelected();
     await expect(cancel).toBeDisabled();
     await expect($(`${card} .fp-text`)).not.toBeDisplayed();
-    // Nothing on the page sends the answer: that is another part.
-    expect(await textsOf("#formation-page button")).toEqual(["選択を取り消す"]);
+    // The page's one button that sends is at its end.
+    expect(await textsOf("#formation-page button")).toEqual(["選択を取り消す", "リーダーに送る"]);
   });
 
   it("gives the other kinds of card the fixed choices of their kind, and a field for a note", async () => {
@@ -2675,6 +2675,131 @@ describe("orchestration mode: the decision page of a child", () => {
     await $("#formation-tab-leader-main").click();
     await $(PAGE_TAB).click();
     await expect($("#formation-page .fp-title")).toHaveText("直したページ");
+  });
+
+  const SEND = "#formation-page .fp-send-btn";
+  const SEND_ERROR = "#formation-page .fp-send .fp-error";
+  const QUESTION_2 = decisionCard("Q2", { title: "いつまでに決めるか", options: [{ key: "A", label: "今週", detail: null }], recommendation: "A", recommendationReason: "早い" });
+  const answerCalls = () => callsOf("formation_page_answer");
+
+  it("sends what was chosen to the leader with the mark's time, and reads the questions' choices and free text as they stand", async () => {
+    await openPage(decisionPage({ questions: [QUESTION, QUESTION_2] }));
+    await expect($(SEND)).toHaveText("リーダーに送る");
+    await $('#formation-page [data-card="Q1"] input[value="B"]').click();
+    await $('#formation-page [data-card="Q2"] input[value="other"]').click();
+    await $('#formation-page [data-card="Q2"] .fp-text').setValue("来週の頭");
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([
+      {
+        name: "formation",
+        child: "req-login",
+        atMs: MARK_AT,
+        answers: [
+          { card: "Q1", choice: "B", note: "" },
+          { card: "Q2", choice: "other", note: "来週の頭" },
+        ],
+      },
+    ]);
+  });
+
+  it("sends a card with no choice as no choice, and a note on a card with fixed choices as it is typed", async () => {
+    const approval = decisionPage({
+      pageKind: "approval",
+      subject: "design",
+      what: "設計を承認します",
+      residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
+      structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
+      adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
+      unmetCriteria: [],
+      qualityLoop: { rounds: 2, mustFixResolved: 3 },
+    });
+    await openPage(approval);
+    await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
+    await $('#formation-page [data-card="SP-1"] input[value="reject"]').click();
+    await $('#formation-page [data-card="SP-1"] .fp-text').setValue("重複は減らない");
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([
+      {
+        name: "formation",
+        child: "req-login",
+        atMs: MARK_AT,
+        answers: [
+          { card: "MF-1", choice: "skip", note: "" },
+          { card: "SP-1", choice: "reject", note: "重複は減らない" },
+          { card: "ADR-1", choice: null, note: "" },
+        ],
+      },
+    ]);
+  });
+
+  it("sends a page with no card that asks, with no answer", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", qualityLoop: null }));
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [] }]);
+  });
+
+  it("keeps the page and the answers, and says why, when the reply could not be sent, and sends again when it is pressed again", async () => {
+    await openPage(decisionPage({ questions: [QUESTION, QUESTION_2] }));
+    await mock("formation_page_answer", rejects("回答が必要なカードが未回答です: Q2"));
+    await $('#formation-page [data-card="Q1"] input[value="A"]').click();
+    await $(SEND).click();
+    await expect($(SEND_ERROR)).toBeDisplayed();
+    expect(await rawTextsOf(SEND_ERROR)).toEqual(["回答が必要なカードが未回答です: Q2"]);
+    await expect($(SEND_ERROR)).toHaveAttribute("role", "alert");
+    // The tab, the page and the choice stay, and the button can be pressed again.
+    await expect($(PAGE_TAB)).toBeDisplayed();
+    await expect($("#formation-page .fp-title")).toBeDisplayed();
+    await expect($('#formation-page [data-card="Q1"] input[value="A"]')).toBeSelected();
+    await expect($(SEND)).toBeEnabled();
+    expect(await answerCalls()).toHaveLength(1);
+    await mock("formation_page_answer", null);
+    await $('#formation-page [data-card="Q2"] input[value="A"]').click();
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([
+      {
+        name: "formation",
+        child: "req-login",
+        atMs: MARK_AT,
+        answers: [
+          { card: "Q1", choice: "A", note: "" },
+          { card: "Q2", choice: "A", note: "" },
+        ],
+      },
+    ]);
+    await expect($(SEND_ERROR)).not.toBeDisplayed();
+  });
+
+  it("sends once however often it is pressed, and closes the tab and puts the card back when the reply went through", async () => {
+    await openFlow([asking(), formationChild("api-update", "working")], { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> 確認します"], formation_page_read: decisionPage({ questions: [QUESTION] }) });
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    await card("api-update").click();
+    await $(OPEN).click();
+    await expect($("#formation-page")).toBeDisplayed();
+    await $('#formation-page [data-card="Q1"] input[value="A"]').click();
+    await mock("formation_page_answer", holds);
+    // The press is made in the page: a second press of the driver would wait for the first.
+    await browser.execute((s) => {
+      const button = document.querySelector<HTMLButtonElement>(s)!;
+      button.click();
+      button.click();
+    }, SEND);
+    await waitForCalls("formation_page_answer", 1);
+    await browser.pause(READ * 2);
+    expect(await answerCalls()).toHaveLength(1);
+    await expect($(SEND)).toBeDisabled();
+    await expect($(SEND)).toHaveAttribute("aria-busy", "true");
+    // Until the reply is sent, the page waits: its tab is there.
+    await expect($(PAGE_TAB)).toBeDisplayed();
+    await mock("formation_children", [formationChild("req-login", "working"), formationChild("api-update", "working")]);
+    await release("formation_page_answer", null);
+    await browser.waitUntil(async () => !(await $(PAGE_TAB).isExisting()), { timeoutMsg: "the tab never closed" });
+    await expect($("#formation-page")).not.toBeDisplayed();
+    expect(await count("#formation-page > *")).toBe(0);
+    // The tab that was selected before is shown again, and the card says what the child does.
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    expect(await textsOf("#formation-flow-list .formation-card-open")).toEqual([]);
+    expect(await textsOf('#formation-flow-list [data-name="req-login"] .formation-card-state')).toEqual(["作業中"]);
+    expect(await answerCalls()).toHaveLength(1);
   });
 
   it("leaves the page of another formation behind when a formation is selected", async () => {

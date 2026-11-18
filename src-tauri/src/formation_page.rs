@@ -101,7 +101,7 @@ impl CardKind {
     }
 
     /// Whether the card offers lettered options (`A`, `B`, ...); the recommended one is always `A`.
-    fn lettered(self) -> bool {
+    pub(crate) fn lettered(self) -> bool {
         matches!(self, Self::Question | Self::Nr | Self::ReviewDecision)
     }
 
@@ -1851,6 +1851,9 @@ pub struct PageRecord {
     pub subject: Subject,
     /// When it was recorded (epoch milliseconds).
     pub at: u64,
+    /// When the owner's reply to it was sent to the leader (epoch milliseconds): an answered page no longer waits (#923). A record from before the field has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -1899,12 +1902,43 @@ fn put_page(config: &Path, formation: &str, page: PageRecord) -> Result<(), Stri
     accounts::write_atomic(&formation::dir(config, formation), PAGES_FILE, &text)
 }
 
-/// The page of `child` that waits for the owner: the record of the child's page, unless it is older than the child's launch (a child of the same name that was closed and launched again does not wait on the page of the one before).
+/// The page of `child` that waits for the owner: the record of the child's page, unless it is older than the child's launch (a child of the same name that was closed and launched again does not wait on the page of the one before) or the owner has answered it.
 fn pending_record<'a>(child: &Child, pages: &'a [PageRecord]) -> Option<&'a PageRecord> {
     let launch = child.launch.as_ref()?;
     pages
         .iter()
-        .find(|p| p.child == child.name && p.at >= launch.launched_at)
+        .find(|p| p.child == child.name && p.at >= launch.launched_at && p.answered_at.is_none())
+}
+
+/// Marks the page of `child` recorded at `at` as answered at `answered_at`, so that it no longer waits. The record is read, changed and written under the same locks as `put_page`. A page that is not there, one that a newer page replaced (another `at`) and one that is answered already are refused, and nothing is written.
+pub fn mark_answered(
+    config: &Path,
+    formation: &str,
+    child: &str,
+    at: u64,
+    answered_at: u64,
+) -> Result<(), String> {
+    formation::check_name(formation)?;
+    formation::check_name(child)?;
+    let _held = PAGES.lock().unwrap_or_else(PoisonError::into_inner);
+    if !formation::dir(config, formation).is_dir() {
+        return Err(format!(
+            "フォーメーション「{formation}」はありません（削除されました）"
+        ));
+    }
+    let _other_processes = formation::lock_file(config, formation, PAGES_LOCK)?;
+    let mut pages = read_pages_strict(config, formation)?;
+    let Some(page) = pages.iter_mut().find(|p| p.child == child && p.at == at) else {
+        return Err(format!(
+            "「{child}」の判断ページは差し替わったか、もうありません"
+        ));
+    };
+    if page.answered_at.is_some() {
+        return Err(format!("「{child}」の判断ページには、もう答えています"));
+    }
+    page.answered_at = Some(answered_at);
+    let text = serde_json::to_string_pretty(&Pages { pages }).map_err(|e| e.to_string())?;
+    accounts::write_atomic(&formation::dir(config, formation), PAGES_FILE, &text)
 }
 
 /// The mark of the page that waits on each child of `children`, in order.
@@ -2011,6 +2045,7 @@ fn record_with(
             page_kind: page.page_kind,
             subject: page.subject,
             at,
+            answered_at: None,
         },
     )?;
     Ok(json!({
@@ -2079,9 +2114,66 @@ fn read_with(
 
 /// The page that waits on `child` of a formation whose record is on this machine, checked again and with its evidence resolved now (`page.read` of the server, and the read of a formation of this Mac).
 pub fn read_here(config: &Path, formation: &str, child: &str) -> Result<DecisionPage, String> {
+    read_here_at(config, formation, child).map(|(page, _)| page)
+}
+
+/// `read_here`, and the time the page was recorded at (the mark's `atMs`): what the answer to the page names, so that a page that was replaced meanwhile is told from the one that was shown.
+pub fn read_here_at(
+    config: &Path,
+    formation: &str,
+    child: &str,
+) -> Result<(DecisionPage, u64), String> {
     let (page, worktree) = waiting_page(config, formation, child)?;
     let allowed = allowed_here().map_err(|r| formation::refusal_text(&r))?;
-    load(&page.path, &worktree, &allowed).map_err(|v| violations_text(&v))
+    let loaded = load(&page.path, &worktree, &allowed).map_err(|v| violations_text(&v))?;
+    Ok((loaded, page.at))
+}
+
+/// The page of `child` and the time it was recorded at, read where the formation's record is: here for a formation of this Mac, on the server of its PC for a formation of a saved environment (#923).
+pub fn page_with_time(
+    config: &Path,
+    formation: &str,
+    child: &str,
+    open: &impl AsyncFn(&str) -> Result<Client, String>,
+) -> Result<(DecisionPage, u64), String> {
+    formation::check_name(formation)?;
+    let (environment, started) = formation::formation_home(config, formation);
+    if environment == LOCAL {
+        return read_here_at(config, formation, child);
+    }
+    if !started {
+        return Err(format!("「{child}」に判断待ちのページはありません"));
+    }
+    formation::on_pc(
+        &environment,
+        open,
+        formation::PC_RECORD_WAIT,
+        async |client| client.page_read_at(formation, child).await,
+    )
+}
+
+/// Marks the page of `child` recorded at `at` as answered, where the formation's record is (`mark_answered` here, or `page.answer` of the server of its PC).
+pub fn mark_page_answered(
+    config: &Path,
+    formation: &str,
+    child: &str,
+    at: u64,
+    open: &impl AsyncFn(&str) -> Result<Client, String>,
+) -> Result<(), String> {
+    formation::check_name(formation)?;
+    let (environment, started) = formation::formation_home(config, formation);
+    if environment == LOCAL {
+        return mark_answered(config, formation, child, at, formation::now_ms());
+    }
+    if !started {
+        return Err(format!("「{child}」に判断待ちのページはありません"));
+    }
+    formation::on_pc(
+        &environment,
+        open,
+        formation::PC_RECORD_WAIT,
+        async |client| client.page_answered(formation, child, at).await,
+    )
 }
 
 /// The page of `child` for the screen: read here for a formation of this Mac, and by the server of its PC for a formation of a saved environment, which checks it and resolves it there (the files are on that PC).
@@ -3113,6 +3205,7 @@ mod tests {
             page_kind: PageKind::Approval,
             subject: Subject::Design,
             at: 1,
+            answered_at: None,
         };
         assert!(put_page(&config, "gone", page).is_err());
         assert!(!formation::dir(&config, "gone").exists());
@@ -3128,6 +3221,7 @@ mod tests {
             page_kind: PageKind::Approval,
             subject: Subject::Design,
             at,
+            answered_at: None,
         }
     }
 
@@ -3157,6 +3251,60 @@ mod tests {
         assert_eq!(marks, [None, None]);
         let marks = pending_pages(&children[..1], &[record_of("again", 1000)]);
         assert!(marks[0].is_some());
+    }
+
+    #[test]
+    fn an_answered_page_is_no_mark_and_a_newer_page_of_the_child_waits_again() {
+        let children = [child("one", "/w", 100)];
+        let mut answered = record_of("one", 250);
+        answered.answered_at = Some(300);
+        assert_eq!(pending_pages(&children, &[answered]), [None]);
+        let marks = pending_pages(&children, &[record_of("one", 400)]);
+        assert_eq!(marks[0].as_ref().unwrap().at_ms, 400);
+    }
+
+    #[test]
+    fn answering_marks_the_page_of_that_time_once_and_a_replaced_or_missing_page_is_refused() {
+        let repo = repo("answer");
+        let config = temp_dir("answer-config");
+        formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
+        put_page(&config, "api-work", record_of("one", 250)).unwrap();
+        put_page(&config, "api-work", record_of("two", 260)).unwrap();
+        // A page that a newer one replaced, and a child with no page, are refused and nothing is written.
+        assert!(mark_answered(&config, "api-work", "one", 249, 500).is_err());
+        assert!(mark_answered(&config, "api-work", "three", 250, 500).is_err());
+        assert!(read_pages(&config, "api-work")
+            .iter()
+            .all(|p| p.answered_at.is_none()));
+        mark_answered(&config, "api-work", "one", 250, 500).unwrap();
+        let pages = read_pages(&config, "api-work");
+        let answered = |name: &str| pages.iter().find(|p| p.child == name).unwrap().answered_at;
+        assert_eq!(answered("one"), Some(500));
+        assert_eq!(answered("two"), None);
+        // The second answer of one page is refused, and the first time stays.
+        assert!(mark_answered(&config, "api-work", "one", 250, 900).is_err());
+        let pages = read_pages(&config, "api-work");
+        let first = pages.iter().find(|p| p.child == "one").unwrap();
+        assert_eq!(first.answered_at, Some(500));
+        // The page that the child writes next waits again.
+        put_page(&config, "api-work", record_of("one", 700)).unwrap();
+        let pages = read_pages(&config, "api-work");
+        assert!(pages
+            .iter()
+            .find(|p| p.child == "one")
+            .unwrap()
+            .answered_at
+            .is_none());
+        // An answered page cannot be read as the page that waits.
+        mark_answered(&config, "api-work", "one", 700, 800).unwrap();
+        assert!(waiting_page(&config, "api-work", "one").is_err());
+    }
+
+    #[test]
+    fn an_answer_does_not_bring_back_the_folder_of_a_deleted_formation() {
+        let config = temp_dir("answer-deleted");
+        assert!(mark_answered(&config, "gone", "one", 1, 2).is_err());
+        assert!(!formation::dir(&config, "gone").exists());
     }
 
     #[test]

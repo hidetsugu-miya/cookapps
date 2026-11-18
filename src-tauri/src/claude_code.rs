@@ -720,6 +720,23 @@ impl ClaudeCode {
         }
     }
 
+    /// Types `text` into the terminal of the orchestrator of the formation `name` (the pane `formation:{name}`), as it is: a failure when it has no process, or has ended, so that a reply for the leader is never taken for sent when nobody is there to read it (A-41).
+    pub fn input_formation(&self, name: &str, text: String) -> Result<(), String> {
+        check_input(&text)?;
+        let gone = || {
+            "リーダーの Claude Code が動いていません。リーダーを始めてから、もう一度送ってください"
+                .to_owned()
+        };
+        let sessions = self.inner.lock();
+        let session = sessions
+            .get(format!("{FORMATION_ID_PREFIX}{name}").as_str())
+            .ok_or_else(gone)?;
+        if session.ended.load(Ordering::SeqCst) {
+            return Err(gone());
+        }
+        session.input.send(text).map_err(|_| gone())
+    }
+
     /// Gives the terminal of `id` a new size; nothing happens when it has ended.
     fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let sessions = self.inner.lock();
@@ -1767,6 +1784,43 @@ mod tests {
         code.input("a", "hello\r".to_owned());
         let (text, _) = until(&rx, "got:hello");
         assert!(text.contains("got:hello"), "{text:?}");
+    }
+
+    #[test]
+    fn the_reply_for_a_leader_reaches_the_terminal_of_its_formation_in_order_and_fails_where_nobody_reads(
+    ) {
+        let code = ClaudeCode::default();
+        // No pane, and a pane of another formation, take nothing.
+        assert!(code.input_formation("api-work", "x".to_owned()).is_err());
+        let (sink, rx) = collecting();
+        code.start(
+            "formation:api-work",
+            &spec("read line; echo \"got:$line\""),
+            None,
+            sink,
+        )
+        .unwrap();
+        assert!(code.input_formation("other", "x".to_owned()).is_err());
+        // The text, and then Enter in a send of its own, as a reply is typed.
+        code.input_formation("api-work", "reply-text".to_owned())
+            .unwrap();
+        code.input_formation("api-work", "\r".to_owned()).unwrap();
+        let (text, _) = until(&rx, "got:reply-text");
+        assert!(text.contains("got:reply-text"), "{text:?}");
+        // More than one send of a pane takes is refused.
+        let long = "あ".repeat(INPUT_LIMIT + 1);
+        assert!(code.input_formation("api-work", long).is_err());
+    }
+
+    #[test]
+    fn a_leader_whose_process_has_ended_takes_no_reply() {
+        let code = ClaudeCode::default();
+        let (sink, rx) = collecting();
+        code.start("formation:api-work", &spec("echo done"), None, sink)
+            .unwrap();
+        until(&rx, "done");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(code.input_formation("api-work", "x".to_owned()).is_err());
     }
 
     #[test]

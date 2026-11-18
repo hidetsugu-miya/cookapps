@@ -661,6 +661,15 @@ pub(crate) fn formation_home(config: &Path, formation: &str) -> (String, bool) {
     )
 }
 
+/// The PC a formation belongs to and the handle of its orchestrator's terminal in that PC's Orca (`Meta::orchestrator_terminal`): where a reply to a decision page goes (A-41). A formation of this Mac has no handle: its orchestrator is the app's own pane.
+pub(crate) fn orchestrator_home(config: &Path, formation: &str) -> (String, Option<String>) {
+    let meta = read_meta(config, formation).unwrap_or_default();
+    (
+        formation_environment(&meta.projects),
+        meta.orchestrator_terminal,
+    )
+}
+
 /// A formation belongs to one PC: a project of another environment is refused, because a Claude Code reaches another by `SendMessage` only on the same PC, so the orchestrator and its children must be there together.
 fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
     let environment = formation_environment(projects);

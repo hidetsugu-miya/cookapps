@@ -162,6 +162,8 @@ const answers = {
     unmetCriteria: [],
     pr: null,
   },
+  // A-41 (#923): the reply that the answers of a page make was put into the leader's terminal.
+  formation_page_answer: null,
   // A-37 (#893): no PC has the owner's consent yet; a spec that needs one gives `formationConsent` of e2e/support.ts, and one that presses 「同意する」 or 「取り消す」 mocks `formation_consent` or `formation_consent_revoke`.
   formation_consents: [],
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.

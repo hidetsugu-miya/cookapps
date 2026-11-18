@@ -1,8 +1,9 @@
 // The decision page of a child (A-41): what `formation_page_read` gives, drawn in the middle pane under the tab 「判断: {title}」 (formation-flow.ts). The page is the child's text, so everything goes in as `textContent` (formation-page-blocks.ts); nothing is read as HTML.
-// A card that asks has its choices as radios and a box for free text; sending the answers to the leader is another part (#923), so no button of this file sends.
+// A card that asks has its choices as radios and a box for free text; 「リーダーに送る」 at the end of the page hands what was chosen to `send` (the reply is made and sent in Rust, #923). Nothing here decides what the answers mean.
 import type { Card } from "./bindings/Card";
 import type { CardKind } from "./bindings/CardKind";
 import type { DecisionPage } from "./bindings/DecisionPage";
+import type { PageAnswer } from "./bindings/PageAnswer";
 import type { ScopeGroup } from "./bindings/ScopeGroup";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
@@ -50,7 +51,8 @@ const NOTE_LABEL: Partial<Record<CardKind, string>> = { "structural-proposal": "
 // The number of the cards drawn, so that the radios of a card are a group of their own.
 let cards = 0;
 
-export function drawPage(page: DecisionPage, child: string, atMs: number): HTMLElement {
+// `send` takes the answers of the page and fails with the message when the reply could not be sent.
+export function drawPage(page: DecisionPage, child: string, atMs: number, send: (answers: PageAnswer[]) => Promise<void>): HTMLElement {
   const root = tag("article", "fp");
   root.dataset.child = child;
   root.dataset.at = String(atMs);
@@ -64,7 +66,45 @@ export function drawPage(page: DecisionPage, child: string, atMs: number): HTMLE
   root.append(...groups(page));
   const reference = referenceOf(page);
   if (reference !== null) root.append(reference);
+  root.append(sender(root, send));
   return root;
+}
+
+// The answers of the page as chosen: for each card that asks, its number, the key of the choice (null when none) and its free text. What the answers mean is Rust's.
+function answersOf(root: HTMLElement): PageAnswer[] {
+  return [...root.querySelectorAll<HTMLElement>(".fp-card")].flatMap((card) => {
+    const box = card.querySelector<HTMLElement>(".fp-answer");
+    if (box === null) return [];
+    const chosen = box.querySelector<HTMLInputElement>("input:checked");
+    const text = box.querySelector<HTMLTextAreaElement>("textarea");
+    return [{ card: card.dataset.card ?? "", choice: chosen?.value ?? null, note: text?.value ?? "" }];
+  });
+}
+
+// 「リーダーに送る」 and the reason a send failed. The button waits while the send is on its way, so that a second press sends nothing; after a send that went through the page is closed by its owner, and after one that failed the answers stay and the button can be pressed again.
+function sender(root: HTMLElement, send: (answers: PageAnswer[]) => Promise<void>): HTMLElement {
+  const row = tag("footer", "fp-send");
+  const error = tag("p", "fp-error pending fail");
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+  const button = tag("button", "text-btn primary fp-send-btn", "リーダーに送る");
+  button.type = "button";
+  button.onclick = async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    error.hidden = true;
+    try {
+      await send(answersOf(root));
+    } catch (e) {
+      error.textContent = String(e);
+      error.hidden = false;
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  };
+  row.append(error, button);
+  return row;
 }
 
 function section(heading: string, className = ""): HTMLElement {
