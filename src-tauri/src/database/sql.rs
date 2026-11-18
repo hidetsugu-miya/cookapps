@@ -8,7 +8,10 @@
 //! a statement that gives no row is told by the rows it changed (`format_summary`),
 //! and the rows are read as a stream that stops after `ROWS_MAX` of them (`collect_limited`), so the rows past the limit are never held.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 
 use futures_util::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
@@ -35,6 +38,9 @@ pub const CLIENT_LIMIT: Duration = Duration::from_secs(35);
 const RESTORE: &str =
     "SET SESSION autocommit = 1, max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
 const EMPTY: &str = "SQL を入力してください";
+const TIMED_OUT: &str =
+    "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください";
+const TIMED_OUT_WRITE: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。書き込みの文は、サーバーで確定している場合があります。もう一度開いてください";
 
 /// The result of a run: the columns and the rows as D-4's cells, and the line under the table. A statement that gives no row has no column.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -124,6 +130,15 @@ pub fn server_message(number: u16, message: &str) -> String {
     format!("{words} ({number}): {}", shorten(message))
 }
 
+/// The words of a run that the app stopped at `CLIENT_LIMIT`. `body_started` is that the text of the user had been sent (the preface was over): a write may then have been committed on the server (autocommit), so the words say so.
+pub fn timed_out(body_started: bool) -> &'static str {
+    if body_started {
+        TIMED_OUT_WRITE
+    } else {
+        TIMED_OUT
+    }
+}
+
 /// What a run that failed is. An error that MySQL answered is worded by `server_message` and leaves the session as it was; the others are the words of every query (`mysql::query_failure`).
 pub fn failure(error: &sqlx::Error) -> QueryFailure {
     if let sqlx::Error::Database(db) = error {
@@ -185,10 +200,12 @@ async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx
 }
 
 /// Runs `text` (already checked by `statement`) in `database` on the session, under the limits of MySQL, and puts the limits back.
+/// `body_started` is set once the preface is over and the text is about to be sent, so that the caller that stops the run at `CLIENT_LIMIT` knows how to word it (`timed_out`).
 pub async fn run(
     connection: &mut MySqlConnection,
     database: &str,
     text: &str,
+    body_started: &AtomicBool,
 ) -> Result<DatabaseSqlResult, sqlx::Error> {
     // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
     let prepared = sqlx::raw_sql(AssertSqlSafe(prepare_sql(database)))
@@ -196,7 +213,10 @@ pub async fn run(
         .await;
     let started = Instant::now();
     let read = match prepared {
-        Ok(_) => read(connection, text).await,
+        Ok(_) => {
+            body_started.store(true, Ordering::Relaxed);
+            read(connection, text).await
+        }
         Err(e) => Err(e),
     };
     let elapsed = started.elapsed();
@@ -268,6 +288,21 @@ mod tests {
         assert!(prepare_sql("a`b").ends_with("USE `a``b`"));
         // The client waits longer than MySQL, so that MySQL's own stop is the one that comes first.
         assert!(CLIENT_LIMIT > SERVER_LIMIT);
+    }
+
+    #[test]
+    fn a_run_stopped_by_the_app_says_that_a_write_may_have_been_committed_only_once_the_text_was_sent(
+    ) {
+        let before = timed_out(false);
+        assert_eq!(
+            before,
+            "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください"
+        );
+        assert!(!before.contains("書き込みの文は"));
+        let after = timed_out(true);
+        assert!(after.contains("書き込みの文は、サーバーで確定している場合があります"));
+        assert!(after.starts_with("実行が時間内に終わらなかったため、MySQL との接続を閉じました。"));
+        assert!(after.ends_with("もう一度開いてください"));
     }
 
     #[test]

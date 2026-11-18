@@ -7,7 +7,14 @@
 //! The databases are read from `information_schema.SCHEMATA` and the tables from `information_schema.TABLES`, the name of the database as a bound value, never put in the SQL text.
 //! The format of the row count and of the size (`format_rows`, `format_size`) are pure functions.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use serde::Serialize;
 use sqlx::{mysql::MySqlConnection, Connection};
@@ -29,8 +36,6 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 const NOT_OPEN: &str = "接続が開いていません。もう一度開いてください";
 const TIMED_OUT: &str = "MySQL への問い合わせが時間内に終わりませんでした。もう一度開いてください";
-const SQL_TIMED_OUT: &str =
-    "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください";
 /// The names of the databases the user may see.
 const DATABASES: &str =
     "SELECT CAST(SCHEMA_NAME AS CHAR) FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME";
@@ -389,15 +394,27 @@ impl Sessions {
     ) -> Result<DatabaseSqlResult, String> {
         let text = sql::statement(text)?;
         let session = self.session(scripts, id).await?;
+        let body_started = AtomicBool::new(false);
         let read = {
             let mut guard = session.connection.lock().await;
             let Some(connection) = guard.as_mut() else {
                 return Err(NOT_OPEN.to_owned());
             };
-            tokio::time::timeout(sql::CLIENT_LIMIT, sql::run(connection, database, text)).await
-        };
-        self.settle_with(scripts, id, &session, read, sql::failure, SQL_TIMED_OUT)
+            tokio::time::timeout(
+                sql::CLIENT_LIMIT,
+                sql::run(connection, database, text, &body_started),
+            )
             .await
+        };
+        self.settle_with(
+            scripts,
+            id,
+            &session,
+            read,
+            sql::failure,
+            sql::timed_out(body_started.load(Ordering::Relaxed)),
+        )
+        .await
     }
 
     /// The structure of `table` in `database` (D-5).
