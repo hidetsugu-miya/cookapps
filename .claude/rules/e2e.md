@@ -37,7 +37,7 @@ const trash = await mock("trash", true);
 
 ### Shorten a timer the spec waits for with `timers()`, and wait its period times 1.2
 
-A spec that must wait out an app timer (the Orca list's clock, the terminal mirror, the read of the connections of the database screen, the read of the children by the flow pane) puts `timers({ orcaClock, orcaMirror, databaseProfiles, formationFlow })` in the fixtures of `boot`, in milliseconds, and waits the shortened period times 1.2.
+A spec that must wait out an app timer (the Orca list's clock, the terminal mirror, the read of the connections of the database screen, the read of the children by the flow pane, the read of the language servers' settings) puts `timers({ orcaClock, orcaMirror, databaseProfiles, formationFlow, lspSettings })` in the fixtures of `boot`, in milliseconds, and waits the shortened period times 1.2.
 `fixtures.js` sets `window.__e2e_timers__` from it, which only the E2E build has, and `periodMs` (`ts/e2e-timers.ts`) reads it, so the periods of the app never change.
 
 ```ts

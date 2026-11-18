@@ -2,6 +2,6 @@
 import type { LspStatus } from "./LspStatus";
 
 /**
- * A change of the state of the server of a worktree: the event `lsp-status`.
+ * A change of the state of the server `server` of a worktree: the event `lsp-status`.
  */
-export type LspStatusEvent = { environment?: string | null, worktree: string, status: LspStatus, };
+export type LspStatusEvent = { environment?: string | null, worktree: string, server: string, status: LspStatus, };

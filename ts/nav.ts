@@ -7,6 +7,7 @@ import { showDatabase } from "./database.js";
 import { closeDatabaseForm } from "./database-form.js";
 import { hideFormation, showFormation } from "./formation.js";
 import { closeHint } from "./hint.js";
+import { pauseLsp } from "./orca-lsp.js";
 import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { showSlackList } from "./slack-list.js";
@@ -82,7 +83,11 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   closeHint();
   closeDetail();
   closeDatabaseForm();
-  if (name !== "orca") hideFormation();
+  if (name !== "orca") {
+    hideFormation();
+    // The language server's settings are read by the clock only while the Orca screen is shown (A-34).
+    pauseLsp();
+  }
   markNav(name);
   syncTrays();
   $("error").hidden = true;

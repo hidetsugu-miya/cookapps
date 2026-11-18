@@ -1016,6 +1016,75 @@ mod tests {
         );
     }
 
+    /// The definition tab (A-34) is new when it is moved: `update` mends the layout against the tabs the screen shows, which puts it in the pane with the focus, and then does the operation.
+    #[test]
+    fn a_new_tab_moved_in_the_same_call_joins_the_focused_pane_and_then_splits_it_or_goes_to_another_pane(
+    ) {
+        let saved = layout(pane("p1", &["a", "b"], "b"), "p1");
+        let live = ids(&["a", "b", "def"]);
+        let got = apply(
+            reconcile(saved.clone(), &live),
+            &mv("def", "p1", Edge::Bottom),
+        );
+        assert_eq!(
+            got,
+            layout(
+                split(
+                    Direction::Column,
+                    vec![pane("p1", &["a", "b"], "b"), pane("p2", &["def"], "def")]
+                ),
+                "p2"
+            )
+        );
+        // Another pane has the focus: the tab joins that pane, and leaves it for the pane that is asked.
+        let two = layout(
+            split(
+                Direction::Row,
+                vec![pane("p1", &["a"], "a"), pane("p2", &["b"], "b")],
+            ),
+            "p2",
+        );
+        let got = apply(reconcile(two, &live), &mv("def", "p1", Edge::Bottom));
+        assert_eq!(
+            got.root,
+            Some(split(
+                Direction::Row,
+                vec![
+                    split(
+                        Direction::Column,
+                        vec![pane("p1", &["a"], "a"), pane("p3", &["def"], "def")]
+                    ),
+                    pane("p2", &["b"], "b")
+                ]
+            ))
+        );
+        // A new file is opened from the definition tab into the pane of the editor: it joins the tabs there and is shown.
+        let below = layout(
+            split(
+                Direction::Column,
+                vec![pane("p1", &["a", "b"], "b"), pane("p2", &["def"], "def")],
+            ),
+            "p2",
+        );
+        let got = apply(
+            reconcile(below, &ids(&["a", "b", "def", "c"])),
+            &mv("c", "p1", Edge::Center),
+        );
+        assert_eq!(
+            got,
+            layout(
+                split(
+                    Direction::Column,
+                    vec![
+                        pane("p1", &["a", "b", "c"], "c"),
+                        pane("p2", &["def"], "def")
+                    ]
+                ),
+                "p1"
+            )
+        );
+    }
+
     #[test]
     fn a_tab_alone_in_its_pane_cannot_split_it_and_an_unknown_tab_or_pane_changes_nothing() {
         let saved = layout(pane("p1", &["a"], "a"), "p1");

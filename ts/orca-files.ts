@@ -1,7 +1,7 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`) and which differ from HEAD (`orca_files_changes`, A-39); this module draws the folder at once, marks the ignored and the changed entries when the answers come, and takes the presses.
 // A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
-// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the definition of a name of the editor (A-34, orca-definition.ts, with the language server under it, orca-lsp.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the definition has none of.
+// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server has none of.
 import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
 import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
@@ -10,11 +10,10 @@ import type { OrcaGitChange } from "./bindings/OrcaGitChange";
 import type { OrcaGitMark } from "./bindings/OrcaGitMark";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete, confirmDeleteMany } from "./hint.js";
-import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DEFINITION_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG } from "./icons.js";
+import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG, SERVER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
-import { askDefinition, type DefinitionQuery, initDefinition, syncDefinition } from "./orca-definition.js";
 import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { syncLsp } from "./orca-lsp.js";
@@ -39,7 +38,7 @@ interface Listing {
 
 let shown = false;
 // What the pane shows under the heading.
-let mode: "files" | "history" | "definition" = "files";
+let mode: "files" | "history" | "server" = "files";
 let context: FilesContext | null = null;
 // A new tree (another worktree) ends the reads of the old one.
 let generation = 0;
@@ -106,16 +105,15 @@ export function toggleFiles() {
   syncModes();
 }
 
-// Shows the part of the pane that is chosen, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are, and the definition is asked only by the editor.
+// Shows the part of the pane that is chosen, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are, and the language server only while it is shown.
 function syncModes() {
   const part = shownPart();
   $("orca-files-tree").hidden = part !== "files";
   $("orca-history").hidden = part !== "history";
-  $("orca-definition").hidden = part !== "definition";
-  for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["definition", "orca-files-mode-definition"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
+  $("orca-server").hidden = part !== "server";
+  for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["server", "orca-files-mode-server"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
   syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && part === "history");
-  syncDefinition(context === null ? null : { target: context.target, path: context.path });
-  syncLsp(context === null ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "definition");
+  syncLsp(context === null ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "server");
   if (shown && part === "files" && context !== null && !listings.has("")) void readDir("");
 }
 
@@ -123,17 +121,10 @@ function syncModes() {
 const shownPart = () => mode;
 const showsHistory = () => shownPart() === "history";
 
-function chooseMode(next: "files" | "history" | "definition") {
+function chooseMode(next: "files" | "history" | "server") {
   if (mode === next) return;
   mode = next;
   syncModes();
-}
-
-// The editor asked for a definition (A-34): the pane shows it, and asks. The screen has shown the pane before.
-export function showDefinition(q: DefinitionQuery) {
-  mode = "definition";
-  syncModes();
-  void askDefinition(q);
 }
 
 // Whether the list marked the folder `dir` as ignored (what it holds is ignored then, and Rust does not ask git).
@@ -295,7 +286,7 @@ async function reload(quiet = false, clock = false) {
 // With `clock` it is the read of the clock of the Orca screen (A-18, A-27), which says nothing: the tree is drawn again only where a folder changed, the history only when its first commits are not the ones held (`checkHistory`), and a read that fails keeps what is shown.
 export function refreshFiles(clock = false) {
   if (!shown || context === null) return;
-  if (shownPart() === "definition") return;
+  if (shownPart() === "server") return;
   if (showsHistory()) {
     if (clock) void checkHistory();
     else refreshHistory();
@@ -889,7 +880,7 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; definition: { inside: (relative: string, line: number, character: number) => void; outside: (path: string, line: number, character: number) => void }; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
@@ -897,7 +888,6 @@ export function initOrcaFiles(on: { open: (relative: string) => void; definition
   gone = on.deleted;
   hold = on.moving;
   initHistory({ open: on.commitDiff });
-  initDefinition(on.definition);
   $("orca-files-tree").oncontextmenu = openRootMenu;
   $("orca-files-tree").onkeydown = deleteKey;
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
@@ -906,6 +896,6 @@ export function initOrcaFiles(on: { open: (relative: string) => void; definition
   $("orca-files-mode-files").onclick = () => chooseMode("files");
   $("orca-files-mode-history").innerHTML = BRANCH_SVG;
   $("orca-files-mode-history").onclick = () => chooseMode("history");
-  $("orca-files-mode-definition").innerHTML = DEFINITION_SVG;
-  $("orca-files-mode-definition").onclick = () => chooseMode("definition");
+  $("orca-files-mode-server").innerHTML = SERVER_SVG;
+  $("orca-files-mode-server").onclick = () => chooseMode("server");
 }

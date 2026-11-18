@@ -548,7 +548,7 @@ describe("orca: files and editor (A-18)", () => {
     browser.execute(() => {
       const b = document.querySelector<HTMLElement>(".orca-edit-line")!;
       const r = b.getBoundingClientRect();
-      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: b.nextElementSibling === document.querySelector(".orca-edit-hl") };
+      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: !!(b.compareDocumentPosition(document.querySelector(".orca-edit-hl")!) & Node.DOCUMENT_POSITION_FOLLOWING) };
     });
   // The box of the letter at `index` of the text, drawn by the layer (a plain text file: the layer is one text node).
   const glyph = (index: number) =>
@@ -3290,11 +3290,11 @@ describe("orca: files and editor (A-18)", () => {
       onceId(),
     );
 
-  it("has the buttons of the files, of the history and of the definition in the top row, and shows the files at the start without reading the history (A-27, A-34)", async () => {
+  it("has the buttons of the files, of the history and of the language server in the top row, and shows the files at the start without reading the history (A-27, A-34)", async () => {
     await openFiles(historyFixtures());
     await waitForCount("#orca-files-tree .orca-file", 4);
     const bar = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-bar > button")].map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-pressed"), b.querySelector("svg") !== null]));
-    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["定義", "false", true], ["ファイル欄", "true", true]]);
+    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["言語サーバー", "false", true], ["ファイル欄", "true", true]]);
     await expect($("#orca-files-tree")).toBeDisplayed();
     await expect($("#orca-history")).not.toBeDisplayed();
     expect(await callsOf("orca_git_history")).toEqual([]);

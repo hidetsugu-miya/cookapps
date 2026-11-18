@@ -1,6 +1,7 @@
 //! The `ssh` command of this Mac, as the language server of a saved environment's worktree (A-34, `lsp.rs`) runs its programs through it, and the run of a process with a time limit.
 //!
 //! The host is a Host of `~/.ssh/config`, one element of ssh's argument list after `--`; what the host runs is a script that a caller gives, and nothing of what it reads or prints is kept or logged.
+//! The names of those Hosts are read from the file for the select of the screen (`ssh_hosts`), and nothing else of it is.
 
 use std::{
     io::{Read, Write},
@@ -40,6 +41,157 @@ pub(crate) fn check_host(host: &str) -> Result<&str, String> {
     } else {
         Ok(host)
     }
+}
+
+/// How deep an `Include` goes: `~/.ssh/config` is 0, the file it includes 1, and the files from 5 on are not read.
+const INCLUDE_DEPTH: usize = 4;
+
+/// A line of `ssh_config` that names Hosts or files to include, with its words.
+#[derive(Debug, PartialEq)]
+enum Entry {
+    Host(Vec<String>),
+    Include(Vec<String>),
+}
+
+/// The `Host` and `Include` lines of the text of an `ssh_config` file, in order.
+fn entries(text: &str) -> Vec<Entry> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        let (key, rest) = line.split_at(
+            line.find(|c: char| c.is_whitespace() || c == '=')
+                .unwrap_or(line.len()),
+        );
+        let make: fn(Vec<String>) -> Entry = if key.eq_ignore_ascii_case("Host") {
+            Entry::Host
+        } else if key.eq_ignore_ascii_case("Include") {
+            Entry::Include
+        } else {
+            continue;
+        };
+        // The keyword and its arguments are told apart by blanks and one `=`.
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('=').unwrap_or(rest);
+        found.push(make(words(rest)));
+    }
+    found
+}
+
+/// The arguments of a line: told apart by blanks, a word in double quotes kept whole, and a `#` that starts a word ending the line.
+fn words(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quoted = false;
+    for c in text.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                word.get_or_insert_with(String::new);
+            }
+            c if c.is_whitespace() && !quoted => found.extend(word.take()),
+            '#' if word.is_none() && !quoted => break,
+            c => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    found.extend(word);
+    found
+}
+
+/// Whether `name` is a Host that is a name: no pattern (`*`, `?`) or negation (`!`), and one that ssh is given (`check_host`).
+fn is_name(name: &str) -> bool {
+    !name.contains(['*', '?', '!']) && check_host(name).is_ok()
+}
+
+/// Whether the name `name` matches the pattern `pattern` of `*` (any characters) and `?` (one).
+fn glob_match(pattern: &[char], name: &[char]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|n| glob_match(rest, &name[n..])),
+        Some((p, rest)) => name
+            .split_first()
+            .is_some_and(|(c, tail)| (*p == '?' || p == c) && glob_match(rest, tail)),
+    }
+}
+
+/// The files that the argument `pattern` of an `Include` names: `~` is the home folder `home`, a relative path is from `ssh_dir`, and `*` and `?` of a name are matched against the names of the folder (those that start with a dot only by a pattern that does), in the order of the names.
+fn include_files(pattern: &str, home: &Path, ssh_dir: &Path) -> Vec<PathBuf> {
+    let path = match pattern.strip_prefix('~') {
+        Some("") => home.to_path_buf(),
+        Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
+        _ => ssh_dir.join(pattern),
+    };
+    let mut paths = vec![PathBuf::new()];
+    for part in path.components() {
+        let name = part.as_os_str().to_str().unwrap_or_default();
+        if matches!(part, std::path::Component::Normal(_)) && name.contains(['*', '?']) {
+            let pattern: Vec<char> = name.chars().collect();
+            paths = paths
+                .iter()
+                .flat_map(|dir| {
+                    let mut names: Vec<String> = std::fs::read_dir(dir)
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .filter_map(|entry| entry.file_name().into_string().ok())
+                        .filter(|n| !n.starts_with('.') || name.starts_with('.'))
+                        .filter(|n| glob_match(&pattern, &n.chars().collect::<Vec<_>>()))
+                        .collect();
+                    names.sort();
+                    names.into_iter().map(|n| dir.join(n)).collect::<Vec<_>>()
+                })
+                .collect();
+        } else {
+            for p in &mut paths {
+                p.push(part.as_os_str());
+            }
+        }
+    }
+    paths
+}
+
+/// Adds the Host names of the file `file` and of the files it includes (each `Include` where it stands, down to `INCLUDE_DEPTH`) to `names`. A file that cannot be read is skipped.
+fn collect_hosts(file: &Path, depth: usize, home: &Path, names: &mut Vec<String>) {
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return;
+    };
+    for entry in entries(&text) {
+        match entry {
+            Entry::Host(list) => {
+                for name in list.into_iter().filter(|n| is_name(n)) {
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+            }
+            Entry::Include(patterns) if depth < INCLUDE_DEPTH => {
+                for pattern in patterns {
+                    for path in include_files(&pattern, home, &home.join(".ssh")) {
+                        collect_hosts(&path, depth + 1, home, names);
+                    }
+                }
+            }
+            Entry::Include(_) => {}
+        }
+    }
+}
+
+/// The Host names of the file `~/.ssh/config` of the home folder `home`, in the order they come, with the files it includes read where their `Include` stands.
+fn hosts_in(home: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_hosts(&home.join(".ssh/config"), 0, home, &mut names);
+    names
+}
+
+/// The Host names of this Mac's `~/.ssh/config` (A-34): the select of the ssh Host of a repository takes its choices from it. An empty list when there is no file.
+#[tauri::command]
+pub async fn ssh_hosts() -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        dirs::home_dir()
+            .map(|home| hosts_in(&home))
+            .unwrap_or_default()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// What a run of ssh left: its exit code (none when a signal ended it), its stdout up to the limit asked for, and its stderr.
@@ -223,6 +375,119 @@ mod tests {
         for host in ["", "-oProxyCommand=x", "a b", "a\nb", "a\u{3000}b"] {
             assert_eq!(check_host(host).unwrap_err(), BAD_HOST, "{host:?}");
         }
+    }
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|w| (*w).to_owned()).collect()
+    }
+
+    #[test]
+    fn lines_name_hosts_and_includes() {
+        let text = "# Host commented\n\
+            \n\
+            Include ~/.orbstack/ssh/config\n\
+            host  a   b\t\"c d\"  # not e\n\
+            \tHOST=f\n\
+            Host = g\n\
+            HostName not-a-host\n\
+            Hostname=x\n\
+            Match host h\n\
+            include conf.d/*.conf \"with space/*\"\n\
+            Host\n";
+        assert_eq!(
+            entries(text),
+            [
+                Entry::Include(words(&["~/.orbstack/ssh/config"])),
+                Entry::Host(words(&["a", "b", "c d"])),
+                Entry::Host(words(&["f"])),
+                Entry::Host(words(&["g"])),
+                Entry::Include(words(&["conf.d/*.conf", "with space/*"])),
+                Entry::Host(Vec::new()),
+            ]
+        );
+    }
+
+    /// A home folder in the temporary folder with the files `files` (a path from it and its text).
+    fn home_with(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let home =
+            std::env::temp_dir().join(format!("tsunagiai-ssh-hosts-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        for (path, text) in files {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        home
+    }
+
+    #[test]
+    fn hosts_are_the_names_ssh_takes() {
+        let home = home_with(
+            "names",
+            &[(
+                ".ssh/config",
+                "Host github.com host-one *.example\nHost !skip dev? build\nHost -oProxyCommand=x host-one studio\nHost a*\n  HostName ignored\nHost [a]\n",
+            )],
+        );
+        assert_eq!(
+            hosts_in(&home),
+            ["github.com", "host-one", "build", "studio", "[a]"]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+        // No file, no hosts.
+        assert_eq!(hosts_in(&home), Vec::<String>::new());
+    }
+
+    #[test]
+    fn includes_are_read_where_they_stand() {
+        let home = home_with(
+            "include",
+            &[
+                (".ssh/config", "Host first\nInclude conf.d/*.conf ~/other/one missing/*\nInclude /nowhere ~/.ssh/config\nHost last first\n"),
+                (".ssh/conf.d/b.conf", "Host b\n"),
+                (".ssh/conf.d/a.conf", "Host a\nInclude deep\n"),
+                (".ssh/conf.d/skip.txt", "Host skip\n"),
+                (".ssh/conf.d/.hidden.conf", "Host hidden\n"),
+                (".ssh/deep", "Host deep\n"),
+                ("other/one", "Host one\n"),
+            ],
+        );
+        // The glob is in the order of the names, a file read twice (its own include) adds nothing more, and a file that is not there is no error.
+        assert_eq!(hosts_in(&home), ["first", "a", "deep", "b", "one", "last"]);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn globs_match_names() {
+        let m = |p: &str, n: &str| {
+            glob_match(
+                &p.chars().collect::<Vec<_>>(),
+                &n.chars().collect::<Vec<_>>(),
+            )
+        };
+        assert!(m("*.conf", "a.conf") && m("*.conf", ".conf") && m("a?c", "abc") && m("*", ""));
+        assert!(!m("*.conf", "a.confx") && !m("a?c", "ac") && !m("a", "ab") && !m("", "a"));
+    }
+
+    #[test]
+    fn includes_stop_at_the_depth() {
+        let chain: Vec<(String, String)> = (0..7)
+            .map(|n| {
+                let path = if n == 0 {
+                    ".ssh/config".to_owned()
+                } else {
+                    format!(".ssh/c{n}")
+                };
+                (path, format!("Host h{n}\nInclude c{}\n", n + 1))
+            })
+            .collect();
+        let files: Vec<(&str, &str)> = chain
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let home = home_with("depth", &files);
+        assert_eq!(hosts_in(&home), ["h0", "h1", "h2", "h3", "h4"]);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]

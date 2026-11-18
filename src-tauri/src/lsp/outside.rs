@@ -1,6 +1,6 @@
-//! A-34: reading, read only, a file outside the worktree that ruby-lsp gave as a definition (a gem, for example).
+//! A-34: reading, read only, a file outside the worktree that a language server gave as a definition (a gem, for example).
 //!
-//! Only a path that the server of that (place, worktree) answered as a definition outside the worktree is read (`LspServers::outside_way`); any other path is refused before anything is run. The way is the one the server was started by, kept with it (`server::Way`, so the worktree is not read again, and a setting changed since the start does not send the read to another container or host), run by `lsp::run_on`: `cat` on this machine, `docker compose exec -T {service} cat` in the service of compose, and, for a saved environment, the same through ssh. The path is the server's own (the path inside the container for compose). Nothing is written, and nothing of the file is kept.
+//! Only a path that the server of that (place, worktree, server name) answered as a definition outside the worktree is read (`LspServers::outside_way`); any other path is refused before anything is run. The way is the one the server was started by, kept with it (`server::Way`, so the worktree is not read again, and a setting changed since the start does not send the read to another container or host), run by `lsp::run_on`: `cat` on this machine, `docker compose exec -T {service} cat` in the service of compose, and, for a saved environment, the same through ssh. The path is the server's own (the path inside the container for compose). Nothing is written, and nothing of the file is kept.
 
 use serde::Serialize;
 use tauri::State;
@@ -14,6 +14,7 @@ use super::{
 };
 use crate::{
     orca_files::check_worktree_of_project,
+    orca_language::{detect_language, highlight_name},
     ssh::{failure, Ran},
 };
 
@@ -27,7 +28,7 @@ const NOT_READ: &str = "ファイルを読めません";
 const TOO_LARGE: &str = "ファイルが大きすぎて読めません";
 const NOT_UTF8: &str = "ファイルが UTF-8 ではありません";
 
-/// A file outside the worktree, as the server sees it. `path` is the one asked for.
+/// A file outside the worktree, as the server sees it. `path` is the one asked for, `language` the name Orca's editor gives it (A-21, from the path and the text) and `highlight` the name the page's highlighter knows it by (null: no grammar).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -35,6 +36,8 @@ const NOT_UTF8: &str = "ファイルが UTF-8 ではありません";
 pub struct LspOutsideFile {
     pub path: String,
     pub text: String,
+    pub language: String,
+    pub highlight: Option<String>,
 }
 
 /// The path of a file that may be read: absolute, not starting with `-`, no control character, no `.` or `..` or empty name between the slashes (the server's paths have none), and not longer than a setting.
@@ -89,24 +92,31 @@ fn read_outside(
     text_of(run(&way.route, worktree, &command, MAX_FILE + 1)?)
 }
 
-/// The text of the file `path`, outside the worktree `worktree` of the project `project` of `environment` (`None`: this machine), that ruby-lsp gave as a definition (A-34). A path that the server of that worktree did not give is refused, and so is a worktree that is not one of Orca's list or not of that project.
+/// The text of the file `path`, outside the worktree `worktree` of the project `project` of `environment` (`None`: this machine), that the server `server` gave as a definition (A-34). A path that that server of the worktree did not give is refused, and so is a worktree that is not one of Orca's list or not of that project.
 #[tauri::command]
 pub async fn lsp_read_outside(
     servers: State<'_, LspServers>,
     environment: Option<String>,
     project: String,
     worktree: String,
+    server: String,
     path: String,
 ) -> Result<LspOutsideFile, String> {
     check_path(&path)?;
     let way = servers
-        .outside_way(environment.as_deref(), &worktree, &path)
+        .outside_way(environment.as_deref(), &worktree, &server, &path)
         .await
         .ok_or(NOT_KNOWN)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     tokio::task::spawn_blocking(move || {
         let text = read_outside(&way, &worktree, &path, run_on)?;
-        Ok(LspOutsideFile { path, text })
+        let language = detect_language(&path, &text);
+        Ok(LspOutsideFile {
+            highlight: highlight_name(language).map(str::to_owned),
+            language: language.to_owned(),
+            path,
+            text,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -125,6 +135,7 @@ mod tests {
             route: Route::Local,
             method,
             service: service.map(str::to_owned),
+            extensions: vec![".rb".into()],
         }
     }
 

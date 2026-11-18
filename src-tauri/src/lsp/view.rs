@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use ts_rs::TS;
 
-/// The place a definition is, as it is drawn: `file` and `line` (from 1) in the first line, `place` under it, and `outside` for a file the worktree does not hold (the mark "gem").
+use crate::orca_language::detect_language;
+
+/// The place a definition is, as it is drawn: `file` and `line` (from 1) in the first line, `place` under it, `outside` for a file the worktree does not hold, and `language` the name Orca's editor gives the file by its name (A-21; the mark "gem" is for an outside file of `ruby`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -15,6 +17,7 @@ pub struct LspPlace {
     pub line: u32,
     pub place: String,
     pub outside: bool,
+    pub language: String,
 }
 
 /// What `place_of` needs of a definition (an `LspLocation` has more, and it is sent as it is).
@@ -171,6 +174,7 @@ pub fn place_of(of: &LspPlaceOf) -> LspPlace {
         line: of.line + 1,
         place,
         outside: of.outside,
+        language: detect_language(&of.path, "").to_owned(),
     }
 }
 
@@ -283,7 +287,8 @@ mod tests {
                 file: "rails_ext.rb".into(),
                 line: 1,
                 place: "app/lib".into(),
-                outside: false
+                outside: false,
+                language: "ruby".into()
             }
         );
         let root = place("Rakefile", false, 9);
@@ -306,8 +311,14 @@ mod tests {
                 file: "rails.rb".into(),
                 line: 19,
                 place: "railties 8.1.4.1 / lib".into(),
-                outside: true
+                outside: true,
+                language: "ruby".into()
             }
+        );
+        // The language is by the name of the file: a file of another language outside the worktree is no gem.
+        assert_eq!(
+            place("/x/node_modules/a/index.ts", true, 0).language,
+            "typescript"
         );
         let deep = place(
             "/usr/local/bundle/gems/actioncable-8.1.4.1/lib/rails/generators/channel/channel_generator.rb",

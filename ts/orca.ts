@@ -1,6 +1,6 @@
 // The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine or of a saved environment);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
-// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history.
+// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history, and the definition of a name of the editor (A-34, orca-definition.ts), one tab for a project, that opens in a pane under the pane of the editor.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments.
@@ -22,17 +22,17 @@ import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { childrenKnown, currentFormation, deselectFormation, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
-import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import type { DefinitionQuery } from "./orca-definition.js";
+import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, showEditors } from "./orca-editor.js";
-import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
-import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, showDefinition, syncFiles, toggleFiles } from "./orca-files.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, resolveServers, showEditors } from "./orca-editor.js";
+import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
+import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
@@ -199,10 +199,10 @@ export function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24).
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34).
 interface Tab {
   id: string;
-  kind: "claude" | "plain" | "file" | "diff";
+  kind: "claude" | "plain" | "file" | "diff" | "definition";
   status: OrcaStatus;
   label: string;
   title: string;
@@ -218,12 +218,13 @@ interface Tab {
   where: string;
   // Where the tab is: null for this machine, else the name of the saved environment. A terminal's comes from its row, a file's and a diff's from the project they were opened in.
   environment: string | null;
-  // A file outside the worktree that a definition named (A-34): the tab has a lock and `gem`, and the file is read only.
+  // A file outside the worktree that a definition named (A-34): the tab has a lock, and the file is read only. `gem` marks one that is a Ruby file.
   outside?: boolean;
+  gem?: boolean;
 }
 
-// A tab with no terminal, whose page is a document of the worktree: a file in the editor, or the difference of a file.
-const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff";
+// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name.
+const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition";
 
 // Where an item of a list is (A-6): the saved environment's name, null for this machine (an item with no `environment` is this machine's).
 const placeOf = (item: { environment?: string | null }) => item.environment ?? null;
@@ -272,11 +273,15 @@ function tabsOf(key: string): Tab[] {
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target);
     tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+  }
+  for (const d of definitionsOf(place, key)) {
+    const where = tabs.find((t) => t.path === d.query.path)?.where ?? mix.worktrees.find((w) => w.path === d.query.path && placeOf(w) === d.target);
+    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -549,12 +554,13 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  if (t.kind === "definition") wrap.dataset.definition = "true";
   if (t.kind === "file") {
     wrap.dataset.file = "true";
     if (t.outside) {
       wrap.dataset.outside = "true";
-      select.append(tag("span", "orca-tab-gem", "gem"));
+      if (t.gem) select.append(tag("span", "orca-tab-gem", "gem"));
     }
     if (dirtyIds().has(t.id)) {
       const unsaved = tag("span", "orca-tab-dirty");
@@ -595,6 +601,13 @@ function lockIcon() {
 function diffIcon() {
   const icon = tag("span", "orca-ic orca-file-tab-ic");
   icon.innerHTML = DIFF_SVG;
+  return icon;
+}
+
+// The mark of a definition's tab.
+function definitionIcon() {
+  const icon = tag("span", "orca-ic orca-file-tab-ic");
+  icon.innerHTML = DEFINITION_SVG;
   return icon;
 }
 
@@ -677,6 +690,18 @@ function syncDiff(tabs: Tab[]) {
   showDiffs(placements, filesShown());
 }
 
+// Shows the definition of the definition tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
+function syncDefinition(tabs: Tab[]) {
+  const layout = shown() ? currentLayout() : null;
+  const placements: { id: string; host: HTMLElement }[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = tabOfId(tabs, pane.selected);
+    const host = editorHostOf(pane.id);
+    if (tab?.kind === "definition" && host) placements.push({ id: tab.id, host });
+  }
+  showDefinitions(placements);
+}
+
 // The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project.
 function filesWorktree(tabs: Tab[]): { path: string; label: string; environment: string | null } | null {
   const tab = tabOfId(tabs, selectedTab() ?? "");
@@ -700,22 +725,40 @@ function drawFiles(tabs: Tab[]) {
 }
 
 // A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
-function openFile(relative: string, jump: { line: number; character: number } | null = null, outside = false) {
+function openFile(relative: string) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative, outside);
+  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();
-  // A place of a definition (A-34): the caret goes there when the text is shown.
-  if (jump !== null) goTo(id, jump.line, jump.character);
 }
 
-// A name of the editor was pressed with the Command key and the right button (A-34): the file pane is shown, if it was hidden, with the definition of the name.
+// A name of the editor was pressed with the Command key and the right button (A-34): the definition tab of the project (made when there is none) asks for the definition of the name. A new tab is split off below the pane of the editor that asked (A-17); the tab that is open already, wherever it is, is selected, and the layout stays.
 function askDefinition(query: DefinitionQuery) {
-  if (!filesShown()) toggleFilesAndDraw();
-  showDefinition(query);
+  if (projectKey === null || view === null) return;
+  started = null;
+  const { tab, created } = openDefinition(query);
+  const pane = panesOf(currentLayout()?.root ?? null).find((p) => p.tabs.includes(query.tab));
+  // The move adds the new tab to the layout before it moves it (Rust mends the layout against the tabs the screen shows first).
+  if (created && pane !== undefined) runPaneOp({ kind: "move", tab: tab.id, pane: pane.id, edge: "bottom" });
+  else chooseTab(tab.id);
+  draw();
+}
+
+// A place of a definition was opened (A-34): its file is a tab of the editor, in the pane of the editor that asked (the first pane that is not the definition's when that tab is gone), and the caret goes to the place when the text is shown. A file that is open already is selected where it is.
+function openPlace(place: DefinitionOpen) {
+  const { query, path, outside, line, character } = place;
+  if (projectKey === null || view === null) return;
+  started = null;
+  const id = openEditorFile(query.target, query.project, query.path, path, outside ? query.server : null);
+  const panes = panesOf(currentLayout()?.root ?? null);
+  const near = panes.find((p) => p.tabs.includes(query.tab)) ?? panes.find((p) => !p.tabs.includes(place.definition));
+  if (near !== undefined && !panes.some((p) => p.tabs.includes(id))) runPaneOp({ kind: "move", tab: id, pane: near.id, edge: "center" });
+  else chooseTab(id);
+  draw();
+  goTo(id, line, character);
 }
 
 // The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
@@ -826,19 +869,20 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
+  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
-// Whether the language server of the worktree at `path` of `environment` is to stop (A-34): no tab of the worktree is open (a session, a terminal, a file or a difference of any project), or it has not the worktree any more in a list that was read well. A place that the screen does not list now (another saved environment than the one it shows) has no session or terminal tab open, so it needs no list: its server stops when no file or difference of the worktree is open.
+// Whether the language server of the worktree at `path` of `environment` is to stop (A-34): no tab of the worktree is open (a session, a terminal, a file, a difference or a definition of any project), or it has not the worktree any more in a list that was read well. A place that the screen does not list now (another saved environment than the one it shows) has no session or terminal tab open, so it needs no list: its server stops when no file or difference of the worktree is open.
 function serverGone(environment: string | null, path: string) {
   const listed = environment === view?.target || (environment === null && here !== null);
-  if (!listed) return !hasFileIn(environment, path) && !hasDiffIn(environment, path);
+  const kept = () => hasFileIn(environment, path) || hasDiffIn(environment, path) || hasDefinitionIn(environment, path);
+  if (!listed) return !kept();
   const read = environment === view?.target ? view?.state === "ready" : here?.state === "ready";
   if (!read) return false;
   if (!mix.worktrees.some((w) => w.path === path && placeOf(w) === environment)) return true;
   const open = mix.rows.some((r) => r.paneKey !== null && r.path === path && placeOf(r) === environment) || mix.terminals.some((t) => t.path === path && placeOf(t) === environment);
-  return !open && !hasFileIn(environment, path) && !hasDiffIn(environment, path);
+  return !open && !kept();
 }
 
 // The modal of A-40 shows the session it was opened for as the list has it now, and closes when the list no longer has it, when its project was selected, or when the screen is not shown.
@@ -856,18 +900,22 @@ function draw() {
   drawBadge();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();
-  if (!listShown()) return;
+  if (!listShown()) return pauseLsp();
   drawNotice();
   drawSearch();
   drawFeed();
   // A formation takes the place of the work pane: the terminals of the pane are hidden, and nothing else of it is drawn.
-  if (!shown()) return syncTerminal();
+  if (!shown()) {
+    pauseLsp();
+    return syncTerminal();
+  }
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawWork(tabs);
   drawFiles(tabs);
   syncTerminal(tabs);
   syncEditor(tabs);
   syncDiff(tabs);
+  syncDefinition(tabs);
 }
 
 // ---- the stream of a saved environment ----
@@ -1178,8 +1226,8 @@ async function closeTab(tab: Tab) {
     draw();
     return;
   }
-  if (tab.kind === "diff") {
-    closeDiff(tab.id);
+  if (tab.kind === "diff" || tab.kind === "definition") {
+    (tab.kind === "diff" ? closeDiff : closeDefinition)(tab.id);
     closing.delete(tab.id);
     draw();
     return;
@@ -1388,9 +1436,10 @@ export function initOrca() {
   initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
-  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, ruby: (target, project, path) => void ensureServer({ target, project, path }) });
-  initLsp();
-  initOrcaFiles({ open: (relative) => openFile(relative), definition: { inside: (relative, line, character) => openFile(relative, { line, character }), outside: (path, line, character) => openFile(path, { line, character }, true) }, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
+  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
+  initLsp({ changed: ({ target, project }) => resolveServers(target, project) });
+  initDefinition({ open: openPlace });
+  initOrcaFiles({ open: (relative) => openFile(relative), diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
     switched: () => {
       rereadTabs();

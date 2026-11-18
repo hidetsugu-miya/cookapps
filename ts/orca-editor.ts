@@ -3,7 +3,8 @@
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
-// A file of a Ruby worktree asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the file pane. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
+// A file whose language a language server takes asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the definition tab under the pane of the editor. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
+// While the Command key is down and the mouse stays on a name for LINK_WAIT_MS, the editor asks whether the name has a definition (`lsp_definition_exists`, only of a server that is running) and draws an underline under it in the accent color, in the box of the text under the layer of colors, with the pointer for the cursor (A-34, `showLink`, `hideLink`). The answer is kept by the name's range until the text changes; the key's release, the mouse leaving the editor, typing and the scroll take the underline away.
 // The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
@@ -38,6 +39,16 @@ interface EditorFile {
   outside: boolean;
   // The language Rust named for the file (A-21), once it is read.
   language: string;
+  // The server of the project that takes that language (A-34), found once the file is read: none asks nothing. For a file outside the worktree, the server that gave it.
+  server: string | null;
+  // The underline of the Command key (A-34): the element (in the box of the text, under the layer), the place of the mouse in the editor (null: it is not in it), the timer of the wait for the mouse to stay, the count that drops an answer older than the last move or hide, the box of the name that is underlined (null: none), and the answers kept (by line, start and end of the name) for the text of the edit `knownEdits`.
+  link: HTMLElement;
+  hover: { x: number; y: number } | null;
+  linkTimer: number | null;
+  linkSeq: number;
+  linkBox: DOMRect | null;
+  known: Map<string, boolean>;
+  knownEdits: number;
   // The place the screen asked to go to (a definition), kept until the text is shown: the line from 0 and the character in UTF-16 units.
   jump: { line: number; character: number } | null;
   // The text of the read (null until it is read), whether the file has CRLF, and the signature of what the disk held then; a save that went through brings the signature up to date.
@@ -110,6 +121,8 @@ const COLOR_NOW_MAX = 30000;
 const COLOR_WAIT_MS = 150;
 // After a change of the rich view, how long it waits for more changes before the edit is put into the textarea.
 const RICH_WAIT_MS = 200;
+// How long the mouse stays on a name, with the Command key down, before the editor asks whether the name has a definition.
+const LINK_WAIT_MS = 150;
 
 const files = new Map<string, EditorFile>();
 let lastId = 0;
@@ -117,7 +130,8 @@ let autosaveMs = 1000;
 let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
 let definition: (query: DefinitionQuery) => void = () => {};
-let ruby: (target: string | null, project: string, path: string) => void = () => {};
+let serve: (target: string | null, project: string, path: string, server: string) => void = () => {};
+let mayAsk: (target: string | null, path: string, server: string) => boolean = () => true;
 
 export const nameOf = (relative: string) => relative.slice(relative.lastIndexOf("/") + 1);
 
@@ -483,15 +497,44 @@ function setMode(f: EditorFile, mode: "rich" | "source") {
   }
 }
 
+// The server that gave a file outside the worktree (A-34); none is an error in Japanese.
+function serverOf(f: EditorFile) {
+  if (f.server === null) throw new Error("言語サーバーがありません");
+  return f.server;
+}
+
+// The file outside the worktree, as the editor takes a file (read only, with the language that Rust gave it by its name).
+async function readOutside(f: EditorFile) {
+  const read = await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: serverOf(f), path: f.relative });
+  return { content: read.text, crlf: false, signature: "", language: read.language, highlight: read.highlight };
+}
+
+// Looks for the server of the project that takes the language of the file (A-34): with none the Command key and the right button ask nothing, and one that is found is started when the settings say so.
+function lookServer(f: EditorFile) {
+  void invoke("lsp_server_for", { environment: f.target, project: f.project, language: f.language }).then(
+    (server) => {
+      if (f.server !== server) hideLink(f);
+      f.server = server;
+      if (server !== null) serve(f.target, f.project, f.path, server);
+    },
+    () => {},
+  );
+}
+
+// The files of the project that are open look for their server again, once its settings changed (a server renamed, or a language taken by another).
+export function resolveServers(target: string | null, project: string) {
+  for (const f of filesOf(target, project)) if (!f.outside && f.read === "ready") lookServer(f);
+}
+
 async function load(f: EditorFile) {
   try {
-    const text = f.outside
-      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
-      : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
+    const text = f.outside ? await readOutside(f) : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.edits++;
     f.highlight = text.highlight;
     f.language = text.language;
+    // A file outside the worktree is marked `gem` when it is a Ruby file.
+    if (f.outside) f.state.textContent = text.language === "ruby" ? "gem" : "";
     f.markdown = text.language === "markdown";
     paint(f);
     numberLines(f, f.area.value);
@@ -500,8 +543,8 @@ async function load(f: EditorFile) {
     f.read = "ready";
     f.area.disabled = false;
     setMode(f, f.mode);
-    // A Ruby file of a worktree starts its language server (A-34); a file outside the worktree belongs to a server that is there already.
-    if (f.language === "ruby" && !f.outside) ruby(f.target, f.project, f.path);
+    // The server that takes the file's language is looked for once the text is shown; with none the Command key and the right button ask nothing. A file of a worktree starts that server (A-34); a file outside the worktree belongs to a server that is there already.
+    if (!f.outside) lookServer(f);
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -556,20 +599,123 @@ function charBox(code: HTMLElement, offset: number) {
   return null;
 }
 
+// Where the character at `offset` of `text` is: the offset of the start of its line, the line from 0, the character in that line (UTF-16 units) and the text of the line.
+function placeOf(text: string, offset: number) {
+  const lineStart = offset === 0 ? 0 : text.lastIndexOf("\n", offset - 1) + 1;
+  let line = 0;
+  for (let i = text.indexOf("\n"); i !== -1 && i < lineStart; i = text.indexOf("\n", i + 1)) line++;
+  const end = text.indexOf("\n", offset);
+  return { lineStart, line, character: offset - lineStart, lineText: text.slice(lineStart, end === -1 ? undefined : end) };
+}
+
+// The box on the page of the text of the layer from `from` to `to` (offsets in its text, which is drawn in many nodes), none when the layer has no such text.
+function layerBox(code: HTMLElement, from: number, to: number) {
+  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  let seen = 0;
+  let started = false;
+  for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+    const next = seen + node.length;
+    if (!started && from < next) {
+      range.setStart(node, from - seen);
+      started = true;
+    }
+    if (started && to <= next) {
+      range.setEnd(node, to - seen);
+      return range.getBoundingClientRect();
+    }
+    seen = next;
+  }
+  return null;
+}
+
+// Whether the Command key may draw an underline in the file: its text is shown in the source, it is a file of the worktree and a server takes its language (a file outside the worktree asks nothing, as the right button does).
+const linkReady = (f: EditorFile) => f.read === "ready" && !f.outside && f.server !== null && !f.body.hidden;
+
+// Takes the underline away and drops what waits for it: the timer of the wait and the answer that is on its way.
+function hideLink(f: EditorFile) {
+  f.linkSeq++;
+  if (f.linkTimer !== null) {
+    clearTimeout(f.linkTimer);
+    f.linkTimer = null;
+  }
+  f.linkBox = null;
+  if (!f.link.hidden) {
+    f.link.hidden = true;
+    f.area.style.cursor = "";
+  }
+}
+
+// Starts the wait for the mouse to stay where it is (any underline and older wait are taken away first).
+function waitLink(f: EditorFile) {
+  hideLink(f);
+  const at = f.hover;
+  if (at === null || !linkReady(f)) return;
+  const seq = f.linkSeq;
+  f.linkTimer = window.setTimeout(() => {
+    f.linkTimer = null;
+    void probeLink(f, at.x, at.y, seq);
+  }, LINK_WAIT_MS);
+}
+
+// Underlines the name under the point when the server has a definition for it (A-34). The answer is kept by the range of the name until the text changes, so the same name is not asked again; an answer that failed (a server that is not running is one) is not kept and draws nothing. An answer that comes after the underline was taken away or the mouse moved on (`seq`) is dropped.
+async function probeLink(f: EditorFile, x: number, y: number, seq: number) {
+  const offset = offsetAt(f, x, y);
+  const server = f.server;
+  // A server that is indexing or stopped can only refuse: nothing is sent to it.
+  if (offset === null || server === null || !mayAsk(f.target, f.path, server)) return;
+  const text = f.area.value;
+  const { lineStart, line, character, lineText } = placeOf(text, offset);
+  try {
+    const word = await invoke("lsp_word", { line: lineText, character });
+    if (word === null || seq !== f.linkSeq) return;
+    const start = lineText.lastIndexOf(word, character);
+    if (start === -1) return;
+    const key = `${line}:${start}:${start + word.length}`;
+    if (f.knownEdits !== f.edits) {
+      f.known.clear();
+      f.knownEdits = f.edits;
+    }
+    let has = f.known.get(key);
+    if (has === undefined) {
+      has = await invoke("lsp_definition_exists", { environment: f.target, worktree: f.path, server, relative: f.relative, text, line, character });
+      if (seq !== f.linkSeq) return;
+      f.known.set(key, has);
+    }
+    if (has) showLink(f, lineStart + start, lineStart + start + word.length);
+  } catch {
+    // Nothing is drawn.
+  }
+}
+
+// Draws the underline under the text from `from` to `to` of the layer, in the box of the text: the layer sits where the text of the textarea does, so the line is under the letters the owner sees. The cursor over the textarea is the pointer while it is drawn.
+function showLink(f: EditorFile, from: number, to: number) {
+  const box = layerBox(f.code, from, to);
+  const host = f.link.parentElement;
+  if (box === null || host === null) return;
+  const at = host.getBoundingClientRect();
+  f.link.style.left = `${box.left - at.left}px`;
+  f.link.style.top = `${box.bottom - at.top - 1}px`;
+  f.link.style.width = `${box.width}px`;
+  f.link.hidden = false;
+  f.linkBox = box;
+  f.area.style.cursor = "pointer";
+}
+
+const hideLinks = () => {
+  for (const f of files.values()) hideLink(f);
+};
+
 // The right button with the Command key on the text (A-34): the character under the mouse, not the caret, is where the definition is asked (the line from 0 and the character in UTF-16 units, which is the index of a string of the page). Rust finds the name there from the text of the line; where there is none nothing happens.
 async function askDefinition(f: EditorFile, x: number, y: number) {
   const offset = offsetAt(f, x, y);
   if (offset === null) return;
   const text = f.area.value;
-  const lineStart = offset === 0 ? 0 : text.lastIndexOf("\n", offset - 1) + 1;
-  let line = 0;
-  for (let i = text.indexOf("\n"); i !== -1 && i < lineStart; i = text.indexOf("\n", i + 1)) line++;
-  const end = text.indexOf("\n", offset);
-  const character = offset - lineStart;
+  const { line, character, lineText } = placeOf(text, offset);
   try {
-    const word = await invoke("lsp_word", { line: text.slice(lineStart, end === -1 ? undefined : end), character });
+    const word = await invoke("lsp_word", { line: lineText, character });
     if (word === null) return;
-    definition({ target: f.target, project: f.project, path: f.path, relative: f.relative, text, line, character, word });
+    if (f.server !== null) definition({ target: f.target, project: f.project, path: f.path, server: f.server, relative: f.relative, text, line, character, word, tab: f.id });
   } catch (e) {
     fail(e);
   }
@@ -626,6 +772,7 @@ async function reread(f: EditorFile) {
     const [start, end, top, left, richTop] = [area.selectionStart, area.selectionEnd, area.scrollTop, area.scrollLeft, f.rich.scrollTop];
     area.value = text.content;
     f.edits++;
+    hideLink(f);
     area.setSelectionRange(Math.min(start, text.content.length), Math.min(end, text.content.length));
     area.scrollTop = top;
     area.scrollLeft = left;
@@ -647,7 +794,7 @@ async function reread(f: EditorFile) {
   }
 }
 
-function create(id: string, target: string | null, project: string, path: string, relative: string, outside: boolean): EditorFile {
+function create(id: string, target: string | null, project: string, path: string, relative: string, outside: boolean, server: string | null): EditorFile {
   const el = tag("div", "orca-edit");
   el.dataset.file = id;
   const head = tag("div", "orca-edit-head");
@@ -665,14 +812,13 @@ function create(id: string, target: string | null, project: string, path: string
   modes.hidden = true;
   modes.append(sourceButton, richButton);
   const where = tag("span", "orca-edit-path", relative);
-  // A file outside the worktree is read only: a lock before its path, and `gem` where the state of a save is.
+  // A file outside the worktree is read only: a lock before its path, and `gem` (for a Ruby file, once it is read) where the state of a save is.
   if (outside) {
     const lock = tag("span", "orca-edit-lock");
     lock.setAttribute("role", "img");
     lock.setAttribute("aria-label", "読み取り専用");
     lock.innerHTML = LOCK_SVG;
     head.append(lock);
-    state.textContent = "gem";
     state.dataset.state = "outside";
   }
   head.append(where, state, modes);
@@ -690,7 +836,9 @@ function create(id: string, target: string | null, project: string, path: string
   const band = tag("div", "orca-edit-line");
   band.hidden = true;
   const text = tag("div", "orca-edit-text");
-  text.append(band, layer, area);
+  const link = tag("div", "orca-edit-link");
+  link.hidden = true;
+  text.append(band, link, layer, area);
   const nums = document.createTextNode("1");
   const numbers = tag("div", "orca-edit-nums");
   numbers.append(nums);
@@ -705,13 +853,32 @@ function create(id: string, target: string | null, project: string, path: string
   richBand.hidden = true;
   rich.append(richBand);
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
   area.oninput = () => {
     f.edits++;
+    hideLink(f);
     typed(f);
     placeBand(f);
   };
-  area.onscroll = () => followScroll(f);
+  area.onscroll = () => {
+    hideLink(f);
+    followScroll(f);
+  };
+  // The Command key and the mouse staying on a name draw the underline of a definition (A-34).
+  area.onmousemove = (e) => {
+    f.hover = { x: e.clientX, y: e.clientY };
+    if (!e.metaKey) {
+      hideLink(f);
+      return;
+    }
+    const box = f.linkBox;
+    if (box !== null && e.clientX >= box.left && e.clientX < box.right && e.clientY >= box.top && e.clientY < box.bottom) return;
+    waitLink(f);
+  };
+  area.onmouseleave = () => {
+    f.hover = null;
+    hideLink(f);
+  };
   // The caret moves with a key (the key has not moved it yet at `keydown`, so that waits for the frame) or the mouse, and the focus comes and goes.
   const bandLater = () => void requestAnimationFrame(() => placeBand(f));
   const bandNow = () => placeBand(f);
@@ -728,7 +895,7 @@ function create(id: string, target: string | null, project: string, path: string
   rich.addEventListener("focusin", () => placeRichBand(f));
   rich.addEventListener("focusout", () => placeRichBand(f));
   area.oncontextmenu = (e) => {
-    if (!e.metaKey || f.outside || f.read !== "ready" || f.language !== "ruby" || f.body.hidden) return;
+    if (!e.metaKey || f.outside || f.read !== "ready" || f.server === null || f.body.hidden) return;
     e.preventDefault();
     void askDefinition(f, e.clientX, e.clientY);
   };
@@ -751,14 +918,14 @@ function create(id: string, target: string | null, project: string, path: string
   return f;
 }
 
-// Opens the file as a tab of the project and gives its id (with `outside`, a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
-export function openFile(target: string | null, project: string, path: string, relative: string, outside = false) {
-  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.outside === outside);
+// Opens the file as a tab of the project and gives its id (with `outside`, the server that gave a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
+export function openFile(target: string | null, project: string, path: string, relative: string, outside: string | null = null) {
+  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.outside === (outside !== null));
   if (open) {
     open.wantFocus = true;
     return open.id;
   }
-  const f = create(`file:${++lastId}`, target, project, path, relative, outside);
+  const f = create(`file:${++lastId}`, target, project, path, relative, outside !== null, outside);
   files.set(f.id, f);
   void load(f);
   return f.id;
@@ -785,6 +952,7 @@ export async function closeFile(id: string) {
   if (f.save === "error") setSave(f, "pending");
   while (canSave(f)) await flush(f);
   if (f.dirty && !f.blocked) return false;
+  hideLink(f);
   clearTimer(f);
   cancelPaint(f);
   clearRich(f);
@@ -797,6 +965,7 @@ export async function closeFile(id: string) {
 export function discardFiles(target: string | null, project: string, path: string, relative: string, folder: boolean) {
   const gone = filesOf(target, project).filter((f) => !f.outside && f.path === path && (f.relative === relative || (folder && f.relative.startsWith(`${relative}/`))));
   for (const f of gone) {
+    hideLink(f);
     clearTimer(f);
     cancelPaint(f);
     clearRich(f);
@@ -866,12 +1035,22 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
   }
 }
 
-export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; ruby: (target: string | null, project: string, path: string) => void }) {
+export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; serve: (target: string | null, project: string, path: string, server: string) => void; mayAsk: (target: string | null, path: string, server: string) => boolean }) {
   changed = on.changed;
   fail = on.error;
   definition = on.definition;
-  ruby = on.ruby;
+  serve = on.serve;
+  mayAsk = on.mayAsk;
   document.addEventListener("selectionchange", placeBands);
+  // The Command key pressed over a name that the mouse is on starts the wait; its release, and the window losing the focus, take every underline away.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Meta" || e.repeat) return;
+    for (const f of files.values()) if (f.hover !== null && f.el.isConnected) waitLink(f);
+  });
+  document.addEventListener("keyup", (e) => {
+    if (e.key === "Meta") hideLinks();
+  });
+  window.addEventListener("blur", hideLinks);
   // The page is going away (the window is closed): the typing that waits for its timer is sent now, for every file that can be saved.
   window.addEventListener("pagehide", () => {
     for (const f of files.values()) void flush(f);

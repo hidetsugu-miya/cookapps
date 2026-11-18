@@ -1,4 +1,4 @@
-//! A-34: the Language Server Protocol as `lsp::server` speaks it with ruby-lsp, as pure functions: the frame (`Content-Length`), the messages, the state that `$/progress` gives, the paths of the server and of the worktree, and the answer to a definition.
+//! A-34: the Language Server Protocol as `lsp::server` speaks it with a language server, as pure functions: the frame (`Content-Length`), the messages, the state that `$/progress` gives, the paths of the server and of the worktree, and the answer to a definition.
 //! What comes from the server is not trusted. A frame has a limit, a header that cannot be read ends the stream (there is no way to find the next frame), a body that is not JSON is dropped (its length was read, so the stream stays in step), and an answer that cannot be read is no location.
 //! A position is of the unit the client asked for: UTF-16 (`initialize_params`), which is the unit of the index of a JavaScript string, so a position is passed on as it is.
 
@@ -26,11 +26,12 @@ const MAX_ERROR: usize = 200;
 const MAX_PATH: usize = 4096;
 const METHOD_NOT_FOUND: i64 = -32601;
 
-const BROKEN: &str = "ruby-lsp の出力を読めません";
-const BAD_HEADER: &str = "ruby-lsp の枠のヘッダーが正しくありません";
-const NO_LENGTH: &str = "ruby-lsp の枠に長さがありません";
-const TOO_LONG: &str = "ruby-lsp の枠が大きすぎます";
-const CUT: &str = "ruby-lsp の枠が途中で終わりました";
+// What is said of the server, without its name: `server::named` puts the name in front of them.
+const BROKEN: &str = "の出力を読めません";
+const BAD_HEADER: &str = "の枠のヘッダーが正しくありません";
+const NO_LENGTH: &str = "の枠に長さがありません";
+const TOO_LONG: &str = "の枠が大きすぎます";
+const CUT: &str = "の枠が途中で終わりました";
 const BAD_PATH: &str = "ファイルのパスが正しくありません";
 
 // ---- the frame ----

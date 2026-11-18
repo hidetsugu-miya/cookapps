@@ -174,7 +174,11 @@ const answers = {
   lsp_stop: null,
   lsp_restart: { state: "indexing" },
   lsp_container_start: null,
-  lsp_launch: { method: "none", candidates: [], service: null, command: null, mount: null },
+  // The server that takes Ruby, of a repository with nothing saved.
+  lsp_server_for: "ruby-lsp",
+  // The languages that a server can take (A-21), as `orca_languages` answers them.
+  orca_languages: ["plaintext", "python", "ruby", "typescript"],
+  lsp_launches: ({ servers }) => servers.map(() => ({ method: "none", candidates: [], service: null, command: null, mount: null })),
   // A-14: the two default themes, with example colors (a spec that chooses among themes gives `terminalThemes` of e2e/support.ts); a spec that presses a select mocks `terminal_theme_set`.
   terminal_themes: {
     themes: [
@@ -231,9 +235,10 @@ const computed = {
     }
     return { weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) => (firstDay + i) % 7), days };
   },
-  // A-34: the settings of a repository that has none saved, and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
-  lsp_settings: ({ environment, project }) => ({ environment, project, autoStart: true, command: null, mount: null, service: null, sshHost: null }),
+  // A-34: the settings of a repository that has none saved (the one server, ruby-lsp, taking Ruby), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
+  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [{ name: "ruby-lsp", languages: ["ruby"], autoStart: true, command: null, mount: null, service: null }] }),
   lsp_settings_set: ({ settings }) => settings,
+  ssh_hosts: () => [],
   orca_browse_dir: ({ path }) => {
     const resolvedPath = path.trim() === "" || path.trim() === "~" ? "/home/dev" : path;
     if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";
