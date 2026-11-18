@@ -203,6 +203,16 @@ Claude タブに打ち込んだ内容と、Claude Code が呼んだツールの�
 タブに出た内容と打ち込んだ内容を、本アプリは保存しません。Claude Code 自身が会話をどう保存するかは、Claude Code の扱いに従います。
 Claude Code は、Claude タブの × を押したときと、本アプリを終了したときに止めます。Claude Code が自分で終わったときも止まります。右ペインを閉じても、データベースの画面を離れても、編集ペインを閉じても止めません。
 
+### Orca の言語サーバーの欄の Claude Code
+
+利用者が Orca の画面の言語サーバーの欄で、見出しの ✦ か言語のカードの「Claude に頼む」を押したとき、本アプリはこの Mac の Claude Code（`claude`）を、設定フォルダの `claude-code/` で、欄のカードの下のペインに起動します。
+Claude Code に渡す MCP サーバーは `tsunagiai-mcp` だけで、サインインは設定の「Claude」タブで選んだ方式を使います。
+最初の指示として、Orca の環境の名前、プロジェクトの ID、worktree のパス（保存した環境の worktree では、ssh の接続先の名前も）を渡します。
+ペインに打ち込んだ内容と、Claude Code が呼んだツールの結果は、Claude Code を通じて Anthropic のサーバーへ送られます。このペインの Claude Code は、Bash などの組み込みの道具も使えます。
+書き込むツールとコマンドは、使う前に Claude Code が利用者に確かめます。
+ペインに出た内容と打ち込んだ内容を、本アプリは保存しません。Claude Code 自身が会話をどう保存するかは、Claude Code の扱いに従います。
+Claude Code は、ペインの ✕ を押したとき、Orca の一覧から worktree が消えたとき、本アプリを終了したときに止めます。Claude Code が自分で終わったときも止まります。
+
 ## Orca との連携
 
 メール、Slack のスレッド、Todo の詳細の右側にある「Orca に渡す」欄は、開いている内容を、Orca（エージェントを動かすアプリ）の新しいセッションに渡します。
