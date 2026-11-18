@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.85.0
+
+S-27: the 「Slack に貼る」 screen has two modes, and a switch 「Claude / 手動」 at the right of its header chooses one (#904). It always opens in Claude mode. Claude mode shows the conversation with Claude wide, and the things to do in a narrow column on its right, with the number, the destination and the head of the text of each; the divider between them sets the width of the column, from a fifth to a half of the screen. Manual mode shows the original message and the cards, with 「投稿」, over the whole width. A switch changes nothing of the draft.
+
+S-1: in manual mode, posting two or more things to do that are not posted opens a dialog (#905). For each one after the first, it asks whether to post in the thread of the one before it or to its own destination (or to the channel of the one before it, when it continued a thread). 「やめる」 posts nothing. One thing to do is posted at once, as before.
+
+A-35: the pane of the unread in the footer closes by itself when the count falls to 0 while it is open (#788), whether the last row was cleared by a button of the row or the count fell for another reason, such as a sync.
+
+A-6, A-37: the list on the left of the development screen starts at 19% of the screen, and the divider sets it between 15% and 50% (#991). It started at 25% and had 20% as its smallest.
+
+A-16: the icon of 「Claude を起動」 in the + menu of the work pane is drawn in the color of Claude (#990).
+
 ## v0.84.4
 
 A-34: a project has one language server for each language, and the app finds them from the project (#974). The servers of the language table are looked for in the place the server runs in (a compose service that mounts the worktree, else the host): ruby-lsp for Ruby, rust-analyzer for Rust, typescript-language-server for TypeScript and JavaScript, gopls for Go, and pyright or pylsp for Python. A server saved with no `command` follows what the app finds, and the settings saved by an older version are read as one server for each language.
