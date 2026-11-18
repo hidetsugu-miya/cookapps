@@ -4,7 +4,7 @@ import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
 import { claudeCodeStarted, closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
-import { hideSession, isLeaderTab, onTabChange, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
+import { hideSession, isLeaderTab, onTabChange, showChild, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
 import { currentFormation, formationEnvironment, initFormationList } from "./formation-list.js";
 import { RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -155,6 +155,8 @@ export function initFormation() {
       failures.delete(name);
       showPane();
     },
+    // The row of a child in the list was pressed, after its formation was selected: the child's tab is shown.
+    showChild,
   );
   $("formation-restart").innerHTML = RELOAD_SVG;
   const button = $<HTMLButtonElement>("formation-restart");

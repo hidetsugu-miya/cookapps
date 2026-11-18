@@ -3561,6 +3561,42 @@ fn counts_of(rows: &[FormationChild]) -> ChildCounts {
     counts
 }
 
+/// One launched child of a formation as the list draws it under the formation's row (A-37): where it stands, the project it works in and its worktree. `path` and `environment` tell which worktree of which PC is a child's, so that the sessions of the projects can leave it out.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct FormationListChild {
+    pub name: String,
+    pub repo: String,
+    /// The branch of its worktree.
+    pub branch: String,
+    /// Where its worktree is, on its PC.
+    pub path: String,
+    /// The Orca the child runs in, as `FormationChild::environment` has it.
+    pub environment: String,
+    pub state: FormationState,
+}
+
+/// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed.
+fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationListChild> {
+    records
+        .iter()
+        .zip(rows)
+        .filter_map(|(child, row)| {
+            let launch = child.launch.as_ref()?;
+            Some(FormationListChild {
+                name: row.name.clone(),
+                repo: row.repo.clone(),
+                branch: launch.branch.clone(),
+                path: launch.path.clone(),
+                environment: row.environment.clone(),
+                state: row.state,
+            })
+        })
+        .collect()
+}
+
 /// One formation as the list draws it.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -3575,6 +3611,8 @@ pub struct FormationEntry {
     #[cfg_attr(test, ts(type = "number | null"))]
     pub created_at: Option<u64>,
     pub counts: ChildCounts,
+    /// The children that were launched, in the order of the record (`listed_children`): a planned child is not in it. The list draws them under the formation's row, and the number of them is the number it shows.
+    pub children: Vec<FormationListChild>,
     /// Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`list_core` with the titles); the list of `list_with` and the answer of `formation_create` have `false`.
     pub waiting: bool,
 }
@@ -3725,6 +3763,7 @@ fn list_core(
             projects: meta.projects,
             created_at: meta.created_at,
             counts: counts_of(own),
+            children: listed_children(children, own),
             waiting,
         });
     }
@@ -3933,6 +3972,7 @@ fn create_with(
         projects: meta.projects,
         created_at: meta.created_at,
         counts: ChildCounts::default(),
+        children: Vec::new(),
         waiting: false,
     })
 }
@@ -8652,6 +8692,51 @@ mod tests {
             ]
         );
         assert_eq!(list.formations[0].projects, [project(LOCAL, "api")]);
+        // Only the launched children are listed, each with where its worktree is and how it stands; the number of them is what the counts say without the planned ones.
+        let children =
+            |f: &FormationEntry| -> Vec<(String, String, String, String, String, FormationState)> {
+                f.children
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.name.clone(),
+                            c.repo.clone(),
+                            c.branch.clone(),
+                            c.path.clone(),
+                            c.environment.clone(),
+                            c.state,
+                        )
+                    })
+                    .collect()
+            };
+        let own = |name: &str, repo: &str, environment: &str, state| {
+            (
+                name.to_owned(),
+                repo.to_owned(),
+                format!("user/{name}"),
+                format!("/work/{name}"),
+                environment.to_owned(),
+                state,
+            )
+        };
+        assert_eq!(
+            children(&list.formations[0]),
+            [
+                own("a", "web", LOCAL, FormationState::Working),
+                own("b", "api", "mac-studio", FormationState::Waiting),
+            ]
+        );
+        assert_eq!(
+            children(&list.formations[1]),
+            [
+                own("c", "web", LOCAL, FormationState::Done),
+                own("d", "api", "mac-studio", FormationState::Working),
+            ]
+        );
+        for f in &list.formations {
+            let c = f.counts;
+            assert_eq!(f.children.len() as u32, c.waiting + c.working + c.done);
+        }
         // One read of each environment's ps for the two formations together.
         assert_eq!(
             fake.reads_of_ps(),

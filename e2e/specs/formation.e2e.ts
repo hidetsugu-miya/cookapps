@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
+import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls } from "../support";
 
 import type { FormationList } from "../../ts/bindings/FormationList";
 
@@ -2980,5 +2980,114 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect($("#formation-page")).not.toBeDisplayed();
     expect(await count("#formation-page > *")).toBe(0);
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+// A-37: the launched children under the row of their formation in the list.
+const CHILD = (name: string) => `#formation-list-feed .formation-child[data-child="${name}"]`;
+const childRows = () => textsOf("#formation-list-feed .formation-child");
+const withChildren = () =>
+  formationList([
+    formationEntry("formation"),
+    formationEntry("won-2485", { minutes: 12, repos: ["wonder-api"], children: [listedChild("auth-api", "working", { repo: "wonder-api", branch: "child-auth" }), listedChild("add-tests", "waiting", { repo: "wonder-front", branch: "child-test" })], counts: { planned: 1, waiting: 1, working: 1, done: 0 } }),
+    formationEntry("mail-summary", { minutes: 90, children: [listedChild("old-one", "done", { repo: "tsunagiai", branch: "old" })], counts: { planned: 0, waiting: 0, working: 0, done: 1 } }),
+  ]);
+
+describe("orchestration mode: the children under a formation in the list", () => {
+  it("shows the number of launched teammates at the right of a formation's row, and none for a formation that has none", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["2", "1"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .formation-row-count`)].map((e) => e.getAttribute("aria-label")), ROWS)).toEqual(["起動しているチームメイト 2 人", "起動しているチームメイト 1 人"]);
+    expect(await count(`${ROWS}[data-formation="formation"] .formation-row-count`)).toBe(0);
+    // The count is at the right end of the row, after the name.
+    const place = await browser.execute((s) => {
+      const r = document.querySelector(`${s}[data-formation="won-2485"]`)!.getBoundingClientRect();
+      const n = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-count`)!.getBoundingClientRect();
+      const name = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-name`)!.getBoundingClientRect();
+      return { right: r.right - n.right < 16, beside: name.right <= n.left };
+    }, ROWS);
+    expect(place).toEqual({ right: true, beside: true });
+  });
+
+  it("draws a row for each launched child under its formation: the name, and under it the project and the branch of its worktree, with the icon of its state", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    expect(await childRows()).toEqual(["auth-api" + "wonder-api ・ child-auth", "add-tests" + "wonder-front ・ child-test", "old-one" + "tsunagiai ・ old"]);
+    expect(await textsOf(".formation-child .formation-child-name")).toEqual(["auth-api", "add-tests", "old-one"]);
+    expect(await textsOf(".formation-child .formation-child-where")).toEqual(["wonder-api ・ child-auth", "wonder-front ・ child-test", "tsunagiai ・ old"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".formation-child .orca-ic")].map((e) => [e.dataset.status, e.getAttribute("aria-label")]))).toEqual([
+      ["working", "作業中"],
+      ["question", "承認待ち"],
+      ["done", "完了"],
+    ]);
+    // A child is under its formation's row, below it and indented from its name.
+    const [parent, first, second] = [await rectOf(`${ROWS}[data-formation="won-2485"]`), await rectOf(CHILD("auth-api")), await rectOf(CHILD("add-tests"))];
+    expect(first.top).toBeGreaterThanOrEqual(parent.bottom - 1);
+    expect(second.top).toBeGreaterThanOrEqual(first.bottom - 1);
+    expect(first.left).toBeGreaterThan(parent.left);
+  });
+
+  it("folds the children away and opens them again with the arrow of the formation's row, and gives a formation with no child no arrow", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    const arrow = '#formation-list-feed .orca-arrow[data-arrow="won-2485"]';
+    expect(await count("#formation-list-feed .orca-arrow")).toBe(2);
+    await expect($(arrow)).toHaveAttribute("aria-expanded", "true");
+    await $(arrow).click();
+    await expect($(arrow)).toHaveAttribute("aria-expanded", "false");
+    expect(await childRows()).toEqual(["old-one" + "tsunagiai ・ old"]);
+    // The count stays while the children are folded, and the press of the arrow selects nothing.
+    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["2", "1"]);
+    expect(await pressedRows()).toEqual([]);
+    await $(arrow).click();
+    await expect($(arrow)).toHaveAttribute("aria-expanded", "true");
+    expect(await childRows()).toHaveLength(3);
+  });
+
+  it("keeps a folded formation folded when the list is read again", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    await $('#formation-list-feed .orca-arrow[data-arrow="won-2485"]').click();
+    await mock("formation_list", formationList([formationEntry("formation"), formationEntry("won-2485", { children: [listedChild("auth-api", "done", { repo: "wonder-api", branch: "child-auth" })] })]));
+    await browser.waitUntil(async () => (await textsOf(`${ROWS} .formation-row-count`)).join() === "1");
+    expect(await count(".formation-child")).toBe(0);
+  });
+
+  it("selects the formation and shows the child's tab when its row is pressed", async () => {
+    await openList({ formation_list: withChildren(), formation_children: [formationChild("auth-api", "working"), formationChild("add-tests", "waiting")] }, null);
+    await $(CHILD("add-tests")).click();
+    expect(await pressedRows()).toEqual(["won-2485"]);
+    await expect($("#formation")).toBeDisplayed();
+    await expect($('#formation-tabs-mates [data-child="add-tests"]')).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "false");
+    await expect($("#formation-teammate-term")).toBeDisplayed();
+    // Another child of the same formation: no new formation, and its tab is shown at once.
+    await $(CHILD("auth-api")).click();
+    await expect($('#formation-tabs-mates [data-child="auth-api"]')).toHaveAttribute("aria-selected", "true");
+    await expect($('#formation-tabs-mates [data-child="add-tests"]')).toHaveAttribute("aria-selected", "false");
+    expect(await pressedRows()).toEqual(["won-2485"]);
+  });
+
+  it("shows the child's tab of another formation than the shown one, after its children are read", async () => {
+    await openList({ formation_list: withChildren(), formation_children: [formationChild("old-one", "working")] });
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await $(CHILD("old-one")).click();
+    expect(await pressedRows()).toEqual(["mail-summary"]);
+    await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("selects the formation and leaves the leader's tab for a child that has no terminal", async () => {
+    await openList({ formation_list: withChildren(), formation_children: [formationChild("old-one", "done", { handle: null })] }, null);
+    await $(CHILD("old-one")).click();
+    expect(await pressedRows()).toEqual(["mail-summary"]);
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("lists the children of a formation of a saved environment as it lists those of this Mac", async () => {
+    const saved = formationList([formationEntry("remote-work", { environment: "dev-server", repos: [], children: [listedChild("r-child", "working", { repo: "wonder-api", branch: "r-branch", environment: "dev-server", path: "/srv/work/r-child" })] })]);
+    await openList({ formation_list: saved, formation_orchestrator: { environment: "dev-server", handle: "term_orch" }, formation_consents: [formationConsent("dev-server")], formation_children: [formationChild("r-child", "working", { environment: "dev-server" })] }, null);
+    expect(await childRows()).toEqual(["r-child" + "wonder-api ・ r-branch"]);
+    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["1"]);
+    await $(CHILD("r-child")).click();
+    expect(await pressedRows()).toEqual(["remote-work"]);
+    await expect($('#formation-tabs-mates [data-child="r-child"]')).toHaveAttribute("aria-selected", "true");
   });
 });
