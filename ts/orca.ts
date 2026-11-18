@@ -21,7 +21,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { currentFormation, deselectFormation } from "./formation-list.js";
+import { childrenFresh, currentFormation, deselectFormation, isChildWorktree, readList } from "./formation-list.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
@@ -243,6 +243,15 @@ const keyOfTab = (t: Tab) => t.handle ?? t.id;
 // The handles of the terminals of the tabs the read holds: the terminals on the screen are known by them.
 const liveHandles = () => new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null || r.handle === null ? [] : [r.handle])), ...mix.terminals.map((t) => t.handle)]);
 
+// Whether a row or a terminal of the list is in the worktree of a formation's child: the list of the projects leaves it out, since the child is under its formation (A-37), and the Orca button still counts it.
+const inChildWorktree = (item: { path: string; environment?: string | null }) => isChildWorktree(item.path, placeOf(item));
+
+// The sessions the list shows under the project `key`: its tabs other than files and diffs, and other than those in a child's worktree.
+const listedTabs = (key: string) => tabsOf(key).filter((t) => !isDocument(t) && !isChildWorktree(t.path, t.environment));
+
+// The number of sessions of the project `key` that the list leaves out, which the number at the right of its row does not count.
+const hiddenIn = (key: string) => mix.rows.filter((r) => r.projectKey === key && inChildWorktree(r)).length + mix.terminals.filter((t) => t.projectKey === key && inChildWorktree(t)).length;
+
 // The tabs of the project `key`: its Claude sessions and its plain terminals, in the order they were first seen.
 function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
@@ -390,7 +399,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
     e.preventDefault();
     // The first session of the project (A-40). A selected project's terminal is in the work pane, and a project with no session, or a session with no terminal, has none to show.
     // Read at the press: the row is not drawn again when its first session changes.
-    const first = tabsOf(key).filter((x) => !isDocument(x))[0];
+    const first = listedTabs(key)[0];
     if (key === pickedProject() || first === undefined || first.handle === null) return;
     openPeek(key, first.id, key);
     syncPeek();
@@ -436,14 +445,20 @@ function trackWorking() {
     if (projectKey !== null) opened.add(projectKey);
   }
   const now = new Map<string, Set<string>>();
+  // The projects whose work is a child's alone, which the list does not show: they do not open for it.
+  const childWork = new Set<string>();
   for (const r of mix.rows) {
     if (r.status !== "working") continue;
+    if (inChildWorktree(r)) {
+      childWork.add(r.projectKey);
+      continue;
+    }
     const ids = now.get(r.projectKey) ?? new Set<string>();
     ids.add(r.paneKey ?? `${r.repo}/${r.branch}`);
     now.set(r.projectKey, ids);
   }
   // A project whose icon works with no working Claude row: its own id, which no pane key is.
-  for (const p of mix.projects) if (p.status === "working" && !now.has(p.key)) now.set(p.key, new Set([`project:${p.key}`]));
+  for (const p of mix.projects) if (p.status === "working" && !now.has(p.key) && !childWork.has(p.key)) now.set(p.key, new Set([`project:${p.key}`]));
   const keys = mix.projects.map((p) => p.key).filter((k) => now.has(k));
   const kept = workingOrder.filter((k) => keys.includes(k));
   for (const k of keys) if ([...now.get(k)!].some((id) => !workingIds.get(k)?.has(id))) opened.add(k);
@@ -491,7 +506,7 @@ function cursorKey(rows = visibleRows(matcher())) {
 
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, r.sessions, placeOf(r), openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => !isDocument(t)), r.key === on, re));
+  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, Math.max(0, r.sessions - hiddenIn(r.key)), placeOf(r), openTabs.get(r.key) ?? listedTabs(r.key), r.key === on, re));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
@@ -499,10 +514,10 @@ function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, o
 function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
-  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => !isDocument(t))]));
+  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, listedTabs(k)]));
   const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.environment])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
-  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p)];
+  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions - hiddenIn(p.key), placeOf(p)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
@@ -1195,16 +1210,19 @@ function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
   const item = (label: string, icon: string, pick: () => void) => ({ label, color: "var(--accent)", icon, current: false, pick });
   openMenu(anchor, [
-    item("Claude を起動", CLAUDE_SVG, () => chooseWorktree(anchor, (w) => start("claude", w))),
-    item("ターミナルを開く", TERMINAL_SVG, () => chooseWorktree(anchor, (w) => start("terminal", w))),
-    item("スクラッチパッド", SCRATCHPAD_SVG, () => chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w)))),
+    item("Claude を起動", CLAUDE_SVG, () => void chooseWorktree(anchor, (w) => start("claude", w))),
+    item("ターミナルを開く", TERMINAL_SVG, () => void chooseWorktree(anchor, (w) => start("terminal", w))),
+    item("スクラッチパッド", SCRATCHPAD_SVG, () => void chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w)))),
   ]);
 }
 
-// A project with one worktree acts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
-function chooseWorktree(anchor: Element, act: (worktree: OrcaWorktree) => void) {
+// A project with one worktree acts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there). The worktrees of the formations' children are not among them (A-16, A-37); the list of the formations is read first when it is not recent.
+async function chooseWorktree(anchor: Element, act: (worktree: OrcaWorktree) => void) {
   if (view === null || projectKey === null) return;
-  const mine = mix.worktrees.filter((w) => w.projectKey === projectKey);
+  const from = projectKey;
+  if (!childrenFresh()) await readList();
+  if (view === null || projectKey !== from) return;
+  const mine = mix.worktrees.filter((w) => w.projectKey === projectKey && !inChildWorktree(w));
   if (mine.length === 1) act(mine[0]);
   else openWorktreeDialog(anchor, mine, null, act);
 }

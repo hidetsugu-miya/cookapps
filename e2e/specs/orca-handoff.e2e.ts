@@ -8,12 +8,15 @@ import {
   composerLayout,
   count,
   fire,
+  formationEntry,
+  formationList,
   handoffSummary,
   heightOf,
   holds,
   huge,
   image,
   inbox,
+  listedChild,
   mock,
   note,
   onceId,
@@ -349,6 +352,17 @@ describe("orca handoff", () => {
     await worktreeRow("default").click();
     await expect($(`${MAIL.pane} .ho-name`)).not.toBeDisplayed();
     await expect($(`${MAIL.pane} .ho-fresh`)).not.toBeDisplayed();
+  });
+
+  it("leaves the worktree of a formation's child out of the menu of the worktree chip, and offers the others (A-9, #947)", async () => {
+    const list = [orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b", branch: "fix-b" }), orcaWorktree("example-app", "feat/c", { path: "/work/example-app-c", branch: "child-c" }), ...worktrees()];
+    const children = formationList([formationEntry("formation", { children: [listedChild("child-c", "working", { repo: "example-app", branch: "feat/c", path: "/work/example-app-c" })] })]);
+    await openMail({ orca_overview: orcaOverview(sample(), list), formation_list: children });
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    await $(`${MAIL.pane} .ho-worktree`).click();
+    await browser.waitUntil(async () => (await menuRows()).length > 0);
+    expect(await menuRows()).toEqual(["default / feat/a", "fix-b / feat/b", "新規作成"]);
   });
 
   it("lists the worktrees of the project with the branch under the name, the own folder first and 新規作成 last, narrows them by name or branch, and hands over in the one chosen", async () => {

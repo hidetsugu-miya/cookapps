@@ -12,7 +12,7 @@ import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
 import { CHEVRON_SVG, DELETE_SVG, FOLDER_SVG, FORMATION_NEW_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { type MenuItem, openMenu } from "./menu.js";
-import { statusIcon } from "./orca.js";
+import { redrawOrca, statusIcon } from "./orca.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
 
@@ -35,7 +35,13 @@ export const formationEnvironment = (name: string) => formations.find((f) => f.n
 // The last read; a read that failed keeps it and says why in `failure`.
 let formations: FormationEntry[] = [];
 let failure: string | null = null;
-let reading = false;
+let inflight: Promise<void> | null = null;
+// When the last read that worked ended (epoch milliseconds; 0: none yet).
+let readAt = 0;
+// The worktrees of the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac. The sessions of the projects and the choices of a worktree leave them out (A-8, A-9, A-16).
+let childPlaces = new Set<string>();
+// How long a read stays fresh for the choices of a worktree; it is the period of the Orca list while the screen is shown.
+const FRESH_MS = 10_000;
 // Counts the formations made by this screen: a read that began before one was made does not know it, and its answer is dropped.
 let made = 0;
 // What the list shows now; it is drawn again only when the key changes.
@@ -54,10 +60,32 @@ let deleteFailure: string | null = null;
 // What a deletion that worked told that is no failure: the branches that Orca kept for the commits no remote has.
 let deleteNotice: string | null = null;
 
-// Reads the formations now. One call at a time; a hidden window reads nothing.
-export async function readList() {
-  if (reading || document.hidden) return;
-  reading = true;
+const placeKey = (environment: string | null | undefined, path: string) => `${environment ?? LOCAL}\n${path}`;
+
+// Whether the worktree at `path` on the PC `environment` (null or none: this Mac; else the saved environment's name) is a launched child's, by the last read (A-37).
+export const isChildWorktree = (path: string, environment: string | null | undefined) => childPlaces.has(placeKey(environment, path));
+
+// Holds the worktrees of the children of `formations`; the screens that leave them out are drawn again when they changed.
+function holdChildren() {
+  const next = new Set(formations.flatMap((f) => f.children.map((c) => placeKey(c.environment, c.path))));
+  const changed = next.size !== childPlaces.size || [...next].some((k) => !childPlaces.has(k));
+  childPlaces = next;
+  if (changed) redrawOrca();
+}
+
+// Whether the last read is recent enough for a choice of a worktree to leave the children out of it.
+export const childrenFresh = () => Date.now() - readAt < FRESH_MS;
+
+// Reads the formations now. One call at a time (a call while one is on its way waits for it); a hidden window reads nothing.
+export function readList(): Promise<void> {
+  if (document.hidden) return Promise.resolve();
+  inflight ??= load().finally(() => {
+    inflight = null;
+  });
+  return inflight;
+}
+
+async function load() {
   let read = false;
   const before = made;
   try {
@@ -66,11 +94,11 @@ export async function readList() {
       formations = answer.formations;
       failure = answer.readError;
       read = true;
+      readAt = Date.now();
+      holdChildren();
     }
   } catch (e) {
     failure = String(e);
-  } finally {
-    reading = false;
   }
   // The shown formation left the list: its flow is read no more, and none is shown.
   if (read && current !== null && !formations.some((f) => f.name === current)) choose(null);
@@ -83,6 +111,7 @@ function added(entry: FormationEntry) {
   deleteFailure = null;
   deleteNotice = null;
   formations = [...formations.filter((f) => f.name !== entry.name), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  holdChildren();
   choose(entry.name);
   void readList();
 }
@@ -117,6 +146,7 @@ async function remove(name: string, force: boolean, shown: FormationShown[]) {
   // A read that began before the deletion still lists it: its answer is dropped.
   made++;
   formations = formations.filter((f) => f.name !== name);
+  holdChildren();
   // The shown formation is deleted: none is shown, and the read of the flow of the deleted one stops.
   if (current === name) choose(null);
   onRemoved(name);
