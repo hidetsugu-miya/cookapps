@@ -141,7 +141,7 @@ fn start_badge_clock(app: AppHandle) {
 /// What to do with a navigation of the webview or one of its frames.
 #[derive(Debug, PartialEq)]
 enum Navigation {
-    /// The app's own page, or a frame's `about:srcdoc`.
+    /// The app's own page, a frame's `about:srcdoc`, or the preview server of A-31 on its running port (the frame of the HTML preview).
     Allow,
     /// A link of a mail body: handed to the default browser.
     Browser,
@@ -151,8 +151,12 @@ enum Navigation {
 // wry asks about the navigations of every frame, not only the top window's, and cannot tell a click from a load.
 // A WKWebView check found no load without a click that gets here: a mail's nested iframe, frame, object, embed (stopped by the CSP)
 // and meta refresh (stopped by the sandbox) never reached the delegate.
-fn navigation_of(url: &tauri::Url) -> Navigation {
+fn navigation_of(url: &tauri::Url, preview_port: Option<u16>) -> Navigation {
     match (url.scheme(), url.host_str()) {
+        // The frame that previews an HTML file loads from the server of A-31, on its running port alone.
+        ("http", Some("127.0.0.1")) if preview_port.is_some() && url.port() == preview_port => {
+            Navigation::Allow
+        }
         // Only the mail frames' own document; any other about: page would blank the window or a frame.
         ("about", _) if url.path() == "srcdoc" => Navigation::Allow,
         ("tauri", Some("localhost")) => Navigation::Allow,
@@ -170,7 +174,7 @@ fn navigation_of(url: &tauri::Url) -> Navigation {
 fn navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("navigation")
         .on_navigation(|webview, url| {
-            match navigation_of(url) {
+            match navigation_of(url, orca_preview::running_port()) {
                 Navigation::Allow => return true,
                 Navigation::Browser => {
                     if let Err(e) = webview.opener().open_url(url.as_str(), None::<&str>) {
@@ -383,6 +387,7 @@ pub fn run() {
             orca_files::orca_file_move,
             orca_files::orca_file_download,
             orca_preview::orca_file_open_in_browser,
+            orca_preview::orca_file_preview_url,
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,
             orca_files::orca_remote_branches,
@@ -533,7 +538,7 @@ mod tests {
             "tauri://localhost",
             "about:srcdoc",
         ] {
-            assert_eq!(navigation_of(&url(ok)), Navigation::Allow, "{ok}");
+            assert_eq!(navigation_of(&url(ok), None), Navigation::Allow, "{ok}");
         }
     }
 
@@ -545,7 +550,7 @@ mod tests {
             "HTTPS://example.com/",
             "https://tauri.localhost.example.com/",
         ] {
-            assert_eq!(navigation_of(&url(web)), Navigation::Browser, "{web}");
+            assert_eq!(navigation_of(&url(web), None), Navigation::Browser, "{web}");
         }
     }
 
@@ -560,7 +565,7 @@ mod tests {
             "ftp://example.com/",
             "about:blank",
         ] {
-            assert_eq!(navigation_of(&url(bad)), Navigation::Cancel, "{bad}");
+            assert_eq!(navigation_of(&url(bad), None), Navigation::Cancel, "{bad}");
         }
     }
 
@@ -571,6 +576,36 @@ mod tests {
         } else {
             Navigation::Browser
         };
-        assert_eq!(navigation_of(&url("http://tauri.localhost/")), expected);
+        assert_eq!(
+            navigation_of(&url("http://tauri.localhost/"), None),
+            expected
+        );
+    }
+
+    #[test]
+    fn the_preview_server_is_allowed_on_its_running_port_alone() {
+        let port = Some(4100);
+        assert_eq!(
+            navigation_of(&url("http://127.0.0.1:4100/tok/a.html"), port),
+            Navigation::Allow
+        );
+        for other in [
+            "http://127.0.0.1:4101/tok/a.html",
+            "http://127.0.0.1/tok/a.html",
+            "https://127.0.0.1:4100/tok/a.html",
+            "http://localhost:4100/tok/a.html",
+            "http://127.0.0.2:4100/tok/a.html",
+        ] {
+            assert_eq!(
+                navigation_of(&url(other), port),
+                Navigation::Browser,
+                "{other}"
+            );
+        }
+        // With no server running, nothing on 127.0.0.1 is allowed.
+        assert_eq!(
+            navigation_of(&url("http://127.0.0.1:4100/tok/a.html"), None),
+            Navigation::Browser
+        );
     }
 }

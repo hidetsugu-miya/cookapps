@@ -10,7 +10,7 @@
   "app": {
     "withGlobalTauri": true,
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self'"
+      "csp": "default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self' http://127.0.0.1:*"
     },
     "windows": [
       { "title": "つなぎAI", "width": 1200, "height": 820, "dragDropEnabled": false, "titleBarStyle": "Overlay", "hiddenTitle": true, "trafficLightPosition": { "x": 9, "y": 20 } }

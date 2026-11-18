@@ -464,6 +464,8 @@ export interface Commands {
   orca_file_download: { args: { path: string; relative: string; environment: string | null }; result: string | null };
   // A-31: opens the HTML file `relative` of the worktree in the default browser of this PC, from the server of the app. It answers nothing: the address is never given to the page.
   orca_file_open_in_browser: { args: { path: string; relative: string; environment: string | null }; result: null };
+  // A-31: starts the same server and answers the address of the HTML file `relative` of the worktree, for the preview frame of the editor only.
+  orca_file_preview_url: { args: { path: string; relative: string; environment: string | null }; result: string };
   // A-18: the settings of the editor: how long after the typing stops the file is saved.
   editor_settings: { args: undefined; result: EditorSettings };
   // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.
