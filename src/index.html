@@ -722,13 +722,17 @@
       </aside>
       </div>
     </section>
-    <section id="slack-compose" hidden>
+    <section id="slack-compose" data-mode="claude" hidden>
       <header data-tauri-drag-region="deep">
         <button id="slack-back" class="text-btn back-text">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>メールに戻る
         </button>
         <h1>Slack に貼る</h1>
         <span id="slack-subject" class="header-sub"></span>
+        <div id="slack-mode" role="group" aria-label="モード">
+          <button id="slack-mode-claude" class="text-btn" type="button" aria-pressed="true">Claude</button>
+          <button id="slack-mode-manual" class="text-btn" type="button" aria-pressed="false">手動</button>
+        </div>
       </header>
       <p id="slack-error" class="pending fail" role="alert" hidden></p>
       <div id="slack-main" class="split-main">
@@ -750,14 +754,18 @@
             <button id="slack-post" class="text-btn primary" disabled>投稿</button>
           </div>
         </section>
-        <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
-        <aside id="slack-chat" class="chat-pane split-chat" aria-label="Claude">
+        <aside id="slack-chat" class="chat-pane" aria-label="Claude">
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
             <button id="slack-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
           </div>
           <div id="slack-log" class="chat-log"></div>
           <p id="slack-chat-note" class="chat-note" hidden></p>
+        </aside>
+        <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="行うことの幅" aria-valuemin="20" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
+        <aside id="slack-brief" aria-label="行うこと">
+          <div id="slack-brief-head"><span class="prompt-label">行うこと</span></div>
+          <ol id="slack-brief-list"></ol>
         </aside>
       </div>
     </section>

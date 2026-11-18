@@ -1,6 +1,8 @@
-// The Slack compose screen, opened by "Slack に貼る" in the thread's header. Two panes: on the left, at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it)
-// with "元の内容に戻す" above it, under it the things to do ("行うこと": numbered cards, each one post, with where it goes and what it posts, and a plus that adds one), and "投稿" at the bottom, which sends them from the top down;
-// on the right a conversation with Claude that proofreads the original message and can write the things to do. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
+// The Slack compose screen, opened by "Slack に貼る" in the thread's header. It has two modes, switched at the right of the header (S-27); it always opens in Claude mode.
+// Manual mode: at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it) with "元の内容に戻す" above it, under it the things to do
+// ("行うこと": numbered cards, each one post, with where it goes and what it posts, and a plus that adds one), and "投稿" at the bottom, which sends them from the top down.
+// Claude mode: a conversation with Claude that proofreads the original message and can write the things to do, and a narrow column of the things to do (number, destination and the head of the text).
+// Both show one draft, so a switch keeps it. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
 import type { Channel } from "./bindings/Channel";
 import type { Recent } from "./bindings/Recent";
 import type { SlackAction } from "./bindings/SlackAction";
@@ -39,6 +41,8 @@ interface Draft {
 // `posted` is set once it was posted, and it is never sent again: its `thread` is the thread a later action continues, the thread it replied in or else the time of its own message (empty when Slack answered none).
 type Action = SlackAction;
 let draft: Draft | null = null;
+// Which of the two parts of the screen is shown. It is not kept: every opening starts in Claude mode.
+type Mode = "claude" | "manual";
 
 // From the last `slack_load`: the picker lists them.
 let workspaces: Workspace[] = [];
@@ -238,6 +242,27 @@ function drawActions() {
     }),
   );
   $<HTMLButtonElement>("slack-add").disabled = !d || posting || pendingOf(d).pending.length >= ACTIONS_MAX;
+  drawBrief();
+}
+
+// The things to do as the narrow column of Claude mode draws them: the number, where it goes, and the head of what it posts (the CSS cuts it to two lines).
+function drawBrief() {
+  const d = draft;
+  $("slack-brief-list").replaceChildren(
+    ...(d?.actions ?? []).map((a, index) => {
+      const item = tag("li", a.posted ? "slack-brief-item posted" : "slack-brief-item");
+      const main = tag("div", "slack-brief-main");
+      main.append(tag("span", "slack-brief-where", whereLabel(a)), tag("span", "slack-brief-text", a.paste ? d!.text : a.text));
+      item.append(tag("span", "slack-no", String(index + 1)), main);
+      return item;
+    }),
+  );
+}
+
+// Shows one of the two parts of the screen; nothing of the draft changes.
+function setMode(mode: Mode) {
+  $("slack-compose").dataset.mode = mode;
+  for (const m of ["claude", "manual"] as const) $(`slack-mode-${m}`).setAttribute("aria-pressed", String(m === mode));
 }
 
 // The preview is shown, or the field it opens (pressing the preview opens it, leaving the field closes it).
@@ -250,6 +275,7 @@ function setEditing(on: boolean) {
 export function refreshSlackCompose() {
   const d = draft;
   $("slack-preview").textContent = d?.text ?? "";
+  drawBrief();
   $<HTMLTextAreaElement>("slack-body").disabled = posting;
   const { pending, ready } = pendingOf(d);
   $("slack-post").textContent = pending.length > 1 ? `${pending.length} 件を投稿` : "投稿";
@@ -430,6 +456,7 @@ async function openCompose() {
   $("slack-error").hidden = true;
   drawActions();
   setEditing(false);
+  setMode("claude");
   // The selects in the frame of the request field need the model settings.
   showModelSlot("slack-model");
   showComposeScreen();
@@ -486,6 +513,8 @@ async function post() {
 export function initSlackCompose() {
   $("thread-slack").onclick = openCompose;
   $("slack-back").onclick = back;
+  $("slack-mode-claude").onclick = () => setMode("claude");
+  $("slack-mode-manual").onclick = () => setMode("manual");
   $("slack-post").onclick = post;
   // A new thing to do goes on in the thread of the one before it, with a text of its own that starts empty.
   $("slack-add").onclick = () => {
@@ -533,7 +562,8 @@ export function initSlackCompose() {
   // The form is the shared composer's; the field is three lines high and scrolls inside.
   $("slack-chat-note").after(createComposer({ prefix: "slack", label: "Claude への依頼" }));
   chat.init();
-  initSplit($("slack-main"), $("slack-split"));
+  // The divider sets the width of the column of the things to do, a fifth to a half of the screen body.
+  initSplit($("slack-main"), $("slack-split"), { min: 1 / 5, max: 1 / 2, initial: 1 / 3, property: "--brief-w" });
   drawActions();
   refreshSlackCompose();
 }
