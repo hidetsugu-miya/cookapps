@@ -71,6 +71,6 @@ Your final message is Markdown.
 - `## {section heading}`: one for each section, holding its final draft, verbatim and nothing else.
 - `## 確かめたい点`: only when natural-japanese or yomiyasu raised a question and `body_only` is `false`. Each question, verbatim.
 - `## 事実の確かめ`: only when yomiyasu wrote that section and `body_only` is `false`. That section, verbatim.
-- `## 実行した推敲`: always, last, in English. One line each for unslop, natural-japanese and yomiyasu: `ran`, or `skipped` with the reason (no Japanese, caller asked to skip, or the skill is not installed).
+- `## 実行した推敲`: always, last, in English. One line each for unslop, natural-japanese and yomiyasu. The unslop line is always `ran`, because Step 1 always runs. The natural-japanese and yomiyasu lines are `ran`, or `skipped` with the reason (no Japanese, caller asked to skip (natural-japanese only), or the skill is not installed).
 
 Do not return the original text or a list of what changed.
