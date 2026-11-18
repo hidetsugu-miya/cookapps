@@ -548,7 +548,7 @@ describe("orca: files and editor (A-18)", () => {
     browser.execute(() => {
       const b = document.querySelector<HTMLElement>(".orca-edit-line")!;
       const r = b.getBoundingClientRect();
-      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: b.nextElementSibling === document.querySelector(".orca-edit-hl") };
+      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: !!(b.compareDocumentPosition(document.querySelector(".orca-edit-hl")!) & Node.DOCUMENT_POSITION_FOLLOWING) };
     });
   // The box of the letter at `index` of the text, drawn by the layer (a plain text file: the layer is one text node).
   const glyph = (index: number) =>

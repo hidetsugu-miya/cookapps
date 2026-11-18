@@ -30,8 +30,8 @@ import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, showEditors } from "./orca-editor.js";
-import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, resolveServers, showEditors } from "./orca-editor.js";
+import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -218,8 +218,9 @@ interface Tab {
   where: string;
   // Where the tab is: null for this machine, else the name of the saved environment. A terminal's comes from its row, a file's and a diff's from the project they were opened in.
   environment: string | null;
-  // A file outside the worktree that a definition named (A-34): the tab has a lock and `gem`, and the file is read only.
+  // A file outside the worktree that a definition named (A-34): the tab has a lock, and the file is read only. `gem` marks one that is a Ruby file.
   outside?: boolean;
+  gem?: boolean;
 }
 
 // A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name.
@@ -272,7 +273,7 @@ function tabsOf(key: string): Tab[] {
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target);
@@ -559,7 +560,7 @@ function tabNode(t: Tab, selected: boolean) {
     wrap.dataset.file = "true";
     if (t.outside) {
       wrap.dataset.outside = "true";
-      select.append(tag("span", "orca-tab-gem", "gem"));
+      if (t.gem) select.append(tag("span", "orca-tab-gem", "gem"));
     }
     if (dirtyIds().has(t.id)) {
       const unsaved = tag("span", "orca-tab-dirty");
@@ -899,12 +900,15 @@ function draw() {
   drawBadge();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();
-  if (!listShown()) return;
+  if (!listShown()) return pauseLsp();
   drawNotice();
   drawSearch();
   drawFeed();
   // A formation takes the place of the work pane: the terminals of the pane are hidden, and nothing else of it is drawn.
-  if (!shown()) return syncTerminal();
+  if (!shown()) {
+    pauseLsp();
+    return syncTerminal();
+  }
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawWork(tabs);
   drawFiles(tabs);
@@ -1432,8 +1436,8 @@ export function initOrca() {
   initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
-  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server) });
-  initLsp();
+  initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
+  initLsp({ changed: ({ target, project }) => resolveServers(target, project) });
   initDefinition({ open: openPlace });
   initOrcaFiles({ open: (relative) => openFile(relative), diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).

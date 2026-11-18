@@ -131,6 +131,7 @@ let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
 let definition: (query: DefinitionQuery) => void = () => {};
 let serve: (target: string | null, project: string, path: string, server: string) => void = () => {};
+let mayAsk: (target: string | null, path: string, server: string) => boolean = () => true;
 
 export const nameOf = (relative: string) => relative.slice(relative.lastIndexOf("/") + 1);
 
@@ -502,16 +503,40 @@ function serverOf(f: EditorFile) {
   return f.server;
 }
 
+// The file outside the worktree, as the editor takes a file (read only, with the language that Rust gave it by its name).
+async function readOutside(f: EditorFile) {
+  const read = await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: serverOf(f), path: f.relative });
+  return { content: read.text, crlf: false, signature: "", language: read.language, highlight: read.highlight };
+}
+
+// Looks for the server of the project that takes the language of the file (A-34): with none the Command key and the right button ask nothing, and one that is found is started when the settings say so.
+function lookServer(f: EditorFile) {
+  void invoke("lsp_server_for", { environment: f.target, project: f.project, language: f.language }).then(
+    (server) => {
+      if (f.server !== server) hideLink(f);
+      f.server = server;
+      if (server !== null) serve(f.target, f.project, f.path, server);
+    },
+    () => {},
+  );
+}
+
+// The files of the project that are open look for their server again, once its settings changed (a server renamed, or a language taken by another).
+export function resolveServers(target: string | null, project: string) {
+  for (const f of filesOf(target, project)) if (!f.outside && f.read === "ready") lookServer(f);
+}
+
 async function load(f: EditorFile) {
   try {
-    const text = f.outside
-      ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: serverOf(f), path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
-      : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
+    const text = f.outside ? await readOutside(f) : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.edits++;
     f.highlight = text.highlight;
     f.language = text.language;
-    f.markdown = text.language === "markdown";    paint(f);
+    // A file outside the worktree is marked `gem` when it is a Ruby file.
+    if (f.outside) f.state.textContent = text.language === "ruby" ? "gem" : "";
+    f.markdown = text.language === "markdown";
+    paint(f);
     numberLines(f, f.area.value);
     f.crlf = text.crlf;
     f.signature = text.signature;
@@ -519,14 +544,7 @@ async function load(f: EditorFile) {
     f.area.disabled = false;
     setMode(f, f.mode);
     // The server that takes the file's language is looked for once the text is shown; with none the Command key and the right button ask nothing. A file of a worktree starts that server (A-34); a file outside the worktree belongs to a server that is there already.
-    if (!f.outside)
-      void invoke("lsp_server_for", { environment: f.target, project: f.project, language: f.language }).then(
-        (server) => {
-          f.server = server;
-          if (server !== null) serve(f.target, f.project, f.path, server);
-        },
-        () => {},
-      );
+    if (!f.outside) lookServer(f);
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -644,7 +662,8 @@ function waitLink(f: EditorFile) {
 async function probeLink(f: EditorFile, x: number, y: number, seq: number) {
   const offset = offsetAt(f, x, y);
   const server = f.server;
-  if (offset === null || server === null) return;
+  // A server that is indexing or stopped can only refuse: nothing is sent to it.
+  if (offset === null || server === null || !mayAsk(f.target, f.path, server)) return;
   const text = f.area.value;
   const { lineStart, line, character, lineText } = placeOf(text, offset);
   try {
@@ -793,14 +812,13 @@ function create(id: string, target: string | null, project: string, path: string
   modes.hidden = true;
   modes.append(sourceButton, richButton);
   const where = tag("span", "orca-edit-path", relative);
-  // A file outside the worktree is read only: a lock before its path, and `gem` where the state of a save is.
+  // A file outside the worktree is read only: a lock before its path, and `gem` (for a Ruby file, once it is read) where the state of a save is.
   if (outside) {
     const lock = tag("span", "orca-edit-lock");
     lock.setAttribute("role", "img");
     lock.setAttribute("aria-label", "読み取り専用");
     lock.innerHTML = LOCK_SVG;
     head.append(lock);
-    state.textContent = "gem";
     state.dataset.state = "outside";
   }
   head.append(where, state, modes);
@@ -1017,11 +1035,12 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
   }
 }
 
-export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; serve: (target: string | null, project: string, path: string, server: string) => void }) {
+export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void; definition: (query: DefinitionQuery) => void; serve: (target: string | null, project: string, path: string, server: string) => void; mayAsk: (target: string | null, path: string, server: string) => boolean }) {
   changed = on.changed;
   fail = on.error;
   definition = on.definition;
   serve = on.serve;
+  mayAsk = on.mayAsk;
   document.addEventListener("selectionchange", placeBands);
   // The Command key pressed over a name that the mouse is on starts the wait; its release, and the window losing the focus, take every underline away.
   document.addEventListener("keydown", (e) => {

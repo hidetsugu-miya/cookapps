@@ -414,8 +414,8 @@ export interface Commands {
   lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
   // A-34: the name of the server of the project `project` of `environment` that takes `language` (a language of A-21), null when none does.
   lsp_server_for: { args: { environment: string | null; project: string; language: string }; result: string | null };
-  // A-34: how the server `server` is started in `worktree` of the project `project` of `environment` (null: this machine): read from the worktree just now (a saved environment's through the ssh Host of its settings), with the settings of that server applied.
-  lsp_launch: { args: { environment: string | null; project: string; worktree: string; server: string }; result: LspLaunch };
+  // A-34: how each of the servers `servers` is started in `worktree` of the project `project` of `environment` (null: this machine), in their order: read from the worktree just now, once for all of them (a saved environment's through the ssh Host of its settings), with the settings of each server applied.
+  lsp_launches: { args: { environment: string | null; project: string; worktree: string; servers: string[] }; result: LspLaunch[] };
   // A-34: starts the server `server` for `worktree` of the project `project` of `environment` (null: this machine) and answers its state (`indexing`). A server that is there and not stopped is left as it is; a stopped one is started again. How it is started is read from the worktree by Rust; a failure of that or of the process is the state `stopped` with its message, told by the event `lsp-status` (`LspStatusEvent`).
   lsp_start: { args: { environment: string | null; project: string; worktree: string; server: string }; result: LspStatus };
   // A-34: stops the server `server` of `worktree` and starts it again (the restart of the screen), as `lsp_start` does, and answers its state (`indexing`). The places outside the worktree that the stopped server gave stay known to the new one.

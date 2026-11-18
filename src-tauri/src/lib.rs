@@ -394,7 +394,7 @@ pub fn run() {
             orca_files::editor_settings_set,
             lsp::lsp_settings,
             lsp::lsp_settings_set,
-            lsp::lsp_launch,
+            lsp::lsp_launches,
             lsp::lsp_server_for,
             lsp::server::lsp_start,
             lsp::server::lsp_stop,

@@ -43,7 +43,7 @@ fn up_result(ran: &Ran) -> Result<(), String> {
     }
 }
 
-/// Starts the container of the server `server` for the worktree `worktree` of the project `project` of `environment`. `read` runs the commands that decide the way (as `lsp::launch_for` does) and `up` runs the start; each is given the route, the worktree, the command and the most bytes to keep.
+/// Starts the container of the server `server` for the worktree `worktree` of the project `project` of `environment`. `read` runs the commands that decide the way (as `lsp::launches_for` does) and `up` runs the start; each is given the route, the worktree, the command and the most bytes to keep.
 fn start_container(
     dir: &Path,
     environment: Option<&str>,

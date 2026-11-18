@@ -116,7 +116,7 @@ function rowNode(d: DefinitionTab, row: Row, index: number) {
   names.append(tag("span", "orca-def-file", `${row.location.outside ? place.file : row.location.path}:${place.line}`));
   if (row.location.outside) names.append(tag("span", "orca-def-place", place.place));
   bar.append(names);
-  if (row.location.outside) bar.append(tag("span", "orca-def-gem", "gem"));
+  if (row.location.outside && place.language === "ruby") bar.append(tag("span", "orca-def-gem", "gem"));
   const button = tag("button", "text-btn orca-def-open", "開く");
   button.type = "button";
   button.onclick = () => open({ definition: d.id, query: d.query, path: row.location.path, outside: row.location.outside, line: row.location.line, character: row.location.character });
@@ -136,31 +136,39 @@ function draw(d: DefinitionTab) {
   d.list.replaceChildren(...parts);
 }
 
-// Reads the lines around the definition of the row, and draws them in the row. An answer for an older question, or for a tab that was closed, is dropped.
-async function readPreview(d: DefinitionTab, row: Row, seq: number) {
+// Reads the file of the rows once (they are places of one file), and draws the lines around the definition of each row in it. An answer for an older question, or for a tab that was closed, is dropped.
+async function readPreview(d: DefinitionTab, rows: Row[], seq: number) {
   const q = d.query;
-  const hit = row.location.line + 1;
-  let next: Preview;
+  const { location } = rows[0];
+  let all: string[] | null = null;
+  let error = "";
   try {
-    const text = row.location.outside
-      ? (await invoke("lsp_read_outside", { environment: q.target, project: q.project, worktree: q.path, server: q.server, path: row.location.path })).text
-      : (await invoke("orca_file_read", { path: q.path, relative: row.location.path, environment: q.target })).content;
-    const all = text.split("\n").map((l) => l.replace(/\r$/, ""));
-    const from = Math.max(0, hit - 1 - AROUND);
-    next = { read: "ready", first: from + 1, hit, lines: all.slice(from, Math.min(all.length, hit + AROUND)), error: null };
+    const text = location.outside
+      ? (await invoke("lsp_read_outside", { environment: q.target, project: q.project, worktree: q.path, server: q.server, path: location.path })).text
+      : (await invoke("orca_file_read", { path: q.path, relative: location.path, environment: q.target })).content;
+    all = text.split("\n").map((l) => l.replace(/\r$/, ""));
   } catch (e) {
-    next = { read: "failed", first: hit, hit, lines: [], error: String(e) };
+    error = String(e);
   }
   if (seq !== d.seq) return;
-  row.preview = next;
-  drawPreview(row);
+  for (const row of rows) {
+    const hit = row.location.line + 1;
+    const from = Math.max(0, hit - 1 - AROUND);
+    row.preview = all === null ? { read: "failed", first: hit, hit, lines: [], error } : { read: "ready", first: from + 1, hit, lines: all.slice(from, Math.min(all.length, hit + AROUND)), error: null };
+    drawPreview(row);
+  }
 }
 
-// Reads the places of the tab, `READS` at a time.
+// Reads the places of the tab, `READS` files at a time: the places of one file are read with one read.
 async function readPreviews(d: DefinitionTab, seq: number) {
-  const queue = [...d.rows];
+  const files = new Map<string, Row[]>();
+  for (const row of d.rows) {
+    const key = JSON.stringify([row.location.outside, row.location.path]);
+    files.set(key, [...(files.get(key) ?? []), row]);
+  }
+  const queue = [...files.values()];
   const worker = async () => {
-    for (let row = queue.shift(); row !== undefined && seq === d.seq; row = queue.shift()) await readPreview(d, row, seq);
+    for (let rows = queue.shift(); rows !== undefined && seq === d.seq; rows = queue.shift()) await readPreview(d, rows, seq);
   };
   await Promise.all(Array.from({ length: Math.min(READS, queue.length) }, worker));
 }

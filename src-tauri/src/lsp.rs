@@ -821,16 +821,43 @@ fn plan_for(
     })
 }
 
-/// The way the server `server` is started for `worktree`, read from it by `run` (a command, its folder's route and the most bytes to keep).
-fn launch_for(
+/// The way each of the servers `servers` is started for `worktree`, in their order, read from the worktree once by `run` (a command, its folder's route and the most bytes to keep): the compose configuration is read once, and the `Gemfile.lock` once when a server takes `ruby`. A server that the settings do not have is an error, before anything is run.
+fn launches_for(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     worktree: &str,
-    server: &str,
-    run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
-) -> Result<LspLaunch, String> {
-    plan_for(dir, environment, project, worktree, server, run).map(|planned| planned.launch)
+    servers: &[String],
+    mut run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
+) -> Result<Vec<LspLaunch>, String> {
+    check_worktree(worktree)?;
+    let settings = settings_of(dir, environment, project)?;
+    let chosen = servers
+        .iter()
+        .map(|name| {
+            settings
+                .server(name)
+                .ok_or_else(|| format!("言語サーバー「{name}」の設定がありません"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let route = route_of(environment, project, &settings)?;
+    let inputs = collect(
+        &mut |command, limit| run(&route, worktree, command, limit),
+        worktree,
+        chosen.iter().any(|server| server.takes_ruby()),
+    )?;
+    chosen
+        .into_iter()
+        .map(|server| {
+            // Only a server that takes `ruby` reads the lock (as `plan_for` does for one server).
+            let lock = inputs
+                .gemfile_lock
+                .as_deref()
+                .filter(|_| server.takes_ruby());
+            decide(worktree, inputs.compose.as_deref(), lock)
+                .map(|launch| resolve(launch, server, worktree))
+        })
+        .collect()
 }
 
 /// The settings of the project `project` of `environment` (`None`: this machine): the saved ones, else the unset ones (A-34).
@@ -875,26 +902,26 @@ pub async fn lsp_server_for(
     .map_err(|e| e.to_string())?
 }
 
-/// How the server `server` is started in `worktree` of the project `project` of `environment` (`None`: this machine), read from the worktree just now, with the settings of its repository applied (A-34).
+/// How each of the servers `servers` is started in `worktree` of the project `project` of `environment` (`None`: this machine), in the order of `servers`, read from the worktree just now (once for all of them), with the settings of its repository applied (A-34).
 #[tauri::command]
-pub async fn lsp_launch(
+pub async fn lsp_launches(
     app: AppHandle,
     environment: Option<String>,
     project: String,
     worktree: String,
-    server: String,
-) -> Result<LspLaunch, String> {
-    check_server(&server)?;
+    servers: Vec<String>,
+) -> Result<Vec<LspLaunch>, String> {
+    servers.iter().try_for_each(|server| check_server(server))?;
     check_worktree(&worktree)?;
     check_worktree_of_project(&worktree, environment.as_deref(), &project).await?;
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
-        launch_for(
+        launches_for(
             &dir,
             environment.as_deref(),
             &project,
             &worktree,
-            &server,
+            &servers,
             run_on,
         )
     })
@@ -914,6 +941,26 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tsunagiai-lsp-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// The way of one server, as `launches_for` reads it for a list of one.
+    fn launch_for(
+        dir: &Path,
+        environment: Option<&str>,
+        project: &str,
+        worktree: &str,
+        server: &str,
+        run: impl FnMut(&Route, &str, &str, usize) -> Result<Ran, String>,
+    ) -> Result<LspLaunch, String> {
+        launches_for(
+            dir,
+            environment,
+            project,
+            worktree,
+            &[server.to_owned()],
+            run,
+        )
+        .map(|mut launches| launches.remove(0))
     }
 
     fn bind(source: &str, target: &str) -> Value {
@@ -2243,5 +2290,62 @@ mod tests {
         assert_eq!(got.method, LspMethod::Host);
         assert_eq!(got.command.as_deref(), Some("bundle exec ruby-lsp"));
         assert_eq!(got.mount.as_deref(), Some(WT));
+    }
+
+    #[test]
+    fn launches_for_reads_the_worktree_once_for_every_server_and_keeps_their_order() {
+        let dir = temp_dir("launch-many");
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![server(), typescript()],
+                ..settings()
+            },
+        )
+        .unwrap();
+        let mut commands = Vec::new();
+        let got = launches_for(
+            &dir,
+            None,
+            "repo-1",
+            WT,
+            &["ts".to_owned(), "ruby-lsp".to_owned()],
+            |_, _, command, _| {
+                commands.push(command.to_owned());
+                Ok(if command.contains("Gemfile.lock") {
+                    ran(0, LOCK, "")
+                } else {
+                    ran(0, "", "")
+                })
+            },
+        )
+        .unwrap();
+        // The compose configuration and the lock are read once each, whatever the number of servers.
+        assert_eq!(commands.len(), 2);
+        assert_eq!(got.len(), 2);
+        // The server that does not take ruby does not see the lock: it has no way of its own.
+        assert_eq!(got[0].method, LspMethod::None);
+        assert_eq!(
+            got[0].command.as_deref(),
+            Some("typescript-language-server --stdio")
+        );
+        assert_eq!(got[1].method, LspMethod::Host);
+        // One server that the settings do not have fails the whole read before anything is run.
+        let mut runs = 0;
+        let err = launches_for(
+            &dir,
+            None,
+            "repo-1",
+            WT,
+            &["ts".to_owned(), "gone".to_owned()],
+            |_, _, _, _| {
+                runs += 1;
+                Ok(ran(0, "", ""))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, "言語サーバー「gone」の設定がありません");
+        assert_eq!(runs, 0);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -3,7 +3,7 @@
 //! A server has the name of its entry in the settings of its repository (`lsp::LspServerSettings`), and every command is given it. A server is started by `lsp_start` (or replaced by `lsp_restart`) and stays until `lsp_stop`, the death of its process, or the end of the app (`LspServers::close_all`, from `lib.rs`). One task owns it: it reads how to start it (`lsp::plan_for`), starts the process (`/bin/sh -c`, a `docker compose exec -T` in it, or the `ssh` in front: `spawn_of`), talks LSP over its standard input and output (`session`), and ends when the process does. Whether the screen still needs a server is the screen's to decide: it calls `lsp_stop`.
 //! The state is `indexing` from the start to the end of the progress the server shows (`protocol::Progress`), `running` after it, and `stopped` with a reason when the process is gone. A service of compose whose container does not run is told as `containerDown`, so that the screen can offer to start it; starting the container is not done here. Each change of the state is told by the event `lsp-status` (`LspStatusEvent`, with the server's name), and `lsp_status` answers the state as it is.
 //! A server is stopped by `shutdown` and `exit`, and then by closing its standard input, which ends the server, through `docker compose exec` and `ssh` as well; a process that is still there after a moment is killed.
-//! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which files of its languages changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered.
+//! What a file holds is not kept: `lsp_definition` is given the text of the editor and sends it as the whole text of the file (`didOpen` the first time, `didChange` when it is not the text last sent, found by a hash), and only that hash is kept. The paths that the server answered outside the worktree (a gem) are remembered for each server (`LspServers::outside_way`): they are the only ones that are read from outside the worktree, and the way the server was started (`Way`) is the way they are read. Before each question the app tells the server which files of its languages changed on the disk (`LspServers::refresh`, `watch`), and a file is closed again once its question is answered (but for the one file that the question of the underline keeps open, until another file is asked about by it or the files change on the disk).
 
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
@@ -245,6 +245,8 @@ pub(crate) enum Cmd {
         text: String,
         line: u32,
         character: u32,
+        /// Whether the file stays open once it is answered (the question of the underline, which comes again and again for the same file: `session` keeps one such file open).
+        keep: bool,
         reply: oneshot::Sender<Result<Value, String>>,
     },
     /// Files of the worktree that changed on the disk (`watch::message`): the notice `workspace/didChangeWatchedFiles`, as it is to be sent.
@@ -272,6 +274,22 @@ async fn send<W: AsyncWrite + Unpin>(
     .await
     .map_err(|_| WRITE_TIMEOUT)?
     .map_err(|_| WRITE_FAILED.to_owned())
+}
+
+/// The language id that LSP gives a file (`languageId` of `didOpen`), from the name of A-21 of its language and its path: the names are the same but for `shell` (`shellscript`) and the React files, which A-21 does not tell from plain TypeScript and JavaScript (`typescriptreact`, `javascriptreact`).
+fn language_id(relative: &str, language: &str) -> String {
+    let extension = relative
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, extension)| extension.to_lowercase());
+    match (language, extension.as_deref()) {
+        ("typescript", Some("tsx")) => "typescriptreact",
+        ("javascript", Some("jsx")) => "javascriptreact",
+        ("shell", _) => "shellscript",
+        _ => language,
+    }
+    .to_owned()
 }
 
 fn text_hash(text: &str) -> u64 {
@@ -418,6 +436,8 @@ where
     let mut progress = Progress::default();
     let mut pending: Pending = HashMap::new();
     let mut docs: HashMap<String, (i64, u64)> = HashMap::new();
+    // The one file that a question of the underline keeps open, so that the same text is not sent again at the next one.
+    let mut kept: Option<String> = None;
     loop {
         tokio::select! {
             frame = frames.recv() => {
@@ -441,8 +461,10 @@ where
                     Incoming::Response { id, result } => {
                         if let Some((uri, reply)) = pending.remove(&id) {
                             let _ = reply.send(result);
-                            if let Err(e) = close_unused(writer, &mut docs, &pending, &uri, timing.write).await {
-                                return End::Died(e);
+                            if kept.as_deref() != Some(uri.as_str()) {
+                                if let Err(e) = close_unused(writer, &mut docs, &pending, &uri, timing.write).await {
+                                    return End::Died(e);
+                                }
                             }
                         }
                     }
@@ -476,12 +498,18 @@ where
                 }
                 Some(Cmd::Changed(message)) => {
                     if initialized {
+                        // A file that stayed open is not read again from the disk by the server: it is opened again by the next question, with the text of the editor.
+                        if let Some(old) = kept.take() {
+                            if let Err(e) = close_unused(writer, &mut docs, &pending, &old, timing.write).await {
+                                return End::Died(e);
+                            }
+                        }
                         if let Err(e) = send(writer, &message, timing.write).await {
                             return End::Died(e);
                         }
                     }
                 }
-                Some(Cmd::Definition { uri, language, text, line, character, reply }) => {
+                Some(Cmd::Definition { uri, language, text, line, character, keep, reply }) => {
                     if !initialized {
                         let _ = reply.send(Err(NOT_READY.into()));
                         continue;
@@ -493,7 +521,7 @@ where
                         .map(|(asked, _)| asked.clone())
                         .collect();
                     pending.retain(|_, (_, reply)| !reply.is_closed());
-                    for asked in abandoned {
+                    for asked in abandoned.into_iter().filter(|asked| kept.as_deref() != Some(asked.as_str())) {
                         if let Err(e) = close_unused(writer, &mut docs, &pending, &asked, timing.write).await {
                             return End::Died(e);
                         }
@@ -501,6 +529,16 @@ where
                     if pending.len() >= MAX_PENDING {
                         let _ = reply.send(Err(BUSY.into()));
                         continue;
+                    }
+                    if keep {
+                        if let Some(old) = kept.take().filter(|old| *old != uri) {
+                            if let Err(e) = close_unused(writer, &mut docs, &pending, &old, timing.write).await {
+                                return End::Died(e);
+                            }
+                        }
+                        kept = Some(uri.clone());
+                    } else if kept.as_deref() == Some(uri.as_str()) {
+                        kept = None;
                     }
                     if let Err(e) = sync_document(writer, &mut docs, &uri, &language, &text, timing.write).await {
                         return End::Died(e);
@@ -948,7 +986,7 @@ impl LspServers {
             return Err(TOO_LARGE.into());
         }
         let uri = uri_of(&server_path(&mount, relative)?);
-        let language = orca_language::detect_language(relative, &text).to_owned();
+        let language = language_id(relative, orca_language::detect_language(relative, &text));
         let (reply, answer) = oneshot::channel();
         server
             .commands
@@ -958,6 +996,7 @@ impl LspServers {
                 text,
                 line,
                 character,
+                keep: running_only,
                 reply,
             })
             .map_err(|_| STOPPED)?;
@@ -1344,6 +1383,23 @@ mod tests {
             line: u32,
             character: u32,
         ) -> Result<Value, String> {
+            self.ask(uri, language, text, line, character, false).await
+        }
+
+        /// A question of the underline: the file stays open once it is answered.
+        async fn probe(&self, uri: &str, text: &str) -> Result<Value, String> {
+            self.ask(uri, "ruby", text, 0, 0, true).await
+        }
+
+        async fn ask(
+            &self,
+            uri: &str,
+            language: &str,
+            text: &str,
+            line: u32,
+            character: u32,
+            keep: bool,
+        ) -> Result<Value, String> {
             let (reply, answer) = oneshot::channel();
             self.commands
                 .send(Cmd::Definition {
@@ -1352,6 +1408,7 @@ mod tests {
                     text: text.into(),
                     line,
                     character,
+                    keep,
                     reply,
                 })
                 .unwrap();
@@ -1637,6 +1694,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_file_that_the_underline_asks_about_stays_open_until_another_file_is_asked_or_the_disk_changed(
+    ) {
+        let run = run(Plan::new());
+        run.plan.end.notify_one();
+        run.until_states(2).await;
+        run.probe("file:///app/a.rb", "x = 1\n").await.unwrap();
+        run.probe("file:///app/a.rb", "x = 1\n").await.unwrap();
+        // The text of the editor changed: it is told as a change, not opened again.
+        run.probe("file:///app/a.rb", "x = 2\n").await.unwrap();
+        until_calls(&run, 2 + 5).await;
+        assert_eq!(
+            run.methods()[2..],
+            [
+                "textDocument/didOpen",
+                "textDocument/definition",
+                "textDocument/definition",
+                "textDocument/didChange",
+                "textDocument/definition",
+            ]
+        );
+        // Another file takes its place: the first is closed, and only one is kept.
+        run.probe("file:///app/b.rb", "y\n").await.unwrap();
+        until_calls(&run, 2 + 8).await;
+        assert_eq!(
+            run.methods()[7..],
+            [
+                "textDocument/didClose",
+                "textDocument/didOpen",
+                "textDocument/definition",
+            ]
+        );
+        // A change of the files on the disk closes the kept one before it is told.
+        let notice = crate::lsp::watch::message(
+            "/app",
+            &[crate::lsp::watch::Change {
+                path: "lib/a.rb".into(),
+                kind: 2,
+            }],
+        )
+        .unwrap();
+        run.commands.send(Cmd::Changed(notice)).unwrap();
+        // A question that is not the underline's opens the file again, and closes it once it is answered.
+        run.definition("file:///app/b.rb", "y\n", 0, 0)
+            .await
+            .unwrap();
+        until_calls(&run, 2 + 8 + 5).await;
+        assert_eq!(
+            run.methods()[10..],
+            [
+                "textDocument/didClose",
+                "workspace/didChangeWatchedFiles",
+                "textDocument/didOpen",
+                "textDocument/definition",
+                "textDocument/didClose",
+            ]
+        );
+        run.stop().await;
+    }
+
+    #[test]
+    fn a_language_id_is_the_one_that_lsp_names() {
+        assert_eq!(language_id("a.rb", "ruby"), "ruby");
+        assert_eq!(language_id("src/App.tsx", "typescript"), "typescriptreact");
+        assert_eq!(language_id("src/app.ts", "typescript"), "typescript");
+        assert_eq!(language_id("src/App.JSX", "javascript"), "javascriptreact");
+        assert_eq!(language_id("bin/run", "shell"), "shellscript");
+        assert_eq!(language_id("a.sh", "shell"), "shellscript");
+        assert_eq!(language_id("Dockerfile", "dockerfile"), "dockerfile");
+    }
+
+    #[tokio::test]
     async fn a_file_is_closed_only_when_no_other_question_about_it_waits() {
         let uri = "file:///app/a.rb";
         let mut docs: HashMap<String, (i64, u64)> = HashMap::new();
@@ -1730,6 +1858,7 @@ mod tests {
                 text: "a".into(),
                 line: 0,
                 character: 0,
+                keep: false,
                 reply,
             })
             .unwrap();
@@ -1802,6 +1931,7 @@ mod tests {
                 text: "a".into(),
                 line: 0,
                 character: 0,
+                keep: false,
                 reply,
             })
             .unwrap();

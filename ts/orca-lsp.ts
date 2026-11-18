@@ -1,5 +1,5 @@
 // The language server of the Orca screen (A-34): the state of the language servers of a worktree and their settings, shown as a card for each server in the file pane, and when they are started and stopped. A repository has any number of servers, each with a name and the languages it takes; a Ruby file or any file whose language a server takes asks Rust for that server (`lsp_server_for`).
-// Rust starts, keeps and stops the processes (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of their state (the event `lsp-status`), reads how a server is started from the worktree (`lsp_launch`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
+// Rust starts, keeps and stops the processes (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of their state (the event `lsp-status`), reads how the servers are started from the worktree (`lsp_launches`, once for all of them) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
 // A file opened in the editor starts the server that takes its language when the settings say 「自動で起動」 (`ensureServer`); a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
 // While the part is shown, the settings are read at an interval, so that a change made elsewhere (`tsunagiai-mcp`, A-34) is drawn: the text that is being typed in, the open card and a card that is not saved yet stay. The interval stops when the part is hidden, when another worktree is shown or when the project is gone from the list.
 import type { LspLaunch } from "./bindings/LspLaunch";
@@ -27,6 +27,9 @@ const STATE_LABELS = { indexing: "索引中", running: "動作中", stopped: "�
 // How often the settings are read while the part is shown.
 const WATCH_MS = 2000;
 
+// What the screen is told: the settings of a project changed, so the files open in it look for their server again.
+let changed: (place: LspPlace) => void = () => {};
+
 // A server of a worktree: its name in the settings of the repository too.
 interface ServerPlace extends LspPlace {
   server: string;
@@ -41,7 +44,7 @@ const checking = new Set<string>();
 // The last state told of each server (a server that was not asked about is not started).
 const statuses = new Map<string, LspStatus>();
 
-// How a server is started in the worktree that is shown: what `lsp_launch` answered, or why it could not.
+// How a server is started in the worktree that is shown: what `lsp_launches` answered, or why it could not.
 interface Read {
   launch: LspLaunch | null;
   error: string | null;
@@ -364,14 +367,23 @@ function draw() {
 
 // ---- reading ----
 
-// Reads how the server `name` is started in the worktree (and, for a server not asked about yet, its state).
-async function readServer(name: string, mine: number, withStatus: boolean) {
-  const here = serverPlace(name);
-  if (here === null) return;
-  const [launch, status] = await Promise.allSettled([invoke("lsp_launch", args(here)), withStatus ? invoke("lsp_status", { environment: here.target, worktree: here.path, server: name }) : Promise.resolve(null)]);
+// Reads how the servers `names` are started in the worktree, in one read of the worktree (and, for the servers that `withStatus` names, not asked about yet, their state).
+async function readServers(names: string[], mine: number, withStatus: (name: string) => boolean) {
+  const here = pane;
+  if (here === null || names.length === 0) return;
+  const [launched, states] = await Promise.all([
+    invoke("lsp_launches", { environment: here.target, project: here.project, worktree: here.path, servers: names }).then(
+      (all) => ({ all, error: null }),
+      (e) => ({ all: null, error: String(e) }),
+    ),
+    Promise.allSettled(names.map((name) => (withStatus(name) ? invoke("lsp_status", { environment: here.target, worktree: here.path, server: name }) : Promise.resolve(null)))),
+  ]);
   if (mine !== generation) return;
-  launches.set(name, launch.status === "fulfilled" ? { launch: launch.value, error: null } : { launch: null, error: String(launch.reason) });
-  if (status.status === "fulfilled" && status.value !== null) statuses.set(keyOf(here.target, here.path, name), status.value);
+  for (const [i, name] of names.entries()) {
+    launches.set(name, launched.all === null ? { launch: null, error: launched.error } : { launch: launched.all[i] ?? null, error: null });
+    const state = states[i];
+    if (state.status === "fulfilled" && state.value !== null) statuses.set(keyOf(here.target, here.path, name), state.value);
+  }
   drawCards();
 }
 
@@ -404,7 +416,11 @@ async function load() {
   }
   ensureOpen();
   draw();
-  await Promise.all(read.servers.map((s) => readServer(s.name, mine, false)));
+  await readServers(
+    read.servers.map((s) => s.name),
+    mine,
+    () => false,
+  );
 }
 
 // Reads the settings again, and draws them when they are not the ones shown (a change made elsewhere).
@@ -433,7 +449,12 @@ async function watch() {
   ensureOpen();
   draw();
   const ssh = before.sshHost !== read.sshHost;
-  await Promise.all(read.servers.filter((s) => ssh || !same(s)).map((s) => readServer(s.name, mine, !before.servers.some((b) => b.name === s.name))));
+  changed(here);
+  await readServers(
+    read.servers.filter((s) => ssh || !same(s)).map((s) => s.name),
+    mine,
+    (name) => !before.servers.some((b) => b.name === name),
+  );
 }
 
 // ---- saving ----
@@ -503,8 +524,14 @@ async function saveNow(patch: Patch) {
   }
   draw();
   if (mine !== generation) return;
-  if (patch.sshHost !== undefined) await Promise.all(next.servers.map((s) => readServer(s.name, mine, false)));
-  else if (patch.server !== undefined) await readServer(renamed ?? patch.server.name, mine, renamed !== null);
+  if (pane !== null) changed(pane);
+  if (patch.sshHost !== undefined) {
+    await readServers(
+      next.servers.map((s) => s.name),
+      mine,
+      () => false,
+    );
+  } else if (patch.server !== undefined) await readServers([renamed ?? patch.server.name], mine, () => renamed !== null);
 }
 
 // Saves the card that is not saved yet, now that it has a language.
@@ -525,11 +552,18 @@ async function saveDraft() {
   settings = next;
   version++;
   note = null;
+  // What was typed into the card while the save was on its way is saved on the saved server, after this one.
+  const later = draft;
   draft = null;
   const saved = next.servers[next.servers.length - 1]?.name ?? added.name;
-  if (openName === added.name) openName = saved;
+  if (openName === added.name || (later !== null && openName === later.name)) openName = saved;
+  if (later !== null && later !== added) {
+    const change = Object.fromEntries(Object.entries(later).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(added[key as keyof LspServerSettings]))) as Partial<LspServerSettings>;
+    if (Object.keys(change).length > 0) queue(() => saveNow({ server: { name: saved, change } }));
+  }
   draw();
-  await readServer(saved, mine, true);
+  if (pane !== null) changed(pane);
+  await readServers([saved], mine, () => true);
 }
 
 const queue = (task: () => Promise<void>) => {
@@ -613,7 +647,7 @@ export async function ensureServer(place: LspPlace, server: string) {
   if (started.has(key) || checking.has(key)) return;
   checking.add(key);
   try {
-    const status = await invoke("lsp_status", args(here));
+    const status = await invoke("lsp_status", { environment: place.target, worktree: place.path, server });
     statuses.set(key, status);
     if (status.state !== "stopped") started.set(key, here);
     else if (status.reason === "notStarted" && (await invoke("lsp_settings", { environment: place.target, project: place.project })).servers.find((s) => s.name === server)?.autoStart) await startServer(here);
@@ -650,6 +684,15 @@ function stopWatch() {
   timer = null;
 }
 
+// The Orca screen is left (or the work pane is not shown): nothing is read by the clock until the file pane is drawn again.
+export const pauseLsp = stopWatch;
+
+// Whether a question of the Command key may be sent to the server `server` of the worktree: not when it is known to be indexing or stopped (it can only refuse), and when nothing is known of it yet Rust says.
+export function mayAsk(target: string | null, path: string, server: string) {
+  const state = statuses.get(keyOf(target, path, server))?.state;
+  return state === undefined || state === "running";
+}
+
 // Follows the file pane: the worktree it shows (null: none) and whether the language server is what it shows. The settings and the way of starting are read when the part is shown, for the worktree that is shown.
 export function syncLsp(next: LspPlace | null, visible: boolean) {
   const same = next?.path === pane?.path && next?.target === pane?.target && next?.project === pane?.project;
@@ -676,7 +719,8 @@ export function syncLsp(next: LspPlace | null, visible: boolean) {
   } else stopWatch();
 }
 
-export function initLsp() {
+export function initLsp(on: { changed: (place: LspPlace) => void }) {
+  changed = on.changed;
   $("orca-lsp-add").innerHTML = PLUS_SVG;
   $("orca-lsp-add").onclick = () => {
     if (settings === null) return;
