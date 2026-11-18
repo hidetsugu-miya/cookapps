@@ -76,6 +76,8 @@ check_logged_pass() {
   else echo "ok   $name"; fi
 }
 check_logged_pass "レビュー" "main で起動し worktree で push（記録あり、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+check_logged_pass "CI" "main で起動し worktree で push（CI・E2E の記録あり、CI のゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+check_logged_pass "E2E" "main で起動し worktree で push（CI・E2E の記録あり、E2E のゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
 echo dirty > "$work/dirty.txt"
 git -C "$work" add dirty.txt
 check 2 "main で起動し worktree で push（記録あり、未コミットの変更あり）" "$work" "git push -u origin HEAD"

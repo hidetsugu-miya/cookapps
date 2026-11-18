@@ -136,6 +136,7 @@ Bad:  pass -> push with Low left, and ask the owner whether to fix it
 
 A fix made after a pass is not sent through the reviewers, and release-verifier is not launched.
 Write the fixed findings in a file, one to a line, each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
+A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
 Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh {passed HEAD} {list file}` by the main checkout's path, from the worktree (`worktree.md`).
 `range-check.sh` stops, with the reason on stderr and exit 1, unless all of these hold: the working tree is clean, the passed commit has a pass record or is `origin/main` or its ancestor, it is an ancestor of HEAD and not HEAD, HEAD has passing CI and E2E records (`check-ci.sh`, `check-e2e.sh`), and every path of `git diff --name-only --no-renames {passed HEAD} HEAD` appears in the list. It prints each path outside the list, and that diff goes through the first-round flow. It does not review the content of the findings.
 When all hold, it writes the pass record for the new HEAD with `.claude/hooks/record-review.sh`.

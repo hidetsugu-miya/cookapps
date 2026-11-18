@@ -81,7 +81,11 @@ if grep -q -E "${g}push" <<< "$cmd"; then
     main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
     t=$(hook_log_now)
     skip_ci=0
-    if ! { "$main/.claude/tools/check-ci.sh" >/dev/null 2>&1 && "$main/.claude/tools/check-e2e.sh" >/dev/null 2>&1; }; then
+    records_ok=0
+    # HEAD's own records are checked once here; when both pass, the gates below do not run the two checks again.
+    if "$main/.claude/tools/check-ci.sh" >/dev/null 2>&1 && "$main/.claude/tools/check-e2e.sh" >/dev/null 2>&1; then
+      records_ok=1
+    else
       base=""
       for c in $(git rev-list "$range" 2>/dev/null); do
         jq -e --arg sha "$c" '.sha == $sha and .clean == true and .passed == true' "$main/.claude/ci/$c" >/dev/null 2>&1 \
@@ -92,7 +96,10 @@ if grep -q -E "${g}push" <<< "$cmd"; then
       [ -n "$base" ] || base="${range%..*}"
       [ -n "$base" ] && "$main/.claude/tools/release-only-diff.sh" "$base" HEAD >/dev/null 2>&1 && skip_ci=1
     fi
-    if [ "$skip_ci" -eq 1 ]; then
+    if [ "$records_ok" -eq 1 ]; then
+      hook_log_gate "CI" "$t" 0
+      hook_log_gate "E2E" "$t" 0
+    elif [ "$skip_ci" -eq 1 ]; then
       hook_log_gate "CI・E2E(リリース作業だけ)" "$t" 0
     else
       gate "CI" "$main/.claude/tools/check-ci.sh"
