@@ -3369,7 +3369,7 @@ describe("orca: scratchpad (A-29)", () => {
   });
 
   it("reads again the folders of the file pane that hold the new file when the pane shows that worktree", async () => {
-    const entries = (...names: string[]): OrcaDir => ({ entries: names.map((name) => ({ name, path: name, isDirectory: true, ignored: false })), total: names.length });
+    const entries = (...names: string[]): OrcaDir => ({ entries: names.map((name) => ({ name, path: name, isDirectory: true, ignored: false, icon: null })), total: names.length });
     await openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: entries("src"), orca_files_ignored: [] });
     await pickProject("example-app");
     await filesToggle().click();

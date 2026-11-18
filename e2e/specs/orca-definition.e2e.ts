@@ -13,7 +13,7 @@ import { claudeTab, filesToggle, openOrca, orcaOverview, project, sample, select
 
 // A-34: the definition tab under the pane of the editor, and the editor's Command and right button. Rust asks the language server, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, how it splits the work pane, and how it draws the answers and opens them. The language server in the file pane is checked below too: its state and settings, and when it is started and stopped.
 describe("orca: definition (A-34)", () => {
-  const dirOf = (entries: [string, boolean][]): OrcaDir => ({ entries: entries.map(([name, isDirectory]) => ({ name, path: name, isDirectory, ignored: false })), total: entries.length });
+  const dirOf = (entries: [string, boolean][]): OrcaDir => ({ entries: entries.map(([name, isDirectory]) => ({ name, path: name, isDirectory, ignored: false, icon: null })), total: entries.length });
   const root = () =>
     dirOf([
       ["a.rb", false],

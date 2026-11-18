@@ -63,7 +63,7 @@ Read an area's section there before you change a behavior it covers, and when a 
 ```text
 ts/            TypeScript, compiled by tsc to src/js/ (gitignored). No framework, no bundler
 ts/bindings/   Rust struct types written by ts-rs (generated, committed)
-src/           index.html, CSS, vendored libraries (src/vendor/)
+src/           index.html, CSS, vendored libraries (src/vendor/) and the JetBrains file icons (src/vendor/jetbrains-icons/)
 src-tauri/     Rust backend (Tauri v2); src/bin/tsunagiai-mcp.rs is the MCP server
 src-tauri/formation/  the leader's skill and the children's plugin of A-41, embedded in the binary by build.rs
 e2e/           WebdriverIO specs, fixtures and mocks
@@ -92,7 +92,7 @@ tmp/           scratch files, gitignored except .keep
   - `formation_assets.rs` (A-41): the files of `src-tauri/formation/` that `build.rs` embeds: the leader's skill `feature-dev` and the children's plugin (`formation-plugin/` of the config folder)
   - `formation_server.rs` (#890): the server mode of `tsunagiai-mcp` (`--serve`) on the PC of a saved environment, and `Client`, the app's connection to it
   - `formation_remote.rs` (#891, #893): the app's side: puts `tsunagiai-mcp` in `remote/` of that PC from the GitHub Release, starts it, pins its key and version in `formation-remote.json` and connects to it. The app's secret key is in the keychain, service `jp.mysis.tsunagiai.formation`
-  - `orca.rs` (A-6), with `orca_link.rs` and `orca_e2ee.rs` (the connection to Orca's runtime), `orca_handoff.rs` (A-9), `orca_attach.rs` (A-10), `orca_stream.rs` (A-12), `orca_panes.rs` (A-17), `orca_files.rs` (the file pane and the editor, A-18, the download, A-22, the diff, A-24, the branches and the commits of a worktree, A-27), `orca_diff.rs` (A-24), `orca_language.rs` (A-21), `orca_preview.rs` (the HTTP server on `127.0.0.1` that serves the files of a worktree to the default browser, A-31) and `orca_browse.rs` (the folders of a saved environment's server, for the picking dialog of A-38)
+  - `orca.rs` (A-6), with `orca_link.rs` and `orca_e2ee.rs` (the connection to Orca's runtime), `orca_handoff.rs` (A-9), `orca_attach.rs` (A-10), `orca_stream.rs` (A-12), `orca_panes.rs` (A-17), `orca_files.rs` (the file pane and the editor, A-18, the download, A-22, the diff, A-24, the branches and the commits of a worktree, A-27), `orca_diff.rs` (A-24), `orca_language.rs` (A-21), `orca_icon.rs` (the icon of a file in the file pane, #965), `orca_preview.rs` (the HTTP server on `127.0.0.1` that serves the files of a worktree to the default browser, A-31) and `orca_browse.rs` (the folders of a saved environment's server, for the picking dialog of A-38)
   - `ghostty.rs` (Ghostty's settings for the Orca terminals, A-13), `orca_theme.rs` (the colors of the Orca terminals, A-14, with the table `orca_themes.json`)
   - `ssh.rs` (this Mac's `ssh` command and the run of a process with a time limit, for `lsp.rs`, and the Host names of `~/.ssh/config` for the select of the ssh Host, #959)
   - `lsp.rs` (A-34): how a language server is started for a worktree, and the settings of each repository (its servers: name, languages, command) in `lsp-settings.json`, with `lsp/server.rs` (the language server processes that stay, one for each worktree and server name), `lsp/protocol.rs` (the LSP frame, messages and answers as pure functions), `lsp/container.rs`, `lsp/outside.rs` (#699), `lsp/view.rs` (#700) and `lsp/watch.rs`

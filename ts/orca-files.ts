@@ -741,7 +741,7 @@ function row(entry: OrcaFileEntry, depth: number) {
     button.append(mark, icon(FOLDER_SVG));
   } else {
     button.dataset.open = String(opened.has(entry.path));
-    button.append(mark, icon(FILE_SVG));
+    button.append(mark, entry.icon === null ? icon(FILE_SVG) : kindIcon(entry.icon));
     // A file opens on a double press (or Enter), so a single press only selects it.
     button.ondblclick = () => openFile(entry.path);
     button.onkeydown = (e) => {
@@ -761,6 +761,17 @@ function row(entry: OrcaFileEntry, depth: number) {
 function icon(svg: string) {
   const node = tag("span", "orca-file-ic");
   node.innerHTML = svg;
+  return node;
+}
+
+// The icon of a kind of file (A-18): an SVG of JetBrains' that the app holds (src/vendor/jetbrains-icons/), drawn as an image of the same origin. A press and a drag on it are the row's, so it is not an image to drag.
+function kindIcon(name: string) {
+  const node = tag("span", "orca-file-ic");
+  const image = document.createElement("img");
+  image.src = `vendor/jetbrains-icons/${name}.svg`;
+  image.alt = "";
+  image.draggable = false;
+  node.append(image);
   return node;
 }
 

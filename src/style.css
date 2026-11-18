@@ -1343,6 +1343,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[aria-expanded="true"] .orca-file-mark svg { transform: rotate(90deg); }
 .orca-file-ic { flex: none; display: inline-flex; color: var(--muted); }
 .orca-file-ic svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.orca-file-ic img { width: 14px; height: 14px; pointer-events: none; }
 .orca-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .orca-file[data-ignored="true"] { opacity: .55; }
 .orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }

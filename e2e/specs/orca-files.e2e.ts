@@ -44,9 +44,9 @@ describe("orca: files and editor (A-18)", () => {
   const zsh = "orca:term_example-app_zsh";
   const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
   const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
-  // The entries of the folder `dir`: [name, is a folder, ignored by git]. Rust lists a folder with no entry marked unless the folder itself is ignored (the third is then true); the marks of the others come from `orca_files_ignored`.
-  const dirOf = (dir: string, entries: [string, boolean, boolean?][]): OrcaDir => ({
-    entries: entries.map(([name, isDirectory, ignored = false]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored })),
+  // The entries of the folder `dir`: [name, is a folder, ignored by git, the icon Rust names for the file]. Rust lists a folder with no entry marked unless the folder itself is ignored (the third is then true); the marks of the others come from `orca_files_ignored`.
+  const dirOf = (dir: string, entries: [string, boolean, boolean?, string?][]): OrcaDir => ({
+    entries: entries.map(([name, isDirectory, ignored = false, icon = null]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored, icon })),
     total: entries.length,
   });
   const root = () =>
@@ -1044,6 +1044,23 @@ describe("orca: files and editor (A-18)", () => {
     await release("orca_files_changes", [change("target", "changed")]);
     await browser.pause(300);
     expect((await gitLook("target")).change).toBeNull();
+  });
+
+  // A-18: the icon of a file is the one Rust names (`icon`): the SVG of JetBrains' that the app holds, as an image of its own origin; a file with no icon and a folder keep the line drawing.
+  it("draws the icon Rust names for a file as an image of the app's own, and the line drawing for a file with none and for a folder", async () => {
+    await openFiles({ orca_files_list: dirOf("", [["src", true], ["user.rb", false, false, "ruby"], ["notes.txt", false]]), orca_files_ignored: [] });
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    const looks = await browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#orca-files-tree .orca-file")].map((node) => {
+        const image = node.querySelector<HTMLImageElement>(".orca-file-ic img");
+        return { path: node.dataset.path, images: node.querySelectorAll(".orca-file-ic img").length, lines: node.querySelectorAll(".orca-file-ic svg").length, src: image?.getAttribute("src") ?? null, loaded: (image?.naturalWidth ?? 0) > 0, alt: image?.alt ?? null, draggable: image?.draggable ?? null };
+      }),
+    );
+    expect(looks).toEqual([
+      { path: "src", images: 0, lines: 1, src: null, loaded: false, alt: null, draggable: null },
+      { path: "user.rb", images: 1, lines: 0, src: "vendor/jetbrains-icons/ruby.svg", loaded: true, alt: "", draggable: false },
+      { path: "notes.txt", images: 0, lines: 1, src: null, loaded: false, alt: null, draggable: null },
+    ]);
   });
 
   it("reads a folder when it is pressed the first time, and draws it from what was read when it is opened again", async () => {

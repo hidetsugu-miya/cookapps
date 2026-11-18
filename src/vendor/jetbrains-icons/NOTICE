@@ -1,0 +1,26 @@
+Icons of JetBrains (IntelliJ Platform)
+
+The SVG files in this folder are taken, unchanged, from the repository
+https://github.com/JetBrains/intellij-community
+at the commit 5540e0d7a9d8c9210c747369ab2e5000434c420d (2026-11-18).
+
+Copyright 2000-2026 JetBrains s.r.o. and contributors.
+The files are licensed under the Apache License, Version 2.0 (the file LICENSE in this folder).
+Most of them say so in a comment at their top: "Use of this source code is governed by the Apache 2.0 license."
+The repository's own NOTICE.txt says:
+
+  This software includes code from IntelliJ IDEA
+  Copyright (C) JetBrains s.r.o.
+  https://www.jetbrains.com/idea/
+
+Where each file is from (the name of a file here is the name it has there, without the folder):
+
+- go.svg, kotlin.svg, php.svg, python.svg, ruby.svg, rust.svg and scala.svg: platform/icons/src/language/
+- every other .svg: platform/icons/src/expui/fileTypes/ (the icons of the New UI, the light ones)
+
+The files were not changed. The files that the app does not use are not taken.
+The app draws them in the file pane of the Orca screen (A-18, src-tauri/src/orca_icon.rs).
+
+About LICENSE. It is the text of the Apache License 2.0 as it is in LICENSE.txt of the tag idea/2026.1.1 of that repository.
+The LICENSE.txt at the commit above holds the JetBrains Open-Source Build Terms instead, which refer to the Apache License 2.0 for the open source software of the build.
+Why this commit and not a tag: the tags of the releases (idea/2025.2.4 to idea/2026.1.1) hold only 52 of the icons of expui/fileTypes, and the icons of TypeScript, Docker, SQL and the others are there only on the master branch.

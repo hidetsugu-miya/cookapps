@@ -32,6 +32,7 @@ pub mod orca_diff;
 pub mod orca_e2ee;
 pub mod orca_files;
 pub mod orca_handoff;
+pub mod orca_icon;
 pub mod orca_language;
 pub mod orca_link;
 pub mod orca_panes;
