@@ -616,12 +616,20 @@
       </aside>
     </section>
     <section id="orca" class="split-main" hidden>
-      <aside id="orca-list" aria-label="プロジェクト">
+      <aside id="orca-list" aria-label="一覧">
         <header id="orca-header" data-tauri-drag-region>
+          <button id="formation-new" class="icon-btn" type="button" aria-label="フォーメーションを作る"></button>
           <button id="orca-add" class="icon-btn" type="button" aria-label="プロジェクトを追加" aria-haspopup="dialog">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M12 10v6M9 13h6"/></svg>
           </button>
         </header>
+        <div id="orca-notice"></div>
+        <div id="orca-formations">
+          <h2 class="orca-list-head">フォーメーション</h2>
+          <p id="formation-list-error" class="pending fail" role="alert" hidden></p>
+          <div id="formation-list-feed"></div>
+        </div>
+        <h2 class="orca-list-head">プロジェクト</h2>
         <div id="orca-search" role="search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
           <input id="orca-search-input" type="text" autocomplete="off" spellcheck="false" aria-label="プロジェクトを検索" placeholder="検索">
@@ -629,10 +637,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>
-        <div id="orca-notice"></div>
         <div id="orca-feed"></div>
       </aside>
       <div id="orca-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="一覧の幅" aria-valuemin="20" aria-valuemax="50" aria-valuenow="30" tabindex="0"><span></span></div>
+      <div id="orca-session">
       <div id="orca-work">
         <p id="orca-started" class="pending" role="status" hidden></p>
         <div id="orca-panes"></div>
@@ -689,17 +697,8 @@
           </section>
         </div>
       </aside>
-    </section>
-    <section id="formation" class="split-main" hidden>
-      <aside id="formation-list" aria-label="フォーメーション">
-        <header id="formation-list-head" data-tauri-drag-region="deep">
-          <h1>フォーメーション</h1>
-          <button id="formation-new" class="icon-btn" type="button" aria-label="フォーメーションを作る"></button>
-        </header>
-        <p id="formation-list-error" class="pending fail" role="alert" hidden></p>
-        <div id="formation-list-feed"></div>
-      </aside>
-      <div id="formation-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="一覧の幅" aria-valuemin="15" aria-valuemax="35" aria-valuenow="18" tabindex="0"><span></span></div>
+      </div>
+      <div id="formation" hidden>
       <section id="formation-orchestrator" aria-label="リーダー">
         <header id="formation-head" data-tauri-drag-region="deep">
           <h1>リーダー</h1>
@@ -733,6 +732,7 @@
         <div id="formation-strip-head"><button id="formation-strip-open" class="icon-btn" type="button" aria-label="チームメイトを開く" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button></div>
         <div id="formation-strip-marks"></div>
       </aside>
+      </div>
     </section>
     <section id="slack-compose" hidden>
       <header data-tauri-drag-region="deep">
@@ -774,16 +774,6 @@
       </div>
     </section>
     <footer id="footer">
-      <div id="footer-modes" role="group" aria-label="開発のモード" hidden>
-        <button id="footer-mode-orca" class="footer-btn footer-mode" type="button" aria-label="Orca" aria-pressed="true">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
-          <span class="footer-mode-count" aria-hidden="true" hidden></span>
-        </button>
-        <button id="footer-mode-formation" class="footer-btn footer-mode" type="button" aria-label="オーケストレーション" aria-pressed="false">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="2.5" width="7" height="5" rx="1.5"/><path d="M12 7.5v4M5 15.5v-4h14v4M12 11.5v4"/><rect x="2.5" y="15.5" width="5" height="5" rx="1.5"/><rect x="9.5" y="15.5" width="5" height="5" rx="1.5"/><rect x="16.5" y="15.5" width="5" height="5" rx="1.5"/></svg>
-          <span class="footer-mode-count" aria-hidden="true" hidden></span>
-        </button>
-      </div>
       <button id="footer-bell" class="footer-btn" type="button" aria-label="通知" aria-expanded="false">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>
         <span class="footer-count" aria-hidden="true" hidden></span>

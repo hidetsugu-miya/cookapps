@@ -43,7 +43,9 @@ export const MEET_SVG = svgOf('<rect x="3" y="6" width="13" height="12" rx="2"/>
 export const PIN_SVG = svgOf('<path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>');
 export const LINES_SVG = svgOf('<path d="M4 6h16M4 12h16M4 18h10"/>');
 export const PEOPLE_SVG = svgOf('<circle cx="9" cy="8" r="3.5"/><path d="M3 20c.6-3.6 3-5.5 6-5.5s5.4 1.9 6 5.5M16 5a3.5 3.5 0 0 1 0 6.5M18 14.8c1.7.8 2.7 2.5 3 5.2"/>');
-export const ORCA_SVG = $("footer-mode-orca").querySelector("svg")!.outerHTML;
+export const ORCA_SVG = svgOf('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>');
+// The button that makes a formation (A-37): the tree of a leader and its teammates, with a plus at the corner.
+export const FORMATION_NEW_SVG = svgOf('<rect x="7.5" y="3.5" width="6" height="4.5" rx="1.5"/><path d="M10.5 8v3.5M5 15.5v-4h11v4M10.5 11.5v4"/><rect x="2.5" y="15.5" width="5" height="5" rx="1.5"/><rect x="8" y="15.5" width="5" height="5" rx="1.5"/><rect x="14.5" y="15.5" width="5" height="5" rx="1.5"/><path d="M19 2v5M16.5 4.5h5"/>');
 export const DATABASE_SVG = $("nav-database").querySelector("svg")!.outerHTML;
 export const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const ARROW_UP_SVG = svgOf('<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>');

@@ -1,21 +1,17 @@
-// The list of the formations at the left of the orchestration mode (A-37): a row for each formation with its name, the time since it was made and the number of its children in each state (`formation_list`).
-// The formation of the selected row is the one the middle pane (its orchestrator) and the right pane (its flow) show; with no row selected (at each start, and after the selected one is deleted) neither pane is shown. The list is read on the clock of the flow (formation-flow.ts), so it is read only while the mode is shown.
+// The formations under their heading at the top of the list of the development screen (A-37): a row for each formation, with its name alone (`formation_list`).
+// The formation of the selected row is the one the middle pane (its leader) and the right pane (its flow) show; with no row selected (at each start, after a project or a session is selected, and after the selected one is deleted) neither pane is shown. The list is read on the clock of formation-flow.ts, so it is read while the development screen is shown.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationKeptChild } from "./bindings/FormationKeptChild";
 import type { FormationShown } from "./bindings/FormationShown";
 import type { FormationState } from "./bindings/FormationState";
 import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
-import { setFormationCount } from "./footer.js";
 import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
-import { DELETE_SVG, FOLDER_SVG, PLUS_SVG } from "./icons.js";
+import { DELETE_SVG, FOLDER_SVG, FORMATION_NEW_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { type MenuItem, openMenu } from "./menu.js";
-import { elapsed } from "./orca.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
-// The order of the counts of a row.
-const COUNT_ORDER: FormationState[] = ["waiting", "working", "planned", "done"];
 
 // The environment of this Mac in `FormationEntry.environment`.
 const LOCAL = "local";
@@ -23,6 +19,8 @@ const LOCAL = "local";
 // The name of the formation the screen shows: none at each start of the app, in memory only.
 let current: string | null = null;
 export const currentFormation = () => current;
+// A project or a session was selected: no formation is shown any more.
+export const deselectFormation = () => choose(null);
 // The PC the formation `name` belongs to, from the last read: `local` (this Mac) or a saved environment. Its orchestrator runs there.
 export const formationEnvironment = (name: string) => formations.find((f) => f.name === name)?.environment ?? LOCAL;
 
@@ -44,20 +42,6 @@ let deleteFailure: string | null = null;
 // What a deletion that worked told that is no failure: the branches that Orca kept for the commits no remote has.
 let deleteNotice: string | null = null;
 
-// The numbers on the footer's orchestration button (A-37), from the last read that Orca could be read in: the children that wait in all the formations, and the formations with a child that works.
-let waitingChildren = 0;
-let workingFormations = 0;
-
-// Draws the numbers of the last read on the footer.
-export const showCount = () => setFormationCount(waitingChildren, workingFormations);
-
-// Takes the numbers from a read of the list that Orca could be read in (an answer with a `readError` takes every launched child as working, so it counts nothing), and draws them.
-export function noteCounts(list: FormationEntry[]) {
-  waitingChildren = list.reduce((sum, f) => sum + f.counts.waiting, 0);
-  workingFormations = list.filter((f) => f.counts.working > 0).length;
-  showCount();
-}
-
 // Reads the formations now. One call at a time; a hidden window reads nothing.
 export async function readList() {
   if (reading || document.hidden) return;
@@ -70,7 +54,6 @@ export async function readList() {
       formations = answer.formations;
       failure = answer.readError;
       read = true;
-      if (answer.readError === null) noteCounts(answer.formations);
     }
   } catch (e) {
     failure = String(e);
@@ -148,7 +131,7 @@ function choose(name: string | null) {
   onChange(name);
 }
 
-function row(f: FormationEntry, now: number): HTMLButtonElement {
+function row(f: FormationEntry): HTMLButtonElement {
   const node = tag("button", "formation-row");
   node.type = "button";
   node.dataset.formation = f.name;
@@ -160,39 +143,25 @@ function row(f: FormationEntry, now: number): HTMLButtonElement {
     draw();
   };
   if (deleting.has(f.name)) node.setAttribute("aria-busy", "true");
-  const head = span("formation-row-head", "");
   const name = span("formation-row-name", f.name);
   // The menu and its confirmation are anchored on the name, which the button's own state does not touch.
   node.oncontextmenu = (e) => openRowMenu(f, name, e);
-  head.append(name);
-  const time = f.createdAt === null ? "" : elapsed(f.createdAt, now, false);
-  if (time !== "") head.append(tag("time", "formation-row-time", time));
-  node.append(head);
-  const counts = span("formation-row-counts", "");
-  for (const state of COUNT_ORDER) {
-    if (f.counts[state] === 0) continue;
-    const count = span("formation-row-count", `${STATE_LABELS[state]} ${f.counts[state]}`);
-    count.dataset.state = state;
-    count.prepend(tag("i", "formation-dot"));
-    counts.append(count);
-  }
-  if (counts.childElementCount > 0) node.append(counts);
+  node.append(tag("i", "formation-row-dot"), name);
   return node;
 }
 
 function draw() {
-  const now = Date.now();
   const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
-  const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects, f.createdAt === null ? "" : elapsed(f.createdAt, now, false), f.counts])]);
+  const key = JSON.stringify([current, [...deleting], formations.map((f) => [f.name, f.projects])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.
   const feed = $("formation-list-feed");
   const top = feed.scrollTop;
   const focused = feed.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.formation : undefined;
-  feed.replaceChildren(...formations.map((f) => row(f, now)));
+  feed.replaceChildren(...formations.map(row));
   feed.scrollTop = top;
   if (focused) feed.querySelector<HTMLElement>(`[data-formation="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
@@ -201,7 +170,7 @@ export function initFormationList(changed: (name: string | null) => void, remove
   onChange = changed;
   onRemoved = removed;
   const plus = $<HTMLButtonElement>("formation-new");
-  plus.innerHTML = PLUS_SVG;
+  plus.innerHTML = FORMATION_NEW_SVG;
   plus.onclick = () => openFormationDialog(plus, added);
   draw();
 }

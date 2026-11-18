@@ -5,29 +5,31 @@ import type { FormationList } from "../../ts/bindings/FormationList";
 // The text of each element as it is, with the spaces that `textsOf` trims (a line of git's status starts with one).
 const rawTextsOf = (selector: string) => browser.execute((s) => [...document.querySelectorAll(s)].map((e) => e.textContent ?? ""), selector);
 
-// A-37: the development screen's orchestration mode. The orchestrator's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
-const FOOTER_MODES = "#footer-modes";
+// A-37: the orchestration of the development screen: the formations in the list of the Orca screen, and the leader and the flow in place of the work pane. The leader's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
 const visible = (selector: string) => browser.execute((s) => document.querySelector(s)?.getClientRects().length !== 0 && !document.querySelector<HTMLElement>(s)!.hidden, selector);
-const pressed = (id: string) => browser.execute((i) => document.getElementById(i)!.getAttribute("aria-pressed"), id);
-// What a button of the footer's switch shows: its text (none, the buttons are icons) and whether its icon fades (the work mark).
-const textOf = (id: string) => browser.execute((i) => document.getElementById(i)!.textContent!.trim(), id);
-const fades = (id: string) => browser.execute((i) => document.getElementById(i)!.classList.contains("working") && getComputedStyle(document.querySelector(`#${i} svg`)!).animationName !== "none", id);
-const marked = (id: string) => browser.execute((i) => document.getElementById(i)!.classList.contains("working"), id);
-const ground = (id: string) => browser.execute((i) => getComputedStyle(document.getElementById(i)!).backgroundColor, id);
+const pressed = (selector: string) => browser.execute((s) => document.querySelector(s)!.getAttribute("aria-pressed"), selector);
+const ground = (selector: string) => browser.execute((s) => getComputedStyle(document.querySelector(s)!).backgroundColor, selector);
 const starts = async () => (await callsOf("claude_code_start")).length;
 // The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
 const pressRestart = () => browser.execute(() => document.getElementById("formation-restart")!.click());
 const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
 
-// Opens the mode. No formation is selected at the start, so the row of `select` (the one the default fixture has, `formation`) is pressed unless it is `null`.
+// A list with one project that has a session with no pane, so the project is a row of the list and pressing it shows the work pane of Orca with nothing to read.
+const ORCA_LIST = () => orcaOverview([orcaRow("api", "main", "Write the docs", { handle: null, paneKey: null })]);
+const PROJECT = '#orca-feed .orca-project[data-key="proj_api"]';
+const ROW = (name: string) => `#formation-list-feed [data-formation="${name}"]`;
+
+// Opens the development screen and selects a formation. No formation is selected at the start, so the row of `select` (the one the default fixture has, `formation`) is pressed unless it is `null`.
 async function openFormation(select: string | null = "formation") {
   await $("#nav-orca").click();
-  await $("#footer-mode-formation").click();
-  await expect($("#formation")).toBeDisplayed();
-  if (select !== null) await $(`#formation-list-feed [data-formation="${select}"]`).click();
+  await expect($("#orca")).toBeDisplayed();
+  if (select !== null) {
+    await $(ROW(select)).click();
+    await expect($("#formation")).toBeDisplayed();
+  }
 }
 
-describe("development screen: orchestration mode", () => {
+describe("development screen: orchestration", () => {
   beforeEach(async () => {
     await boot({ inbox: inbox() });
   });
@@ -39,58 +41,85 @@ describe("development screen: orchestration mode", () => {
     await expect($("#nav-orca")).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows the footer's switch on the development screen only, with Orca on first", async () => {
-    await expect($(FOOTER_MODES)).not.toBeDisplayed();
+  it("has no switch of a mode in the footer, on the development screen too: the bell alone", async () => {
     await $("#nav-orca").click();
-    await expect($(FOOTER_MODES)).toBeDisplayed();
     await expect($("#orca")).toBeDisplayed();
-    await expect($("#formation")).not.toBeDisplayed();
-    expect(await pressed("footer-mode-orca")).toBe("true");
-    expect(await pressed("footer-mode-formation")).toBe("false");
-    // Both are icons alone, with no frame around the switch; the name is the label only.
-    expect(await textOf("footer-mode-orca")).toBe("");
-    expect(await textOf("footer-mode-formation")).toBe("");
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca");
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", "オーケストレーション");
-    expect(await browser.execute(() => getComputedStyle(document.getElementById("footer-modes")!).borderTopWidth)).toBe("0px");
-    for (const nav of ["#nav-mail", "#nav-calendar", "#nav-todo", "#nav-slack", "#nav-database", "#nav-settings"]) {
-      await $(nav).click();
-      await expect($(FOOTER_MODES)).not.toBeDisplayed();
-    }
+    expect(await browser.execute(() => ["footer-modes", "footer-mode-orca", "footer-mode-formation"].map((id) => document.getElementById(id)))).toEqual([null, null, null]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#footer button")].map((b) => b.id))).toEqual(["footer-bell"]);
     await expect($("#footer-bell")).toBeDisplayed();
   });
 
-  it("puts the switch at the left end of the footer, and the bell stays at the right end", async () => {
+  it("starts with the work pane of Orca and the formations and the projects in one list under their headings", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST() });
     await $("#nav-orca").click();
-    const edges = await browser.execute(() => {
-      const [modes, bell, footer] = ["footer-modes", "footer-bell", "footer"].map((id) => document.getElementById(id)!.getBoundingClientRect());
-      return { modesFromLeft: Math.round(modes.left - footer.left), bellFromRight: Math.round(footer.right - bell.right), apart: bell.left - modes.right };
-    });
-    expect(edges.modesFromLeft).toBeLessThan(24);
-    expect(edges.bellFromRight).toBeLessThan(24);
-    expect(edges.apart).toBeGreaterThan(0);
+    await expect($("#orca")).toBeDisplayed();
+    await expect($("#orca-session")).toBeDisplayed();
+    await expect($("#formation")).not.toBeDisplayed();
+    expect(await textsOf("#orca-list .orca-list-head")).toEqual(["フォーメーション", "プロジェクト"]);
+    // The order of the list, from the top: the formations, the heading of the projects, the projects.
+    const tops = await browser.execute(() => ["orca-formations", "orca-feed"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().top)));
+    expect(tops[0]).toBeLessThan(tops[1]);
+    expect(await textsOf("#formation-list-feed .formation-row-name")).toEqual(["formation"]);
+    await expect($(PROJECT)).toBeDisplayed();
+    // Only one list: the formations have no pane of their own at the left.
+    expect(await browser.execute(() => ["formation-list", "formation-split"].map((id) => document.getElementById(id)))).toEqual([null, null]);
   });
 
-  it("switches to the orchestration with its three panes, and the pale green ground moves to its icon", async () => {
-    await boot({ inbox: inbox(), formation_children: [formationChild("api-update", "planned")] });
+  it("has the button that makes a formation in the header of the list, beside the one that adds a project", async () => {
+    await $("#nav-orca").click();
+    const place = await browser.execute(() => {
+      const buttons = [...document.querySelectorAll("#orca-header button")].map((b) => b.id);
+      return { buttons, inHeader: document.getElementById("formation-new")!.closest("#orca-header") !== null };
+    });
+    expect(place.inHeader).toBe(true);
+    expect(place.buttons).toEqual(expect.arrayContaining(["formation-new", "orca-add"]));
+    await expect($("#formation-new")).toHaveAttribute("aria-label", "フォーメーションを作る");
+  });
+
+  it("shows the leader and the flow in place of the work pane when a formation is pressed, with the ground of the selected row", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST(), formation_children: [formationChild("api-update", "planned")] });
     await openFormation();
     await expect($("#formation-flow")).toBeDisplayed();
-    await expect($("#orca")).not.toBeDisplayed();
-    expect(await pressed("footer-mode-orca")).toBe("false");
-    expect(await pressed("footer-mode-formation")).toBe("true");
-    // The pale green ground (--soft) is the one of the mode that is on; the other has none.
-    expect(await ground("footer-mode-formation")).toBe("rgb(227, 244, 234)");
-    expect(await ground("footer-mode-orca")).toBe("rgba(0, 0, 0, 0)");
-    expect(await browser.execute(() => document.querySelectorAll(".footer-mode-name").length)).toBe(0);
+    await expect($("#orca-session")).not.toBeDisplayed();
+    await expect($("#orca-work")).not.toBeDisplayed();
     await expect($("#nav-orca")).toHaveAttribute("aria-current", "page");
-    const lefts = await browser.execute(() => ["formation-list", "formation-orchestrator", "formation-flow"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().left)));
+    // The pale green ground (--soft) is the one of the selected row; a project's row has none.
+    expect(await pressed(ROW("formation"))).toBe("true");
+    expect(await ground(ROW("formation"))).toBe("rgb(227, 244, 234)");
+    expect(await pressed(PROJECT)).toBe("false");
+    expect(await ground(PROJECT)).toBe("rgba(0, 0, 0, 0)");
+    const lefts = await browser.execute(() => ["orca-list", "formation-orchestrator", "formation-flow"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().left)));
     expect(lefts[0]).toBeLessThan(lefts[1]);
     expect(lefts[1]).toBeLessThan(lefts[2]);
     await expect($("#formation-orchestrator h1")).toHaveText("リーダー");
-    await $("#footer-mode-orca").click();
-    await expect($("#orca")).toBeDisplayed();
+  });
+
+  it("shows the work pane again when a project is pressed, and the formation is no longer selected", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST() });
+    await openFormation();
+    await $(PROJECT).click();
+    await expect($("#orca-session")).toBeDisplayed();
     await expect($("#formation")).not.toBeDisplayed();
-    expect(await pressed("footer-mode-orca")).toBe("true");
+    expect(await pressed(ROW("formation"))).toBe("false");
+    expect(await pressed(PROJECT)).toBe("true");
+    await $(ROW("formation")).click();
+    await expect($("#formation")).toBeDisplayed();
+    await expect($("#orca-session")).not.toBeDisplayed();
+    expect(await pressed(PROJECT)).toBe("false");
+  });
+
+  it("keeps one divider for the list, whichever of the two is shown", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST() });
+    await openFormation(null);
+    const width = () => browser.execute(() => Math.round(document.getElementById("orca-list")!.getBoundingClientRect().width));
+    const before = await width();
+    await browser.execute((id) => window.__e2e_once__(id) && document.getElementById("orca-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })), onceId());
+    const after = await width();
+    expect(after).toBeGreaterThan(before);
+    await $(ROW("formation")).click();
+    expect(await width()).toBe(after);
+    await $(PROJECT).click();
+    expect(await width()).toBe(after);
   });
 
   it("starts the orchestrator with the pane id of its formation, Claude Code's own tools, no skill and no project, in the size of the left pane", async () => {
@@ -105,16 +134,17 @@ describe("development screen: orchestration mode", () => {
     for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input"]) expect(await callsOf(command)).toEqual([]);
   });
 
-  it("does not start the orchestrator again when the mode or the screen is left and shown again", async () => {
+  it("does not start the orchestrator again when a project is pressed, or the screen is left, and the formation is shown again", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST() });
     await openFormation();
     await waitForStarts(1);
-    await $("#footer-mode-orca").click();
+    await $(PROJECT).click();
     await expect($("#formation-term")).not.toBeDisplayed();
-    await $("#footer-mode-formation").click();
+    await $(ROW("formation")).click();
     await expect($("#formation-term")).toBeDisplayed();
     await $("#nav-mail").click();
     await $("#nav-orca").click();
-    // The mode was kept while the screen was left.
+    // The selection was kept while the screen was left.
     await expect($("#formation")).toBeDisplayed();
     await $("#nav-todo").click();
     await $("#nav-orca").click();
@@ -124,11 +154,12 @@ describe("development screen: orchestration mode", () => {
   });
 
   it("starts the orchestrator again when it is shown again after its process ended", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST() });
     await openFormation();
     await waitForStarts(1);
     await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
-    await $("#footer-mode-orca").click();
-    await $("#footer-mode-formation").click();
+    await $(PROJECT).click();
+    await $(ROW("formation")).click();
     await waitForStarts(2);
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
@@ -196,7 +227,7 @@ describe("development screen: orchestration mode", () => {
     expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
   });
 
-  it("starts nothing for the orchestrator while Orca is the mode", async () => {
+  it("starts nothing for the orchestrator while no formation is selected", async () => {
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
     await browser.pause(300);
@@ -204,7 +235,7 @@ describe("development screen: orchestration mode", () => {
     expect(await visible("#formation")).toBe(false);
   });
 
-  it("keeps the count and the label of the 開発 button in the orchestration mode", async () => {
+  it("keeps the count and the label of the 開発 button while a formation is shown", async () => {
     await boot({ inbox: inbox(), orca_overview: orcaOverview([orcaRow("example-api", "main", "Task of example-api", { group: "waiting" })]) });
     await expect($("#nav-orca .nav-count")).toHaveText("1");
     await openFormation();
@@ -212,16 +243,17 @@ describe("development screen: orchestration mode", () => {
     await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（確認待ち 1 件）");
   });
 
-  it("has Orca on again when the app starts again", async () => {
+  it("shows the work pane of Orca and no formation selected when the app starts again", async () => {
     await openFormation();
     await boot({ inbox: inbox() });
     await $("#nav-orca").click();
-    await expect($("#orca")).toBeDisplayed();
-    expect(await pressed("footer-mode-orca")).toBe("true");
+    await expect($("#orca-session")).toBeDisplayed();
+    await expect($("#formation")).not.toBeDisplayed();
+    expect(await pressed(ROW("formation"))).toBe("false");
   });
 });
 
-// A-37: the flow pane of the orchestration mode.
+// A-37: the flow pane of the orchestration.
 const READ = 500;
 const WAIT = READ * 1.2;
 const cardNames = () => textsOf("#formation-flow-list .formation-card-name");
@@ -255,7 +287,7 @@ const styleOf = (selector: string, property: "backgroundColor" | "borderRightCol
   browser.execute((s, p) => getComputedStyle(document.querySelector(s)!)[p], selector, property);
 
 async function openFlow(children: unknown, extra: Record<string, unknown> = {}) {
-  await boot({ inbox: inbox(), formation_children: children, ...timers({ formationFlow: READ }), ...extra });
+  await boot({ inbox: inbox(), orca_overview: ORCA_LIST(), formation_children: children, ...timers({ formationFlow: READ }), ...extra });
   await openFormation();
 }
 
@@ -413,14 +445,13 @@ describe("orchestration mode: the flow pane", () => {
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update");
   });
 
-  it("reads nothing while another screen is shown, and reads again when the mode is shown", async () => {
+  it("reads nothing while another screen is shown, and reads again when the screen is shown", async () => {
     await boot({ inbox: inbox(), ...timers({ formationFlow: READ, orcaClock: READ }) });
     await $("#nav-orca").click();
-    // Orca is the mode: the list is read for the count, and no children.
+    // No formation is selected: the list is read, and no children.
     await waitForCalls("formation_list", 1);
     expect(await callsOf("formation_children")).toEqual([]);
-    await $("#footer-mode-formation").click();
-    await $('#formation-list-feed [data-formation="formation"]').click();
+    await $(ROW("formation")).click();
     const afterMode = (await callsOf("formation_children")).length;
     await waitForCalls("formation_children", afterMode + 1);
     await $("#nav-mail").click();
@@ -507,44 +538,45 @@ describe("orchestration mode: the panes beside the list", () => {
     await expect($("#formation-flow")).not.toBeDisplayed();
     await expect($("#formation-flow-split")).not.toBeDisplayed();
     await expect($("#formation-strip")).not.toBeDisplayed();
-    const [pane, divider, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-split"), await rectOf("#formation")];
+    const [pane, divider, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#orca-split"), await rectOf("#orca")];
     expect(Math.abs(pane.left - divider.right)).toBeLessThan(1);
     expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
   });
 
-  it("shows the right pane when a child, a planned one too, is recorded, with a divider before it, 41% of the screen wide (half of what the list leaves)", async () => {
+  it("shows the right pane when a child, a planned one too, is recorded, with a divider before it, 37% of the screen wide (half of what the list leaves)", async () => {
     await openFlow([]);
     await waitForCalls("formation_children", 1);
     await expect($("#formation-flow")).not.toBeDisplayed();
     await mock("formation_children", [formationChild("api-update", "planned")]);
     await expect($("#formation-flow")).toBeDisplayed();
-    const [orchestrator, divider, flow, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-flow-split"), await rectOf("#formation-flow"), await rectOf("#formation")];
+    const [orchestrator, divider, flow, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation-flow-split"), await rectOf("#formation-flow"), await rectOf("#orca")];
     expect(Math.abs(orchestrator.right - divider.left)).toBeLessThan(1);
     expect(Math.abs(divider.right - flow.left)).toBeLessThan(1);
     expect(Math.abs(flow.right - screen.right)).toBeLessThan(1);
-    expect((flow.right - flow.left) / (screen.right - screen.left)).toBeCloseTo(0.41, 2);
-    // The screen has the list, its divider, the orchestrator, the divider before the right pane, the pane and the strip (not shown while the pane is open), and no column of tabs beside them.
-    expect(await browser.execute(() => [...document.getElementById("formation")!.children].map((e) => e.id))).toEqual(["formation-list", "formation-split", "formation-orchestrator", "formation-flow-split", "formation-flow", "formation-strip"]);
+    expect((flow.right - flow.left) / (screen.right - screen.left)).toBeCloseTo(0.37, 2);
+    // The formation has the orchestrator, the divider before the right pane, the pane and the strip (not shown while the pane is open), and no column of tabs beside them; the list and its divider are the Orca screen's.
+    expect(await browser.execute(() => [...document.getElementById("formation")!.children].map((e) => e.id))).toEqual(["formation-orchestrator", "formation-flow-split", "formation-flow", "formation-strip"]);
+    expect(await browser.execute(() => [...document.getElementById("orca")!.children].map((e) => e.id))).toEqual(["orca-list", "orca-split", "orca-session", "formation"]);
   });
 
-  it("has a divider before the right pane that starts at 41% of the screen and moves with the arrow keys, within 20% and 50%", async () => {
+  it("has a divider before the right pane that starts at 37% of the screen and moves with the arrow keys, within 20% and 50%", async () => {
     await openFlow([formationChild("api-update", "planned")]);
     await expect($("#formation-flow")).toBeDisplayed();
-    const share = () => browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("formation")!.getBoundingClientRect().width);
+    const share = () => browser.execute(() => document.getElementById("formation-flow")!.getBoundingClientRect().width / document.getElementById("orca")!.getBoundingClientRect().width);
     const split = $("#formation-flow-split");
     await expect(split).toHaveAttribute("role", "separator");
     await expect(split).toHaveAttribute("aria-label", "チームメイトの幅");
     await expect(split).toHaveAttribute("aria-valuemin", "20");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
-    await expect(split).toHaveAttribute("aria-valuenow", "41");
-    expect(await share()).toBeCloseTo(0.41, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "37");
+    expect(await share()).toBeCloseTo(0.37, 2);
     expect(await browser.execute(() => document.getElementById("formation-flow-split")!.classList.contains("split-bar"))).toBe(true);
     // The arrow that points away from the pane's edge widens it.
     await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("formation-flow-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowLeft");
-    await expect(split).toHaveAttribute("aria-valuenow", "43");
-    expect(await share()).toBeCloseTo(0.43, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "39");
+    expect(await share()).toBeCloseTo(0.39, 2);
     // The list's divider is not moved by it.
-    await expect($("#formation-split")).toHaveAttribute("aria-valuenow", "18");
+    await expect($("#orca-split")).toHaveAttribute("aria-valuenow", "25");
   });
 
   it("hides the right pane again when the children are gone, and the orchestrator takes the width", async () => {
@@ -552,7 +584,7 @@ describe("orchestration mode: the panes beside the list", () => {
     await expect($("#formation-flow")).toBeDisplayed();
     await mock("formation_children", []);
     await expect($("#formation-flow")).not.toBeDisplayed();
-    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#formation")];
+    const [pane, screen] = [await rectOf("#formation-orchestrator"), await rectOf("#orca")];
     expect(Math.abs(pane.right - screen.right)).toBeLessThan(1);
   });
 
@@ -768,8 +800,8 @@ describe("orchestration mode: close and open the right pane", () => {
     await browser.execute((id) => window.__e2e_once__(id) && document.getElementById("formation-flow-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true })), onceId());
     await expect($("#formation-flow-split")).toHaveAttribute("aria-valuenow", "43");
     await close();
-    await $("#footer-mode-orca").click();
-    await $("#footer-mode-formation").click();
+    await $(PROJECT).click();
+    await $(ROW("formation")).click();
     await expect($("#formation-strip")).toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     await reopen();
@@ -927,7 +959,7 @@ describe("orchestration mode: the session of a child", () => {
   });
 
   // A-37, #839: a saved environment that the Orca screen streams (A-12) streams the terminals of its children.
-  const STUDIO = { orca_overview: orcaOverview([], [], { target: "Studio", environments: ["Studio"] }) };
+  const STUDIO = { orca_overview: orcaOverview([orcaRow("api", "main", "Write the docs", { handle: null, paneKey: null })], [], { target: "Studio", environments: ["Studio"] }) };
   const studioChildren = () => [formationChild("a-update", "working"), formationChild("lab-update", "waiting", { minutes: 3, environment: "Studio" })];
   const openStudio = async (children: unknown = studioChildren()) => {
     await openSession(children, STUDIO);
@@ -985,9 +1017,9 @@ describe("orchestration mode: the session of a child", () => {
   it("closes the stream when the mode is left, and streams again when it is shown", async () => {
     await openStudio();
     const [first] = await streamed();
-    await $("#footer-mode-orca").click();
+    await $(PROJECT).click();
     expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
-    await $("#footer-mode-formation").click();
+    await $(ROW("formation")).click();
     const [, second] = await streamed(2);
     expect(second.handle).toBe("term_lab-update");
     await $("#nav-mail").click();
@@ -1044,11 +1076,11 @@ describe("orchestration mode: the session of a child", () => {
   it("reads no terminal while the mode is left, and reads it again when the mode is shown", async () => {
     await openSession(mixed());
     await waitForCalls("orca_terminal_read");
-    await $("#footer-mode-orca").click();
+    await $(PROJECT).click();
     await mock("orca_terminal_read", ["$"]);
     await browser.pause(MIRROR * 3);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
-    await $("#footer-mode-formation").click();
+    await $(ROW("formation")).click();
     expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_web-update" });
     await $("#nav-mail").click();
     await mock("orca_terminal_read", ["$"]);
@@ -1279,7 +1311,7 @@ describe("orchestration mode: close a child from its card", () => {
 const listedFirst = () => formationList([formationEntry("api-work", { minutes: 3 }), ...listed().formations]);
 
 async function openList(extra: Record<string, unknown> = {}, select: string | null = "formation") {
-  await boot({ inbox: inbox(), formation_list: listed(), ...timers({ formationFlow: READ }), ...extra });
+  await boot({ inbox: inbox(), orca_overview: ORCA_LIST(), formation_list: listed(), ...timers({ formationFlow: READ }), ...extra });
   await openFormation(null);
   const rows = ((extra.formation_list as FormationList | undefined) ?? listed()).formations.length;
   await browser.waitUntil(async () => (await rowNames()).length === rows);
@@ -1287,37 +1319,38 @@ async function openList(extra: Record<string, unknown> = {}, select: string | nu
 }
 
 describe("orchestration mode: the list of the formations", () => {
-  it("heads the list with フォーメーション, with the one button that makes a formation at its right end", async () => {
+  it("heads the formations with フォーメーション in the list of the Orca screen, and the button that makes one is in its header", async () => {
     await openList();
-    await expect($("#formation-list h1")).toHaveText("フォーメーション");
-    expect(await textsOf("#formation-list-head button")).toEqual([""]);
+    await expect($("#orca-formations h2")).toHaveText("フォーメーション");
     await expect($("#formation-new")).toHaveAttribute("aria-label", "フォーメーションを作る");
+    expect(await textsOf("#formation-new")).toEqual([""]);
     expect(await count("#formation-new svg")).toBe(1);
     const place = await browser.execute(() => {
-      const [head, button] = [document.getElementById("formation-list-head")!.getBoundingClientRect(), document.getElementById("formation-new")!.getBoundingClientRect()];
-      return { right: head.right - button.right < 16, inside: button.top >= head.top && button.bottom <= head.bottom };
+      const [head, button, add] = ["orca-header", "formation-new", "orca-add"].map((id) => document.getElementById(id)!.getBoundingClientRect());
+      return { right: head.right - add.right < 16, inside: button.top >= head.top && button.bottom <= head.bottom, beside: button.right <= add.left };
     });
-    expect(place).toEqual({ right: true, inside: true });
+    expect(place).toEqual({ right: true, inside: true, beside: true });
   });
 
-  it("draws a row for each formation, in the order given, with the time and the number of children in each state, and no project", async () => {
+  it("draws a row for each formation, in the order given, with a gray ring and the name alone", async () => {
     await openList();
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
-    // `formation` has no time and no project (no file); the others show how long ago they were made.
-    expect(await textsOf(`${ROWS} .formation-row-time`)).toEqual(["12 分", "1 時間"]);
-    expect(await count(".formation-row-projects, .formation-row-project")).toBe(0);
-    expect(await textsOf(`${ROWS}[data-formation="formation"] .formation-row-count`)).toEqual([]);
-    expect(await textsOf(`${ROWS}[data-formation="won-2485"] .formation-row-count`)).toEqual(["作業中 1", "予定 3"]);
-    expect(await textsOf(`${ROWS}[data-formation="mail-summary"] .formation-row-count`)).toEqual(["承認待ち 1", "完了 2"]);
-    expect(await browser.execute(() => [...document.querySelectorAll(".formation-row-count")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["working", "planned", "waiting", "done"]);
+    // Nothing but the name: no time, no count of the children and no project.
+    expect(await textsOf(ROWS)).toEqual(["formation", "won-2485", "mail-summary"]);
+    expect(await count(".formation-row-time, .formation-row-count, .formation-row-projects, .formation-row-project")).toBe(0);
+    expect(await count(`${ROWS} .formation-row-dot`)).toBe(3);
+    // The ring is gray and hollow.
+    expect(await browser.execute(() => {
+      const style = getComputedStyle(document.querySelector(".formation-row-dot")!);
+      return { background: style.backgroundColor, border: style.borderTopWidth, radius: style.borderTopLeftRadius };
+    })).toEqual({ background: "rgba(0, 0, 0, 0)", border: "1.5px", radius: "50%" });
   });
 
-  it("selects nothing at the start, shows the list alone and starts and reads nothing", async () => {
+  it("selects nothing at the start, shows the work pane of Orca and starts and reads nothing", async () => {
     await openList({ formation_children: mixed() }, null);
     expect(await pressedRows()).toEqual([]);
-    await expect($("#formation-list")).toBeDisplayed();
+    await expect($("#orca-formations")).toBeDisplayed();
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
-    await expect($("#formation-split")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     await browser.pause(READ * 2);
     expect(await starts()).toBe(0);
@@ -1334,12 +1367,12 @@ describe("orchestration mode: the list of the formations", () => {
     await expect($("#formation-orchestrator")).toBeDisplayed();
   });
 
-  it("shows only the plus of the list when the list is empty", async () => {
+  it("shows the heading alone when the list is empty", async () => {
     await openList({ formation_list: formationList([]) }, null);
     await expect($("#formation-new")).toBeDisplayed();
+    await expect($("#orca-formations h2")).toHaveText("フォーメーション");
     expect(await rowNames()).toEqual([]);
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
-    await expect($("#formation-split")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     await browser.pause(READ * 2);
     expect(await starts()).toBe(0);
@@ -1427,7 +1460,6 @@ describe("orchestration mode: the list of the formations", () => {
     await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation");
     expect(await pressedRows()).toEqual([]);
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
-    await expect($("#formation-split")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     await mock("formation_children", []);
     const before = (await callsOf("formation_children")).length;
@@ -1436,16 +1468,14 @@ describe("orchestration mode: the list of the formations", () => {
     expect(await starts()).toBe(2);
   });
 
-  it("reads the list for its rows while the orchestration mode is shown, and reads it no more once the screen is left", async () => {
-    await boot({ inbox: inbox(), formation_list: listed(), ...timers({ formationFlow: READ, orcaClock: READ }) });
+  it("reads the list for its rows while the development screen is shown, and reads it no more once the screen is left", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST(), formation_list: listed(), ...timers({ formationFlow: READ, orcaClock: READ }) });
     await $("#nav-orca").click();
-    // Orca is the mode: the list is read only for the footer's count, and no row is drawn from it.
-    await waitForCalls("formation_list", 1);
-    expect(await rowNames()).toEqual([]);
-    await $("#footer-mode-formation").click();
+    // No formation is selected: the rows are drawn from the first read, and no children are read.
     await browser.waitUntil(async () => (await rowNames()).length === 3);
-    await $("#footer-mode-orca").click();
-    await $("#footer-mode-formation").click();
+    expect(await callsOf("formation_children")).toEqual([]);
+    await $(PROJECT).click();
+    await $(ROW("formation")).click();
     await $("#nav-mail").click();
     const afterScreen = (await callsOf("formation_list")).length;
     await browser.pause(WAIT * 2);
@@ -1464,19 +1494,18 @@ describe("orchestration mode: the list of the formations", () => {
     await expect($("#formation-list-error")).not.toBeDisplayed();
   });
 
-  it("has a divider that starts at 18% of the screen and moves with the arrow keys, within 15% and 35%", async () => {
+  it("has the divider of the Orca list for the formations too, at 25% of the screen at first", async () => {
     await openList();
-    const share = () => browser.execute(() => document.getElementById("formation-list")!.getBoundingClientRect().width / document.getElementById("formation")!.getBoundingClientRect().width);
-    const split = $("#formation-split");
+    const share = () => browser.execute(() => document.getElementById("orca-list")!.getBoundingClientRect().width / document.getElementById("orca")!.getBoundingClientRect().width);
+    const split = $("#orca-split");
     await expect(split).toHaveAttribute("role", "separator");
-    await expect(split).toHaveAttribute("aria-valuemin", "15");
-    await expect(split).toHaveAttribute("aria-valuemax", "35");
-    await expect(split).toHaveAttribute("aria-valuenow", "18");
-    expect(await share()).toBeCloseTo(0.18, 2);
-    expect(await browser.execute(() => document.getElementById("formation-list")!.getBoundingClientRect().width)).toBeLessThan(260);
-    await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("formation-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowRight");
-    await expect(split).toHaveAttribute("aria-valuenow", "20");
-    expect(await share()).toBeCloseTo(0.2, 2);
+    await expect(split).toHaveAttribute("aria-valuemin", "20");
+    await expect(split).toHaveAttribute("aria-valuemax", "50");
+    await expect(split).toHaveAttribute("aria-valuenow", "25");
+    expect(await share()).toBeCloseTo(0.25, 2);
+    await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("orca-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowRight");
+    await expect(split).toHaveAttribute("aria-valuenow", "27");
+    expect(await share()).toBeCloseTo(0.27, 2);
   });
 });
 
@@ -1844,7 +1873,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await browser.execute(
       (once) => {
         if (!window.__e2e_once__(once)) return;
-        document.getElementById("formation-list-head")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+        document.getElementById("orca-header")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
       },
       onceId(),
     );
@@ -1971,7 +2000,6 @@ describe("orchestration mode: delete a formation", () => {
     expect(await pressedRows()).toEqual([]);
     expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:formation" }]);
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
-    await expect($("#formation-split")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     expect(await starts()).toBe(1);
   });
@@ -2015,7 +2043,6 @@ describe("orchestration mode: delete a formation", () => {
     await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation,mail-summary");
     expect(await pressedRows()).toEqual([]);
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
-    await expect($("#formation-split")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     // The terminal of the deleted formation's orchestrator is dropped, and no new start is made.
     expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:won-2485" }]);
@@ -2132,35 +2159,8 @@ describe("orchestration mode: delete a formation", () => {
   });
 });
 
-describe("orchestration mode: the count on the footer's icon", () => {
-  const badge = () => $("#footer-mode-formation .footer-mode-count");
-  const LABEL = "オーケストレーション";
-  // The list of two formations that have `first` and `second` children waiting, and others that are planned or are done, and, with `working` (off at first), children that work too: the number is the sum of the waiting ones, and the icon fades while a formation has a working child.
-  const waitingList = (first: number, second = 0, working = false) =>
-    formationList([
-      formationEntry("formation", { counts: { planned: 1, waiting: first, working: working ? 1 : 0, done: 1 } }),
-      formationEntry("other", { minutes: 5, counts: { planned: 0, waiting: second, working: working ? 2 : 0, done: 0 } }),
-    ]);
-
-  it("shows the number of the children that wait in all the formations on the icon in the Orca mode, in orange, and the label says it", async () => {
-    await boot({ inbox: inbox(), formation_list: waitingList(2, 1), ...timers({ orcaClock: READ }) });
-    await expect(badge()).not.toBeDisplayed();
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("3");
-    expect(await fades("footer-mode-formation")).toBe(false);
-    expect(await browser.execute(() => getComputedStyle(document.querySelector("#footer-mode-formation .footer-mode-count")!).backgroundColor)).toBe("rgb(240, 81, 0)");
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（承認待ち 3 件）`);
-    // It follows the reads, at the period of the Orca list's read, and is not drawn for none.
-    await mock("formation_list", waitingList(3, 0));
-    await browser.waitUntil(async () => (await badge().getText()) === "3");
-    await mock("formation_list", waitingList(1, 4));
-    await browser.waitUntil(async () => (await badge().getText()) === "5");
-    await mock("formation_list", waitingList(0, 0));
-    await expect(badge()).not.toBeDisplayed();
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", LABEL);
-  });
-
-  it("reads the list and no children in the Orca mode, at the period of the Orca list's read, one call at a time", async () => {
+describe("orchestration: the read of the list while no formation is selected", () => {
+  it("reads the list and no children at the period of the Orca list's read, one call at a time", async () => {
     await boot({ inbox: inbox(), ...timers({ orcaClock: READ }) });
     await mock("formation_list", holds);
     await mock("formation_children", []);
@@ -2169,175 +2169,33 @@ describe("orchestration mode: the count on the footer's icon", () => {
     await browser.pause(READ * 3);
     expect((await callsOf("formation_list")).length).toBe(1);
     // Answer the next reads before the held one is released, so that the read that follows it is not held again; `mock` forgets the calls, and the next one is the first of the new answer.
-    await mock("formation_list", waitingList(1));
-    await release("formation_list", waitingList(1));
+    await mock("formation_list", listed());
+    await release("formation_list", listed());
     await waitForCalls("formation_list", 1);
-    await expect(badge()).toHaveText("1");
+    await browser.waitUntil(async () => (await rowNames()).length === 3);
     expect(await callsOf("formation_children")).toEqual([]);
   });
 
-  it("keeps the last number when a read of the list fails", async () => {
-    await boot({ inbox: inbox(), formation_list: waitingList(2), ...timers({ orcaClock: READ }) });
+  it("keeps the rows when a read of the list fails", async () => {
+    await boot({ inbox: inbox(), formation_list: listed(), ...timers({ orcaClock: READ }) });
     await $("#nav-orca").click();
-    await expect(badge()).toHaveText("2");
+    await browser.waitUntil(async () => (await rowNames()).length === 3);
     await mock("formation_list", rejects("一覧を読めません"));
-    await waitForCalls("formation_list", 2);
-    await expect(badge()).toHaveText("2");
-    // Orca could not be read: the answer lists the formations with every launched child working, which is no count of the waiting ones.
-    await mock("formation_list", formationList(waitingList(0).formations, "Orca に届きません"));
-    await waitForCalls("formation_list", 2);
-    await expect(badge()).toHaveText("2");
-    await mock("formation_list", waitingList(1));
-    await expect(badge()).toHaveText("1");
-  });
-
-  it("makes the icon yellow and fading, with no number, while a formation has a working child and no child waits, in both modes, and the label says it", async () => {
-    await boot({ inbox: inbox(), formation_list: waitingList(0, 0, true), ...timers({ orcaClock: READ, formationFlow: READ }) });
-    await $("#nav-orca").click();
-    await expect(badge()).not.toBeDisplayed();
-    await browser.waitUntil(() => fades("footer-mode-formation"));
-    expect(await browser.execute(() => getComputedStyle(document.querySelector("#footer-mode-formation svg")!).stroke)).toBe("rgb(237, 178, 0)");
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（作業中 2 件）`);
-    await $("#footer-mode-formation").click();
-    await expect(badge()).not.toBeDisplayed();
-    expect(await fades("footer-mode-formation")).toBe(true);
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（作業中 2 件）`);
-    // A child that waits adds the number, and the icon fades on; the last working one takes the fading away, and the answered one the number.
-    await mock("formation_children", []);
-    await mock("formation_list", waitingList(1, 1, true));
-    await expect(badge()).toHaveText("2");
-    expect(await fades("footer-mode-formation")).toBe(true);
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（承認待ち 2 件、作業中 2 件）`);
-    await mock("formation_list", formationList([formationEntry("formation", { counts: { planned: 0, waiting: 0, working: 3, done: 0 } }), formationEntry("other", { minutes: 5 })]));
-    await browser.waitUntil(async () => !(await badge().isDisplayed()));
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（作業中 1 件）`);
-    await mock("formation_list", waitingList(0, 0));
-    await browser.waitUntil(async () => !(await marked("footer-mode-formation")));
-    await expect(badge()).not.toBeDisplayed();
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", LABEL);
-  });
-
-  it("shows 99+ from 100 waiting children, and the label keeps the count", async () => {
-    const many = formationList([formationEntry("formation", { counts: { planned: 0, waiting: 100, working: 0, done: 0 } })]);
-    await boot({ inbox: inbox(), formation_list: many, ...timers({ orcaClock: READ }) });
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("99+");
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（承認待ち 100 件）`);
-  });
-
-  it("keeps the number of the orchestration mode, which shares its read with the flow", async () => {
-    await boot({ inbox: inbox(), formation_list: waitingList(2), ...timers({ orcaClock: READ, formationFlow: READ }) });
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("2");
-    await $("#footer-mode-formation").click();
-    await expect(badge()).toHaveText("2");
-    await expect($("#footer-mode-formation")).toHaveAttribute("aria-label", `${LABEL}（承認待ち 2 件）`);
-    // Only the clock of the flow reads now: the calls of one period are one for each command, not two.
-    await mock("formation_children", []);
-    await mock("formation_list", waitingList(3));
-    await browser.pause(READ * 4 + 100);
-    expect((await callsOf("formation_children")).length).toBeLessThanOrEqual(4);
-    expect((await callsOf("formation_list")).length).toBeLessThanOrEqual(4);
-    await expect(badge()).toHaveText("3");
-    await $("#footer-mode-orca").click();
-    await expect(badge()).toHaveText("3");
+    await waitForCalls("formation_list", 1);
+    expect((await rowNames()).length).toBe(3);
   });
 
   it("does not read again when the 開発 button is pressed on the development screen", async () => {
-    await boot({ inbox: inbox(), formation_list: waitingList(1), ...timers({ orcaClock: 5000 }) });
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("1");
-    await mock("formation_list", waitingList(1));
-    await $("#nav-orca").click();
-    await browser.pause(500);
-    expect(await callsOf("formation_list")).toEqual([]);
-    await expect(badge()).toHaveText("1");
-  });
-
-  it("reads nothing and shows no number once the development screen is left", async () => {
-    await boot({ inbox: inbox(), formation_list: waitingList(1), ...timers({ orcaClock: READ }) });
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("1");
-    await $("#nav-mail").click();
-    await mock("formation_list", waitingList(1));
-    await browser.pause(READ * 3);
-    expect(await callsOf("formation_list")).toEqual([]);
+    await boot({ inbox: inbox(), formation_list: listed(), ...timers({ orcaClock: 5000 }) });
     await $("#nav-orca").click();
     await waitForCalls("formation_list", 1);
-    await expect(badge()).toHaveText("1");
+    const reads = (await callsOf("formation_list")).length;
+    await $("#nav-orca").click();
+    await browser.pause(300);
+    expect((await callsOf("formation_list")).length).toBe(reads);
   });
 });
 
-describe("the count on the footer's Orca button", () => {
-  const badge = () => $("#footer-mode-orca .footer-mode-count");
-  const orca = (rows: ReturnType<typeof orcaRow>[]) => orcaOverview(rows);
-  // Two sessions of example-app work, one of example-api, one waits, one is done and one failed: the number is the one of the sidebar's 開発 button (the one that waits), and the label counts the projects with a session that works.
-  const sample = () => [
-    orcaRow("example-app", "main", "first"),
-    orcaRow("example-app", "feature", "second", { handle: "term_example-app_2", paneKey: "tab_example-app:leaf_2" }),
-    orcaRow("example-api", "main", "third"),
-    orcaRow("example-lib", "main", "fourth", { group: "waiting" }),
-    orcaRow("example-web", "main", "fifth", { group: "done" }),
-    orcaRow("example-cli", "main", "sixth", { status: "failed" }),
-  ];
-
-  it("shows the number of what waits at the corner, and the fading yellow icon while a Claude works, in the Orca mode and in the orchestration mode, and the label says both", async () => {
-    await boot({ inbox: inbox(), orca_overview: orca(sample()), ...timers({ orcaClock: READ }) });
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("1");
-    await expect($("#nav-orca .nav-count")).toHaveText("1");
-    await browser.waitUntil(() => fades("footer-mode-orca"));
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件、作業中 2 件）");
-    await $("#footer-mode-formation").click();
-    await expect(badge()).toHaveText("1");
-    expect(await fades("footer-mode-orca")).toBe(true);
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件、作業中 2 件）");
-    // It follows the reads of the Orca list and goes with the last one. The list is read every 60 seconds while the orchestration mode is shown (A-6), which a spec cannot wait for, so the later reads are waited for in the Orca mode.
-    await $("#footer-mode-orca").click();
-    await mock("orca_overview", orca([orcaRow("example-app", "main", "first"), orcaRow("example-lib", "main", "fourth", { group: "waiting" })]));
-    await browser.waitUntil(async () => (await $("#footer-mode-orca").getAttribute("aria-label")) === "Orca（確認待ち 1 件、作業中 1 件）");
-    await mock("orca_overview", orca([orcaRow("example-app", "main", "first")]));
-    await expect(badge()).not.toBeDisplayed();
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（作業中 1 件）");
-    expect(await fades("footer-mode-orca")).toBe(true);
-    await mock("orca_overview", orca([orcaRow("example-app", "main", "first", { group: "done" })]));
-    await browser.waitUntil(async () => !(await marked("footer-mode-orca")));
-    // A session that finished and was not seen still waits for a check (a notice, A-8), until the screen shows it.
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件）");
-    await expect(badge()).toHaveText("1");
-    await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
-    await $('#orca-feed .orca-session[data-session="claude:tab_example-app:leaf_1"]').click();
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca");
-    await expect(badge()).not.toBeDisplayed();
-  });
-
-  it("makes the icon fade with no number while a Claude works and nothing waits", async () => {
-    await boot({ inbox: inbox(), orca_overview: orca([orcaRow("example-app", "main", "first")]) });
-    await $("#nav-orca").click();
-    await browser.waitUntil(() => fades("footer-mode-orca"));
-    await expect(badge()).not.toBeDisplayed();
-    expect(await browser.execute(() => getComputedStyle(document.querySelector("#footer-mode-orca svg")!).stroke)).toBe("rgb(237, 178, 0)");
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（作業中 1 件）");
-  });
-
-  it("shows 99+ from 100 waiting, and the label keeps the count", async () => {
-    const many = Array.from({ length: 100 }, (_, i) => orcaRow(`example-${i}`, "main", `Task ${i}`, { group: "waiting" }));
-    await boot({ inbox: inbox(), orca_overview: orca(many) });
-    await $("#nav-orca").click();
-    await expect(badge()).toHaveText("99+");
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 100 件）");
-  });
-
-  it("shows no number and no fading when nothing waits or works", async () => {
-    await boot({ inbox: inbox(), orca_overview: orca([orcaRow("example-app", "main", "first", { group: "done" })]) });
-    await $("#nav-orca").click();
-    await expect(badge()).not.toBeDisplayed();
-    expect(await marked("footer-mode-orca")).toBe(false);
-    await expect($("#footer-mode-orca")).toHaveAttribute("aria-label", "Orca");
-  });
-});
-
-// A-37: a formation of a saved environment runs its orchestrator in a terminal of that environment's Orca, which Rust makes (`formation_orchestrator`); this Mac's formation keeps its pseudo terminal.
 describe("orchestration mode: the orchestrator of a formation of a saved environment", () => {
   const remote = (environment = "mac-studio") => formationList([formationEntry("formation"), formationEntry("studio-work", { minutes: 5, environment, projects: [{ environment, repo: "api" }] })]);
   const terminal = (environment = "mac-studio") => ({ environment, handle: "term_orch" });

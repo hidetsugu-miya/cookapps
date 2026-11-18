@@ -21,8 +21,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { setOrcaCount } from "./footer.js";
-import { devMode, setDevMode } from "./formation.js";
+import { currentFormation, deselectFormation } from "./formation-list.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
@@ -77,8 +76,6 @@ type Scope = "full" | "screen" | "badge";
 let waitingCount = 0;
 // The rows that work now (group `working`, with a status that says so). A failed read cannot say that any does, so it clears them: the sidebar icon turns yellow and fades while there is one (see `track`).
 let workingCount = 0;
-// The projects that those rows are in: the number on the footer's Orca button (A-35).
-let workingProjects = 0;
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
 // The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
@@ -125,7 +122,15 @@ let feedKey = "";
 let noticeKey = "";
 
 const feed = () => $("orca-feed");
-const shown = () => currentScreen() === "orca" && devMode() === "orca";
+// The development screen is shown: the list is.
+const listShown = () => currentScreen() === "orca";
+// The work pane of Orca is shown: the screen is, and no formation is selected (a formation takes the place of the work pane, A-37).
+const shown = () => listShown() && currentFormation() === null;
+// The project the list marks as selected: none while a formation is.
+const pickedProject = () => (currentFormation() === null ? projectKey : null);
+
+// The selection of the list changed to or from a formation: what the screen shows is drawn again.
+export const redrawOrca = () => draw();
 
 export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
@@ -153,7 +158,6 @@ function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
   const working = rows.filter((r) => r.group === "working" && (r.status === "working" || r.status === "monitoring"));
   workingCount = working.length;
-  workingProjects = new Set(working.map((r) => r.projectKey)).size;
   const live = new Set<string>();
   for (const r of rows) {
     if (r.paneKey === null) continue;
@@ -174,7 +178,6 @@ function track(rows: OrcaRow[]) {
 function forgetNotices() {
   waitingCount = 0;
   workingCount = 0;
-  workingProjects = 0;
   notified.clear();
   wasStopped = new Set();
   baselined = false;
@@ -287,7 +290,6 @@ function drawBadge() {
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
   nav.setAttribute("aria-label", parts.length === 0 ? "開発" : `開発（${parts.join("、")}）`);
-  setOrcaCount(waiting, workingProjects);
 }
 
 const MISSING_NOTICE = "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます";
@@ -345,7 +347,7 @@ function sessionNode(t: Tab, key: string) {
   row.dataset.key = `tab:${t.id}`;
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
-  row.setAttribute("aria-pressed", String(key === projectKey && t.id === selectedTab()));
+  row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
   // The newer of the user's and Claude's messages; the title when it has none.
   const title = tag("span", "orca-session-title", t.latest ?? t.title);
   row.append(statusIcon(t.status, t.label), title);
@@ -363,7 +365,7 @@ function sessionNode(t: Tab, key: string) {
   row.oncontextmenu = (e) => {
     e.preventDefault();
     // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
-    if (key === projectKey || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
+    if (key === pickedProject() || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
     openPeek(key, t.id, `tab:${t.id}`);
     syncPeek();
   };
@@ -376,7 +378,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   const row = tag("button", "orca-project");
   row.type = "button";
   row.dataset.key = key;
-  row.setAttribute("aria-pressed", String(key === projectKey));
+  row.setAttribute("aria-pressed", String(key === pickedProject()));
   if (onCursor) row.dataset.cursor = "true";
   const label = tag("span", "orca-project-name");
   label.append(...nameNodes(name, re));
@@ -389,7 +391,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
     // The first session of the project (A-40). A selected project's terminal is in the work pane, and a project with no session, or a session with no terminal, has none to show.
     // Read at the press: the row is not drawn again when its first session changes.
     const first = tabsOf(key).filter((x) => !isDocument(x))[0];
-    if (key === projectKey || first === undefined || first.handle === null) return;
+    if (key === pickedProject() || first === undefined || first.handle === null) return;
     openPeek(key, first.id, key);
     syncPeek();
   };
@@ -505,7 +507,7 @@ function drawFeed() {
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, projectKey, sessions, selectedTab()]);
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, pickedProject(), sessions, selectedTab()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -726,10 +728,7 @@ function adopt(read: OrcaOverview) {
   // The count and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked.
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
-  else {
-    workingCount = 0;
-    workingProjects = 0;
-  }
+  else workingCount = 0;
   adoptHere(next.local);
   settle();
 }
@@ -818,7 +817,7 @@ function serverGone(environment: string | null, path: string) {
 function syncPeek() {
   const at = peeking();
   if (at === null) return;
-  const t = shown() && at.project !== projectKey ? tabsOf(at.project).find((x) => x.id === at.tab) : undefined;
+  const t = listShown() && at.project !== pickedProject() ? tabsOf(at.project).find((x) => x.id === at.tab) : undefined;
   if (t === undefined || t.handle === null) return closePeek();
   const name = mix.projects.find((p) => p.key === at.project)?.name ?? "";
   drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: { kind: t.environment !== null && streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment } });
@@ -829,11 +828,13 @@ function draw() {
   drawBadge();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();
-  if (!shown()) return;
+  if (!listShown()) return;
   drawNotice();
   drawSearch();
-  const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawFeed();
+  // A formation takes the place of the work pane: the terminals of the pane are hidden, and nothing else of it is drawn.
+  if (!shown()) return syncTerminal();
+  const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawWork(tabs);
   drawFiles(tabs);
   syncTerminal(tabs);
@@ -878,7 +879,7 @@ function onStream(event: OrcaStreamEvent) {
 }
 
 // What a read after a failure, the first one and one with the command missing ask for: everything. A working list is read for its agents (the screen shown) or their count.
-const clockScope = (): Scope => (view?.state !== "ready" ? "full" : shown() ? "screen" : "badge");
+const clockScope = (): Scope => (view?.state !== "ready" ? "full" : listShown() ? "screen" : "badge");
 
 // Reads the list. Only the latest request is used; `force` starts one although another is on its way (after a launch, a close or a change of the target).
 async function load(scope: Scope, force = false) {
@@ -900,10 +901,7 @@ async function load(scope: Scope, force = false) {
   // A read for the count alone has no terminals: it only moves the count, and a failure of it is left to the next read.
   if (scope === "badge" && next.state !== "missing") {
     if (next.state === "ready") track(next.rows);
-    else {
-      workingCount = 0;
-      workingProjects = 0;
-    }
+    else workingCount = 0;
     drawBadge();
     return;
   }
@@ -964,11 +962,11 @@ function refresh() {
     draw();
   }
   // A streamed list is not read by the clock, but this machine's beside it is, every period while the screen is shown (A-33).
-  if (streaming() && shown() && !document.hidden && Date.now() - hereTry >= shownMs()) void loadHere();
+  if (streaming() && listShown() && !document.hidden && Date.now() - hereTry >= shownMs()) void loadHere();
   if (document.hidden || loading || streaming()) return;
   // A missing command is not looked for again by the clock.
   if (view?.state === "missing") return;
-  if (Date.now() - lastTry >= (shown() ? shownMs() : HIDDEN_MS)) load(clockScope());
+  if (Date.now() - lastTry >= (listShown() ? shownMs() : HIDDEN_MS)) load(clockScope());
 }
 
 // ---- the side pane's share (A-9) ----
@@ -1002,7 +1000,6 @@ export function openInOrca(paneKey: string | null) {
     setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
   }
-  setDevMode("orca");
   setScreen("orca");
 }
 
@@ -1057,7 +1054,11 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
 // Makes `key` the selected project, open in the list (the others stay as they are).
 function setProject(key: string | null) {
   projectKey = key;
-  if (key !== null) opened.add(key);
+  if (key !== null) {
+    opened.add(key);
+    // A project or a session is selected: no formation is.
+    deselectFormation();
+  }
 }
 
 // Selects the project and, in it, the tab last selected there, else the first. The project opens.
@@ -1333,7 +1334,7 @@ function initSearch() {
   document.addEventListener(
     "keydown",
     (e) => {
-      if (!shown() || e.key !== "j" || !(isMac ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey || composing(e)) return;
+      if (!listShown() || e.key !== "j" || !(isMac ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey || composing(e)) return;
       e.preventDefault();
       e.stopPropagation();
       focusSearch();

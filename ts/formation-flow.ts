@@ -1,13 +1,12 @@
-// The right pane of the orchestration mode, "チームメイト" (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
-// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while the mode is shown, and the list is read on the same clock; no other formation's children are read. While Orca is the mode of the development screen, only the list is read, at the Orca list's period, to count the children that wait and the formations that work, on the footer's icon (the reads of the orchestration mode move the same number).
+// The right pane of the orchestration, "チームメイト" (A-37): above, the view of the flow (the orchestrator's card and under it the children as small cards in the order `formation_children` gives), and below, the session of the selected child, a terminal of the Orca of the child's environment: streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
+// The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
 // The pane is opened and closed with the button of its heading (open at first, in memory only); closed, a strip of 40px stays at the right end with the button that opens it and a mark for the state of each child, and the terminal of the session is hidden (its reads stop).
 // The cards are the tabs: the card of a child that has a terminal selects it, and 「自動で追う」 moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { currentFormation, noteCounts, readList, showCount, STATE_LABELS } from "./formation-list.js";
-import { setFormationCount } from "./footer.js";
+import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
 import { confirmChildDelete, confirmChildForce } from "./hint.js";
 import { DELETE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -37,9 +36,9 @@ const held = new Set<string>();
 // The children whose close is on its way, by the formation and the name (`closingKey`); a second close of one is not started meanwhile.
 const closing = new Set<string>();
 const closingKey = (formation: string, name: string) => `${formation}\n${name}`;
-// The clock of the reads and what the reads are for (the pane, or the count only), and whether one is on its way (the next tick waits for it).
+// The clock of the reads and what the reads are for (the pane, or the list only), and whether one is on its way (the next tick waits for it).
 let timer: number | null = null;
-let watching: "flow" | "count" | null = null;
+let watching: "flow" | "list" | null = null;
 let reading = false;
 // Counts the switches of the formation, so that a read that was on its way when the formation changed is dropped.
 let epoch = 0;
@@ -53,33 +52,26 @@ let scrolledTo: string | null = null;
 async function read() {
   // A hidden window reads nothing, as the Orca list does; it reads once when it is shown again (initFormationFlow).
   if (document.hidden) return;
-  // The list of the formations is read on this clock too, while the pane is shown (not for the count).
-  if (watching === "flow") void readList();
-  if (reading) return;
+  // The list of the formations is read on this clock too, whichever pane is shown.
+  void readList();
+  if (watching !== "flow" || reading) return;
   reading = true;
   const mine = epoch;
-  const counting = watching === "count";
   try {
-    if (counting) {
-      // A read that fails keeps the last count, and so does an answer that says Orca could not be read (its counts take every launched child as working).
-      const answer = await invoke("formation_list");
-      if (answer.readError === null) noteCounts(answer.formations);
-    } else {
-      const name = currentFormation();
-      // No formation is selected: there is no child to read.
-      const got = name === null ? [] : await invoke("formation_children", { name });
-      if (mine === epoch) {
-        children = got;
-        failure = null;
-      }
+    const name = currentFormation();
+    // No formation is selected: there is no child to read.
+    const got = name === null ? [] : await invoke("formation_children", { name });
+    if (mine === epoch) {
+      children = got;
+      failure = null;
     }
   } catch (e) {
-    if (mine === epoch && !counting) failure = String(e);
+    if (mine === epoch) failure = String(e);
   } finally {
     reading = false;
   }
   // The formation changed while this read ran: its answer is dropped, and the new formation is read now (one read at a time, so a repeated switch never runs the reads side by side).
-  if (!counting && mine !== epoch) {
+  if (mine !== epoch) {
     if (watching === "flow") void read();
     return;
   }
@@ -87,7 +79,7 @@ async function read() {
 }
 
 // Reads now and then by the clock, for `next`; one clock at a time, so the two ways never read together.
-function watch(next: "flow" | "count", ms: number) {
+function watch(next: "flow" | "list", ms: number) {
   if (watching === next) return;
   stopFlow();
   watching = next;
@@ -121,18 +113,17 @@ function drawRoot() {
   $("formation-flow-root").querySelector(".formation-card-name")!.textContent = currentFormation() ?? "";
 }
 
-// The mode is shown.
+// A formation is selected on the development screen.
 export const startFlow = () => watch("flow", periodMs("formationFlow", READ_MS));
 
-// Orca is the mode of the development screen: the children that wait and the formations that work are counted (from the list) at the period of the Orca list's read.
-export const startCount = () => watch("count", shownMs());
+// No formation is selected on the development screen: only the list is read, at the period of the Orca list's read.
+export const startList = () => watch("list", shownMs());
 
-// The mode or the screen is left: nothing is read until it is shown again.
+// The screen is left: nothing is read until it is shown again.
 export function stopFlow() {
   if (timer !== null) window.clearInterval(timer);
   timer = null;
   watching = null;
-  setFormationCount(0, 0);
 }
 
 // The child that 「自動で追う」 selects: the one that has waited for approval the longest, else the selected one when it works, else the first one that works; null when none works.
@@ -240,7 +231,7 @@ function selectChild(name: string) {
   showSelected(true);
 }
 
-// The mode or the screen is left: the terminal is hidden and its reads stop.
+// The formation is deselected or the screen is left: the terminal is hidden and its reads stop.
 export function hideSession() {
   hideTerminals(OWNER);
 }
@@ -309,9 +300,7 @@ function setOpen(next: boolean) {
 
 function draw() {
   const now = Date.now();
-  if (watching === null) setFormationCount(0, 0);
-  else showCount();
-  if (watching === "count") return;
+  if (watching === "list") return;
   const launched = children.filter((c) => c.state !== "planned");
   const planned = children.length - launched.length;
   // The pane is shown from the first child (a planned one too) on, and the orchestrator has the whole width before. Closed, the strip is shown in its place and the divider is not.

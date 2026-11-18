@@ -15,15 +15,15 @@ export function setClaudeReady(ready: boolean) {
 }
 
 // "slack" is the compose screen of a mail; "slack-list", "slack-channel" and "slack-thread" are the Slack screen's list, the history of a channel and the detail of a message.
-export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings" | "prompt" | "slack" | "slack-list" | "slack-channel" | "slack-thread" | "orca" | "formation" | "database" | "new-mail";
+export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings" | "prompt" | "slack" | "slack-list" | "slack-channel" | "slack-thread" | "orca" | "database" | "new-mail";
 
 // #main scrolls both the list and the thread, so each view keeps its own position.
 let listScroll = 0;
 
 export function show(view: View) {
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
-  // The calendar, Todo, settings, prompt, Slack, Orca (and its orchestration mode) and database screens bring their own header.
-  const own = ["calendar", "todo", "settings", "prompt", "slack", "slack-list", "slack-channel", "slack-thread", "orca", "formation", "database"].includes(view);
+  // The calendar, Todo, settings, prompt, Slack, Orca (with its orchestration) and database screens bring their own header.
+  const own = ["calendar", "todo", "settings", "prompt", "slack", "slack-list", "slack-channel", "slack-thread", "orca", "database"].includes(view);
   $("calendar").hidden = view !== "calendar";
   $("todo").hidden = view !== "todo";
   $("settings").hidden = view !== "settings";
@@ -37,7 +37,6 @@ export function show(view: View) {
   $("slack-claude").hidden = view === "slack-thread";
   $("slack-claude-split").hidden = view === "slack-thread";
   $("orca").hidden = view !== "orca";
-  $("formation").hidden = view !== "formation";
   $("database").hidden = view !== "database";
   // The mail header is the thread's bar with "戻る": the list and the login screen have none.
   $("mail-header").hidden = view !== "thread";
