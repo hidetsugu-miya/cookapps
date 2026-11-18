@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (issues.md).
+"""Orders the open issues of tsunagiai, and tells a run what to start and what the owner has to release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; issues.md for the release).
 
 Usage:
   plan-release.py snapshot
@@ -103,7 +103,7 @@ def quick_bug(issue):
 
 def solo(issue):
     """A member of a unit that is a release of its own: an issue of 8 points, or a part (`solo`) of a point:8 issue that `issue-plan` split.
-    The unit is that one point:8 issue, or all the `solo` parts of one parent. Only the night run keeps a unit apart from everything else (issues.md):
+    The unit is that one point:8 issue, or all the `solo` parts of one parent. Only the night run keeps a unit apart from everything else (.claude/skills/ship/SKILL.md, "Rules"):
     `nightly-limit.sh` and `build_next` do so when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner does not."""
     return has(issue, "point:8") or has(issue, "solo")
 
@@ -123,7 +123,7 @@ def importance(issue):
 
 
 def tier(issue):
-    """The tier of the order (issues.md), 0 first: urgency high and importance high, urgency high only, importance high only, neither.
+    """The tier of the order (.claude/skills/issue-plan/SKILL.md, "Rules"), 0 first: urgency high and importance high, urgency high only, importance high only, neither.
     A label that is missing is low, and `importance:low` is the same as none."""
     return (0 if urgent(issue) else 2) + (0 if has(issue, "importance:high") else 1)
 
@@ -165,7 +165,7 @@ def parse_stream(text):
 # ---- pure: queue ----
 
 def base_key(i):
-    """The basis of the order (issues.md): the tier, then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
+    """The basis of the order (.claude/skills/issue-plan/SKILL.md, "Rules"): the tier, then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
     return (tier(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
 
 
@@ -436,7 +436,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
     An issue with needs:owner, and one with an open blocker, are left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
-    (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
+    (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (.claude/skills/ship/SKILL.md, "Rules"): it may bundle issues of any units.
     `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included); the night run only.
     `waiting` are the changes that wait for the release. A parent is in none of the lists: its parts are.
     """
