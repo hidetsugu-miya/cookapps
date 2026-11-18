@@ -21,7 +21,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { setOrcaWorking } from "./footer.js";
+import { setOrcaCount } from "./footer.js";
 import { devMode, setDevMode } from "./formation.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -36,6 +36,7 @@ import { initLsp, ensureServer, syncServers } from "./orca-lsp.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, showDefinition, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
+import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
@@ -286,23 +287,43 @@ function drawBadge() {
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
   nav.setAttribute("aria-label", parts.length === 0 ? "開発" : `開発（${parts.join("、")}）`);
-  setOrcaWorking(workingProjects);
+  setOrcaCount(waiting, workingProjects);
 }
 
-// What a read that did not work says (the Orca screen and the side pane show it alike), else null.
+const MISSING_NOTICE = "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます";
+
+// What a read that did not work says (the side pane of A-9 shows it alike), else null.
 export function noticeOf(v: OrcaOverview | null) {
-  return v?.state === "missing" ? "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます" : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
+  return v?.state === "missing" ? MISSING_NOTICE : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
+}
+
+// The lines of the notice above the list (A-6, A-33). While this machine is the target, or the command is missing, it is the one line of `noticeOf`. While a saved environment is the target, this machine and the saved environment are read apart,
+// so each read that failed has a line of its own that names its place, this machine's first as in the list; the other place's rows stay drawn.
+function noticeLines() {
+  if (view === null) return [];
+  if (view.target === null || view.state === "missing") {
+    const text = noticeOf(view);
+    return text === null ? [] : [{ text, failed: view.state === "failed" }];
+  }
+  const failed = (place: string, message: string) => ({ text: `${place} を読み込めませんでした: ${message}`, failed: true });
+  const lines: { text: string; failed: boolean }[] = [];
+  if (here?.state === "failed") lines.push(failed(THIS_MACHINE, here.message));
+  if (view.state === "failed") lines.push(failed(view.target, view.message));
+  return lines;
 }
 
 function drawNotice() {
-  const text = noticeOf(view);
-  const key = JSON.stringify([view?.state, text]);
+  const lines = noticeLines();
+  const key = JSON.stringify(lines);
   if (key === noticeKey) return;
   noticeKey = key;
-  if (text === null) return $("orca-notice").replaceChildren();
-  const row = tag("div", view?.state === "failed" ? "pending fail" : "pending");
-  row.append(tag("span", "sp", text));
-  $("orca-notice").replaceChildren(row);
+  $("orca-notice").replaceChildren(
+    ...lines.map((line) => {
+      const row = tag("div", line.failed ? "pending fail" : "pending");
+      row.append(tag("span", "sp", line.text));
+      return row;
+    }),
+  );
 }
 
 // The clear button of the search field shows while something is typed.
@@ -339,6 +360,13 @@ function sessionNode(t: Tab, key: string) {
     row.append(badge);
   }
   row.onclick = () => selectSession(key, t.id);
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
+    if (key === projectKey || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
+    openPeek(key, t.id, `tab:${t.id}`);
+    syncPeek();
+  };
   return row;
 }
 
@@ -356,6 +384,15 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   if (environment !== null) row.append(environmentChip(environment));
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // The first session of the project (A-40). A selected project's terminal is in the work pane, and a project with no session, or a session with no terminal, has none to show.
+    // Read at the press: the row is not drawn again when its first session changes.
+    const first = tabsOf(key).filter((x) => !isDocument(x))[0];
+    if (key === projectKey || first === undefined || first.handle === null) return;
+    openPeek(key, first.id, key);
+    syncPeek();
+  };
   wrap.append(row);
   // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
   if (!tabs.length) return wrap;
@@ -777,9 +814,21 @@ function serverGone(environment: string | null, path: string) {
   return !open && !hasFileIn(environment, path) && !hasDiffIn(environment, path);
 }
 
+// The modal of A-40 shows the session it was opened for as the list has it now, and closes when the list no longer has it, when its project was selected, or when the screen is not shown.
+function syncPeek() {
+  const at = peeking();
+  if (at === null) return;
+  const t = shown() && at.project !== projectKey ? tabsOf(at.project).find((x) => x.id === at.tab) : undefined;
+  if (t === undefined || t.handle === null) return closePeek();
+  const name = mix.projects.find((p) => p.key === at.project)?.name ?? "";
+  drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: { kind: t.environment !== null && streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment } });
+}
+
 function draw() {
   syncServers(serverGone);
   drawBadge();
+  // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
+  syncPeek();
   if (!shown()) return;
   drawNotice();
   drawSearch();
@@ -902,6 +951,7 @@ function rereadFiles() {
 function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
+  syncPeek();
   // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
   if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
   else if (Date.now() - filesAt >= shownMs()) {
@@ -1294,6 +1344,7 @@ function initSearch() {
 
 export function initOrca() {
   initOrcaTerminal(showError);
+  initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError, definition: askDefinition, ruby: (target, project, path) => void ensureServer({ target, project, path }) });

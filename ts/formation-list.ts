@@ -1,4 +1,4 @@
-// The list of the formations at the left of the orchestration mode (A-37): a row for each formation with its name, the time since it was made, its projects and the number of its children in each state (`formation_list`).
+// The list of the formations at the left of the orchestration mode (A-37): a row for each formation with its name, the time since it was made and the number of its children in each state (`formation_list`).
 // The formation of the selected row is the one the middle pane (its orchestrator) and the right pane (its flow) show; with no row selected (at each start, and after the selected one is deleted) neither pane is shown. The list is read on the clock of the flow (formation-flow.ts), so it is read only while the mode is shown.
 import type { FormationEntry } from "./bindings/FormationEntry";
 import type { FormationKeptChild } from "./bindings/FormationKeptChild";
@@ -8,9 +8,9 @@ import { $, span, tag } from "./dom.js";
 import { openFormationDialog } from "./formation-new.js";
 import { setFormationCount } from "./footer.js";
 import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
-import { DELETE_SVG, PLUS_SVG } from "./icons.js";
+import { DELETE_SVG, FOLDER_SVG, PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { openMenu } from "./menu.js";
+import { type MenuItem, openMenu } from "./menu.js";
 import { elapsed } from "./orca.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
@@ -129,11 +129,15 @@ async function remove(name: string, force: boolean, shown: FormationShown[]) {
   void readList();
 }
 
-// The menu of a right press on a row.
+// The menu of a right press on a row: the projects of the formation at the top, as headings that are not pressed (the row shows none), and under a line 「削除」.
 function openRowMenu(f: FormationEntry, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   if (deleting.has(f.name)) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name, false, [])) }], { at: { x: e.clientX, y: e.clientY } });
+  const projects: MenuItem[] = f.projects.map((p) => ({ label: p.repo, color: "", icon: `<span class="formation-menu-mark">${FOLDER_SVG}</span>`, current: false, disabled: true, pick: () => {} }));
+  const del: MenuItem = { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, divider: projects.length > 0, pick: () => confirmFormationDelete(anchor, f.name, () => void remove(f.name, false, [])) };
+  openMenu(anchor, [...projects, del], { at: { x: e.clientX, y: e.clientY } });
+  // A heading cannot take the focus, so the keys start on 「削除」.
+  document.querySelector<HTMLElement>('.menu button:not(:disabled)')?.focus();
 }
 
 // Selects the formation `name`: its orchestrator and its flow are shown. `null` selects none, and neither is shown.
@@ -164,11 +168,6 @@ function row(f: FormationEntry, now: number): HTMLButtonElement {
   const time = f.createdAt === null ? "" : elapsed(f.createdAt, now, false);
   if (time !== "") head.append(tag("time", "formation-row-time", time));
   node.append(head);
-  if (f.projects.length > 0) {
-    const projects = span("formation-row-projects", "");
-    for (const p of f.projects) projects.append(span("formation-row-project", p.repo));
-    node.append(projects);
-  }
   const counts = span("formation-row-counts", "");
   for (const state of COUNT_ORDER) {
     if (f.counts[state] === 0) continue;

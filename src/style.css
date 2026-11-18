@@ -1,4 +1,4 @@
-:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
@@ -69,15 +69,16 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .footer-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
 .footer-btn:hover { background: var(--soft); }
 .footer-btn svg { width: 20px; height: 20px; }
-/* A-37: at the left end of the footer, only while the development screen is shown: the switch between Orca and the orchestration, the name drawn beside the icon of the mode that is on. */
-#footer-modes { display: flex; gap: 2px; margin-right: auto; padding: 2px; border-radius: 10px; border: 1px solid var(--chip-line); background: var(--surface); }
-.footer-mode { height: 24px; padding: 0 6px; color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); }
-.footer-mode { position: relative; }
-.footer-mode svg { width: 17px; height: 17px; }
-/* The count of the children that wait, at the corner of the orchestration's icon while Orca is the mode. */
-.footer-mode-count { position: absolute; top: -6px; right: -5px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--surface); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
-.footer-mode-count.working { background: var(--agent-working); color: var(--side); }
-.footer-mode[aria-pressed="true"] { padding: 0 10px 0 6px; background: var(--soft); color: var(--accent-text); font-weight: bold; }
+/* A-37: at the left end of the footer, only while the development screen is shown: the switch between Orca and the orchestration, two icons with no frame. The mode that is on has a pale green ground and a green icon. */
+#footer-modes { display: flex; gap: 2px; margin-right: auto; }
+.footer-mode { position: relative; padding: 0 7px; color: var(--muted); }
+.footer-mode svg { width: 18px; height: 18px; }
+.footer-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent-text); }
+/* What waits for the owner (the children that wait for approval; what waits for a check in Orca), at the corner of the icon. */
+.footer-mode-count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border-radius: 8px; background: var(--agent-question); color: var(--on-accent); box-shadow: 0 0 0 2px var(--bar); font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+/* Work alone is no number: the icon is yellow and fades slowly, as the sidebar's 開発 button does (A-6); it stays yellow where motion is reduced. */
+.footer-mode.working svg { stroke: var(--agent-working); animation: nav-working 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .footer-mode.working svg { animation: none; } }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
 #unread-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
@@ -1011,8 +1012,8 @@ button.status:hover { filter: brightness(.95); }
 
 /* The orchestration mode of the development screen (A-37): the orchestrator's terminal at the left, and the right pane (the flow, and under it the session of the selected child) of the same width. */
 #formation { flex: 1; min-height: 0; display: flex; }
-/* The list of the formations at the left, as the Orca screen's list is (`--list-w` is where the divider put it, 20% to 50% of the screen). */
-#formation-list { flex: none; width: clamp(20%, var(--list-w, 25%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
+/* The list of the formations at the left, narrower than the Orca screen's list (`--list-w` is where the divider put it, 15% to 35% of the screen, 18% at first, and 160px at least). */
+#formation-list { flex: none; width: clamp(15%, var(--list-w, 18%), 35%); min-width: 160px; display: flex; flex-direction: column; background: var(--bar); }
 #formation-split { flex: none; }
 #formation-list-head { flex: none; display: flex; align-items: center; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px 0 18px; border-bottom: 1px solid var(--line); }
 #formation-new { flex: none; margin-left: auto; }
@@ -1025,9 +1026,10 @@ button.status:hover { filter: brightness(.95); }
 .formation-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .formation-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); font-weight: 700; }
 .formation-row-time { flex: none; color: var(--muted); font-size: calc(11px * var(--fs)); }
-.formation-row-projects, .formation-row-counts { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-.formation-row-projects { gap: 4px; }
-.formation-row-project { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border-radius: 4px; background: var(--soft); color: var(--ink-soft); font-size: calc(11px * var(--fs)); line-height: 18px; }
+.formation-row-counts { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+/* The projects of a formation at the top of the menu of its row: headings that are not pressed, in the monospace of the names. */
+.menu button:disabled:has(> .formation-menu-mark) { opacity: 1; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); cursor: default; }
+.formation-menu-mark { display: inline-flex; flex: none; }
 .formation-row-count { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-size: calc(11px * var(--fs)); white-space: nowrap; }
 .formation-row-count[data-state="waiting"] { color: var(--agent-question); font-weight: 700; }
 #formation-orchestrator { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
@@ -1036,13 +1038,21 @@ button.status:hover { filter: brightness(.95); }
 #formation-head-name { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 #formation-restart { flex: none; margin-left: auto; }
 #formation-term-error { flex: none; margin: 8px; overflow-wrap: anywhere; }
-#formation-flow { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
+/* The right pane, "チームメイト", is as wide as the divider before it puts it (`--flow-w`, 20% to 50% of the screen, 41% at first, half of what the list leaves at its first width). The orchestrator takes the rest. */
+#formation-flow { flex: none; width: clamp(20%, var(--flow-w, 41%), 50%); min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; background: var(--bar); }
+#formation-flow-split { flex: none; }
+/* Closed: a strip of 40px stays at the right end, with the button that opens the pane and a mark for each child. */
+#formation-strip { flex: none; width: 40px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; border-left: 1px solid var(--line); background: var(--bar); }
+#formation-strip-head { flex: none; display: flex; align-items: center; justify-content: center; align-self: stretch; min-height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
+#formation-strip-marks { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 14px 0; align-self: stretch; scrollbar-width: none; }
+.formation-strip-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
 #formation-flow-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: var(--header-h); box-sizing: border-box; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
+#formation-flow-head .icon-btn, #formation-session-head .icon-btn, #formation-strip-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#formation-flow-head .icon-btn svg, #formation-session-head .icon-btn svg, #formation-strip-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #formation-flow-head h2 { flex: none; }
 #formation-flow-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
-.formation-follow { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: var(--muted); font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
-.formation-follow svg { width: 15px; height: 15px; }
-.formation-follow[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+#formation-follow { flex: none; margin-left: auto; color: var(--muted); }
+#formation-follow[aria-pressed="true"], #formation-follow[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
 /* The view has a height of its own at most, and scrolls inside when the tree is taller; without a session under it, it takes the height of the pane. */
 #formation-flow-body { flex: 0 1 auto; min-height: 0; max-height: min(300px, 50%); overflow-y: auto; box-sizing: border-box; padding: 14px 10px; }
 #formation-flow:has(#formation-session[hidden]) #formation-flow-body { flex: 1 1 auto; max-height: none; }
@@ -1074,13 +1084,13 @@ button.formation-card { cursor: pointer; }
 .formation-card[data-state="waiting"] .formation-card-state { color: var(--agent-question); }
 .formation-card[data-state="planned"] .formation-card-state { color: var(--muted); font-weight: 600; }
 .formation-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-idle); }
-.formation-card[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
-.formation-card[data-state="waiting"] .formation-dot, .formation-row-count[data-state="waiting"] .formation-dot, #formation-session-head[data-state="waiting"] .formation-dot { background: var(--agent-question); }
-.formation-card[data-state="done"] .formation-dot, .formation-row-count[data-state="done"] .formation-dot, #formation-session-head[data-state="done"] .formation-dot { background: var(--agent-done); }
-.formation-card[data-state="planned"] .formation-dot, .formation-row-count[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
+.formation-card[data-state="working"] .formation-dot, .formation-strip-mark[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { width: 9px; height: 9px; background: transparent; border: 2px solid var(--agent-working); border-top-color: transparent; animation: spin 1s linear infinite; }
+.formation-card[data-state="waiting"] .formation-dot, .formation-strip-mark[data-state="waiting"] .formation-dot, .formation-row-count[data-state="waiting"] .formation-dot, #formation-session-head[data-state="waiting"] .formation-dot { background: var(--agent-question); }
+.formation-card[data-state="done"] .formation-dot, .formation-strip-mark[data-state="done"] .formation-dot, .formation-row-count[data-state="done"] .formation-dot, #formation-session-head[data-state="done"] .formation-dot { background: var(--agent-done); }
+.formation-card[data-state="planned"] .formation-dot, .formation-strip-mark[data-state="planned"] .formation-dot, .formation-row-count[data-state="planned"] .formation-dot { background: transparent; border: 1.5px solid var(--muted); }
 .formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
-@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot, .formation-strip-mark[data-state="working"] .formation-dot, .formation-row-count[data-state="working"] .formation-dot, #formation-session-head[data-state="working"] .formation-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }
@@ -1232,6 +1242,11 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }
 .orca-file[data-open="true"] { background: var(--soft); color: var(--accent); }
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
+/* A-39: a change from HEAD gives the name and the icon its color, after the open row's rule and before the selected row's, which stays white. */
+.orca-file[data-change="changed"], .orca-file[data-change="changed"] .orca-file-ic { color: var(--warn); }
+.orca-file[data-change="new"], .orca-file[data-change="new"] .orca-file-ic { color: var(--diff-ins-mark); }
+.orca-file-git { flex: none; margin-left: auto; padding-left: 8px; font-size: calc(11px * var(--fs)); }
+.orca-file[data-kind="dir"] .orca-file-git { width: 6px; height: 6px; box-sizing: border-box; margin-right: 2px; padding: 0; border-radius: 50%; background: currentColor; }
 .orca-file[data-selected="true"] { background: var(--accent); color: var(--on-accent); }
 .orca-file[data-selected="true"] .orca-file-ic { color: var(--on-accent); }
 .orca-file-new { display: flex; align-items: center; gap: 4px; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); }
@@ -1344,7 +1359,9 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 /* A-26: the rich view of a Markdown file. Milkdown draws ProseMirror content here (read only for a file that cannot be edited in it); there is no theme, so the elements get their looks below. */
 .orca-edit-rich { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--surface); }
-.orca-edit-rich .ProseMirror { box-sizing: border-box; min-height: 100%; max-width: 860px; margin: 0 auto; padding: 16px 24px 48px; outline: none; white-space: pre-wrap; word-wrap: break-word; font-family: var(--ff-base); line-height: 1.7; user-select: text; -webkit-user-select: text; }
+.orca-edit-rich .ProseMirror { position: relative; z-index: 1; box-sizing: border-box; min-height: 100%; max-width: 860px; margin: 0 auto; padding: 16px 24px 48px; outline: none; white-space: pre-wrap; word-wrap: break-word; font-family: var(--ff-base); line-height: 1.7; user-select: text; -webkit-user-select: text; }
+/* A-26: the band of the paragraph of the caret, in the box of the rich view and under the text of the editor; the script sets its box. */
+.orca-edit-rich-band { position: absolute; z-index: 0; pointer-events: none; background: var(--cursor-band); }
 .orca-edit-rich .ProseMirror > :first-child { margin-top: 0; }
 .orca-edit-rich h1, .orca-edit-rich h2, .orca-edit-rich h3, .orca-edit-rich h4, .orca-edit-rich h5, .orca-edit-rich h6 { margin: 1.4em 0 .5em; line-height: 1.35; }
 .orca-edit-rich h1 { font-size: 1.7em; padding-bottom: .2em; border-bottom: 1px solid var(--line); }
@@ -1372,7 +1389,9 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 /* A numbers box at the left (as wide as the digits of its last number: `--digits` of them in ch, set by the script, and the padding of the numbers and the border) and the two layers of the text beside it. The numbers take the font of the text, are not selected, and follow the vertical scroll only. */
 .orca-edit-gutter { flex: none; width: calc(var(--digits, 1) * 1ch + 21px); overflow: hidden; box-sizing: border-box; border-right: 1px solid var(--line); background: var(--surface); color: var(--muted); text-align: right; user-select: none; -webkit-user-select: none; }
 .orca-edit-nums { padding: 8px 8px 8px 12px; white-space: pre; }
-.orca-edit-text { position: relative; flex: 1; min-width: 0; }
+.orca-edit-text { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+/* The band of the line of the caret, under the layer and the textarea (A-18), across the box of the text; the script sets its height and its place. */
+.orca-edit-line { position: absolute; top: 0; left: 0; right: 0; pointer-events: none; background: var(--cursor-band); }
 .orca-edit-area, .orca-edit-gutter, .orca-edit-hl code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; letter-spacing: normal; }
 .orca-edit-area { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: transparent; caret-color: CanvasText; overflow: auto; resize: none; outline: none; }
 .orca-edit-area::selection { background: var(--hl-select); }
@@ -1426,6 +1445,17 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
+/* A-40: the modal of the terminal of one session, in the middle of a dimmed screen (as .scrim, but not that class: it is always in the document, and the screens count .scrim for an open pane) with a margin on the four sides, in the frame of #account-popup. */
+#orca-peek { position: fixed; inset: 0; z-index: 15; display: flex; background: rgba(0, 0, 0, .25); align-items: center; justify-content: center; box-sizing: border-box; padding: 32px; }
+#orca-peek-box { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+#orca-peek-head { flex: none; display: flex; align-items: center; gap: 10px; box-sizing: border-box; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); }
+#orca-peek-icon { flex: none; display: inline-flex; }
+#orca-peek-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+#orca-peek-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+#orca-peek-open { flex: none; height: 28px; }
+#orca-peek-head .icon-btn { flex: none; width: 28px; height: 28px; }
+#orca-peek-head .icon-btn svg { width: 16px; height: 16px; }
+#orca-peek-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The host of a Claude Code pane (A-36), as `#orca-panes .orca-term` is the host of an Orca terminal: the box of the terminal fills it. */
 .claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
@@ -1452,7 +1482,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .formation-new-pop input:not([type="checkbox"]):focus { outline: 2px solid var(--accent); border-color: transparent; }
 .formation-new-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--chip-line); border-radius: 8px; }
 .formation-new-env { position: sticky; top: 0; margin: 0; padding: 4px 10px; background: var(--soft); color: var(--accent-text); font-size: calc(12px * var(--fs)); font-weight: 700; }
-.formation-new-repo { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+.formation-new-repo { display: flex; align-items: center; gap: 10px; box-sizing: border-box; min-height: 32px; padding: 0 10px; cursor: pointer; }
+.formation-new-repo input { flex: none; width: 16px; height: 16px; margin: 0; cursor: pointer; }
 .formation-new-repo:hover { background: var(--hover); }
 .formation-new-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .formation-new-actions .text-btn { justify-content: center; height: 28px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); }

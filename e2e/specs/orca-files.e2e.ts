@@ -9,6 +9,8 @@ import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaGitChange } from "../../ts/bindings/OrcaGitChange";
+import type { OrcaGitMark } from "../../ts/bindings/OrcaGitMark";
 import type { OrcaLocalBranch } from "../../ts/bindings/OrcaLocalBranch";
 import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
@@ -57,6 +59,39 @@ describe("orca: files and editor (A-18)", () => {
   // What `orca_files_ignored` answers for the root.
   const rootIgnored = ["target", "b.log"];
   const isIgnored = (path: string) => browser.execute((p) => document.querySelector<HTMLElement>(`.orca-file[data-path="${p}"]`)?.dataset.ignored, path);
+  // A-39: the entry `path` differs from HEAD (`orca_files_changes`), and how the row of an entry looks.
+  const change = (path: string, mark: OrcaGitMark): OrcaGitChange => ({ path, mark });
+  const gitLook = (path: string) =>
+    browser.execute((p) => {
+      const node = document.querySelector<HTMLElement>(`.orca-file[data-path="${p}"]`)!;
+      const name = getComputedStyle(node.querySelector(".orca-file-name")!);
+      const git = node.querySelector<HTMLElement>(".orca-file-git");
+      const box = git?.getBoundingClientRect();
+      const style = git === null ? null : getComputedStyle(git);
+      return {
+        change: node.dataset.change ?? null,
+        name: name.color,
+        weight: name.fontWeight,
+        style: name.fontStyle,
+        icon: getComputedStyle(node.querySelector(".orca-file-ic")!).color,
+        background: getComputedStyle(node).backgroundColor,
+        opacity: getComputedStyle(node).opacity,
+        git: git === null || box === undefined || style === null ? null : { text: git.textContent, color: style.color, fill: style.backgroundColor, width: box.width, height: box.height, radius: style.borderRadius, fromEnd: node.getBoundingClientRect().right - box.right },
+      };
+    }, path);
+  const WARN = "rgb(154, 91, 0)";
+  const INS = "rgb(26, 127, 55)";
+  const WHITE = "rgb(255, 255, 255)";
+  // A press on a row with ⌘: it adds the row to the selection (a folder is not opened by it).
+  const metaPress = (path: string) =>
+    browser.execute(
+      (p, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`.orca-file[data-path="${p}"]`)!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+      },
+      path,
+      onceId(),
+    );
   const text = (content: string, signature = "sig-1", language = "plaintext", highlight: string | null = null): OrcaFileText => ({ content, crlf: false, signature, language, highlight });
   const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
   const names = () => textsOf("#orca-files-tree .orca-file-name");
@@ -304,6 +339,64 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.querySelector(".orca-edit-rich")!.textContent)).not.toContain("title");
   });
 
+  // A-26: the band under the paragraph of the caret (`.orca-edit-rich-band`).
+  const richBand = () =>
+    browser.execute(() => {
+      const b = document.querySelector<HTMLElement>(".orca-edit-rich-band")!;
+      const r = b.getBoundingClientRect();
+      return { hidden: b.hidden, top: r.top, bottom: r.bottom, left: r.left, right: r.right, background: getComputedStyle(b).backgroundColor };
+    });
+  const boxOf = (selector: string) =>
+    browser.execute((s) => {
+      const r = document.querySelector(`.orca-edit-rich .ProseMirror ${s}`)!.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left };
+    }, selector);
+  // The caret at the start of the first element `selector` of the rich view, which has the focus (or, with `whole`, the whole content of the element selected).
+  const caretInRich = (selector: string, whole = false) =>
+    browser.execute(
+      (s, all) => {
+        const view = document.querySelector<HTMLElement>(".orca-edit-rich .ProseMirror")!;
+        view.focus();
+        const r = document.createRange();
+        r.selectNodeContents(view.querySelector(s)!);
+        if (!all) r.collapse(true);
+        const selection = getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(r);
+      },
+      selector,
+      whole,
+    );
+  const bandAt = (selector: string) =>
+    browser.waitUntil(
+      async () => {
+        const [b, box] = [await richBand(), await boxOf(selector)];
+        return !b.hidden && Math.abs(b.top - box.top) < 1 && Math.abs(b.bottom - box.bottom) < 1;
+      },
+      { timeoutMsg: `the band never came under ${selector}` },
+    );
+  const richBandHidden = () => browser.waitUntil(async () => (await richBand()).hidden, { timeoutMsg: "the band of the rich view never went" });
+
+  it("lays a faint band under the paragraph of the caret in the rich view, the heading and the item of a list included, and not over a selected range (A-26)", async () => {
+    await openFiles();
+    await openMarkdown(mdSample);
+    await caretInRich("h1");
+    await bandAt("h1");
+    expect((await richBand()).background).not.toBe("rgba(0, 0, 0, 0)");
+    await caretInRich("p");
+    await bandAt("p");
+    await caretInRich("li p");
+    await bandAt("li p");
+    // The band is as wide as the editor, so it reaches the marks of the list on the left of the item.
+    expect((await richBand()).left).toBeLessThan((await boxOf("li p")).left);
+    await caretInRich("p", true);
+    await richBandHidden();
+    await caretInRich("p");
+    await bandAt("p");
+    await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-rich .ProseMirror")!.blur());
+    await richBandHidden();
+  });
+
   it("switches a Markdown file to its source and back to the rich view with the buttons (A-26)", async () => {
     await openFiles();
     await openMarkdown("# 見出し\n");
@@ -448,6 +541,88 @@ describe("orca: files and editor (A-18)", () => {
     });
     const moved = await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-hl code")!.style.transform);
     expect(moved.replace(/\s/g, "")).toBe("translate(0px,-48px)");
+  });
+
+  // A-18: the band under the line of the caret (`.orca-edit-line`), and where it is on the page.
+  const band = () =>
+    browser.execute(() => {
+      const b = document.querySelector<HTMLElement>(".orca-edit-line")!;
+      const r = b.getBoundingClientRect();
+      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: b.nextElementSibling === document.querySelector(".orca-edit-hl") };
+    });
+  // The box of the letter at `index` of the text, drawn by the layer (a plain text file: the layer is one text node).
+  const glyph = (index: number) =>
+    browser.execute((i) => {
+      const node = document.querySelector(".orca-edit-hl code")!.firstChild as Text;
+      const range = document.createRange();
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      const r = range.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    }, index);
+  // Gives the text area the focus and puts the selection `start` to `end` in it. The window of the E2E build has no focus, so a click does not focus the text area and a key that moves the caret (the arrows, End) does not move it: the caret is moved by the script, as the rich view's is.
+  const caretAt = (start: number, end = start) =>
+    browser.execute(
+      (a, b) => {
+        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+        area.focus();
+        area.setSelectionRange(a, b);
+      },
+      start,
+      end,
+    );
+  const bandOn = (line: string) => browser.waitUntil(async () => (await band()).line === line && !(await band()).hidden, { timeoutMsg: `the band never came to line ${line}` });
+  const bandHidden = () => browser.waitUntil(async () => (await band()).hidden, { timeoutMsg: "the band never went" });
+
+  it("lays a faint band under the line of the caret, across the box of the text and under the letters, and moves it with the caret (A-18)", async () => {
+    await openFiles();
+    await openA("alpha\nbeta\ngamma\n");
+    await caretAt(0);
+    await bandOn("0");
+    await caretAt(6);
+    await bandOn("1");
+    const b = await band();
+    const letter = await glyph(6);
+    const next = await glyph(11);
+    expect(b.top).toBeLessThanOrEqual(letter.top);
+    expect(b.bottom).toBeGreaterThanOrEqual(letter.bottom);
+    expect(b.bottom).toBeLessThanOrEqual(next.top);
+    expect(b.width).toBeCloseTo(b.textWidth, 0);
+    expect(b.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(b.beforeLayer).toBe(true);
+    await caretAt(11);
+    await bandOn("2");
+    expect((await band()).top).toBeGreaterThan(b.top);
+    await caretAt(6);
+    await bandOn("1");
+    expect((await band()).top).toBe(b.top);
+  });
+
+  it("does not draw the band over a selected range, and takes it off when the text area loses the focus (A-18)", async () => {
+    await openFiles();
+    await openA("alpha\nbeta\ngamma\n");
+    await caretAt(6);
+    await bandOn("1");
+    await caretAt(6, 7);
+    await bandHidden();
+    await caretAt(6);
+    await bandOn("1");
+    await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-area")!.blur());
+    await bandHidden();
+  });
+
+  it("moves the band with the scroll of the textarea (A-18)", async () => {
+    await openFiles();
+    await openA("x\n".repeat(200));
+    await caretAt(6);
+    await bandOn("3");
+    const before = (await band()).top;
+    await browser.execute(() => {
+      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+      area.scrollTop = 48;
+      area.dispatchEvent(new Event("scroll"));
+    });
+    await browser.waitUntil(async () => Math.abs((await band()).top - (before - 48)) < 0.5, { timeoutMsg: "the band never followed the scroll" });
   });
 
   // A-18: the numbers of the lines, in a box at the left of the text (`.orca-edit-gutter`, one text node of the numbers in lines).
@@ -718,6 +893,159 @@ describe("orca: files and editor (A-18)", () => {
     expect(await count("#orca-files-tree .orca-file-note")).toBe(0);
   });
 
+  // A-39: the entries that differ from HEAD. Rust asks git (unit tests); here the screen is checked: the question, the colors, the marks at the right end, and when they are drawn.
+  const changedRoot = () => dirOf("", [["src", true], ["lib", true], ["a.rs", false], ["b.rs", false], ["c.rs", false]]);
+  const changedMarks = () => [change("src", "changed"), change("lib", "new"), change("a.rs", "changed"), change("b.rs", "new")];
+
+  it("asks which entries differ from HEAD after the folder is drawn, and draws them in the color of their kind with M, U and a dot at the right end, and the others as they were (A-39)", async () => {
+    await openFiles({ orca_files_list: changedRoot(), orca_files_ignored: [], orca_files_changes: holds });
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    // The folder is drawn while git has not answered: nothing is marked yet, and the question is the entries of the list in its order.
+    expect(await waitForCalls("orca_files_changes")).toEqual([{ path: "/work/example-app", paths: ["src", "lib", "a.rs", "b.rs", "c.rs"], environment: null }]);
+    expect(await count(".orca-file[data-change]")).toBe(0);
+    expect(await count(".orca-file-git")).toBe(0);
+    await release("orca_files_changes", changedMarks());
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === "changed", { timeoutMsg: "the change mark never came" });
+    expect(await names()).toEqual(["src", "lib", "a.rs", "b.rs", "c.rs"]);
+    const [a, b, c, src, lib] = [await gitLook("a.rs"), await gitLook("b.rs"), await gitLook("c.rs"), await gitLook("src"), await gitLook("lib")];
+    // A file: the name and the icon in the color, not bold, and M or U at the right end in the same color.
+    expect([a.change, a.name, a.icon, a.weight, a.git?.text, a.git?.color]).toEqual(["changed", WARN, WARN, "400", "M", WARN]);
+    expect([b.change, b.name, b.icon, b.weight, b.git?.text, b.git?.color]).toEqual(["new", INS, INS, "400", "U", INS]);
+    expect(a.git!.fromEnd).toBeGreaterThanOrEqual(7);
+    expect(a.git!.fromEnd).toBeLessThanOrEqual(11);
+    // A folder with a difference inside: the same colors and a dot (a filled circle with no text) at the right end.
+    expect([src.change, src.name, src.icon, src.git?.text, src.git?.fill]).toEqual(["changed", WARN, WARN, "", WARN]);
+    expect([lib.change, lib.name, lib.icon, lib.git?.text, lib.git?.fill]).toEqual(["new", INS, INS, "", INS]);
+    expect([src.git!.width, src.git!.height, src.git!.radius]).toEqual([6, 6, "50%"]);
+    expect(src.git!.fromEnd).toBeGreaterThanOrEqual(7);
+    expect(src.git!.fromEnd).toBeLessThanOrEqual(13);
+    // An entry with no difference has no mark and keeps the colors of every row.
+    expect(c.change).toBeNull();
+    expect(c.git).toBeNull();
+    expect([c.name, c.icon]).not.toContain(WARN);
+    expect([c.name, c.icon]).not.toContain(INS);
+    expect(await names()).toEqual(["src", "lib", "a.rs", "b.rs", "c.rs"]);
+  });
+
+  it("keeps the colors and the marks white on the selected rows, and gives them back when the rows are not selected (A-39)", async () => {
+    await openFiles({ orca_files_list: changedRoot(), orca_files_ignored: [], orca_files_changes: changedMarks() });
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === "changed", { timeoutMsg: "the change mark never came" });
+    await metaPress("a.rs");
+    await metaPress("lib");
+    const [a, lib] = [await gitLook("a.rs"), await gitLook("lib")];
+    expect([a.name, a.icon, a.git?.color, a.background]).toEqual([WHITE, WHITE, WHITE, "rgb(30, 123, 82)"]);
+    expect([lib.name, lib.icon, lib.git?.fill, lib.background]).toEqual([WHITE, WHITE, WHITE, "rgb(30, 123, 82)"]);
+    // The mark of the kind is still there under the selection.
+    expect([a.change, a.git?.text, lib.change]).toEqual(["changed", "M", "new"]);
+    await metaPress("a.rs");
+    expect((await gitLook("a.rs")).name).toBe(WARN);
+    expect((await gitLook("lib")).name).toBe(WHITE);
+  });
+
+  it("draws a changed file that is open in the editor in the color of its kind on the open row's ground (A-39)", async () => {
+    await openFiles({ orca_files_changes: [change("a.rs", "changed")] });
+    await openA();
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === "changed", { timeoutMsg: "the change mark never came" });
+    await expect(row("a.rs")).toHaveAttribute("data-open", "true");
+    const a = await gitLook("a.rs");
+    expect([a.name, a.icon, a.background, a.git?.text]).toEqual([WARN, WARN, "rgb(227, 244, 234)", "M"]);
+  });
+
+  it("keeps the faint italics of an ignored entry that also differs from HEAD (A-39)", async () => {
+    await openFiles({ orca_files_changes: [change("b.log", "new"), change("target", "changed")] });
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
+    await browser.waitUntil(async () => (await gitLook("b.log")).change === "new", { timeoutMsg: "the change mark never came" });
+    const log = await gitLook("b.log");
+    expect([log.style, log.opacity, log.name, log.git?.text]).toEqual(["italic", "0.55", INS, "U"]);
+    const plain = await gitLook("a.rs");
+    expect([plain.style, plain.opacity, plain.change]).toEqual(["normal", "1", null]);
+  });
+
+  it("marks nothing when git cannot tell the differences, and shows no message for it (A-39)", async () => {
+    await openFiles({ orca_files_changes: rejects("Orca に接続できません") });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await waitForCalls("orca_files_changes");
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
+    await browser.pause(300);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    expect(await count(".orca-file[data-change]")).toBe(0);
+    expect(await count(".orca-file-git")).toBe(0);
+    expect(await count("#orca-files-tree .orca-file-note")).toBe(0);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("keeps the change marks through a read again until git answers, replaces them with the answer, and keeps them when git cannot answer (A-39)", async () => {
+    await openFiles({ orca_files_changes: [change("a.rs", "changed")] });
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === "changed", { timeoutMsg: "the change mark never came" });
+    const marks = await mock("orca_files_changes", holds);
+    await focusBack();
+    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log"], environment: null }]);
+    await browser.pause(300);
+    expect((await gitLook("a.rs")).change).toBe("changed");
+    // The answer replaces the marks: a.rs is no longer named.
+    await release(marks, [change("src", "new")]);
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === null, { timeoutMsg: "the answer never replaced the marks" });
+    expect((await gitLook("src")).change).toBe("new");
+    expect(await count(".orca-file-git")).toBe(1);
+    // An answer that fails leaves the kept marks.
+    const failing = await mock("orca_files_changes", rejects("Orca に接続できません"));
+    await focusBack();
+    await waitForCalls(failing);
+    await browser.pause(300);
+    expect((await gitLook("src")).change).toBe("new");
+  });
+
+  it("asks for the differences by the clock too, a folder that holds the same entries included, and not for its ignore marks (A-39)", async () => {
+    await openFiles(timers({ orcaClock: 1000 }));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
+    const ignored = await mock("orca_files_ignored", rootIgnored);
+    const marks = await mock("orca_files_changes", [change("a.rs", "changed")]);
+    // A file was edited outside the app: the same entries, and the mark comes with no return of the focus.
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === "changed", { timeoutMsg: "the clock never asked for the differences" });
+    await mock("orca_files_changes", []);
+    await browser.waitUntil(async () => (await gitLook("a.rs")).change === null, { timeoutMsg: "the clock never took the mark off" });
+    expect(await callsOf(ignored)).toEqual([]);
+    expect(await callsOf(marks)).not.toEqual([]);
+  });
+
+  it("asks for the differences of a folder that is opened, after it is drawn, and not of a folder that the list marked as ignored (A-39)", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const marks = await mock("orca_files_changes", [change("src/lib", "changed"), change("src/gen.rs", "new")]);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["gen.rs", false]]));
+    await row("src").click();
+    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: ["src/lib", "src/gen.rs"], environment: null }]);
+    await browser.waitUntil(async () => (await gitLook("src/gen.rs")).change === "new", { timeoutMsg: "the change mark never came" });
+    expect((await gitLook("src/lib")).git?.text).toBe("");
+    await browser.waitUntil(async () => (await isIgnored("target")) === "true", { timeoutMsg: "the ignored mark never came" });
+    const none = await mock("orca_files_changes", []);
+    await mock("orca_files_list", dirOf("target", [["debug", true, true]]));
+    await row("target").click();
+    await waitForCount("#orca-files-tree .orca-file", 7);
+    await browser.pause(300);
+    expect(await callsOf(none)).toEqual([]);
+    expect(await count('.orca-file[data-path="target/debug"][data-change]')).toBe(0);
+  });
+
+  it("drops the change marks that come after another worktree's tree took the place (A-39)", async () => {
+    const value = orcaOverview(sample(), [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" })], {
+      terminals: [orcaTerminal("example-app", "zsh", { path: "/work/example-app-b", branch: "feat/b" })],
+    });
+    await openFiles({ orca_files_changes: holds }, value);
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await waitForCalls("orca_files_changes");
+    const list = await mock("orca_files_list", dirOf("", [["target", true]]));
+    await tabOf(zsh).$(".orca-tab-btn").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/b");
+    await waitForCalls(list);
+    await browser.waitUntil(async () => (await names()).join() === "target", { timeoutMsg: "the tree of the other worktree never showed" });
+    // The answer for the first worktree comes now, and names a path the new tree has too.
+    await release("orca_files_changes", [change("target", "changed")]);
+    await browser.pause(300);
+    expect((await gitLook("target")).change).toBeNull();
+  });
+
   it("reads a folder when it is pressed the first time, and draws it from what was read when it is opened again", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
@@ -765,6 +1093,26 @@ describe("orca: files and editor (A-18)", () => {
       { path: "/work/example-app", dir: "", ignored: false, environment: null },
       { path: "/work/example-app", dir: "src", ignored: false, environment: null },
     ]);
+  });
+
+  it("asks for the differences of the root and of the open folders in one call when the tree is read again (A-39)", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["gen.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const marks = await mock("orca_files_changes", [change("src/gen.rs", "new")]);
+    // The root first, alone, then `src`: each is answered with its own entries.
+    const list = await mock("orca_files_list", holds);
+    await focusBack();
+    await waitForCalls(list);
+    await release(list, root());
+    await waitForCalls(list, 2);
+    await release(list, dirOf("src", [["lib", true], ["gen.rs", false]]));
+    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log", "src/lib", "src/gen.rs"], environment: null }]);
+    await browser.waitUntil(async () => (await gitLook("src/gen.rs")).change === "new", { timeoutMsg: "the change mark never came" });
+    await browser.pause(300);
+    expect(await callsOf(marks)).toHaveLength(1);
   });
 
   it("reads nothing at the return of the focus while the file pane is hidden or the history is shown, and not a second time while a read is on its way", async () => {
@@ -1012,6 +1360,8 @@ describe("orca: files and editor (A-18)", () => {
     await filesToggle().click();
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
+    // The differences from HEAD (A-39) are asked at the same place.
+    expect(await waitForCalls("orca_files_changes")).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log"], environment: "Studio" }]);
   });
 
   it("shows the message of a root that cannot be read, and of a folder that cannot", async () => {

@@ -1,6 +1,7 @@
 //! A-18: the files of a worktree on the Orca screen: the list of its folders, and the text of a file read and saved by the editor.
 //! The calls are Orca's runtime (`files.readDir`, `files.read`, `files.writeIfUnchanged`, `files.createFile`, `files.createDir`, `files.delete`, `files.rename`, `git.checkIgnored`), on this machine over its unix socket and on a paired server over its WebSocket (the connection of A-10).
 //! The folder is answered from `files.readDir` alone, and what git ignores is asked after it (`orca_files_ignored`, `git.checkIgnored`), as Orca's own window does.
+//! What differs from HEAD is asked after it too (`orca_files_changes`, `git.status`): a file that is `modified`, `deleted`, `renamed` or `copied` is a change, one that is `untracked` or `added` is new, and a folder is what the files below it are. Those statuses were read in `git-status-porcelain-parser.js` in the `app.asar.unpacked` of Orca 1.4.x (a conflicted file has a status of its own, read as a change); it was not run against a real Orca.
 //! They are not a public interface of Orca: this was read in the `app.asar` of Orca 1.4.253 and tried on this machine's Orca. A token is in no log line, no error text and no return value, and the text of a file is in no log line.
 //!
 //! A file is saved with `files.writeIfUnchanged`: Orca writes only when the disk still holds the text that was read, by a signature of it (`disk_signature`, the one of Orca's `disk-baseline-signature.js`), and answers `diskConflict` when it does not, so a file changed elsewhere is never overwritten.
@@ -117,6 +118,25 @@ pub struct OrcaFileEntry {
     pub path: String,
     pub is_directory: bool,
     pub ignored: bool,
+}
+
+/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, deleted, renamed or copied, `New` for one that is untracked or added. A folder is what its files are, and `Changed` when they are both.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "kebab-case")]
+pub enum OrcaGitMark {
+    Changed,
+    New,
+}
+
+/// An entry that differs from HEAD. `path` is relative to the worktree, as the path that was asked for.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaGitChange {
+    pub path: String,
+    pub mark: OrcaGitMark,
 }
 
 /// A folder: its entries, the folders first and each group in natural order of the names, and how many it holds (more than the entries when Orca's page was full).
@@ -512,12 +532,80 @@ async fn ignored_in(rpc: &mut impl Rpc, path: &str, paths: &[String]) -> Vec<Str
         .collect()
 }
 
-/// The paths `orca_files_ignored` is asked about: as many as a list holds at most, each a path inside the worktree (the checks of a file's path).
+/// The paths `orca_files_ignored` and `orca_files_changes` are asked about: as many as a list holds at most, each a path inside the worktree (the checks of a file's path).
 fn check_ignore_paths(paths: &[String]) -> Result<(), String> {
     if paths.len() > LIST_LIMIT {
         return Err(format!("一度に調べられるのは {LIST_LIMIT} 件までです"));
     }
     paths.iter().try_for_each(|p| check_relative(p, false))
+}
+
+/// The mark of one entry of `git.status`: Orca's `untracked` and `added` are new, every other status (`modified`, `deleted`, `renamed`, `copied`, and the one a conflict has) is a change.
+fn mark_of_status(status: &str) -> OrcaGitMark {
+    match status {
+        "untracked" | "added" => OrcaGitMark::New,
+        _ => OrcaGitMark::Changed,
+    }
+}
+
+/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it: a file by its own entries, a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
+fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
+    let mut marks: HashMap<&str, OrcaGitMark> = HashMap::new();
+    let mut new_folders: HashSet<&str> = HashSet::new();
+    for entry in status["entries"].as_array().into_iter().flatten() {
+        let Some(path) = entry["path"].as_str() else {
+            continue;
+        };
+        let status = entry["status"].as_str().unwrap_or("");
+        let mark = mark_of_status(status);
+        let path = path.trim_end_matches('/');
+        if path.is_empty() {
+            continue;
+        }
+        if status == "untracked" && entry["path"].as_str().is_some_and(|p| p.ends_with('/')) {
+            new_folders.insert(path);
+        }
+        let mut at = path;
+        loop {
+            let slot = marks.entry(at).or_insert(mark);
+            if mark == OrcaGitMark::Changed {
+                *slot = OrcaGitMark::Changed;
+            }
+            match at.rfind('/') {
+                Some(i) => at = &at[..i],
+                None => break,
+            }
+        }
+    }
+    paths
+        .iter()
+        .filter_map(|path| {
+            let mark = marks.get(path.as_str()).copied().or_else(|| {
+                let inside_new = path
+                    .match_indices('/')
+                    .any(|(i, _)| new_folders.contains(&path[..i]));
+                inside_new.then_some(OrcaGitMark::New)
+            })?;
+            Some(OrcaGitChange {
+                path: path.clone(),
+                mark,
+            })
+        })
+        .collect()
+}
+
+/// The entries of `paths` that differ from HEAD, from `git.status` of the worktree at `path`. A failed call (a folder that is no repository) marks nothing: the list is still the list.
+async fn changes_of(rpc: &mut impl Rpc, path: &str, paths: &[String]) -> Vec<OrcaGitChange> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    match rpc
+        .call("git.status", worktree_params(path, None, json!({})))
+        .await
+    {
+        Ok(status) => changes_in(&status, paths),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// The message of a failed read of the files.
@@ -1924,6 +2012,20 @@ pub async fn orca_files_ignored(
     Ok(ignored_in(&mut connection, &path, &paths).await)
 }
 
+/// Which of `paths` (entries of one list, relative to the worktree at `path`) differ from HEAD, and how: `changed` or `new` (A-18). The entries that do not differ are not in the answer. It is asked after the list is drawn, as `orca_files_ignored` is; a check that fails answers none, and a worktree that is not one of the target's list, and a path that is not inside the worktree, are refused as for the list.
+#[tauri::command]
+pub async fn orca_files_changes(
+    path: String,
+    paths: Vec<String>,
+    environment: Option<String>,
+) -> Result<Vec<OrcaGitChange>, String> {
+    check_ignore_paths(&paths)?;
+    cached_host_of(&path, environment.as_deref()).await?;
+    let opened = Connection::open(environment.clone()).await;
+    let mut connection = forgetting(opened, &path, environment.as_deref())?;
+    Ok(changes_of(&mut connection, &path, &paths).await)
+}
+
 /// The text of the file `relative` of the worktree at `path`, for the editor (A-18).
 #[tauri::command]
 pub async fn orca_file_read(
@@ -3008,6 +3110,173 @@ mod tests {
         assert!(check_ignore_paths(&most).is_ok());
         let more: Vec<String> = (0..=LIST_LIMIT).map(|i| format!("f{i}")).collect();
         assert!(check_ignore_paths(&more).is_err());
+    }
+
+    fn status_of(entries: Value) -> Value {
+        json!({"entries": entries, "upstreamStatus": {}})
+    }
+
+    fn change(path: &str, mark: OrcaGitMark) -> OrcaGitChange {
+        OrcaGitChange {
+            path: path.to_owned(),
+            mark,
+        }
+    }
+
+    #[test]
+    fn the_status_of_an_entry_is_a_change_or_a_new_file() {
+        for new in ["untracked", "added"] {
+            assert_eq!(mark_of_status(new), OrcaGitMark::New, "{new}");
+        }
+        for changed in ["modified", "deleted", "renamed", "copied", "", "other"] {
+            assert_eq!(mark_of_status(changed), OrcaGitMark::Changed, "{changed}");
+        }
+    }
+
+    #[test]
+    fn a_file_is_marked_by_its_own_entry_and_a_folder_by_the_files_below_it() {
+        let status = status_of(json!([
+            {"status": "modified", "path": "src/a.rs", "area": "unstaged"},
+            {"status": "untracked", "path": "docs/new.md", "area": "untracked"},
+            {"status": "deleted", "path": "gone/x.rs", "area": "unstaged"},
+        ]));
+        let asked: Vec<String> = [
+            "src",
+            "src/a.rs",
+            "src/b.rs",
+            "docs",
+            "docs/new.md",
+            "gone",
+            "README.md",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(
+            changes_in(&status, &asked),
+            [
+                change("src", OrcaGitMark::Changed),
+                change("src/a.rs", OrcaGitMark::Changed),
+                change("docs", OrcaGitMark::New),
+                change("docs/new.md", OrcaGitMark::New),
+                change("gone", OrcaGitMark::Changed),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folder_with_both_kinds_below_it_is_changed_whatever_the_order() {
+        for entries in [
+            json!([{"status": "untracked", "path": "d/n"}, {"status": "modified", "path": "d/m"}]),
+            json!([{"status": "modified", "path": "d/m"}, {"status": "added", "path": "d/n"}]),
+            json!([{"status": "untracked", "path": "d/e/n"}, {"status": "modified", "path": "d/m"}]),
+        ] {
+            let found = changes_in(&status_of(entries), &["d".to_owned()]);
+            assert_eq!(found, [change("d", OrcaGitMark::Changed)]);
+        }
+        // The deeper folders keep their own kind.
+        let status = status_of(json!([
+            {"status": "untracked", "path": "d/e/n"},
+            {"status": "modified", "path": "d/m"},
+        ]));
+        let asked: Vec<String> = ["d", "d/e"].map(String::from).into();
+        assert_eq!(
+            changes_in(&status, &asked),
+            [
+                change("d", OrcaGitMark::Changed),
+                change("d/e", OrcaGitMark::New)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_with_a_staged_and_an_unstaged_entry_is_one_mark() {
+        let status = status_of(json!([
+            {"status": "added", "path": "a", "area": "staged"},
+            {"status": "modified", "path": "a", "area": "unstaged"},
+        ]));
+        assert_eq!(
+            changes_in(&status, &["a".to_owned()]),
+            [change("a", OrcaGitMark::Changed)]
+        );
+    }
+
+    #[test]
+    fn an_untracked_folder_that_git_lists_whole_marks_everything_under_it() {
+        let status = status_of(json!([
+            {"status": "untracked", "path": "newdir/", "area": "untracked"},
+            {"status": "modified", "path": "other/m"},
+        ]));
+        let asked: Vec<String> = [
+            "newdir",
+            "newdir/a",
+            "newdir/sub",
+            "newdir/sub/b",
+            "newdir2",
+            "other",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(
+            changes_in(&status, &asked),
+            [
+                change("newdir", OrcaGitMark::New),
+                change("newdir/a", OrcaGitMark::New),
+                change("newdir/sub", OrcaGitMark::New),
+                change("newdir/sub/b", OrcaGitMark::New),
+                change("other", OrcaGitMark::Changed),
+            ]
+        );
+        // The folder's parents hold something new too.
+        let nested = status_of(json!([{"status": "untracked", "path": "a/b/"}]));
+        assert_eq!(
+            changes_in(&nested, &["a".to_owned()]),
+            [change("a", OrcaGitMark::New)]
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_not_a_list_or_has_odd_entries_marks_nothing_wrong() {
+        let asked = vec!["a".to_owned()];
+        assert!(changes_in(&json!({}), &asked).is_empty());
+        assert!(changes_in(&json!({"entries": "x"}), &asked).is_empty());
+        let odd = status_of(
+            json!([{"status": "modified"}, {"path": 3}, {"status": "modified", "path": ""}, {"status": "modified", "path": "/"}]),
+        );
+        assert!(changes_in(&odd, &asked).is_empty());
+        // An entry with no status is a change.
+        assert_eq!(
+            changes_in(&status_of(json!([{"path": "a"}])), &asked),
+            [change("a", OrcaGitMark::Changed)]
+        );
+        assert!(changes_in(&status_of(json!([])), &[]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_changes_are_asked_of_git_status_of_the_worktree() {
+        let mut orca = fake(vec![(
+            "git.status",
+            Ok(status_of(json!([{"status": "modified", "path": "a"}]))),
+        )]);
+        let asked: Vec<String> = ["a", "b"].map(String::from).into();
+        let found = changes_of(&mut orca, "/work/a", &asked).await;
+        assert_eq!(found, [change("a", OrcaGitMark::Changed)]);
+        assert_eq!(
+            orca.calls,
+            [("git.status".to_owned(), json!({"worktree": "path:/work/a"}))]
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_asked_is_not_asked_of_git_and_a_failed_status_marks_nothing() {
+        let mut orca = fake(vec![]);
+        assert!(changes_of(&mut orca, "/work/a", &[]).await.is_empty());
+        assert!(orca.calls.is_empty());
+        let mut orca = fake(vec![(
+            "git.status",
+            Err(("Orca がエラーを返しました", "not a git repository")),
+        )]);
+        let asked = vec!["a".to_owned()];
+        assert!(changes_of(&mut orca, "/work/a", &asked).await.is_empty());
     }
 
     #[test]

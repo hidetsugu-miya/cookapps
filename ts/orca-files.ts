@@ -1,4 +1,4 @@
-// The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
+// The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`) and which differ from HEAD (`orca_files_changes`, A-39); this module draws the folder at once, marks the ignored and the changed entries when the answers come, and takes the presses.
 // A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the definition of a name of the editor (A-34, orca-definition.ts, with the language server under it, orca-lsp.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the definition has none of.
@@ -6,6 +6,8 @@ import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
 import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
+import type { OrcaGitChange } from "./bindings/OrcaGitChange";
+import type { OrcaGitMark } from "./bindings/OrcaGitMark";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete, confirmDeleteMany } from "./hint.js";
 import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DEFINITION_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG } from "./icons.js";
@@ -42,6 +44,9 @@ let context: FilesContext | null = null;
 // A new tree (another worktree) ends the reads of the old one.
 let generation = 0;
 const listings = new Map<string, Listing>();
+// How git sees the entries that differ from HEAD (A-39), by path from the worktree. It outlives the listings, so a read again keeps the marks until the answer replaces them. `asked` counts the questions of each folder, so that only the last answer is taken.
+const changes = new Map<string, OrcaGitMark>();
+const asked = new Map<string, number>();
 const expanded = new Set<string>();
 // The rows that are selected (A-18), by path from the worktree, with whether each is a folder, in the order they were selected; and the row a Shift press counts from (the last one pressed without Shift). A row that is not drawn any more (its folder closed, or it is gone) leaves the selection, so what is deleted is what is drawn selected.
 const selected = new Map<string, boolean>();
@@ -164,11 +169,61 @@ async function markIgnored(here: FilesContext, mine: number, dir: string, read: 
   drawSoon();
 }
 
+// A folder as it was listed, whose marks of differences are to be asked, with the number of its question (taken when it was listed, so that the folder that was listed last is the one that is answered).
+interface Listed {
+  dir: string;
+  read: OrcaDir;
+  token: number;
+}
+
+// How many paths one question of `orca_files_changes` takes at most (the limit of a list in Rust).
+const CHANGES_LIMIT = 5000;
+
+// Takes the marks of the entries of the folders `listed`, each as it was listed, from `orca_files_changes` (A-39): an entry the answer does not name loses its mark. The folders of one read go in one question (one `git.status` of the worktree, not one for each folder), and in several only when their entries pass CHANGES_LIMIT. It is asked after the folders are drawn, and an answer that fails leaves the marks as they are. Only the last question of a folder (the one whose number `readDir` took last) is answered, and an answer that comes after the tree became another worktree's, or the folder was dropped, is dropped. Nothing is drawn when the marks are the ones shown.
+async function markChanges(here: FilesContext, mine: number, listed: Listed[]) {
+  const groups: Listed[][] = [];
+  let size = 0;
+  for (const l of listed) {
+    if (groups.length === 0 || size + l.read.entries.length > CHANGES_LIMIT) {
+      groups.push([]);
+      size = 0;
+    }
+    groups[groups.length - 1].push(l);
+    size += l.read.entries.length;
+  }
+  await Promise.all(groups.map((group) => markGroup(here, mine, group)));
+}
+
+async function markGroup(here: FilesContext, mine: number, group: Listed[]) {
+  let answer: OrcaGitChange[];
+  try {
+    answer = await invoke("orca_files_changes", { path: here.path, paths: group.flatMap((l) => l.read.entries.map((e) => e.path)), environment: here.target });
+  } catch {
+    return;
+  }
+  if (mine !== generation) return;
+  const now = new Map(answer.map((c) => [c.path, c.mark]));
+  let moved = false;
+  for (const { dir, read, token } of group) {
+    if (asked.get(dir) !== token || !listings.has(dir)) continue;
+    for (const e of read.entries) {
+      const mark = now.get(e.path);
+      if (changes.get(e.path) === mark) continue;
+      moved = true;
+      if (mark === undefined) changes.delete(e.path);
+      else changes.set(e.path, mark);
+    }
+  }
+  if (!moved) return;
+  version++;
+  drawSoon();
+}
+
 // The entries of the folder `dir` of the worktree.
 const listDir = (here: FilesContext, dir: string, ignored: boolean): Promise<OrcaDir> => invoke("orca_files_list", { path: here.path, dir, ignored, environment: here.target });
 
-// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before. With `clock` (the clock alone) a read that finds the entries held asks no ignore marks.
-async function readDir(dir: string, quiet = false, clock = false) {
+// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before. With `clock` (the clock alone) a read that finds the entries held asks no ignore marks. With `pending` (the read of a reload) the folder is put there to have its marks of differences asked with the others, once; without it they are asked for this folder alone.
+async function readDir(dir: string, quiet = false, clock = false, pending?: Listed[]) {
   const here = context;
   if (here === null) return;
   const mine = generation;
@@ -193,17 +248,24 @@ async function readDir(dir: string, quiet = false, clock = false) {
   // A read that finds what is held (the same entries in the same order, and as many in the folder) keeps it, marks and all, and draws nothing.
   const was = held?.dir;
   const now = next.dir;
-  if (held?.error === null && next.error === null && was != null && now !== null && was.total === now.total && was.entries.length === now.entries.length && was.entries.every((e, i) => e.path === now.entries[i].path && e.isDirectory === now.entries[i].isDirectory)) {
+  const same = held?.error === null && next.error === null && was != null && now !== null && was.total === now.total && was.entries.length === now.entries.length && was.entries.every((e, i) => e.path === now.entries[i].path && e.isDirectory === now.entries[i].isDirectory);
+  if (same) {
     next = { ...next, dir: was };
     listings.set(dir, next);
-    // The clock does not ask git again for a folder that holds what it held: its marks are asked for at the next read that is not the clock's.
-    if (clock) return;
   } else {
     listings.set(dir, next);
     version++;
     drawSoon();
   }
-  if (!inherited && next.dir !== null && next.error === null && next.dir.entries.length > 0) void markIgnored(here, mine, dir, next.dir);
+  if (inherited || next.dir === null || next.error !== null || next.dir.entries.length === 0) return;
+  // The differences from HEAD can change with no change of the entries (a file is edited), so the clock asks for them too, for all the folders in one question.
+  const token = (asked.get(dir) ?? 0) + 1;
+  asked.set(dir, token);
+  const listed = { dir, read: next.dir, token };
+  if (pending) pending.push(listed);
+  else void markChanges(here, mine, [listed]);
+  // The clock does not ask git again for the ignore marks of a folder that holds what it held: they are asked for at the next read that is not the clock's.
+  if (!(same && clock)) void markIgnored(here, mine, dir, next.dir);
 }
 
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
@@ -216,14 +278,17 @@ async function reload(quiet = false, clock = false) {
   const mine = generation;
   const queue = [...expanded];
   for (const dir of [...listings.keys()]) if (dir !== "" && !queue.includes(dir)) listings.delete(dir);
-  await readDir("", quiet, clock);
+  const pending: Listed[] = [];
+  await readDir("", quiet, clock, pending);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir, quiet, clock);
+      await readDir(dir, quiet, clock, pending);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+  // The differences from HEAD of every folder that was read are asked once, so that a read of many open folders runs one `git.status`.
+  if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
 // Reads again what the pane shows, when the window gets the focus back: the files (the root, then the open folders) or the history (from the start). It does nothing while the pane is hidden or has no worktree, and while a read of the same kind is on its way, so a failed read is tried again at the next return.
@@ -240,8 +305,12 @@ export function refreshFiles(clock = false) {
 // A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now.
 export function rereadScratchpad(target: string | null, path: string) {
   if (context === null || context.path !== path || context.target !== target) return;
+  const mine = generation;
+  const here = context;
   void (async () => {
-    for (const dir of ["", ".orca", ".orca/scratchpad"]) if (listings.has(dir)) await readDir(dir);
+    const pending: Listed[] = [];
+    for (const dir of ["", ".orca", ".orca/scratchpad"]) if (listings.has(dir)) await readDir(dir, false, false, pending);
+    if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
   })();
 }
 
@@ -395,14 +464,16 @@ async function move(here: FilesContext, from: string, to: string, folder: boolea
   let target = parentOf(to);
   while (target !== "" && !listings.has(target)) target = parentOf(target);
   const [first, ...queue] = new Set([parentOf(from), target, ...reopened]);
-  await readDir(first);
+  const pending: Listed[] = [];
+  await readDir(first, false, false, pending);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir);
+      await readDir(dir, false, false, pending);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+  if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
 // Turns the row of `relative` into the field of its path from the worktree, with the name selected (a file's without its extension).
@@ -559,13 +630,15 @@ async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
     if (creating !== null && under(creating.dir)) creating = null;
   }
   const queue = [...new Set(answer.deleted.map((d) => parentOf(d.relative)))].filter((dir) => dir === "" || listings.has(dir));
+  const pending: Listed[] = [];
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir);
+      await readDir(dir, false, false, pending);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
+  if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
 // The rows drawn now, in the order of the tree.
@@ -685,6 +758,12 @@ function row(entry: OrcaFileEntry, depth: number) {
     };
   }
   button.append(name);
+  // A change from HEAD (A-39): the name and the icon take the color, and the right end has `M` or `U` on a file and a dot on a folder.
+  const change = changes.get(entry.path);
+  if (change !== undefined) {
+    button.dataset.change = change;
+    button.append(tag("span", "orca-file-git", entry.isDirectory ? "" : change === "new" ? "U" : "M"));
+  }
   return button;
 }
 
@@ -788,6 +867,8 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     generation++;
     listings.clear();
     expanded.clear();
+    changes.clear();
+    asked.clear();
     creating = null;
     renaming = null;
     selected.clear();

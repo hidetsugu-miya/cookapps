@@ -4,6 +4,7 @@
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
 // A file of a Ruby worktree asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the file pane. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
+// The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 import { tag } from "./dom.js";
@@ -82,6 +83,16 @@ interface EditorFile {
   area: HTMLTextAreaElement;
   // The layer under the textarea that carries the same text in colors.
   code: HTMLElement;
+  // The band under the line of the caret, in the box of the text and under its layer (hidden unless the text area has the focus and no range is selected), and the band under the paragraph of the caret of the rich view, in the box of the rich view and under its text.
+  band: HTMLElement;
+  richBand: HTMLElement;
+  // What the band of the source keeps: the line it is under (`bandLine`, counted only when the caret is not `bandCaret` or the text was changed since (`edits` is not `bandEdits`: `edits` counts every change of the text area's value, by the user and by the page)), the height of a line and the padding above the text (`bandMetrics`, null: read again at the next place), and the frame in which the band of the rich view is put (null: none waits).
+  bandLine: number;
+  bandCaret: number;
+  bandEdits: number;
+  edits: number;
+  bandMetrics: { height: number; top: number } | null;
+  richFrame: number | null;
   // The numbers of the lines, one text node ("1\n2\n…") that grows and shrinks at its end with the line count (`lines`), in the box at the left of the text that follows the vertical scroll.
   nums: Text;
   numbers: HTMLElement;
@@ -185,6 +196,83 @@ function repaint(f: EditorFile, text: string) {
 function followScroll(f: EditorFile) {
   f.code.style.transform = `translate(${-f.area.scrollLeft}px, ${-f.area.scrollTop}px)`;
   f.numbers.style.transform = `translateY(${-f.area.scrollTop}px)`;
+  // The scroll moves neither the caret nor the focus: the band keeps its line and follows the scroll.
+  if (!f.band.hidden) moveBand(f);
+}
+
+// Puts the band at its line (`bandLine`), under the vertical scroll of the textarea. The height of a line and the padding are read once (`bandMetrics`).
+function moveBand(f: EditorFile) {
+  if (f.bandMetrics === null) {
+    const style = getComputedStyle(f.area);
+    f.bandMetrics = { height: Number.parseFloat(style.lineHeight) || 20, top: Number.parseFloat(style.paddingTop) || 0 };
+  }
+  const { height, top } = f.bandMetrics;
+  f.band.style.height = `${height}px`;
+  f.band.style.transform = `translateY(${top + f.bandLine * height - f.area.scrollTop}px)`;
+}
+
+// Puts the band of the source under the line of the caret: its place follows the vertical scroll of the textarea, and it is as wide as the box of the text. It is hidden when the text area has not the focus, while a range is selected (the color of the selection shows) and while the source is not shown.
+function placeBand(f: EditorFile) {
+  const area = f.area;
+  const caret = area.selectionStart;
+  if (f.read !== "ready" || f.body.hidden || document.activeElement !== area || caret !== area.selectionEnd) {
+    f.band.hidden = true;
+    return;
+  }
+  const text = area.value;
+  if (caret !== f.bandCaret || f.edits !== f.bandEdits) {
+    let line = 0;
+    for (let i = text.indexOf("\n"); i !== -1 && i < caret; i = text.indexOf("\n", i + 1)) line++;
+    f.bandLine = line;
+    f.bandCaret = caret;
+    f.bandEdits = f.edits;
+    f.band.dataset.line = String(line);
+  }
+  moveBand(f);
+  f.band.hidden = false;
+}
+
+// The blocks of the rich view that take the band: a paragraph (also that of a list item), a heading, a code block and a table cell.
+const RICH_BLOCKS = "p, h1, h2, h3, h4, h5, h6, pre, th, td";
+
+// Puts the band of the rich view at the next frame, once for the calls that come before it (a key and the change of the selection that it makes ask for it together).
+function placeRichBand(f: EditorFile) {
+  if (f.richFrame !== null) return;
+  f.richFrame = requestAnimationFrame(() => {
+    f.richFrame = null;
+    putRichBand(f);
+  });
+}
+
+// Puts the band of the rich view under the block the caret is in, as wide as the editor. It is hidden when the editor has not the focus and while a range is selected.
+function putRichBand(f: EditorFile) {
+  const pm = f.rich.querySelector<HTMLElement>(".ProseMirror");
+  const selection = getSelection();
+  const node = selection?.anchorNode ?? null;
+  const at = node instanceof Element ? node : (node?.parentElement ?? null);
+  const block = pm && selection?.isCollapsed && at && pm.contains(document.activeElement) && pm.contains(at) ? at.closest<HTMLElement>(RICH_BLOCKS) : null;
+  if (!pm || !block || !pm.contains(block)) {
+    f.richBand.hidden = true;
+    return;
+  }
+  const box = block.getBoundingClientRect();
+  const host = f.rich.getBoundingClientRect();
+  const column = pm.getBoundingClientRect();
+  f.richBand.style.top = `${box.top - host.top + f.rich.scrollTop}px`;
+  f.richBand.style.left = `${column.left - host.left + f.rich.scrollLeft}px`;
+  f.richBand.style.width = `${column.width}px`;
+  f.richBand.style.height = `${box.height}px`;
+  f.richBand.hidden = false;
+}
+
+// The selection of the page changed, or the focus moved: the file that holds the focus, and a file whose band is shown (it hides it unless the caret is in it), put their bands again; a file with both bands hidden and no focus has nothing to change.
+function placeBands() {
+  const active = document.activeElement;
+  for (const f of files.values()) {
+    if (!f.el.isConnected || !(f.el.contains(active) || !f.band.hidden || !f.richBand.hidden)) continue;
+    placeBand(f);
+    placeRichBand(f);
+  }
 }
 
 // Brings the numbers to the line count of `text`, the value of the textarea: only the numbers that came or went are written, the rest of the text is left as it is. The box is as wide as the digits of the last number, set when their count changes.
@@ -278,6 +366,7 @@ function schedule(f: EditorFile) {
 // The document of the rich view changed: the edit is put into the textarea after RICH_WAIT_MS (at most one wait at a time, so the text is put there while the typing goes on).
 function richChanged(f: EditorFile) {
   f.richPending = true;
+  placeRichBand(f);
   if (f.richTimer === null)
     f.richTimer = window.setTimeout(() => {
       f.richTimer = null;
@@ -311,6 +400,7 @@ async function putRich(f: EditorFile) {
       }
       if (patched.text !== f.area.value) {
         f.area.value = patched.text;
+        f.edits++;
         typed(f);
       }
     } catch (e) {
@@ -331,7 +421,8 @@ function clearRich(f: EditorFile) {
   const view = f.view;
   f.view = null;
   void view?.destroy().catch(() => {});
-  f.rich.replaceChildren();
+  f.richBand.hidden = true;
+  f.rich.replaceChildren(f.richBand);
 }
 
 // Draws the text of the file in the rich view: Milkdown is read the first time, and the front matter is cut off by Rust and kept out of the editor. A drawing that is out of date when the library or the cut comes (the view was left, the file closed) is dropped.
@@ -398,6 +489,7 @@ async function load(f: EditorFile) {
       ? { content: (await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, path: f.relative })).text, crlf: false, signature: "", language: "ruby", highlight: "ruby" }
       : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
+    f.edits++;
     f.highlight = text.highlight;
     f.language = text.language;
     f.markdown = text.language === "markdown";
@@ -533,6 +625,7 @@ async function reread(f: EditorFile) {
     const area = f.area;
     const [start, end, top, left, richTop] = [area.selectionStart, area.selectionEnd, area.scrollTop, area.scrollLeft, f.rich.scrollTop];
     area.value = text.content;
+    f.edits++;
     area.setSelectionRange(Math.min(start, text.content.length), Math.min(end, text.content.length));
     area.scrollTop = top;
     area.scrollLeft = left;
@@ -594,8 +687,10 @@ function create(id: string, target: string | null, project: string, path: string
   const layer = tag("pre", "orca-edit-hl");
   layer.setAttribute("aria-hidden", "true");
   layer.append(code);
+  const band = tag("div", "orca-edit-line");
+  band.hidden = true;
   const text = tag("div", "orca-edit-text");
-  text.append(layer, area);
+  text.append(band, layer, area);
   const nums = document.createTextNode("1");
   const numbers = tag("div", "orca-edit-nums");
   numbers.append(nums);
@@ -606,10 +701,32 @@ function create(id: string, target: string | null, project: string, path: string
   body.append(gutter, text);
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
+  const richBand = tag("div", "orca-edit-rich-band");
+  richBand.hidden = true;
+  rich.append(richBand);
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
-  area.oninput = () => typed(f);
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  area.oninput = () => {
+    f.edits++;
+    typed(f);
+    placeBand(f);
+  };
   area.onscroll = () => followScroll(f);
+  // The caret moves with a key (the key has not moved it yet at `keydown`, so that waits for the frame) or the mouse, and the focus comes and goes.
+  const bandLater = () => void requestAnimationFrame(() => placeBand(f));
+  const bandNow = () => placeBand(f);
+  area.onkeydown = bandLater;
+  area.onmousedown = bandLater;
+  area.onkeyup = bandNow;
+  area.onmouseup = bandNow;
+  area.onselect = bandNow;
+  area.onfocus = () => {
+    f.bandMetrics = null;
+    placeBand(f);
+  };
+  area.onblur = bandNow;
+  rich.addEventListener("focusin", () => placeRichBand(f));
+  rich.addEventListener("focusout", () => placeRichBand(f));
   area.oncontextmenu = (e) => {
     if (!e.metaKey || f.outside || f.read !== "ready" || f.language !== "ruby" || f.body.hidden) return;
     e.preventDefault();
@@ -742,6 +859,8 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
       f.wantFocus = false;
       f.area.focus({ preventScroll: true });
     }
+    f.bandMetrics = null;
+    placeBand(f);
     flushJump(f);
     if (back && fresh) void reread(f);
   }
@@ -752,6 +871,7 @@ export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) =>
   fail = on.error;
   definition = on.definition;
   ruby = on.ruby;
+  document.addEventListener("selectionchange", placeBands);
   // The page is going away (the window is closed): the typing that waits for its timer is sent now, for every file that can be saved.
   window.addEventListener("pagehide", () => {
     for (const f of files.values()) void flush(f);

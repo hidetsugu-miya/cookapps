@@ -65,6 +65,7 @@ import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
 import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
+import type { OrcaGitChange } from "./bindings/OrcaGitChange";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
 import type { OrcaLocalBranch } from "./bindings/OrcaLocalBranch";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
@@ -381,6 +382,8 @@ export interface Commands {
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
   orca_files_list: { args: { path: string; dir: string; ignored: boolean; environment: string | null }; result: OrcaDir };
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };
+  // A-18: which of `paths` (entries of one list, relative to the worktree at `path`) differ from HEAD: `changed` (a file that is modified, deleted, renamed or copied) or `new` (untracked or added). A folder is what its files are, `changed` when both. The entries that do not differ are left out. A failed check answers none.
+  orca_files_changes: { args: { path: string; paths: string[]; environment: string | null }; result: OrcaGitChange[] };
   // A-26: cuts the front matter off a Markdown text; the rich view is given the body only.
   markdown_split: { args: { text: string }; result: MarkdownParts };
   // A-26: puts the edit of the rich view into the original text. `before` and `after` are what the editor exported for the body when it was loaded and now; `conflict` when the edit cannot be put into the original.
