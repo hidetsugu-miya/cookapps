@@ -114,14 +114,14 @@ fn launch_script(claude: &Path, mcp_config: &Path, builtin_tools: bool) -> Strin
     )
 }
 
-/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, and reading the project settings of its folder too.
+/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, at the effort `high` (#911), and reading the project settings of its folder too.
 /// Only the two paths and the name that the app decided (`name` has passed `check_name`) and the fixed flags are in it.
 fn formation_script(claude: &Path, mcp_config: &Path, name: &str) -> String {
     format!(
         "#!/bin/sh\n\
          # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-         exec {claude} -n {name} --permission-mode auto --setting-sources user,project --strict-mcp-config --mcp-config {config} \"$@\"\n",
+         exec {claude} -n {name} --permission-mode auto --effort high --setting-sources user,project --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
         name = sh_quote(name),
         config = sh_quote(&mcp_config.to_string_lossy()),
@@ -933,7 +933,7 @@ mod tests {
             "#!/bin/sh\n\
              # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
              PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
+             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --effort high --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
         );
         assert!(!script.contains("--tools"));
     }
@@ -1161,7 +1161,7 @@ mod tests {
         .unwrap();
         assert_eq!(script, dir.join("start.sh"));
         let script_text = std::fs::read_to_string(&script).unwrap();
-        assert!(script_text.contains("-n 'formation' --permission-mode auto"));
+        assert!(script_text.contains("-n 'formation' --permission-mode auto --effort high"));
         assert!(script_text.contains(&format!(
             "--mcp-config '{}'",
             dir.join("mcp.json").display()
@@ -1207,7 +1207,7 @@ mod tests {
         assert!(!config.join("formations/formation").exists());
         // The orchestrator is named for its formation in the script and in its `CLAUDE.md`, and the other name is nowhere in them.
         let script_text = std::fs::read_to_string(&script).unwrap();
-        assert!(script_text.contains("-n 'api-work' --permission-mode auto"));
+        assert!(script_text.contains("-n 'api-work' --permission-mode auto --effort high"));
         assert!(!script_text.contains("-n 'formation'"));
         let claude_md = std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("名前は `api-work` です。"));

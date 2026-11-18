@@ -1034,7 +1034,7 @@ fn all_terminals_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["terminal", "list", "--json"]), environment)
 }
 
-/// The child's terminal: titled with its name, and running Claude Code in auto mode under that name (`claude -n`, which is also the address of `SendMessage`). The name was checked, so the command line holds nothing a shell would read.
+/// The child's terminal: titled with its name, and running Claude Code in auto mode at the effort `medium` (#911) under that name (`claude -n`, which is also the address of `SendMessage`). The name was checked, so the command line holds nothing a shell would read.
 fn terminal_create_args(path: &str, name: &str, environment: &str) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
     args.extend([
@@ -1042,7 +1042,7 @@ fn terminal_create_args(path: &str, name: &str, environment: &str) -> Vec<String
         "--title".into(),
         name.into(),
         "--command".into(),
-        format!("claude -n {name} --permission-mode auto"),
+        format!("claude -n {name} --permission-mode auto --effort medium"),
         "--json".into(),
     ]);
     on(args, environment)
@@ -5090,7 +5090,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto",
+                "claude -n web-2 --permission-mode auto --effort medium",
                 "--json",
                 "--environment=local"
             ]
