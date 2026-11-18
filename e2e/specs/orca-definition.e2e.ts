@@ -965,6 +965,199 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf("lsp_start")).toEqual([worktreeArgs]);
   });
 
+  // The page's own `mousemove` over the text, at the middle of each character of `offsets` in turn (in one run of the page, so that no wait of the app comes between two of them), with or without the Command key.
+  const moveAt = (meta: boolean, ...offsets: number[]) =>
+    browser.execute(
+      (withMeta, list, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const area = document.querySelector(".orca-edit-area")!;
+        for (const o of list) {
+          const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
+          let left = o;
+          for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+            if (left >= node.length) {
+              left -= node.length;
+              continue;
+            }
+            const range = document.createRange();
+            range.setStart(node, left);
+            range.setEnd(node, left + 1);
+            const box = range.getBoundingClientRect();
+            area.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, metaKey: withMeta, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
+            break;
+          }
+        }
+      },
+      meta,
+      offsets,
+      onceId(),
+    );
+  // The Command key going down or up, as the page sees it.
+  const metaKey = (type: "keydown" | "keyup") =>
+    browser.execute(
+      (t, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.dispatchEvent(new KeyboardEvent(t, { key: "Meta", metaKey: t === "keydown", bubbles: true }));
+      },
+      type,
+      onceId(),
+    );
+  const leave = () =>
+    browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      document.querySelector(".orca-edit-area")!.dispatchEvent(new MouseEvent("mouseleave"));
+    }, onceId());
+  const underline = () => browser.execute(() => ({ hidden: document.querySelector<HTMLElement>(".orca-edit-link")!.hidden, cursor: document.querySelector<HTMLElement>(".orca-edit-area")!.style.cursor }));
+  const waitUnderline = () => browser.waitUntil(async () => !(await underline()).hidden, { timeoutMsg: "the underline was never drawn" });
+  const noUnderline = async () => {
+    await browser.pause(400);
+    expect((await underline()).hidden).toBe(true);
+  };
+  const onLogger = () => source.indexOf(".logger") + 3;
+  const existsArgs = (line: number, character: number, relative = "a.rb", body = source) => ({ environment: null, worktree, server: "ruby-lsp", relative, text: body, line, character });
+  // Opens a.rb with the answer of `lsp_definition_exists` and the name under the mouse ("Rails").
+  async function openLinked(exists: boolean | ReturnType<typeof rejects> = true) {
+    await openFiles();
+    await openFileWith("a.rb", text(source));
+    await mock("lsp_word", "Rails");
+    await mock("lsp_definition_exists", exists);
+  }
+
+  it("underlines the name when the mouse stays on it with the Command key and the server has a definition, with the pointer, and opens nothing (A-34)", async () => {
+    await openLinked();
+    await moveAt(true, onRails());
+    expect(await waitForCalls("lsp_definition_exists")).toEqual([existsArgs(2, 6)]);
+    expect(await callsOf("lsp_word")).toEqual([{ line: "    Rails.logger.info(x)", character: 6 }]);
+    await waitUnderline();
+    expect((await underline()).cursor).toBe("pointer");
+    // The line is under the name: the same left edge and width as the letters of "Rails" in the layer, and at the foot of them.
+    const gap = await browser.execute((from, to) => {
+      const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let seen = 0;
+      let started = false;
+      for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+        if (!started && from < seen + node.length) {
+          range.setStart(node, from - seen);
+          started = true;
+        }
+        if (started && to <= seen + node.length) {
+          range.setEnd(node, to - seen);
+          break;
+        }
+        seen += node.length;
+      }
+      const word = range.getBoundingClientRect();
+      const line = document.querySelector(".orca-edit-link")!.getBoundingClientRect();
+      return { left: line.left - word.left, width: line.width - word.width, foot: line.bottom - word.bottom };
+    }, source.indexOf("Rails"), source.indexOf("Rails") + 5);
+    expect(Math.abs(gap.left)).toBeLessThan(1);
+    expect(Math.abs(gap.width)).toBeLessThan(1);
+    expect(Math.abs(gap.foot)).toBeLessThan(1);
+    expect(await callsOf("lsp_definition")).toEqual([]);
+    await expect($(".orca-definition")).not.toExist();
+  });
+
+  it("draws nothing for a name with no definition, and nothing when the Command key is not down (A-34)", async () => {
+    await openLinked(false);
+    await moveAt(true, onRails());
+    await waitForCalls("lsp_definition_exists");
+    await noUnderline();
+    expect((await underline()).cursor).toBe("");
+    await mock("lsp_definition_exists", true);
+    await moveAt(false, onRails());
+    await browser.pause(400);
+    expect(await callsOf("lsp_definition_exists")).toEqual([]);
+    await noUnderline();
+  });
+
+  it("asks once the Command key goes down over a name the mouse is on, and takes the underline away when it goes up (A-34)", async () => {
+    await openLinked();
+    await moveAt(false, onRails());
+    await metaKey("keydown");
+    await waitForCalls("lsp_definition_exists");
+    await waitUnderline();
+    await metaKey("keyup");
+    await noUnderline();
+    expect((await underline()).cursor).toBe("");
+  });
+
+  it("asks nothing while the mouse keeps moving, and the name where it stays (A-34)", async () => {
+    await openLinked();
+    await mock("lsp_word", "logger");
+    await moveAt(true, onRails(), onLogger());
+    expect(await waitForCalls("lsp_definition_exists")).toEqual([existsArgs(2, 12)]);
+    await browser.pause(300);
+    expect(await callsOf("lsp_definition_exists")).toHaveLength(1);
+  });
+
+  it("does not ask again for the same name until the text changes, and asks for another name (A-34)", async () => {
+    await openLinked();
+    await moveAt(true, onRails());
+    await waitForCalls("lsp_definition_exists");
+    await waitUnderline();
+    // Out of the name and back, and the key up and down.
+    await moveAt(true, 0);
+    await noUnderline();
+    await moveAt(true, onRails());
+    await waitUnderline();
+    await metaKey("keyup");
+    await metaKey("keydown");
+    await waitUnderline();
+    expect(await callsOf("lsp_definition_exists")).toHaveLength(1);
+    // Another name is asked.
+    await mock("lsp_word", "logger");
+    await mock("lsp_definition_exists", true);
+    await moveAt(true, onLogger());
+    expect(await waitForCalls("lsp_definition_exists")).toEqual([existsArgs(2, 12)]);
+    // The text changes: the same name is asked again, with the new text.
+    const typed = `${source}x = Rails\n`;
+    await mock("orca_file_write", { state: "saved", signature: "sig-2" });
+    await browser.execute(
+      (t, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+        area.value = t;
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      typed,
+      onceId(),
+    );
+    await noUnderline();
+    await mock("lsp_word", "Rails");
+    await mock("lsp_definition_exists", true);
+    await moveAt(true, onRails());
+    expect(await waitForCalls("lsp_definition_exists")).toEqual([existsArgs(2, 6, "a.rb", typed)]);
+    await waitUnderline();
+  });
+
+  it("takes the underline away when the mouse leaves the editor and when the text scrolls (A-34)", async () => {
+    await openLinked();
+    await moveAt(true, onRails());
+    await waitUnderline();
+    await leave();
+    await noUnderline();
+    await moveAt(true, onRails());
+    await waitUnderline();
+    await browser.execute(() => {
+      document.querySelector(".orca-edit-area")!.dispatchEvent(new Event("scroll"));
+    });
+    await noUnderline();
+  });
+
+  it("draws nothing, and keeps nothing, when the server cannot answer yet (A-34)", async () => {
+    await openLinked(rejects("言語サーバーの準備がまだできていません"));
+    await moveAt(true, onRails());
+    await waitForCalls("lsp_definition_exists");
+    await noUnderline();
+    // The failure is not kept: the next stay asks again.
+    await mock("lsp_definition_exists", true);
+    await moveAt(true, 0);
+    await moveAt(true, onRails());
+    await waitForCalls("lsp_definition_exists");
+    await waitUnderline();
+  });
+
   // The app with a project that has no session: its tabs are the files that are opened.
   async function openWithoutSession() {
     await openOrca(orcaOverview([], [orcaWorktree("example-app", "main")]), { orca_files_list: root(), orca_files_ignored: [], editor_settings: { autosaveMs: 100 }, ...timers({ orcaClock: 600000 }) });

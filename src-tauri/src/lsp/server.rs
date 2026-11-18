@@ -900,9 +900,48 @@ impl LspServers {
         line: u32,
         character: u32,
     ) -> Result<Vec<LspLocation>, String> {
+        let (server, found) = self
+            .locate(key, false, relative, text, line, character)
+            .await?;
+        let mut outside = server.outside.lock().unwrap_or_else(|e| e.into_inner());
+        for place in found.iter().filter(|place| place.outside) {
+            if outside.len() < MAX_OUTSIDE {
+                outside.insert(place.path.clone());
+            }
+        }
+        Ok(found)
+    }
+
+    /// Whether the server of `key` has a definition for the name at the position (the question of `definition`, which keeps no place outside the worktree: nothing is shown). Only a server that is `running` is asked; one that is indexing is `NOT_READY`, and one that is stopped or not there is refused, so that nothing is asked of a server that cannot answer yet and nothing is started (A-34).
+    pub(crate) async fn definition_exists(
+        &self,
+        key: &Key,
+        relative: &str,
+        text: String,
+        line: u32,
+        character: u32,
+    ) -> Result<bool, String> {
+        let (_, found) = self
+            .locate(key, true, relative, text, line, character)
+            .await?;
+        Ok(!found.is_empty())
+    }
+
+    /// The server of `key` and the places it gives for the question of `definition`; with `running_only` a server that is not `running` is refused.
+    async fn locate(
+        &self,
+        key: &Key,
+        running_only: bool,
+        relative: &str,
+        text: String,
+        line: u32,
+        character: u32,
+    ) -> Result<(Arc<Server>, Vec<LspLocation>), String> {
         let server = self.get(key).await.ok_or(NOT_STARTED)?;
-        if server.status().state == LspState::Stopped {
-            return Err(STOPPED.into());
+        match server.status().state {
+            LspState::Stopped => return Err(STOPPED.into()),
+            LspState::Indexing if running_only => return Err(NOT_READY.into()),
+            _ => {}
         }
         let mount = server.way().ok_or(NOT_READY)?.mount;
         if text.len() > MAX_DOC {
@@ -928,13 +967,7 @@ impl LspServers {
             Ok(Ok(result)) => result,
         };
         let found = locations(&result?, &mount);
-        let mut outside = server.outside.lock().unwrap_or_else(|e| e.into_inner());
-        for place in found.iter().filter(|place| place.outside) {
-            if outside.len() < MAX_OUTSIDE {
-                outside.insert(place.path.clone());
-            }
-        }
-        Ok(found)
+        Ok((server, found))
     }
 
     /// How the server `server` of the worktree was started, when it gave `path` as a definition outside the worktree: only such a path may be read from the server's side, and it is read the way the server was started (`Way`), not the way the worktree says now.
@@ -1119,6 +1152,25 @@ pub async fn lsp_definition(
     servers.refresh(&key, run_on).await;
     servers
         .definition(&key, &relative, text, line, character)
+        .await
+}
+
+/// Whether the name at `line` and `character` of the file `relative` of `worktree` (its text now `text`) has a definition for the server `server`: the question that draws the underline while the Command key is down (A-34). It reads no change of the disk, and a server that is not `running` is refused with its reason, not started and not asked.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn lsp_definition_exists(
+    servers: State<'_, LspServers>,
+    environment: Option<String>,
+    worktree: String,
+    server: String,
+    relative: String,
+    text: String,
+    line: u32,
+    character: u32,
+) -> Result<bool, String> {
+    let key = key_of(environment.as_deref(), &worktree, &server);
+    servers
+        .definition_exists(&key, &relative, text, line, character)
         .await
 }
 
@@ -2084,6 +2136,69 @@ mod tests {
             None
         );
         servers.close_all().await;
+    }
+
+    #[tokio::test]
+    async fn whether_a_definition_exists_is_asked_of_a_running_server_only_and_keeps_no_place_outside(
+    ) {
+        let servers = LspServers::default();
+        let (emit, _) = collector();
+        let plan = Plan::new();
+        let k = key("/w/a");
+        let ask = |text: &str| servers.definition_exists(&k, "lib/a.rb", text.into(), 0, 2);
+        assert_eq!(ask("User\n").await, Err(NOT_STARTED.to_owned()));
+        servers
+            .start_with(k.clone(), emit, standin(plan.clone(), Arc::default()))
+            .await;
+        // Indexing: nothing is asked.
+        assert_eq!(ask("User\n").await, Err(NOT_READY.to_owned()));
+        plan.end.notify_one();
+        wait_for(&servers, &k, LspState::Running).await;
+        let gem = "/usr/local/bundle/gems/rack-3.1.0/lib/rack.rb";
+        *plan.definition.lock().unwrap() = json!([
+            {"uri": format!("file://{gem}"), "range": {"start": {"line": 10, "character": 2}}},
+        ]);
+        assert_eq!(ask("Rack\n").await, Ok(true));
+        assert_eq!(
+            servers.outside_way(None, "/w/a", "ruby-lsp", gem).await,
+            None
+        );
+        *plan.definition.lock().unwrap() = json!([]);
+        assert_eq!(ask("x\n").await, Ok(false));
+        *plan.definition.lock().unwrap() = json!(null);
+        assert_eq!(ask("x\n").await, Ok(false));
+        assert!(servers
+            .definition_exists(&k, "../x.rb", "a".into(), 0, 0)
+            .await
+            .is_err());
+        assert_eq!(
+            servers
+                .definition_exists(&k, "a.rb", "a".repeat(MAX_DOC + 1), 0, 0)
+                .await,
+            Err(TOO_LARGE.to_owned())
+        );
+        servers.stop(&k).await;
+        assert_eq!(ask("x\n").await, Err(NOT_STARTED.to_owned()));
+        servers.close_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_stopped_server_is_refused_the_question_of_whether_a_definition_exists() {
+        let servers = LspServers::default();
+        let (emit, _) = collector();
+        let mut dying = Plan::new();
+        dying.dies = true;
+        let k = key("/w/a");
+        servers
+            .start_with(k.clone(), emit, standin(dying, Arc::default()))
+            .await;
+        wait_for(&servers, &k, LspState::Stopped).await;
+        assert_eq!(
+            servers
+                .definition_exists(&k, "a.rb", "a".into(), 0, 0)
+                .await,
+            Err(STOPPED.to_owned())
+        );
     }
 
     #[tokio::test]

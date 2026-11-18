@@ -1503,6 +1503,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-text { position: relative; flex: 1; min-width: 0; overflow: hidden; }
 /* The band of the line of the caret, under the layer and the textarea (A-18), across the box of the text; the script sets its height and its place. */
 .orca-edit-line { position: absolute; top: 0; left: 0; right: 0; pointer-events: none; background: var(--cursor-band); }
+/* A-34: the underline of a name that has a definition while the Command key is down, in the box of the text under the layer; the script sets its place and width. */
+.orca-edit-link { position: absolute; left: 0; top: 0; height: 1px; pointer-events: none; background: var(--accent); }
 .orca-edit-area, .orca-edit-gutter, .orca-edit-hl code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; letter-spacing: normal; }
 .orca-edit-area { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: transparent; caret-color: CanvasText; overflow: auto; resize: none; outline: none; }
 .orca-edit-area::selection { background: var(--hl-select); }

@@ -401,6 +401,7 @@ pub fn run() {
             lsp::server::lsp_restart,
             lsp::server::lsp_status,
             lsp::server::lsp_definition,
+            lsp::server::lsp_definition_exists,
             lsp::outside::lsp_read_outside,
             lsp::container::lsp_container_start,
             lsp::view::lsp_word,
