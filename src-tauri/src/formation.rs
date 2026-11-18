@@ -2301,7 +2301,7 @@ fn has_agent_at(ps: &Value, path: &str, pane_key: &str) -> bool {
         .any(|agent| agent["paneKey"].as_str() == Some(pane_key))
 }
 
-/// Whether Orca's list says the terminal the record names is the child's: for a Claude Code child an agent of its pane under its path in `ps` (`orca worktree ps` of its environment, `None` when it could not be read), for a Codex child, which `ps` has no row for (measured, 2026-11-18), its handle in `orca terminal list` of its environment (`child_row` reads it the same way). A list that cannot be read does not say so.
+/// Whether Orca's list says the terminal the record names is the child's: for a Claude Code child an agent of its pane under its path in `ps` (`orca worktree ps` of its environment, `None` when it could not be read), for a Codex child, which `ps` has no row for (measured, 2026-11-18), its handle in `orca terminal list` of its environment, listed under the child's path (`is_childs_terminal_listed`; `child_row` reads it the same way). A list that cannot be read does not say so.
 fn terminal_is_childs(
     agent: FormationAgent,
     launch: &Launch,
@@ -2314,7 +2314,7 @@ fn terminal_is_childs(
             ps.is_some_and(|ps| has_agent_at(ps, &launch.path, &launch.pane_key))
         }
         FormationAgent::Codex => read(&all_terminals_args(environment))
-            .is_ok_and(|list| is_listed_terminal(&list, &launch.handle)),
+            .is_ok_and(|list| is_childs_terminal_listed(&list, &launch.handle, &launch.path)),
     }
 }
 
@@ -3257,7 +3257,7 @@ fn child_row(child: &Child, environment: &str, read: Option<&Value>) -> Formatio
         return row;
     };
     if child.agent == FormationAgent::Codex {
-        if is_listed_terminal(read, &launch.handle) {
+        if is_childs_terminal_listed(read, &launch.handle, &launch.path) {
             row.state = FormationState::Working;
         } else {
             row.state = FormationState::Done;
@@ -4150,6 +4150,15 @@ fn is_listed_terminal(list: &Value, handle: &str) -> bool {
         .into_iter()
         .flatten()
         .any(|t| orca::text_of(t, "handle") == Some(handle) && t["orphaned"] != true)
+}
+
+/// Whether `terminal list` (its `result`) has the terminal `handle` of a child, not orphaned, and says it is in the worktree at `path` (`worktreePath`, as `handles_in` reads it). The record is a file the orchestrator can write, so a handle of a terminal of another path (the owner's own, or the leader's) is not the child's.
+fn is_childs_terminal_listed(list: &Value, handle: &str, path: &str) -> bool {
+    list["terminals"].as_array().into_iter().flatten().any(|t| {
+        orca::text_of(t, "handle") == Some(handle)
+            && t["orphaned"] != true
+            && orca::text_of(t, "worktreePath") == Some(path)
+    })
 }
 
 /// The first line of what Orca printed, for a message that is one line.
@@ -6397,12 +6406,28 @@ mod tests {
         std::fs::create_dir_all(&there).unwrap();
         let path = there.to_string_lossy().into_owned();
         for (terminals, confirmed) in [
-            (json!({"terminals": [{"handle": "term_a"}]}), true),
             (
-                json!({"terminals": [{"handle": "term_a", "orphaned": true}]}),
+                json!({"terminals": [{"handle": "term_a", "worktreePath": path}]}),
+                true,
+            ),
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": path, "orphaned": true}]}),
                 false,
             ),
-            (json!({"terminals": [{"handle": "term_other"}]}), false),
+            (
+                json!({"terminals": [{"handle": "term_other", "worktreePath": path}]}),
+                false,
+            ),
+            // The handle is listed, but under another path (the owner's own terminal, or the leader's), or with none (a floating terminal).
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": "/somewhere/else"}]}),
+                false,
+            ),
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": ""}]}),
+                false,
+            ),
+            (json!({"terminals": [{"handle": "term_a"}]}), false),
         ] {
             recorded_codex(&config, &path, "term_a", false);
             let orca = Calls::new();
@@ -6459,8 +6484,16 @@ mod tests {
         let config = temp_dir("close-codex-gone");
         let path = "/nonexistent-tsunagiai/w/a";
         for (terminals, confirmed) in [
-            (json!({"terminals": [{"handle": "term_a"}]}), true),
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": path}]}),
+                true,
+            ),
             (json!({"terminals": []}), false),
+            // Listed under another path: not the child's, so it is left alone.
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": "/somewhere/else"}]}),
+                false,
+            ),
         ] {
             recorded_codex(&config, path, "term_a", true);
             let orca = Calls::new();
@@ -6494,7 +6527,10 @@ mod tests {
             &config,
             F,
             None,
-            &codex_orca(&path, json!({"terminals": [{"handle": "term_a"}]})),
+            &codex_orca(
+                &path,
+                json!({"terminals": [{"handle": "term_a", "worktreePath": path}]}),
+            ),
             &|args| orca.run(args),
             &no_remote_git,
             &|| {},
@@ -6695,8 +6731,9 @@ mod tests {
         agent
     }
 
+    /// The terminals of `handles`, all in the worktree `/work/c` (the path of `codex_child("c")`).
     fn terminals_of(handles: &[&str]) -> Value {
-        json!({"terminals": handles.iter().map(|h| json!({"handle": h, "orphaned": false})).collect::<Vec<_>>()})
+        json!({"terminals": handles.iter().map(|h| json!({"handle": h, "worktreePath": "/work/c", "orphaned": false})).collect::<Vec<_>>()})
     }
 
     fn codex_child(name: &str) -> Child {
@@ -6717,7 +6754,11 @@ mod tests {
         for list in [
             terminals_of(&["term_other"]),
             terminals_of(&[]),
-            json!({"terminals": [{"handle": "term_c", "orphaned": true}]}),
+            json!({"terminals": [{"handle": "term_c", "worktreePath": "/work/c", "orphaned": true}]}),
+            // The handle is listed under another worktree, or under none: not the child's terminal.
+            json!({"terminals": [{"handle": "term_c", "worktreePath": "/work/other", "orphaned": false}]}),
+            json!({"terminals": [{"handle": "term_c", "worktreePath": "", "orphaned": false}]}),
+            json!({"terminals": [{"handle": "term_c"}]}),
         ] {
             let rows = rows_of(std::slice::from_ref(&codex), &list);
             assert_eq!(rows[0].state, FormationState::Done, "{list}");
@@ -10306,6 +10347,24 @@ mod tests {
         assert!(!is_listed_terminal(&list, "term_c"));
         assert!(!is_listed_terminal(&list, "term_x"));
         assert!(!is_listed_terminal(&Value::Null, "term_a"));
+    }
+
+    #[test]
+    fn a_childs_terminal_is_listed_only_under_its_own_path() {
+        let list = json!({"terminals": [
+            {"handle": "term_a", "worktreePath": "/w/a"},
+            {"handle": "term_b", "worktreePath": "/w/a", "orphaned": true},
+            {"handle": "term_c", "worktreePath": "/w/other"},
+            {"handle": "term_d", "worktreePath": ""},
+            {"handle": "term_e"},
+        ]});
+        assert!(is_childs_terminal_listed(&list, "term_a", "/w/a"));
+        assert!(!is_childs_terminal_listed(&list, "term_b", "/w/a"));
+        assert!(!is_childs_terminal_listed(&list, "term_c", "/w/a"));
+        assert!(!is_childs_terminal_listed(&list, "term_d", "/w/a"));
+        assert!(!is_childs_terminal_listed(&list, "term_e", "/w/a"));
+        assert!(!is_childs_terminal_listed(&list, "term_x", "/w/a"));
+        assert!(!is_childs_terminal_listed(&Value::Null, "term_a", "/w/a"));
     }
 
     /// A stand-in Orca for the start of an orchestrator: every call in order, with what it says to it (`read` and `write` share one list of calls).
