@@ -1465,7 +1465,7 @@ function initSearch() {
 export function initOrca() {
   initOrcaTerminal((e) => showFailure("orca", e));
   initPeek(statusIcon, selectSession);
-  initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
+  initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: (e) => showFailure("orca", e), definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
   initLsp({ changed: ({ target, project }) => resolveServers(target, project) });

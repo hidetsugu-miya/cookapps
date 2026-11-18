@@ -1531,18 +1531,18 @@ describe("orchestration mode: the list of the formations", () => {
     await expect($("#formation-list-error")).not.toBeDisplayed();
   });
 
-  it("has the divider of the Orca list for the formations too, at 25% of the screen at first", async () => {
+  it("has the divider of the Orca list for the formations too, at 19% of the screen at first", async () => {
     await openList();
     const share = () => browser.execute(() => document.getElementById("orca-list")!.getBoundingClientRect().width / document.getElementById("orca")!.getBoundingClientRect().width);
     const split = $("#orca-split");
     await expect(split).toHaveAttribute("role", "separator");
-    await expect(split).toHaveAttribute("aria-valuemin", "20");
+    await expect(split).toHaveAttribute("aria-valuemin", "15");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
-    await expect(split).toHaveAttribute("aria-valuenow", "25");
-    expect(await share()).toBeCloseTo(0.25, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "19");
+    expect(await share()).toBeCloseTo(0.19, 2);
     await browser.execute((id, k) => window.__e2e_once__(id) && document.getElementById("orca-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), onceId(), "ArrowRight");
-    await expect(split).toHaveAttribute("aria-valuenow", "27");
-    expect(await share()).toBeCloseTo(0.27, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "21");
+    expect(await share()).toBeCloseTo(0.21, 2);
   });
 });
 
