@@ -483,7 +483,7 @@ function back() {
   requestAnimationFrame(() => ($("main").scrollTop = threadScroll));
 }
 
-// The dialog of "投稿" for two things to do or more (#905): for each one after the first that is not posted, "N をどこに送りますか", the thread of the one before it or its channel, chosen with a radio button; nothing is chosen for one that continues the thread of an earlier post other than the one before it.
+// The dialog of "投稿" for two things to do or more (#905): for each one after the first that is not posted, "N をどこに送りますか", the thread of the one before it or the other choice, chosen with a radio button: the card's own destination when it has one, else the channel of the one before it; nothing is chosen for one that continues the thread of an earlier post other than the one before it.
 // "投稿" of the dialog fixes the chosen destinations in the cards and resolves true; "やめる", Escape and a press on the dimmed screen resolve false and change nothing.
 function askDestinations(d: Draft): Promise<boolean> {
   const first = d.actions.findIndex((a) => !a.posted);
@@ -501,7 +501,8 @@ function askDestinations(d: Draft): Promise<boolean> {
     const inputs = (
       [
         ["thread", `${i} のスレッドに投稿`],
-        ["channel", `#${channelOf(d, i - 1)!.name} に投稿`],
+        // A card with a destination of its own keeps it; one that continues a thread goes to the channel of the card before it.
+        ["channel", a.after === null ? `${whereLabel(a)} に投稿` : `#${channelOf(d, i - 1)!.name} に投稿`],
       ] as const
     ).map(([value, text]) => {
       const input = tag("input");
@@ -554,6 +555,7 @@ function askDestinations(d: Draft): Promise<boolean> {
       for (const i of indexes) {
         const a = d.actions[i];
         if (chosen(i) === "thread") [a.after, a.byClaude] = [i - 1, false];
+        else if (a.after === null) a.byClaude = false;
         else [a.target, a.after, a.byClaude] = [channels.get(i)!, null, false];
       }
       $("slack-error").hidden = true;

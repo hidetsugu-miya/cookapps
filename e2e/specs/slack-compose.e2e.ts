@@ -483,6 +483,32 @@ describe("slack compose screen", () => {
     await expect(where(2)).toHaveText("Example Team ・ #general");
   });
 
+  it("offers the own destination of a second thing to do as the choice of the dialog, chosen at first, and posts it there with no thread", async () => {
+    await openManual();
+    await chooseGeneral();
+    await add().click();
+    await written(2).setValue("別の場所です");
+    // The second has a channel of its own, not the channel of the first.
+    await mock("slack_channels", [...slackChannels, { id: "C0999RAND", name: "random", private: false }]);
+    await where(2).click();
+    const random = $("//div[contains(@class, 'slack-pop')]//button[normalize-space()='#random']");
+    await random.waitForExist();
+    await random.click();
+    await expect(where(2)).toHaveText("Example Team ・ #random");
+    const slackPost = await mock("slack_post", postedTs);
+    await post().click();
+    await ask().waitForExist();
+    expect(await textsOf(".slack-ask-choice")).toEqual(["1 のスレッドに投稿", "Example Team ・ #random に投稿"]);
+    await expect(askChoice(2, "channel")).toBeSelected();
+    await askGo().click();
+    await expect(ask()).not.toExist();
+    expect(await waitForCalls(slackPost, 2)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: slackPreview, written: false },
+      { teamId: "T1", channel: "C0999RAND", threadTs: null, name: "random", text: "別の場所です", written: true },
+    ]);
+    await expect(where(2)).toHaveText("Example Team ・ #random");
+  });
+
   it("posts nothing and changes no card when the dialog is closed with やめる, Escape or a press on the dimmed screen", async () => {
     await openManual();
     await chooseGeneral();
