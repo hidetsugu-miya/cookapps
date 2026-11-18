@@ -17,7 +17,7 @@ The launch prompt gives you the JSON of `snapshot` (its first line may be `mode:
 `fixed` holds the issues whose place is settled and that cannot move (the ones already started and the ones waiting for a release), and `free` holds the issues that this agent orders.
 Each issue has `urgency` (`high` or `normal`), `importance` (`high`, `normal` or `low`), `points` and `parent` (the number of the parent issue; null when the issue is not a part of a feature).
 `free` comes in the base order (the tier; within a tier, bugs that go out early; the ones without `importance:low` first; fewer points first; older first).
-There are four tiers, decided by urgency and importance. In order: (1) `urgency` is `high` and `importance` is also `high`, (2) only `urgency` is `high`, (3) only `importance` is `high`, (4) neither. An issue with `importance` `low` and one with `normal` are in the same tier (one with no label is the lower).
+There are four tiers, decided by urgency and importance. In order: (1) `urgency` is `high` and `importance` is also `high`, (2) only `urgency` is `high`, (3) only `importance` is `high`, (4) neither. An issue with `importance` `low` and one with `normal` are in the same tier (a missing label counts as low).
 
 ## Steps
 
