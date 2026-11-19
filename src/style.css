@@ -1147,7 +1147,7 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-more > summary, .fp-detail > summary { color: var(--accent-text); font-size: calc(12px * var(--fs)); }
 .fp-diagram { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .fp-diagram-box { overflow-x: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-.fp-diagram-box svg { max-width: 100%; height: auto; }
+.fp-diagram-box svg { width: 100%; max-width: 100%; height: auto; fill: initial; stroke: none; stroke-width: initial; }
 .fp-diagram figcaption { color: var(--muted); font-size: calc(12px * var(--fs)); }
 .fp-diagram-source, .fp-pre { margin: 0; padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 8px; background: var(--code); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); white-space: pre-wrap; }
 .fp-diagram-box[data-drawn="true"] .fp-diagram-source { display: none; }

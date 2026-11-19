@@ -2761,6 +2761,22 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await $(`${box} svg`).getAttribute("aria-label")).toBe("流れ");
     expect(await browser.execute((s) => document.querySelector(s)!.textContent, `${box} svg`)).toContain("開始");
     expect(await textsOf('#formation-page [data-card="Q1"] figcaption')).toEqual(["流れ"]);
+    // The app's icon rule (`svg { width: 20px }`) does not shrink the diagram: it is as wide as the smaller of the box and its own width (#1089).
+    const size = await browser.execute((s) => {
+      const svg = document.querySelector(s) as SVGSVGElement;
+      const box = svg.parentElement as HTMLElement;
+      const cs = getComputedStyle(box);
+      return {
+        width: svg.getBoundingClientRect().width,
+        boxWidth: box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        ownWidth: svg.viewBox.baseVal.width,
+        fill: getComputedStyle(svg).fill,
+        stroke: getComputedStyle(svg).stroke,
+      };
+    }, `${box} svg`);
+    expect(size.width).not.toBe(20);
+    expect(Math.abs(size.width - Math.min(size.boxWidth, size.ownWidth))).toBeLessThan(1);
+    expect(size.stroke).toBe("none");
     expect(await browser.execute(() => document.querySelectorAll('script[src$="mermaid.min.js"]').length)).toBe(1);
     // The diagram is in the card, not behind 詳しく見る.
     expect(await count('#formation-page [data-card="Q1"] .fp-more')).toBe(0);
