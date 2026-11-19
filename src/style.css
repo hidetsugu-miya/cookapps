@@ -1750,6 +1750,16 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #todo-claude-term { flex: 1; min-height: 0; }
 #todo-claude-ask { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
 #todo-claude-ask p { margin: 0; color: var(--ink-soft); }
+/* T-7: where the tasks' column (`#todo-body`) would be under 612px (the detail's 556px and the 56px of its margins) with the side on the right, `ts/todo.ts` gives `#todo` the class `below`: Claude goes under the tasks, over the width left of the project list,
+   30% to 45% of the screen's height (`--chat-h`, the plain ratio that `ts/split.ts` writes, used as a flex-grow so that no height has to be known; the range is held here too), the divider lies down, and the ✳ is in the header of the tasks, not in a row of its own. `#todo-work` is not a box while the side is on the right. */
+#todo-work { display: contents; }
+#todo.below #todo-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#todo.below #todo-body { flex-grow: calc(1 - clamp(0.3, var(--chat-h, 0.3), 0.45)); flex-shrink: 1; flex-basis: 0; min-height: 0; }
+#todo.below #todo-side { width: auto; flex-grow: clamp(0.3, var(--chat-h, 0.3), 0.45); flex-shrink: 1; flex-basis: 0; min-height: 0; }
+#todo.below #todo-tools { display: none; }
+#todo.below #todo-split { width: auto; height: 7px; border-left: 0; border-top: 1px solid var(--line); cursor: row-resize; }
+#todo.below #todo-split span { width: 32px; height: 3px; }
+#todo.below.dragging { cursor: row-resize; }
 /* A-9: on the Todo screen the pane follows the detail, under the comments, in the scroll of #todo-main: it is as high as its content, and the terminal of a session has a height of its own (the pane has none to fill). */
 #todo-handoff { flex: none; max-width: 980px; margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 #todo-handoff .ho-main, #todo-handoff .ho-form.ho-fill { flex: none; }

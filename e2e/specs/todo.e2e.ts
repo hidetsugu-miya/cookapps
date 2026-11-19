@@ -3,6 +3,21 @@ import { boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettin
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
 
+// Runs `run` in a window of `width`px and puts the window back. The E2E window is 1200px, where Claude's side is under the tasks (T-7, "Under the tasks"); a spec that needs the side on the right takes a wider window, and one that needs a narrow detail a narrower one.
+async function inWindow(width: number, run: () => Promise<void>) {
+  const before = await browser.getWindowSize();
+  const resize = async (w: number) => {
+    await browser.setWindowSize(w, before.height);
+    await browser.waitUntil(async () => (await browser.execute(() => innerWidth)) === w, { timeoutMsg: `the window did not get ${w}px` });
+  };
+  await resize(width);
+  try {
+    await run();
+  } finally {
+    await resize(before.width);
+  }
+}
+
 describe("todo", () => {
   it("lists the projects and today's tasks, and a project's tasks when it is picked", async () => {
     await openTodo();
@@ -1043,33 +1058,36 @@ describe("todo: closing the list of projects (A-23)", () => {
   });
 
   it("closes the list, widens the tasks to its width, and puts the button at the left of the heading", async () => {
-    await openTodo();
-    const [listBefore, bodyBefore] = await Promise.all(["#projects", "#todo-body"].map(rect));
-    await $("#projects-toggle").click();
-    await expect($("#projects")).not.toBeDisplayed();
-    const [screen, body] = await Promise.all(["#todo", "#todo-body"].map(rect));
-    expect(body.left).toBeCloseTo(screen.left, 0);
-    expect(body.width).toBeCloseTo(bodyBefore.width + listBefore.width, 0);
-    // The button is first in the header, beside the heading and at its left.
-    const closed = $("#todo-list-toggle");
-    await expect(closed).toBeDisplayed();
-    await expect(closed).toHaveAttribute("aria-expanded", "false");
-    await expect(closed).toHaveAttribute("aria-label", "プロジェクト一覧");
-    expect(await browser.execute(() => document.querySelector("#todo-body > header")!.firstElementChild!.id)).toBe("todo-list-toggle");
-    const [button, title, header] = await Promise.all(["#todo-list-toggle", "#todo-title", "#todo-body > header"].map(rect));
-    expect(button.right).toBeLessThanOrEqual(title.left);
-    expect(button.left).toBeGreaterThanOrEqual(header.left);
-    // Level with the heading.
-    expect(Math.abs((button.top + button.bottom) / 2 - (title.top + title.bottom) / 2)).toBeLessThan(6);
-    // Still a button of the band: a press on it does not move the window.
-    await expect(closed).not.toHaveAttribute("data-tauri-drag-region");
-    // The green column stays.
-    await expect($("#sidebar")).toBeDisplayed();
-    await closed.click();
-    await expect($("#projects")).toBeDisplayed();
-    await expect($("#todo-list-toggle")).not.toBeDisplayed();
-    await expect($("#projects-toggle")).toHaveAttribute("aria-expanded", "true");
-    expect((await rect("#projects")).width).toBeCloseTo(listBefore.width, 0);
+    // In a window where Claude's side is on the right with the list open and closed (T-7), so that the tasks take the list's width and nothing else.
+    await inWindow(1600, async () => {
+      await openTodo();
+      const [listBefore, bodyBefore] = await Promise.all(["#projects", "#todo-body"].map(rect));
+      await $("#projects-toggle").click();
+      await expect($("#projects")).not.toBeDisplayed();
+      const [screen, body] = await Promise.all(["#todo", "#todo-body"].map(rect));
+      expect(body.left).toBeCloseTo(screen.left, 0);
+      expect(body.width).toBeCloseTo(bodyBefore.width + listBefore.width, 0);
+      // The button is first in the header, beside the heading and at its left.
+      const closed = $("#todo-list-toggle");
+      await expect(closed).toBeDisplayed();
+      await expect(closed).toHaveAttribute("aria-expanded", "false");
+      await expect(closed).toHaveAttribute("aria-label", "プロジェクト一覧");
+      expect(await browser.execute(() => document.querySelector("#todo-body > header")!.firstElementChild!.id)).toBe("todo-list-toggle");
+      const [button, title, header] = await Promise.all(["#todo-list-toggle", "#todo-title", "#todo-body > header"].map(rect));
+      expect(button.right).toBeLessThanOrEqual(title.left);
+      expect(button.left).toBeGreaterThanOrEqual(header.left);
+      // Level with the heading.
+      expect(Math.abs((button.top + button.bottom) / 2 - (title.top + title.bottom) / 2)).toBeLessThan(6);
+      // Still a button of the band: a press on it does not move the window.
+      await expect(closed).not.toHaveAttribute("data-tauri-drag-region");
+      // The green column stays.
+      await expect($("#sidebar")).toBeDisplayed();
+      await closed.click();
+      await expect($("#projects")).toBeDisplayed();
+      await expect($("#todo-list-toggle")).not.toBeDisplayed();
+      await expect($("#projects-toggle")).toHaveAttribute("aria-expanded", "true");
+      expect((await rect("#projects")).width).toBeCloseTo(listBefore.width, 0);
+    });
   });
 
   it("keeps the projects and their counts when the list is drawn again, and the button with them", async () => {
@@ -1384,15 +1402,22 @@ describe("todo detail", () => {
   });
 
   it("puts the side pane under the body when the body column would be narrower than 320px", async () => {
+    // In the 1200px window Claude's side is under the tasks (T-7), so the detail has the width of the column less its margins, 556px at least with two columns; the side pane goes under the body in a narrow window only.
     await openTodo();
     await $(ROWS).click();
     const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
-    // The 1200px window with the project list and the right pane (30%) open leaves the detail less than 556px (320 + 16 + 220).
-    const [detail, main, side] = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
-    expect(detail.width).toBeLessThan(556);
-    expect(main.width).toBeGreaterThanOrEqual(320);
-    expect(side.top).toBeGreaterThanOrEqual(main.bottom);
-    expect(side.width).toBe(220);
+    const wide = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
+    expect(wide[0].width).toBeGreaterThanOrEqual(556);
+    expect(wide[2].top).toBeLessThan(wide[1].bottom);
+    // A window of 800px with the project list open leaves the detail less than 556px (320 + 16 + 220).
+    await inWindow(800, async () => {
+      await browser.waitUntil(async () => (await place("#todo-detail")).width < 556, { timeoutMsg: "the detail did not narrow with the window" });
+      const [detail, main, side] = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
+      expect(detail.width).toBeLessThan(556);
+      expect(main.width).toBeGreaterThanOrEqual(320);
+      expect(side.top).toBeGreaterThanOrEqual(main.bottom);
+      expect(side.width).toBe(220);
+    });
   });
 
   it("moves the open task to another project from the side pane, the menu showing the nesting", async () => {

@@ -198,59 +198,61 @@
     </section>
     <section id="todo" class="split-main" hidden>
       <aside id="projects"></aside>
-      <div id="todo-body">
-        <header data-tauri-drag-region="deep">
-          <button id="todo-back" class="icon-btn" aria-label="戻る" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
-          </button>
-          <h1 id="todo-title">今日</h1>
-          <button id="todo-orca-open" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
-          </button>
-          <button id="todo-more" class="text-btn" aria-label="編集" aria-haspopup="menu" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
-            <span>編集</span>
-          </button>
-        </header>
-        <div id="todo-notice"></div>
-        <div id="todo-main">
-          <form id="todo-token" hidden>
-            <p>Todoist の設定の「連携」にある個人 API トークンを入力してください。トークンは OS の資格情報の保管場所（macOS はキーチェーン、Windows は資格情報マネージャー）に保存し、画面には表示しません。</p>
-            <p id="todo-token-note"></p>
-            <div class="row">
-              <input id="todo-token-input" type="password" autocomplete="off" aria-label="Todoist の API トークン" placeholder="API トークン">
-              <button class="text-btn">保存</button>
+      <div id="todo-work">
+        <div id="todo-body">
+          <header data-tauri-drag-region="deep">
+            <button id="todo-back" class="icon-btn" aria-label="戻る" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+            </button>
+            <h1 id="todo-title">今日</h1>
+            <button id="todo-orca-open" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+            </button>
+            <button id="todo-more" class="text-btn" aria-label="編集" aria-haspopup="menu" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
+              <span>編集</span>
+            </button>
+          </header>
+          <div id="todo-notice"></div>
+          <div id="todo-main">
+            <form id="todo-token" hidden>
+              <p>Todoist の設定の「連携」にある個人 API トークンを入力してください。トークンは OS の資格情報の保管場所（macOS はキーチェーン、Windows は資格情報マネージャー）に保存し、画面には表示しません。</p>
+              <p id="todo-token-note"></p>
+              <div class="row">
+                <input id="todo-token-input" type="password" autocomplete="off" aria-label="Todoist の API トークン" placeholder="API トークン">
+                <button class="text-btn">保存</button>
+              </div>
+            </form>
+            <form id="todo-add">
+              <input id="todo-add-input" aria-label="タスクを追加" autocomplete="off">
+              <button id="todo-add-button" class="text-btn">追加</button>
+              <p id="todo-add-hint" hidden></p>
+            </form>
+            <div id="todo-pending"></div>
+            <div id="todo-list"></div>
+            <section id="todo-detail" hidden></section>
+            <aside id="todo-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
+          </div>
+        </div>
+        <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="30" aria-valuemax="45" aria-valuenow="30" tabindex="0" hidden><span></span></div>
+        <div id="todo-side" hidden>
+          <div id="todo-tools" data-tauri-drag-region="deep">
+            <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+            </button>
+          </div>
+          <aside id="todo-claude" class="chat-pane" aria-label="Claude">
+            <div id="todo-claude-ask">
+              <p>Claude に相談しますか？</p>
+              <button id="todo-claude-open" type="button" class="text-btn">相談する</button>
             </div>
-          </form>
-          <form id="todo-add">
-            <input id="todo-add-input" aria-label="タスクを追加" autocomplete="off">
-            <button id="todo-add-button" class="text-btn">追加</button>
-            <p id="todo-add-hint" hidden></p>
-          </form>
-          <div id="todo-pending"></div>
-          <div id="todo-list"></div>
-          <section id="todo-detail" hidden></section>
-          <aside id="todo-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
+            <div class="chat-head" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+              <button id="todo-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
+            </div>
+            <div id="todo-claude-term" hidden></div>
+          </aside>
         </div>
-      </div>
-      <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="30" aria-valuemax="45" aria-valuenow="30" tabindex="0" hidden><span></span></div>
-      <div id="todo-side" hidden>
-        <div id="todo-tools" data-tauri-drag-region="deep">
-          <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
-          </button>
-        </div>
-        <aside id="todo-claude" class="chat-pane" aria-label="Claude">
-          <div id="todo-claude-ask">
-            <p>Claude に相談しますか？</p>
-            <button id="todo-claude-open" type="button" class="text-btn">相談する</button>
-          </div>
-          <div class="chat-head" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
-            <button id="todo-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
-          </div>
-          <div id="todo-claude-term" hidden></div>
-        </aside>
       </div>
     </section>
     <section id="settings" hidden>
