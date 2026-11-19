@@ -86,6 +86,8 @@ function toggleList() {
 function layoutPanes() {
   $("todo-side").hidden = !sideUsable;
   $("todo-split").hidden = !sideUsable;
+  // Under the tasks the column of the tasks has the whole height while the side is hidden (the CSS).
+  $("todo").classList.toggle("side-off", !sideUsable);
   // The ✳ is in the header of the tasks while Claude is under them, and the header is shown under the token form and the page of a draft too.
   $("todo-tool-claude").hidden = !sideUsable;
   // The terminal is shown while the side is in view, and hidden when it is not.

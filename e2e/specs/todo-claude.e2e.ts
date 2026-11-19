@@ -460,7 +460,7 @@ describe("todo Claude pane", () => {
     expect(await places()).toMatchObject({ under: true, list: true, starInHeader: true });
   });
 
-  it("hides the ✳ with the side under the page of a draft, in the narrow window too", async () => {
+  it("hides the ✳ and the side under the page of a draft, in the narrow window too, and the tasks' column has the whole height then", async () => {
     await resize(NARROW);
     await openTodo();
     await expect($("#todo-tool-claude")).toBeDisplayed();
@@ -471,10 +471,14 @@ describe("todo Claude pane", () => {
     await expect($(pane)).not.toBeDisplayed();
     await expect($("#todo-split")).not.toBeDisplayed();
     await expect($("#todo-tool-claude")).not.toBeDisplayed();
+    // The tasks' column has the whole height of the screen while the side is hidden.
+    const filled = () => browser.execute(() => Math.abs(document.getElementById("todo-body")!.getBoundingClientRect().bottom - document.getElementById("todo")!.getBoundingClientRect().bottom) <= 1);
+    expect(await filled()).toBe(true);
     await $("#todo-back").click();
     await expect($("#todo-tool-claude")).toBeDisplayed();
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-split")).toBeDisplayed();
     expect((await places()).under).toBe(true);
+    expect(await filled()).toBe(false);
   });
 });
