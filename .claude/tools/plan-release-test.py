@@ -2202,40 +2202,12 @@ class UseWorktree(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(copy, "deps", "y")))
         self.assertFalse(os.path.exists(os.path.join(copy, "incremental")))
 
-    def test_node_modules_is_cloned_when_the_lock_file_is_the_same_and_npm_ci_is_not_run(self):
+    def test_npm_ci_is_run_when_the_worktree_is_made_and_node_modules_is_not_copied(self):
         self.main_with_node_modules()
         code, path, err = self.use("feat/one")
         self.assertEqual(code, 0, err)
-        self.assertTrue(os.path.exists(os.path.join(path, "node_modules", "p", "y")))
-        self.assertEqual(self.npm_ci_runs(), [])
-
-    def test_npm_ci_is_run_when_the_lock_file_differs_from_the_main_checkouts(self):
-        self.main_with_node_modules()
-        with open(os.path.join(self.main, "package-lock.json"), "w") as f:
-            f.write("older\n")  # the main checkout is behind origin/main
-        code, path, err = self.use("feat/one")
-        self.assertEqual(code, 0, err)
         self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
-        self.assertFalse(os.path.exists(os.path.join(path, "node_modules", "p")))
-
-    def test_npm_ci_is_run_when_the_main_checkout_has_no_node_modules(self):
-        self.commit(self.main, "package-lock.json", "lock\n", "lock")
-        self.git(self.main, "push", "-q", "origin", "main")
-        code, path, err = self.use("feat/one")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
-
-    def test_npm_ci_is_run_when_the_clone_of_node_modules_fails(self):
-        self.main_with_node_modules()
-        unreadable = os.path.join(self.main, "node_modules", "p", "y")
-        os.chmod(unreadable, 0)
-        try:
-            code, path, err = self.use("feat/one")
-        finally:
-            os.chmod(unreadable, 0o600)
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
-        self.assertFalse(os.path.exists(os.path.join(path, "node_modules", "p")))  # the half-made copy is gone
+        self.assertFalse(os.path.exists(os.path.join(path, "node_modules", "p")))  # the main checkout's node_modules may be old
 
     def test_no_lock_file_means_no_node_modules_and_no_npm_ci(self):
         _, path, _ = self.use("feat/one")
