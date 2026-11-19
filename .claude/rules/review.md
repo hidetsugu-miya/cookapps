@@ -40,7 +40,7 @@ Bad:  launch release-verifier on a HEAD whose CI or E2E failed, only to rate the
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
 
-The range is `@{u}..HEAD`, or `origin/main..HEAD` when there is no upstream. The pull request of a night run holds the commits of several issues (up to 10 points), and it is reviewed once, as one range (at the owner's instruction, 2026-11-09; Discussion #293).
+The range is `@{u}..HEAD`, or `origin/main..HEAD` when there is no upstream. The pull request of a night run holds the commits of several issues (up to 20 points), and it is reviewed once, as one range (at the owner's instruction, 2026-11-09; Discussion #293).
 Always launch performance-reviewer and code-reviewer.
 Launch security-reviewer only when the diff touches any of the following.
 - Authentication, tokens, the keychain

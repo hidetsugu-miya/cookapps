@@ -1668,7 +1668,7 @@ class NightlyLimit(unittest.TestCase):
     """nightly-limit.sh with the points and the clock given by the environment."""
 
     # "{issue number} {points} [{unit}]": the unit is `i{n}` for a point:8 issue and for a `solo` issue with no parent, `p:{parent number}` for a `solo` part of a parent, and nothing for any other issue
-    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 p:900\n12 3 p:900\n13 2 p:900\n14 3 p:901\n15 8 i15\n16 3 p:900\n17 3 p:900\n18 3 i18\n20 3\n21 3 p:902\n22 3 p:902\n"
+    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 p:900\n12 3 p:900\n13 2 p:900\n14 3 p:901\n15 8 i15\n16 3 p:900\n17 3 p:900\n18 3 i18\n20 3\n21 3 p:902\n22 3 p:902\n30 5\n31 5\n32 5\n33 3 p:900\n34 3 p:900\n35 3 p:900\n"
     # the issues with the label `session`
     SESSION = "20,21,22"
 
@@ -1685,15 +1685,15 @@ class NightlyLimit(unittest.TestCase):
     def test_the_first_issue_may_start(self):
         self.assertEqual(self.run_limit("issue", "5")[0], 0)
 
-    def test_issues_fit_up_to_ten_points(self):
-        self.assertEqual(self.run_limit("issue", "9", "--taken", "5,2")[0], 0)  # 5 + 2 + 3 = 10
-        code, text = self.run_limit("issue", "3", "--taken", "5,9")  # 5 + 3 + 3 = 11
+    def test_issues_fit_up_to_twenty_points(self):
+        self.assertEqual(self.run_limit("issue", "32", "--taken", "5,30,31")[0], 0)  # 5 + 5 + 5 + 5 = 20
+        code, text = self.run_limit("issue", "3", "--taken", "5,30,31,9")  # 5 + 5 + 5 + 3 + 3 = 21
         self.assertEqual(code, 3, text)
-        self.assertIn("10", text)
+        self.assertIn("20", text)
 
     def test_a_smaller_issue_still_fits_where_a_bigger_one_did_not(self):
-        self.assertEqual(self.run_limit("issue", "3", "--taken", "5,9")[0], 3)
-        self.assertEqual(self.run_limit("issue", "2", "--taken", "5,9")[0], 0)  # 5 + 3 + 2 = 10
+        self.assertEqual(self.run_limit("issue", "3", "--taken", "5,30,31,9")[0], 3)
+        self.assertEqual(self.run_limit("issue", "2", "--taken", "5,30,31,9")[0], 0)  # 5 + 5 + 5 + 3 + 2 = 20
 
     def test_after_the_deadline_nothing_starts(self):
         code, text = self.run_limit("issue", "1", deadline=1000, now=1000)
@@ -1746,14 +1746,14 @@ class NightlyLimit(unittest.TestCase):
         self.assertEqual(self.run_limit("issue", "20", deadline=None)[0], 0)
         self.assertEqual(self.run_limit("issue", "21", "--taken", "20,1,5,8", deadline=None)[0], 0)
 
-    def test_the_parts_of_a_unit_still_keep_to_ten_points(self):
-        code, text = self.run_limit("issue", "17", "--taken", "11,12,16")  # 3 + 3 + 3 + 3 = 12
+    def test_the_parts_of_a_unit_still_keep_to_twenty_points(self):
+        code, text = self.run_limit("issue", "35", "--taken", "11,12,13,16,17,33,34")  # 3 + 3 + 2 + 3 + 3 + 3 + 3 + 3 = 23
         self.assertEqual(code, 3, text)
-        self.assertIn("10", text)
-        self.assertEqual(self.run_limit("issue", "16", "--taken", "11,12")[0], 0)
+        self.assertIn("20", text)
+        self.assertEqual(self.run_limit("issue", "34", "--taken", "11,12,13,16,17,33")[0], 0)  # 17 + 3 = 20
 
     def test_a_session_has_no_time_points_or_unit_limit(self):
-        self.assertEqual(self.run_limit("issue", "3", "--taken", "5,9,10", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "3", "--taken", "5,30,31,32,9", deadline=None)[0], 0)
         self.assertEqual(self.run_limit("issue", "8", "--taken", "1", deadline=None)[0], 0)
         self.assertEqual(self.run_limit("issue", "12", "--taken", "11", deadline=None)[0], 0)
         self.assertEqual(self.run_limit("issue", "12", "--taken", "1", deadline=None)[0], 0)
