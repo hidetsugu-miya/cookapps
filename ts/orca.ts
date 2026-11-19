@@ -47,7 +47,7 @@ export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待�
 const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
 const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
 const ROBOT_SVG = svgOf('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>');
-const SHELL_SVG = svgOf('<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>');
+const PLAY_SVG = svgOf('<polygon points="6 3 20 12 6 21 6 3"/>');
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
@@ -367,7 +367,18 @@ function environmentChip(environment: string) {
   return chip;
 }
 
-// A session of the open project: its status icon and title, selected when it is the tab selected.
+// The icon and the number of one kind of work in a session. The label comes from outside (the command): it is the title and the label, never markup.
+function countNode(className: string, icon: string, n: number, label: string) {
+  const badge = tag("span", className);
+  badge.title = label;
+  badge.setAttribute("role", "img");
+  badge.setAttribute("aria-label", label);
+  badge.innerHTML = icon;
+  badge.append(String(n));
+  return badge;
+}
+
+// A session of the open project: its status icon and title at the left, and at the right end an icon and a number for each kind of work in it (none for a kind that is 0). It is selected when it is the tab selected.
 function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
   row.type = "button";
@@ -378,26 +389,11 @@ function sessionNode(t: Tab, key: string) {
   // The newer of the user's and Claude's messages; the title when it has none.
   const title = tag("span", "orca-session-title", t.latest ?? t.title);
   row.append(statusIcon(t.status, t.label), title);
-  // The command comes from outside: it is the title and the label of the badge, never markup.
-  if (t.shell !== null) {
-    const badge = tag("span", "orca-session-shell");
-    const label = t.shell === "" ? "シェルを実行中" : `シェルを実行中: ${t.shell}`;
-    badge.title = label;
-    badge.setAttribute("role", "img");
-    badge.setAttribute("aria-label", label);
-    badge.innerHTML = SHELL_SVG;
-    row.append(badge);
-  }
-  if (t.subagents > 0) {
-    const badge = tag("span", "orca-session-subagents");
-    const label = `サブエージェント ${t.subagents} 件が作業中`;
-    badge.title = label;
-    badge.setAttribute("role", "img");
-    badge.setAttribute("aria-label", label);
-    badge.innerHTML = ROBOT_SVG;
-    badge.append(String(t.subagents));
-    row.append(badge);
-  }
+  // The AI (the subagents) and the commands. A session runs at most one command (`shell`), so its number is 1.
+  const counts = tag("span", "orca-session-counts");
+  if (t.subagents > 0) counts.append(countNode("orca-session-subagents", ROBOT_SVG, t.subagents, `サブエージェント ${t.subagents} 件が作業中`));
+  if (t.shell !== null) counts.append(countNode("orca-session-shell", PLAY_SVG, 1, t.shell === "" ? "シェルを実行中" : `シェルを実行中: ${t.shell}`));
+  if (counts.children.length) row.append(counts);
   row.onclick = () => selectSession(key, t.id);
   row.oncontextmenu = (e) => {
     e.preventDefault();
@@ -409,8 +405,8 @@ function sessionNode(t: Tab, key: string) {
   return row;
 }
 
-// A project: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
+// A project: its status icon and its name, and the chip of its saved environment at the right end. A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
+function projectNode(key: string, name: string, status: OrcaStatus, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
@@ -421,7 +417,6 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   label.append(...nameNodes(name, re));
   row.append(statusIcon(status), label);
   if (environment !== null) row.append(environmentChip(environment));
-  if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
   row.oncontextmenu = (e) => {
     e.preventDefault();
@@ -535,8 +530,8 @@ function cursorKey(rows = visibleRows(matcher())) {
 }
 
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
-function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>, hidden: Map<string, number>): HTMLElement[] {
-  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, shownSessions(r, hidden), placeOf(r), openTabs.get(r.key) ?? listedTabs(r.key), r.key === on, re));
+function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
+  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? listedTabs(r.key), r.key === on, re));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
@@ -559,7 +554,7 @@ function drawFeed() {
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...projectNodes(re, rows, on, openTabs, hidden));
+  box.replaceChildren(...projectNodes(re, rows, on, openTabs));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
