@@ -5,10 +5,11 @@
     "windows": [{ "title": "つなぎAI", "width": 1200, "height": 820, "visible": false, "dragDropEnabled": false }],
     "security": {
       "capabilities": [
+        "default",
         {
           "identifier": "e2e",
           "windows": ["main"],
-          "permissions": ["core:default", "wdio:default", "wdio-webdriver:default"]
+          "permissions": ["wdio:default", "wdio-webdriver:default"]
         }
       ]
     }
