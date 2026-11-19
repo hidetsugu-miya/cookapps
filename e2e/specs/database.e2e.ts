@@ -1629,7 +1629,8 @@ describe("database: tree", () => {
         await expect(changes()).not.toExist();
         await startEdit(1, 2);
         await field().setValue("Alicia");
-        await $("#database-work .database-range").click();
+        // The driver's press on text that takes no focus leaves the focus in the field in WKWebView, so the field is left by taking its focus away.
+        await browser.execute(() => (document.activeElement as HTMLElement).blur());
         await expect(cell(1, 2)).toHaveText("Alicia");
         await expect(changes()).toHaveText("変更 1 件");
       });
