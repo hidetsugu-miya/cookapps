@@ -424,7 +424,7 @@ function sessionWithWorks(t: Tab, key: string) {
   return wrap;
 }
 
-// A session of the open project: its status icon and title at the left, and at the right end an icon and a number for each kind of work in it (none for a kind that is 0). It is selected when it is the tab selected.
+// A session of the open project: its status icon and the name of its worktree at the left, and at the right end an icon and a number for each kind of work in it (none for a kind that is 0). It is selected when it is the tab selected.
 function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
   row.type = "button";
@@ -432,8 +432,8 @@ function sessionNode(t: Tab, key: string) {
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
-  // The newer of the user's and Claude's messages; the title when it has none.
-  const title = tag("span", "orca-session-title", t.latest ?? t.title);
+  // The name of the worktree the session works in (the `where` of its tab); the title of the tab is the line of A-6.
+  const title = tag("span", "orca-session-title", t.where);
   row.append(statusIcon(t.status, t.label), title);
   // The AI (the subagents) and the commands. A session runs at most one command (`shell`), so its number is 1.
   const counts = tag("span", "orca-session-counts");
@@ -588,7 +588,7 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, listedTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const hidden = hiddenSessions();
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, shownSessions(p, hidden), placeOf(p)];
