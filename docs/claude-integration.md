@@ -59,7 +59,7 @@ Todo 画面の右側は、いつも開いていて、Claude のペインが出�
 
 ## Orca の言語サーバーの欄で Claude Code を動かす
 
-Orca の画面のファイル欄の「言語サーバー」の欄の、見出しの ✦ と、サーバーが見つからなかった言語のカードの「Claude に頼む」で、欄のカードの下に Claude Code のペインが開きます（画面は [Orca](orca.md#claude-code-に設定を頼む)）。
+開発の画面のファイル欄の「言語サーバー」の欄の、見出しの ✦ と、サーバーが見つからなかった言語のカードの「Claude に頼む」で、欄のカードの下に Claude Code のペインが開きます（画面は [Orca](orca.md#claude-code-に設定を頼む)）。
 ペインはターミナルで、アプリが自分で開いて `claude` を起動します。Orca は使いません。
 worktree を読み、言語サーバーの設定を `tsunagiai-mcp` の `lsp_settings` と `lsp_server_save` で書いてもらえます。
 

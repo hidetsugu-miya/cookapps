@@ -4,11 +4,11 @@ title: Claude との連携（MCP）
 
 # Claude との連携（MCP）
 
-`tsunagiai-mcp` は、Claude Code からつなぎAIの受信トレイと予定と、データベースの画面の接続と、Orca の画面の言語サーバーの設定を扱うためのローカルの MCP サーバーです。
+`tsunagiai-mcp` は、Claude Code からつなぎAIの受信トレイと予定と、データベースの画面の接続と、開発の画面の言語サーバーの設定を扱うためのローカルの MCP サーバーです。
 stdio で動き、ネットワークのポートは開きません。
 つなぎAIアプリが起動していなくても使えます。
 データベースの画面の Claude タブでは、アプリが自分の中の `tsunagiai-mcp` を Claude Code に渡すので、この文書の設定は要りません（[Claude](claude-integration.md#データベースの画面で-claude-code-を動かす)）。
-Orca の画面の言語サーバーの欄の ✦ から開く Claude Code にも、アプリが `tsunagiai-mcp` を渡すので、設定は要りません。そのペインの Claude Code が、`lsp_settings` と `lsp_server_save` で、サーバーを設定します（[Claude](claude-integration.md#orca-の言語サーバーの欄で-claude-code-を動かす)）。
+開発の画面の言語サーバーの欄の ✦ から開く Claude Code にも、アプリが `tsunagiai-mcp` を渡すので、設定は要りません。そのペインの Claude Code が、`lsp_settings` と `lsp_server_save` で、サーバーを設定します（[Claude](claude-integration.md#orca-の言語サーバーの欄で-claude-code-を動かす)）。
 開発の画面のリーダーにも、アプリが `tsunagiai-mcp` を渡します。チームメイトのセッションを起動して終えるツールは、リーダーにだけ出し、この文書の設定で登録したクライアントには出ません（[Claude](claude-integration.md#開発の画面のリーダーで-claude-code-を動かす)）。
 
 この文書は AI に読ませて設定を任せられるように、手順と確認方法を順に書いています。
@@ -108,7 +108,7 @@ Claude Code の設定ファイル（`~/.claude/settings.json` など）の `perm
 書き込みのツール（`archive`、`set_read`、`trash`、`db_profile_save`、`db_test`、`lsp_server_save`、`lsp_server_delete`、`lsp_repo_ssh_host_set`）は、許可リストに入れません。
 メールの本文に、Claude への指示が紛れ込むことがあるためです。
 `db_profile_save` は事前スクリプトを保存し、保存したパスワードを消すことがあり、`db_test` は保存した事前スクリプトをこの Mac で動かすので、どちらにも書き込みのツールの印（`destructiveHint`）を付けています。
-`lsp_server_save` は、言語サーバーの起動コマンドを保存します。つなぎAIは、そのサーバーが受け持つ言語のファイルを Orca の画面で開くと、そのコマンドを worktree の中で、書いたとおりに動かします。
+`lsp_server_save` は、言語サーバーの起動コマンドを保存します。つなぎAIは、そのサーバーが受け持つ言語のファイルを開発の画面で開くと、そのコマンドを worktree の中で、書いたとおりに動かします。
 `lsp_server_delete` と `lsp_repo_ssh_host_set` は設定を消したり変えたりするので、3 つとも書き込みのツールの印を付けています。
 許可リストに入れなければ、書き込みのたびに確認が出ます。
 
@@ -150,7 +150,7 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 | `db_profiles` | なし | データベースの画面の接続を返す（`id`、`name`、`username`、`script`、`dbHost`、`dbPort`、`passwordSaved`）。パスワードは返さない | 読み取り |
 | `db_profile_save` | `id`（新しい接続では省く）、`name`、`username`、`script`（無いときは空の文字列）、`db_host`、`db_port`（`script` の有無によらず、どちらも要る） | 接続を保存し、保存した内容を返す。確かめ方と断り方はアプリの保存と同じ。パスワードは設定しない。ユーザー名、`script`、ホスト、ポートを変えると、`script` の有無によらず、保存したパスワードを消す | 書き込み |
 | `db_test` | `id` | 保存した接続を、保存したパスワードで、アプリの「接続をテスト」と同じようにテストする（事前スクリプトがあれば動かし、接続のホストとポートで MySQL にログインして版を読み、スクリプトを止める。スクリプトを動かす前からそのポートが使われているときは失敗にし、つなぎAIでその接続を開いているなら切断してからテストするよう、`error` に添える）。`{"ok": true, "version": …}` か `{"ok": false, "error": …, "note": …}` を返す。最長 2 分ほどかかる | 書き込み |
-| `lsp_settings` | `environment`、`project` | Orca の画面のプロジェクトの言語サーバーの設定を返す（`environment`、`project`、`sshHost`、`servers`。サーバーは言語ごとに 1 つで、`language`、`name`、`autoStart`、`command`、`mount`、`service`）。何も保存していないプロジェクトには、`ruby` の ruby-lsp が自動で起動する形で 1 つある。`command`、`mount`、`service` は、アプリが決めるときは返さない | 読み取り |
+| `lsp_settings` | `environment`、`project` | 開発の画面のプロジェクトの言語サーバーの設定を返す（`environment`、`project`、`sshHost`、`servers`。サーバーは言語ごとに 1 つで、`language`、`name`、`autoStart`、`command`、`mount`、`service`）。何も保存していないプロジェクトには、`ruby` の ruby-lsp が自動で起動する形で 1 つある。`command`、`mount`、`service` は、アプリが決めるときは返さない | 読み取り |
 | `lsp_server_save` | `environment`、`project`、`server`（`language`、`autoStart` は要る。`name`、`command`、`mount`、`service` は、アプリが決めるときは省く） | サーバーを 1 つ保存し、保存した設定を返す。同じ言語のサーバーは、丸ごと置き換わって同じ位置に残り（省いた項目は残らない）、なければ最後に足される。`name` を省くと、アプリの表がその言語に付ける名前になり、`command` を省くと、アプリが、サーバーを動かす場所で見つけたサーバーになる。言語が Orca のエディタの色の言語か、名前が 64 文字までか、`mount` が絶対パスかを、アプリの保存と同じに確かめて、断る。何も保存していないプロジェクトの ruby-lsp は、`ruby` のサーバーで置き換わる | 書き込み |
 | `lsp_server_delete` | `environment`、`project`、`language` | その言語のサーバーを消し、保存した設定を返す。サーバーの無い言語は断る。サーバーが 1 つも無くなったプロジェクトは、ruby-lsp に戻らず、サーバーが無いまま残る | 書き込み |
 | `lsp_repo_ssh_host_set` | `environment`、`project`、`ssh_host` | プロジェクトの「ssh の接続先」を保存し、保存した設定を返す。`ssh_host` は、この Mac の `~/.ssh/config` の Host か、外すときの空の文字列。サーバーはそのまま残る | 書き込み |
