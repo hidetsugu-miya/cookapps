@@ -47,6 +47,7 @@ export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待�
 const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
 const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
 const ROBOT_SVG = svgOf('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>');
+const SHELL_SVG = svgOf('<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>');
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
@@ -213,6 +214,8 @@ interface Tab {
   latest: string | null;
   // How many subagents of a Claude session are at work, which its row in the list shows at its right end (the tab shows none); 0 for the rest.
   subagents: number;
+  // The command of the shell a Claude session is running (empty when Orca gave none), which its row in the list shows as a badge left of the subagents' (the tab shows none); null when it runs none, and for the rest.
+  shell: string | null;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
   // The worktree it runs in (a file's: where the file is).
@@ -266,25 +269,25 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target) ?? gitWorktrees.get(gitKey(f.target, f.path))?.label;
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, shell: null, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.path))?.label;
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, shell: null, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   for (const d of definitionsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.query.path)?.where ?? mix.worktrees.find((w) => w.path === d.query.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.query.path))?.label;
-    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, shell: null, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -375,6 +378,16 @@ function sessionNode(t: Tab, key: string) {
   // The newer of the user's and Claude's messages; the title when it has none.
   const title = tag("span", "orca-session-title", t.latest ?? t.title);
   row.append(statusIcon(t.status, t.label), title);
+  // The command comes from outside: it is the title and the label of the badge, never markup.
+  if (t.shell !== null) {
+    const badge = tag("span", "orca-session-shell");
+    const label = t.shell === "" ? "シェルを実行中" : `シェルを実行中: ${t.shell}`;
+    badge.title = label;
+    badge.setAttribute("role", "img");
+    badge.setAttribute("aria-label", label);
+    badge.innerHTML = SHELL_SVG;
+    row.append(badge);
+  }
   if (t.subagents > 0) {
     const badge = tag("span", "orca-session-subagents");
     const label = `サブエージェント ${t.subagents} 件が作業中`;
@@ -532,7 +545,7 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, listedTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.environment])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.shell, t.environment])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const hidden = hiddenSessions();
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, shownSessions(p, hidden), placeOf(p)];
@@ -634,7 +647,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine.map(({ latest, subagents, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
+    key: JSON.stringify([mine.map(({ latest, subagents, shell, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),

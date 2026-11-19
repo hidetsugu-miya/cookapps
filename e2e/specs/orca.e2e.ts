@@ -1243,6 +1243,53 @@ describe("orca: projects", () => {
       await browser.waitUntil(async () => (await count("#orca-feed .orca-session-subagents")) === 0, { timeoutMsg: "the row did not drop the badge" });
     });
 
+    it("draws a black badge with `>_` for the shell a session runs, left of the subagents' badge, with the command as its title and label, none for a row with no shell, and none on the tab", async () => {
+      const command = "<b>cargo</b> test --all & echo \"x\"";
+      const read = (shell: string | null, subagents = 2) => orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { shell, subagents }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      const badges = () =>
+        browser.execute(() =>
+          [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].map((row) => {
+            const badge = row.querySelector<HTMLElement>(".orca-session-shell");
+            return [row.dataset.session, badge?.title ?? null, badge?.getAttribute("aria-label") ?? null, badge?.textContent ?? null, badge?.querySelector("svg") != null, badge?.children.length ?? null];
+          }),
+        );
+      await openOrca(read(command));
+      await project("example-api").click();
+      // The command is text of the title and the label: no markup of it is drawn.
+      expect(await badges()).toEqual([
+        [claudeTab("example-app"), `シェルを実行中: ${command}`, `シェルを実行中: ${command}`, "", true, 1],
+        [claudeTab("example-api"), null, null, null, false, null],
+      ]);
+      // It is black, and stands left of the subagents' badge, which keeps the right end of the row.
+      const look = await browser.execute(() => {
+        const row = document.querySelector("#orca-feed .orca-session")!;
+        const shell = row.querySelector<HTMLElement>(".orca-session-shell")!;
+        const robot = row.querySelector<HTMLElement>(".orca-session-subagents")!;
+        const title = row.querySelector<HTMLElement>(".orca-session-title")!;
+        return { background: getComputedStyle(shell).backgroundColor, shellRight: shell.getBoundingClientRect().right, robotLeft: robot.getBoundingClientRect().left, robotRight: robot.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right, titleRight: title.getBoundingClientRect().right, shellLeft: shell.getBoundingClientRect().left };
+      });
+      expect(look.background).toBe("rgb(27, 27, 27)");
+      expect(look.shellRight).toBeLessThanOrEqual(look.robotLeft);
+      expect(look.robotRight).toBeLessThanOrEqual(look.rowRight);
+      expect(look.shellLeft).toBeGreaterThanOrEqual(look.titleRight);
+      // A session that runs a shell shows none on its tab.
+      await sessionOf(claudeTab("example-app")).click();
+      expect(await count("#orca-work .orca-session-shell")).toBe(0);
+      // With no subagent, the badge is at the right end by itself.
+      await mock("orca_overview", read(command, 0));
+      await showAgain();
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-subagents")) === 0, { timeoutMsg: "the row did not drop the subagents' badge" });
+      expect(await count("#orca-feed .orca-session-shell")).toBe(1);
+      // A shell that Orca gave no command for has the badge with no command; a read with no shell takes it away.
+      await mock("orca_overview", read(""));
+      await showAgain();
+      await browser.waitUntil(async () => (await badges())[0][1] === "シェルを実行中", { timeoutMsg: "the row did not draw the shell with no command" });
+      expect((await badges())[0][2]).toBe("シェルを実行中");
+      await mock("orca_overview", read(null));
+      await showAgain();
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-shell")) === 0, { timeoutMsg: "the row did not drop the shell badge" });
+    });
+
     it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
       await openOrca(withTerminals());
       await mock("orca_terminal_read", ["$ ls"]);
