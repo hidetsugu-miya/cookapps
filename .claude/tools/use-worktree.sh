@@ -98,7 +98,7 @@ if [ -d "$main/src-tauri/target" ]; then
     echo "警告: src-tauri/target をコピーできませんでした（空からビルドします）" >&2
   fi
 fi
-# node_modules は写さず、ensure-deps.sh で入れる（main の checkout の node_modules は誰も入れ直さないので、package-lock.json と違う版のことがある）。
+# node_modules は写さず、ensure-deps.sh で入れる（main の checkout の node_modules は fast-forward の後、ensure-deps.sh が走るまで package-lock.json と違う版のことがある）。
 # mise.toml をコピーしたあとに実行する（Node の版は mise が決める）。
 "$(cd "$(dirname "$0")" && pwd)/ensure-deps.sh" "$dest"
 echo "$dest"
