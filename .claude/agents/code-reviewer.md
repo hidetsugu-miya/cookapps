@@ -19,6 +19,7 @@ Security and performance are reviewed by other reviewers, so do not cover them h
 - Violations of the requirements (the requirement definitions in `requirements/`) and of `.claude/rules/`
 - A change that disagrees with its callers, its tests or the documents (README, `docs/`)
 - Whether a risky change has tests
+- A new use of a Tauri API other than `core.invoke` (`event`, `window`, and the like) whose permission is not in `src-tauri/capabilities/default.json`, a permission added to the E2E capability beyond WebDriver's, and a feature that receives an event of `app.emit` that only an `emitEvent` of E2E exercises (`.claude/rules/frontend.md`, `.claude/rules/e2e.md`)
 
 ## Severity
 

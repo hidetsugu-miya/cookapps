@@ -77,6 +77,31 @@ Use only example.com addresses and invented names. The repository is public, and
 export const thread = (id: string, subject: string): ThreadItem => ({ id, account: "me@example.com", subject /* … */ });
 ```
 
+## Capabilities and events
+
+### Run the E2E app with the production capability, and add only WebDriver's permissions
+
+`src-tauri/tauri.e2e.conf.json` lists the capability `default` (`src-tauri/capabilities/default.json`, the one the production app has) and a second capability `e2e` that holds only `wdio:default` and `wdio-webdriver:default`.
+Never add another permission to `e2e`, and never give the E2E app a capability of its own in place of `default`, such as `core:default`: a permission that only E2E has makes a spec pass on a call that the production app refuses.
+At the owner's instruction, 2026-11-19; #1068. Production lacked `core:event`, so every `listen` of the screens was refused there, while E2E ran with `core:default` and passed (#1066). From v0.88.1 (#731) to v0.90.0 the screen bridge, the Slack Socket Mode updates, the language server status and the output of the database script never reached the screens in production.
+
+```text
+Good: a screen starts to use `window.__TAURI__.window` -> the permission goes into capabilities/default.json -> E2E, which has `default`, fails until it does
+Bad:  add "core:default" to the `e2e` capability so that a new call stops being refused in E2E
+```
+
+### Do not take an event that E2E sends for proof that the app's own event arrives
+
+`emitEvent` of `e2e/support.ts` makes the page call `event.emit`, so the page sends the event to itself and Rust is not on the way.
+A spec that uses it checks how the screen reacts to an event, and nothing about whether the event reaches the screen from `app.emit` of Rust (the permission, the event name, the target window).
+When a change adds or changes a feature that receives such an event, check once on the production path that the event arrives: through the socket, the Socket Mode task or the process that emits it, in the app a build makes (`tauri dev` or a release build, not the E2E build).
+In a session or a night run that cannot start the app, state in the pull request that this was not checked and what to check, and leave it to the owner (`issues.md`, "File a bug only after reproducing it").
+
+```text
+Good: the screen bridge asks the screen to read a field -> a spec with emitEvent checks the redraw, and `screen_read` through the socket is run once in the app built for the owner
+Bad:  a feature of `app.emit` is called checked because its spec calls emitEvent
+```
+
 ## Do not touch the real thing
 
 ### Cut E2E runs off from the owner's environment
