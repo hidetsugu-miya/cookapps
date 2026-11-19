@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # 使い方: use-worktree.sh ブランチ名（例: use-worktree.sh feat/C-2）| use-worktree.sh --park
-# worktree は main の checkout の .claude/worktrees/work の 1 つだけで、昼のセッションも夜間も同じものを使う（.claude/rules/worktree.md）。
-# 作業のたびに、空いている worktree に origin/main から切ったブランチを切り替えて使い回す。worktree は消さない。
-# ブランチ名: 空いていれば切り替えて、worktree のパスを最後の行に出す。ブランチがすでにあれば、そのブランチに切り替える（origin/main に追いついていれば進める）。
-#   worktree がそのブランチにいるなら、何もせずパスを出す（続きの作業）。
-# 空いている = 作業ツリーがきれいで、HEAD がどれかのリモートブランチに含まれる（origin/main か、push 済みのブランチ。失う変更もコミットもない）。そうでなければ使用中として、理由を stderr に出して exit 3。
-# --park: 作業が終わって worktree を空きに戻す。空いているときだけ、origin/main に detach して、マージ済みの前のブランチを消す（push 済みでマージ前のブランチは残す）。そうでなければ exit 3。
-# worktree がなければ作る: .worktreeinclude のコピー、main の checkout の src-tauri/target の APFS の clone（差分ビルド用の incremental/ は消す。失敗したら警告を出して空から始める）、npm ci。
-# 切り替えのたびに .worktreeinclude をコピーし直し（main の checkout のものが正）、package-lock.json が変わっていれば npm ci をする。どの checkout から呼んでもよい。
+# worktree はブランチごとに 1 つ: main の checkout の .claude/worktrees/{ブランチ名の / を - に置き換えたもの} に作る。session ごと（ブランチごと）に専用で、終わったら --park で消す（.claude/rules/worktree.md）。
+# ブランチ名: worktree のパスを最後の行に出す。
+#   そのパスがあって、そのブランチにいるなら、private files をコピーし直してパスを出す（続きの作業）。
+#   そのパスがあって別のブランチか detached なら、使用中として理由を stderr に出して exit 3。
+#   そのブランチが別の worktree（main の checkout を含む）で checkout 済みなら、使用中として exit 3（release/next も同じ。後から来た側は手を出さない）。
+#   それ以外は worktree を作る。ブランチがローカルにあればそれを（origin/main にマージ済みなら origin/main まで進める）、origin/{ブランチ} があればそれを追跡して、どちらもなければ origin/main から新しく切る。
+#   作ったあとに、.worktreeinclude のコピー（main の checkout のものが正）、main の checkout の src-tauri/target の APFS の clone（差分ビルド用の incremental/ は消す。失敗したら警告を出して空から始める）、npm ci をする。
+# --park: 今いるディレクトリの worktree（.claude/worktrees/ の下のリンクされた worktree）を消す。空いているときだけ消し、そうでなければ exit 3。
+#   空いている = 作業ツリーがきれいで、HEAD がどれかのリモートブランチに含まれる（origin/main か、push 済みのブランチ。失う変更もコミットもない）。
+#   消すのは worktree（git worktree remove。--force は使わない。ignored なファイルは一緒に消える）、origin/main にマージ済みのそのブランチ（push 済みでマージ前のブランチは残す）、持ち主がこの worktree の issue の claim（plan-release.py claim）。最後の行に main の checkout のパスを出す。
+# どの checkout から呼んでもよい。
 set -euo pipefail
 usage() { echo "使い方: use-worktree.sh ブランチ名 | use-worktree.sh --park" >&2; exit 2; }
 [ $# -eq 1 ] || usage
 arg=$1
-main=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
-dest="$main/.claude/worktrees/work"
+main=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)
 
 copy_private() {
   # 追跡されていないファイルは worktree に出てこないので、main の checkout のものをコピーする。
@@ -29,66 +31,73 @@ copy_private() {
   done < "$main/.worktreeinclude"
 }
 
-busy() { echo "使用中: ${1}（${dest}）" >&2; exit 3; }
+busy() { echo "使用中: ${1}（${2}）" >&2; exit 3; }
 
-# 空いているか: きれいで、HEAD がどれかのリモートブランチに含まれる（push 済みのコミットは、切り替えても失わない）。
+# 空いているか: きれいで、HEAD がどれかのリモートブランチに含まれる（push 済みのコミットは、消しても失わない）。
 check_idle() {
-  cur=$(git -C "$dest" branch --show-current)
+  cur=$(git -C "$1" branch --show-current)
   where=${cur:-detached}
-  [ -z "$(git -C "$dest" status --porcelain)" ] || busy "ブランチ ${where} に未コミットの変更があります"
-  [ -n "$(git -C "$dest" branch -r --contains HEAD)" ] || busy "ブランチ ${where} に push していないコミットがあります"
+  [ -z "$(git -C "$1" status --porcelain)" ] || busy "ブランチ ${where} に未コミットの変更があります" "$1"
+  [ -n "$(git -C "$1" branch -r --contains HEAD)" ] || busy "ブランチ ${where} に push していないコミットがあります" "$1"
 }
 
 git -C "$main" fetch origin main
 
 if [ "$arg" = "--park" ]; then
-  [ -d "$dest" ] || { echo "$dest がありません" >&2; exit 3; }
-  check_idle
-  git -C "$dest" switch --detach origin/main --quiet
-  [ -z "$cur" ] || git -C "$dest" branch -d "$cur" >/dev/null 2>&1 || true
-  echo "$dest"
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "対象外: git の作業ツリーではありません" >&2; exit 3; }
+  top=$(cd "$top" && pwd -P)
+  case "$top" in "$main/.claude/worktrees/"*) ;; *) echo "対象外: $top は $main/.claude/worktrees/ の下の worktree ではありません" >&2; exit 3 ;; esac
+  [ "$(cd "$(git -C "$top" rev-parse --path-format=absolute --git-dir)" && pwd -P)" != "$(cd "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)" && pwd -P)" ] \
+    || { echo "対象外: $top はリンクされた worktree ではありません" >&2; exit 3; }
+  check_idle "$top"
+  git -C "$main" worktree remove "$top"
+  if [ -n "$cur" ] && git -C "$main" merge-base --is-ancestor "$cur" origin/main; then
+    git -C "$main" branch -D "$cur" >/dev/null
+  fi
+  for claim in "$main"/.claude/claims/*/; do
+    [ -f "${claim}owner" ] && [ "$(cat "${claim}owner")" = "$top" ] && rm -rf "$claim"
+  done
+  echo "$main"
   exit 0
 fi
 
 branch=$arg
+dest="$main/.claude/worktrees/${branch//\//-}"
 git -C "$main" fetch origin "$branch" 2>/dev/null || true
 
-if [ ! -d "$dest" ]; then
-  git -C "$main" worktree add --detach "$dest" origin/main
-  copy_private
-  # 依存クレートのビルド結果は場所によらず使えるので、main の checkout の target を clone で写して最初のビルドを速くする。
-  # 更新時刻は保つ（clean-target.sh が Cargo.toml との新旧で、依存の変更の前の結果を消す）。APFS でない場所では cp が普通のコピーに切り替える。コピーに失敗したとき（ディスクが一杯など）は、作りかけを消して空から始める。
-  if [ -d "$main/src-tauri/target" ]; then
-    if cp -cpR "$main/src-tauri/target" "$dest/src-tauri/target"; then
-      rm -rf "$dest"/src-tauri/target/*/incremental
-    else
-      rm -rf "$dest/src-tauri/target"
-      echo "警告: src-tauri/target をコピーできませんでした（空からビルドします）" >&2
-    fi
-  fi
-  # mise.toml をコピーしたあとに実行する（Node の版は mise が決める）。
-  [ ! -f "$dest/package-lock.json" ] || (cd "$dest" && mise exec -- npm ci --silent)
-else
-  [ "$(git -C "$dest" branch --show-current)" = "$branch" ] && { copy_private; echo "$dest"; exit 0; }
-  check_idle
+if [ -d "$dest" ]; then
+  now=$(git -C "$dest" branch --show-current)
+  [ "$now" = "$branch" ] && { copy_private; echo "$dest"; exit 0; }
+  busy "別のブランチ ${now:-detached} がいます（ブランチ ${branch} の worktree のパス）" "$dest"
 fi
 
-before=$(git -C "$dest" rev-parse HEAD)
-old=$(git -C "$dest" branch --show-current)
-if git -C "$dest" show-ref --verify --quiet "refs/heads/$branch"; then
-  git -C "$dest" switch --quiet "$branch"
-elif git -C "$dest" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-  git -C "$dest" switch --quiet -c "$branch" --track "origin/$branch"
+# 消えたディレクトリの worktree の登録は、ブランチを checkout 済みに見せ続けるので、先に外す。
+git -C "$main" worktree prune
+holder=$(git -C "$main" worktree list --porcelain | awk -v ref="refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p; exit}')
+[ -z "$holder" ] || busy "ブランチ ${branch} は別の worktree で checkout 済みです" "$holder"
+
+if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
+  git -C "$main" worktree add --quiet "$dest" "$branch"
+  # すでにあるブランチがマージ済みなら origin/main まで進める。
+  if git -C "$dest" merge-base --is-ancestor HEAD origin/main; then
+    git -C "$dest" merge --ff-only --quiet origin/main
+  fi
+elif git -C "$main" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+  git -C "$main" worktree add --quiet -b "$branch" --track "$dest" "origin/$branch"
 else
-  git -C "$dest" switch --quiet -c "$branch" --no-track origin/main
+  git -C "$main" worktree add --quiet -b "$branch" --no-track "$dest" origin/main
 fi
-# すでにあるブランチがマージ済みなら origin/main まで進める。
-if git -C "$dest" merge-base --is-ancestor HEAD origin/main; then
-  git -C "$dest" merge --ff-only --quiet origin/main
-fi
-[ -z "$old" ] || [ "$old" = "$branch" ] || git -C "$dest" branch -d "$old" >/dev/null 2>&1 || true
 copy_private
-if ! git -C "$dest" diff --quiet "$before" HEAD -- package-lock.json; then
-  (cd "$dest" && mise exec -- npm ci --silent)
+# 依存クレートのビルド結果は場所によらず使えるので、main の checkout の target を clone で写して最初のビルドを速くする。
+# 更新時刻は保つ（clean-target.sh が Cargo.toml との新旧で、依存の変更の前の結果を消す）。APFS でない場所では cp が普通のコピーに切り替える。コピーに失敗したとき（ディスクが一杯など）は、作りかけを消して空から始める。
+if [ -d "$main/src-tauri/target" ]; then
+  if cp -cpR "$main/src-tauri/target" "$dest/src-tauri/target"; then
+    rm -rf "$dest"/src-tauri/target/*/incremental
+  else
+    rm -rf "$dest/src-tauri/target"
+    echo "警告: src-tauri/target をコピーできませんでした（空からビルドします）" >&2
+  fi
 fi
+# mise.toml をコピーしたあとに実行する（Node の版は mise が決める）。
+[ ! -f "$dest/package-lock.json" ] || (cd "$dest" && mise exec -- npm ci --silent)
 echo "$dest"

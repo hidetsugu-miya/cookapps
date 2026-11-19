@@ -7,12 +7,15 @@ Usage:
   plan-release.py unsplit [--mine <issue numbers>]
   plan-release.py split <split.json>
   plan-release.py next [--mine <issue numbers>]
+  plan-release.py claim --worktree <path> <issue number>...
   plan-release.py release
   plan-release.py close [--dry-run]
 
 `snapshot` prints the open issues the planner orders, and first closes as not planned the open issues of other authors (the pull requests are left alone), with a fixed comment and without reading their title or body (a failed close is told on stderr and does not stop it). `apply` leaves out of the plan the closed issues, the fixed ones and the parents (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
 `start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out).
+`claim` is how a session or a run tells the others that it took an issue: it makes `.claude/claims/{n}/owner` in the main checkout, holding the path of the worktree that works on it, and `next` leaves an issue whose owner worktree still exists out of `start` and lists it in `claimed`.
+`claim` refuses an issue whose owner is another worktree that still exists (stderr says `#{n} claimed by {path}`, exit 3, and it still claims the others); a claim whose worktree is gone is stale and is taken over; `use-worktree.sh --park` deletes the claims of its worktree.
 A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
 `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
 (open, no `needs:owner`, not in hand, no sub-issue, no parent, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
@@ -25,16 +28,22 @@ the tag that is due after a merge (the workflow tags at the merge, so it shows o
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
 import argparse
+import contextlib
+import errno
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 PLAN_FILE = os.path.join(".claude", "plan.json")
+CLAIMS_DIR = os.path.join(".claude", "claims")
 RELEASE_BRANCH = "release/next"
 
 
@@ -449,9 +458,10 @@ def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
     ]
 
 
-def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
-    """What a run does with the open issues. One worktree and one branch carry the run, so there is no parallel set: `start` is the queue.
+def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, claimed=None):
+    """What a run does with the open issues. A run works in one worktree on one branch, so there is no parallel set: `start` is the queue.
     `mine`: the issues the previous hand-over lists as this run's own; they are `in_progress` (continue them first).
+    `claimed`: {issue number: the worktree that holds the claim}, only the claims whose worktree still exists (`read_claims`); another session works on those issues, so they are not in `start`, and `claimed` lists them.
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
     An issue with needs:owner, and one with an open blocker, are left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
@@ -461,6 +471,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     """
     position = plan_positions(plan)
     waiting = release_changes(issues)
+    claimed = claimed or {}
 
     def brief(i):
         return {"number": i.number, "title": i.title, "labels": i.labels, "points": points(i)}
@@ -473,6 +484,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     out = {
         "start": [],
         "in_progress": [],
+        "claimed": [],
         "held": [],
         "needs_owner": [],
         "blocked": [],
@@ -485,6 +497,8 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     for i in sorted((i for i in issues if i.state == "open" and not is_parent(i)), key=lambda i: (i.created_at, i.number)):
         if i.number in mine:
             out["in_progress"].append(brief(i))
+        elif i.number in claimed:
+            out["claimed"].append(dict(brief(i), owner=claimed[i.number]))
         elif i.number in pr_closing:
             out["held"].append(dict(brief(i), reason="pull request open"))
         elif has(i, "needs:owner"):
@@ -885,20 +899,120 @@ def plan_file(git_common_dir):
     return os.path.join(os.path.dirname(git_common_dir.rstrip("/")), PLAN_FILE)
 
 
-def saved_plan_path():
+def git_common_dir():
     r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True)
     if r.returncode != 0:
         raise GhError(f"git rev-parse: {r.stderr.strip()}")
-    return plan_file(r.stdout.strip())
+    return r.stdout.strip()
+
+
+def saved_plan_path():
+    return plan_file(git_common_dir())
+
+
+# ---- claims: which worktree works on which issue ----
+
+
+def claims_dir(git_common_dir):
+    """The claims live in the main checkout, beside the saved plan: `.claude/claims/{n}/owner` holds the path of the worktree that works on issue n."""
+    return os.path.join(os.path.dirname(git_common_dir.rstrip("/")), CLAIMS_DIR)
+
+
+def live_worktrees(porcelain):
+    """-> the real paths of the worktrees in the output of `git worktree list --porcelain`."""
+    return {os.path.realpath(line[len("worktree "):]) for line in porcelain.splitlines() if line.startswith("worktree ")}
+
+
+def read_owner(claim):
+    try:
+        with open(os.path.join(claim, "owner"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def read_claims(root, live):
+    """-> {issue number: owner path} for the claims whose worktree still exists. A claim whose worktree is gone is stale and is not listed."""
+    try:
+        names = os.listdir(root)
+    except FileNotFoundError:
+        return {}
+    found = {}
+    for name in names:
+        if name.isdigit():
+            owner = read_owner(os.path.join(root, name))
+            if owner in live:
+                found[int(name)] = owner
+    return found
+
+
+def claim_issue(root, n, owner, live):
+    """Claims issue n for the worktree `owner`. -> None when it is the owner's, or the path of the other worktree that holds it.
+    The claim is made whole in a directory of its own and renamed into place: a rename onto a directory that has files fails, so exactly one claimant wins, and no reader sees a claim without its owner.
+    A claim whose owner is no longer in `live` is stale: it is moved away (one claimant wins that rename too) and the claim is tried again."""
+    os.makedirs(root, exist_ok=True)
+    claim = os.path.join(root, str(n))
+    while True:
+        tmp = tempfile.mkdtemp(prefix=".claim-", dir=root)
+        with open(os.path.join(tmp, "owner"), "w", encoding="utf-8") as f:
+            f.write(owner + "\n")
+        try:
+            os.rename(tmp, claim)
+            return None
+        except OSError as e:
+            shutil.rmtree(tmp, ignore_errors=True)
+            if e.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+        holder = read_owner(claim)
+        if holder == owner:
+            return None
+        if holder in live:
+            return holder
+        gone = f"{claim}.stale-{uuid.uuid4().hex}"
+        try:
+            os.rename(claim, gone)
+        except FileNotFoundError:
+            continue
+        shutil.rmtree(gone, ignore_errors=True)
+
+
+def worktree_list():
+    r = subprocess.run(["git", "worktree", "list", "--porcelain"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise GhError(f"git worktree list: {r.stderr.strip()}")
+    return r.stdout
+
+
+def cmd_claim(args):
+    root = claims_dir(git_common_dir())
+    live = live_worktrees(worktree_list())
+    owner = os.path.realpath(args.worktree)
+    if owner not in live:
+        raise PlanError([f"{args.worktree} is not a worktree of this repository"])
+    refused = False
+    for n in args.issues:
+        holder = claim_issue(root, n, owner, live)
+        if holder is None:
+            print(f"claimed #{n}")
+        else:
+            print(f"#{n} claimed by {holder}", file=sys.stderr)
+            refused = True
+    return 3 if refused else 0
 
 
 def save_plan(path, plan):
-    """Writes through a temporary file and a rename, so that a reader never sees half a plan."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(plan, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    """Writes through a temporary file and a rename, so that a reader never sees half a plan.
+    The temporary file has a name of its own (in the same directory, so the rename stays on one volume): two sessions that apply at once do not write the same file."""
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(plan, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def read_plan(path):
@@ -974,7 +1088,8 @@ def cmd_next(args):
     state = load_state()
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
     plan = read_plan(saved_plan_path())
-    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan, night=bool(os.environ.get("NIGHTLY_DEADLINE_EPOCH"))), ensure_ascii=False, indent=2))
+    claimed = read_claims(claims_dir(git_common_dir()), live_worktrees(worktree_list()))
+    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan, night=bool(os.environ.get("NIGHTLY_DEADLINE_EPOCH")), claimed=claimed), ensure_ascii=False, indent=2))
 
 
 def cmd_unsplit(args):
@@ -1123,13 +1238,17 @@ def main(argv=None):
     sp = sub.add_parser("split")
     sp.add_argument("file")
     sp.set_defaults(fn=cmd_split)
+    cl = sub.add_parser("claim")
+    cl.add_argument("--worktree", required=True, help="the worktree that works on the issues")
+    cl.add_argument("issues", nargs="+", type=int)
+    cl.set_defaults(fn=cmd_claim)
     sub.add_parser("release").set_defaults(fn=cmd_release)
     c = sub.add_parser("close")
     c.add_argument("--dry-run", action="store_true")
     c.set_defaults(fn=cmd_close)
     args = p.parse_args(argv)
     try:
-        args.fn(args)
+        return args.fn(args) or 0
     except PlanError as e:
         for problem in e.problems:
             print(problem, file=sys.stderr)
@@ -1137,7 +1256,6 @@ def main(argv=None):
     except GhError as e:
         print(e, file=sys.stderr)
         return 1
-    return 0
 
 
 if __name__ == "__main__":
