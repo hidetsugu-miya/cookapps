@@ -19,7 +19,7 @@ import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
 import { showConsentCard } from "./formation-consent-settings.js";
 import { showLogTab } from "./log-settings.js";
-import { showSkillTab } from "./skill-settings.js";
+import { hideSkillClaude, showSkillTab } from "./skill-settings.js";
 import { logError, showFailure } from "./error-card.js";
 
 let settingsSeq = 0;
@@ -44,8 +44,9 @@ export function selectSettingsTab(name: SettingsTab) {
   $("settings").scrollTop = 0;
   // The connection is asked about only once the Claude tab is shown.
   if (name === "claude") showClaudeTab();
-  // The skills are read only once the Skill tab is shown.
+  // The skills are read only once the Skill tab is shown, and its Claude pane is shown and hidden with the tab.
   if (name === "skill") showSkillTab();
+  else hideSkillClaude();
   // The PCs that the owner agreed to put tsunagiai-mcp on are read each time the Orca tab is shown (A-37).
   if (name === "orca") showConsentCard();
   // The log is read each time the Log tab is shown.

@@ -58,7 +58,7 @@ pub const RULES: Rules = Rules {
         "slack-thread",
         "slack-channel",
     ],
-    changes: &["todo", "calendar", "calendar-shown"],
+    changes: &["todo", "calendar", "calendar-shown", "skills"],
     wait: Duration::from_secs(5),
     post_wait: Duration::from_secs(40),
 };
@@ -89,7 +89,7 @@ pub enum Request {
     Write { target: String, fields: Fields },
     /// Does what the screen's own "投稿" does with what it holds now (#734); the answer's `fields` say what happened (`state`).
     Post { target: String },
-    /// Something changed (a name of `RULES.changes`, such as `todo`, `calendar` (an event) and `calendar-shown` (the calendars shown)): the screens that registered for it read again.
+    /// Something changed (a name of `RULES.changes`, such as `todo`, `calendar` (an event), `calendar-shown` (the calendars shown) and `skills` (a skill saved)): the screens that registered for it read again.
     Changed { what: String },
 }
 
@@ -704,6 +704,8 @@ mod tests {
         assert!(check(&changed("todo"), &RULES).is_ok());
         assert!(check(&changed("calendar"), &RULES).is_ok());
         assert!(check(&changed("calendar-shown"), &RULES).is_ok());
+        assert!(check(&changed("skills"), &RULES).is_ok());
+        assert!(check(&changed("skills"), &LISTED).is_err());
         assert!(check(&changed("calendar"), &LISTED).is_err());
     }
 

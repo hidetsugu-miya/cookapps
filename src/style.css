@@ -857,7 +857,7 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item select.font-family { width: 240px; }
 .item select.font-size { width: 90px; }
 /* The Skill tab (A-32): the skills in a column at the left, the form of the one shown at the right. */
-.skill-card { max-width: 860px; }
+.skill-card { max-width: 1240px; }
 .skill-body { display: flex; align-items: flex-start; border-top: 1px solid var(--line); }
 .skill-side { box-sizing: border-box; flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 210px; padding: 12px; border-right: 1px solid var(--line); }
 #skill-list { display: flex; flex-direction: column; gap: 2px; width: 100%; }
@@ -877,6 +877,8 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 #skill-screens label { display: flex; align-items: center; gap: 6px; color: #333; font-size: calc(13px * var(--fs)); font-weight: normal; }
 #skill-screens input { margin: 0; accent-color: var(--accent); }
 .skill-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* The pane of Claude at the right of the form (A-32, A-36): the head, and the terminal of Claude Code under it. */
+#skill-chat { width: 380px; flex: none; align-self: stretch; min-height: 560px; border-left: 1px solid var(--line); }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }

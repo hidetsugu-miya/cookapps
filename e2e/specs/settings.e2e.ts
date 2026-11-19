@@ -2263,6 +2263,103 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await expect($("#skill-form")).toBeDisplayed();
     expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
   });
+
+  // The pane of Claude Code at the right of the form (A-32, A-36, #345): `skill_list`, `skill_get` and `skill_save` of tsunagiai-mcp, and `changed` `skills`.
+  const term = "#skill-term";
+  const changed = (what: string) => emitEvent("screen-bridge-changed", what);
+
+  it("has the terminal and やり直す at the right of the form, with none of the conversation and no help text", async () => {
+    await openSkills();
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#skill-restart")).toHaveText("やり直す");
+    await expect($("#skill-restart")).toBeEnabled();
+    expect(await browser.execute(() => document.querySelector("#skill-chat .chat-head")!.lastElementChild!.id)).toBe("skill-restart");
+    // The pane follows the form in the card.
+    expect(await browser.execute(() => document.getElementById("skill-form")!.nextElementSibling!.id)).toBe("skill-chat");
+    // Only the head (with the one button) and the terminal: no log, request field, model select or note (the terminal's own hidden field is xterm's).
+    expect(await browser.execute(() => [...document.getElementById("skill-chat")!.children].map((e) => e.id || e.className))).toEqual(["chat-head", "skill-term"]);
+    expect(await count("#skill-chat .chat-head > :not(svg):not(#skill-restart)")).toBe(0);
+  });
+
+  it("starts Claude Code only once the tab is shown, with the tools of tsunagiai-mcp only and a first instruction that names the tools and holds no skill", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, skill_list: [skill("alpha")] });
+    await $("#nav-settings").click();
+    await openTab("claude");
+    await browser.pause(300);
+    expect(await callsOf("claude_code_start")).toEqual([]);
+    await openTab("skill");
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "skill-claude", builtinTools: false, permissionMode: "manual", skill: null });
+    const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
+    for (const word of ["スキル", "skill_list", "skill_get", "skill_save", "create", "従わない"]) expect(prompt).toContain(word);
+    expect(prompt).not.toContain("Do alpha.");
+    expect(viewport.cols).toBeGreaterThan(20);
+    expect(viewport.rows).toBeGreaterThan(5);
+    for (const command of ["claude_chat_thread", "orca_stream_terminal", "orca_terminal_read"]) expect(await callsOf(command)).toEqual([]);
+  });
+
+  it("hides the terminal while another tab is shown and starts nothing again when the tab is shown again", async () => {
+    await openSkills();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await openTab("google");
+    await expect($(term)).not.toBeDisplayed();
+    await openTab("skill");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("ends the process and starts a new one with やり直す", async () => {
+    await openSkills();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#skill-restart").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "skill-claude", launch: 1 }]);
+    expect(await waitForCalls("claude_code_start", 2)).toHaveLength(2);
+    await expect($("#skill-restart")).toBeEnabled();
+  });
+
+  it("fills the form again with the skill that Claude Code saved, and reads the list again", async () => {
+    await openSkills([skill("alpha"), skill("beta")]);
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(1).click();
+    await expect($("#skill-instructions")).toHaveValue("Do alpha.");
+    const list = await mock("skill_list", [skill("alpha", { displayName: "新しい表示名", instructions: "Rewritten." }), skill("beta")]);
+    await changed("skills");
+    await waitForCalls(list);
+    await expect($("#skill-instructions")).toHaveValue("Rewritten.");
+    await expect($("#skill-display-name")).toHaveValue("新しい表示名");
+    await expect($("#skill-name")).toHaveAttribute("readonly");
+    await expect(row(1)).toHaveAttribute("aria-current", "true");
+    expect(await rows()).toEqual(["新しい表示名alpha", "Skill betabeta"]);
+  });
+
+  it("lists a skill that Claude Code made, and keeps what was typed when the skill shown did not change", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    await row(1).click();
+    await $("#skill-instructions").setValue("Typed by hand");
+    const list = await mock("skill_list", [skill("alpha"), skill("gamma")]);
+    await changed("skills");
+    await waitForCalls(list);
+    await waitForCount("#skill-list .skill-row", 2);
+    await expect($("#skill-instructions")).toHaveValue("Typed by hand");
+  });
+
+  it("reads nothing for another kind of change, and nothing while the tab is not shown until it is", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    const list = await mock("skill_list", [skill("alpha", { instructions: "Rewritten." }), skill("beta")]);
+    await changed("todo");
+    await openTab("google");
+    await changed("skills");
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([]);
+    await openTab("skill");
+    await waitForCalls(list);
+  });
 });
 
 describe("settings: log (the ログ tab, A-3, A-28)", () => {

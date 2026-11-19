@@ -39,7 +39,7 @@ const INSTRUCTIONS_MAX: usize = 100_000;
 static SAVING: Mutex<()> = Mutex::new(());
 
 /// A screen that can use skills: the ones that talk to Claude.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, schemars::JsonSchema)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "kebab-case")]
@@ -284,7 +284,7 @@ fn skills_dir(dir: &Path) -> PathBuf {
 }
 
 /// The skills saved, by name. A folder whose name is not a valid one, or with no readable `SKILL.md`, is left out.
-fn list_skills(dir: &Path) -> Result<Vec<Skill>, String> {
+pub fn list_skills(dir: &Path) -> Result<Vec<Skill>, String> {
     let entries = match std::fs::read_dir(skills_dir(dir)) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -303,7 +303,8 @@ fn list_skills(dir: &Path) -> Result<Vec<Skill>, String> {
     Ok(skills)
 }
 
-fn read_skill(dir: &Path, name: &str) -> Result<Skill, String> {
+/// One skill by its name; a refusal in Japanese when the name is not a valid one or there is none.
+pub fn read_skill(dir: &Path, name: &str) -> Result<Skill, String> {
     validate_name(name)?;
     match std::fs::read_to_string(skills_dir(dir).join(name).join(FILE)) {
         Ok(text) => Ok(parse(name, &text)),
@@ -320,7 +321,7 @@ fn manifest() -> String {
 }
 
 /// Saves a skill and answers it as it was saved: the one of that name replaced, or, with `create` (a new skill), a refusal in Japanese when that name is saved already.
-fn save_skill(dir: &Path, skill: &Skill, create: bool) -> Result<Skill, String> {
+pub fn save_skill(dir: &Path, skill: &Skill, create: bool) -> Result<Skill, String> {
     let skill = check(skill)?;
     if create && skills_dir(dir).join(&skill.name).join(FILE).exists() {
         return Err(format!("スキル「{}」はもうあります", skill.name));

@@ -16,6 +16,7 @@ import { invoke } from "./ipc.js";
 import { pauseLsp } from "./orca-lsp.js";
 import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
+import { hideSkillClaude } from "./skill-settings.js";
 import { showSlackList } from "./slack-list.js";
 import { hideThreadClaude } from "./slack-thread.js";
 import { loadTodo, renderTodo } from "./todo.js";
@@ -114,6 +115,8 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   hideThreadClaude();
   // The same for the Claude pane of the Todo prompt screen, which "戻る" and the sidebar leave through here.
   hidePromptClaude();
+  // The same for the Claude pane of the settings' Skill tab, which another screen leaves through here (the tab shows it again).
+  hideSkillClaude();
   if (name !== "orca") {
     hideFormation();
     // The language server's settings are read by the clock only while the Orca screen is shown (A-34).
