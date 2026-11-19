@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.87.2
+
+アプリの機能と画面は変わらない。開発の進め方だけを整えた。
+
 ## v0.87.1
 
 A-12: 開発画面のターミナル（Claude Code のペインを含む）を WebGL で描くようにし、出力が流れているときや打ち込むときのカクつきをなくした（#1002）。WebGL が使えないときや、GPU がコンテキストを手放したときは、これまでの描き方に戻る。
