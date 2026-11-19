@@ -1,6 +1,7 @@
+import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -13,7 +14,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -251,6 +252,120 @@ describe("settings: Slack", () => {
     await waitForCalls(remove);
     expect(await callsOf(remove)).toEqual([{ teamId: "T1" }]);
     await expect($("#slack-workspaces")).toHaveText(expect.stringContaining("ワークスペースはまだありません"));
+  });
+});
+
+describe("settings: Notion (N-1)", () => {
+  const ok: NotionAccount = { workspaceId: "w1", workspaceName: "Example Workspace", userName: "Example User", userEmail: "user@example.com", reconnect: false };
+  const lapsed: NotionAccount = { workspaceId: "w2", workspaceName: "Second Space", userName: null, userEmail: "second@example.com", reconnect: true };
+  const openNotion = async (list: NotionAccount[]) => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, notion_accounts: list });
+    await $("#nav-settings").click();
+    await expect($("#settings")).toBeDisplayed();
+    await openTab("notion");
+    await waitForCalls("notion_accounts");
+  };
+  const unlinkOf = (name: string) => $(`button[aria-label="${name} の接続を解除"]`);
+
+  it("reads the workspaces only when the tab is shown, and draws each with its name, user, state and unlink", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, notion_accounts: [ok, lapsed] });
+    await $("#nav-settings").click();
+    expect(await callsOf("notion_accounts")).toHaveLength(0);
+    await openTab("notion");
+    await waitForCalls("notion_accounts");
+    await waitForText("#notion-accounts .item-name", "Second Space");
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace", "Second Space"]);
+    expect(await textsOf("#notion-accounts .item-meta")).toEqual(["Example User ・ user@example.com", "second@example.com"]);
+    expect(await textsOf("#notion-accounts .status")).toEqual(["使える", "再連携が要る"]);
+    await expect($$("#notion-accounts .status")[0]).toHaveElementClass("ok");
+    await expect($$("#notion-accounts .status")[1]).toHaveElementClass("warn");
+    await expect(unlinkOf("Example Workspace")).toExist();
+    await expect(unlinkOf("Second Space")).toExist();
+    await expect($$("#notion-accounts .avatar")[0]).toHaveText("EW");
+  });
+
+  it("has a header row, the rows and an add row", async () => {
+    await openNotion([ok]);
+    await expect($("#settings-panel-notion .card-head .logo.notion")).toHaveText("N");
+    await expect($("#settings-panel-notion .card-head h2")).toHaveText(expect.stringContaining("Notion"));
+    await expect($("#notion-help")).toExist();
+    await expect($("#settings-panel-notion .card-add #notion-add")).toHaveText("追加");
+  });
+
+  it("says so when no workspace is connected", async () => {
+    await openNotion([]);
+    await expect($("#notion-accounts .card-empty")).toHaveText("ワークスペースはまだありません");
+  });
+
+  it("calls notion_connect from 追加, keeps the button off while the consent is open, and reads the list again", async () => {
+    await openNotion([]);
+    const connect = await mock("notion_connect", holds);
+    await $("#notion-add").click();
+    await waitForCalls(connect);
+    await expect($("#notion-add")).toBeDisabled();
+    await mock("notion_accounts", [ok]);
+    await release(connect, ok);
+    await waitForText("#notion-accounts .item-name", "Example Workspace");
+    await expect($("#notion-add")).toBeEnabled();
+  });
+
+  it("lists a second workspace beside the first", async () => {
+    await openNotion([ok]);
+    const connect = await mock("notion_connect", lapsed);
+    await mock("notion_accounts", [ok, lapsed]);
+    await $("#notion-add").click();
+    expect(await waitForCalls(connect)).toEqual([null]);
+    await waitForText("#notion-accounts .item-name", "Second Space");
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace", "Second Space"]);
+  });
+
+  it("shows the failure of a connection on a card and leaves the list as it was", async () => {
+    await openNotion([ok]);
+    await mock("notion_connect", rejects("ログインがタイムアウトしました"));
+    await $("#notion-add").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("ログインがタイムアウトしました"));
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace"]);
+    await expect($("#notion-add")).toBeEnabled();
+  });
+
+  it("asks before unlinking: キャンセル sends nothing, 解除 calls notion_disconnect with the workspace and draws the rest", async () => {
+    await openNotion([ok, lapsed]);
+    const remove = await mock("notion_disconnect", null);
+    await unlinkOf("Example Workspace").click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toBeDisplayed();
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toExist();
+    expect(await callsOf(remove)).toHaveLength(0);
+
+    await unlinkOf("Example Workspace").click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(remove)).toEqual([{ workspaceId: "w1" }]);
+    await browser.waitUntil(async () => (await textsOf("#notion-accounts .item-name")).join() === "Second Space", { timeoutMsg: "the unlinked workspace stayed" });
+  });
+
+  it("keeps the row and shows the failure on a card when the workspace cannot be unlinked", async () => {
+    await openNotion([ok]);
+    await mock("notion_disconnect", rejects("取り消せません"));
+    await unlinkOf("Example Workspace").click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("取り消せません"));
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace"]);
+  });
+
+  it("writes a failed read of the list to the log and draws no row", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, notion_accounts: rejects("読めません") });
+    await $("#nav-settings").click();
+    await openTab("notion");
+    const line = await waitForLog("読めません");
+    expect(line).toMatchObject({ level: "error", source: "notion-settings" });
+    await expect($("#notion-accounts .item")).not.toExist();
+  });
+
+  it("opens the hint with the steps from ?", async () => {
+    await openNotion([]);
+    await $("#notion-help").click();
+    await expect($('[role="dialog"][aria-label="Notion のワークスペースの追加"]')).toBeDisplayed();
   });
 });
 
@@ -1866,7 +1981,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the ten tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the eleven tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));

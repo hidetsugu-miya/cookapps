@@ -53,6 +53,8 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   todoist_picked_due: null,
+  // N-1: no Notion workspace connected; a spec that connects or unlinks one mocks `notion_accounts` with the list it should read next, and `notion_connect` or `notion_disconnect`.
+  notion_accounts: [],
   slack_load: { workspaces: [], recent: [] },
   slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, unreadChannels: [], side: [] },
   slack_mark_read: true,

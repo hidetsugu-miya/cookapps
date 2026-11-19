@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude, the skills (`ts/skill-settings.ts`), Orca (the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
+// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), Orca (the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -19,12 +19,13 @@ import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
 import { showConsentCard } from "./formation-consent-settings.js";
 import { showLogTab } from "./log-settings.js";
+import { initNotionTab, showNotionTab } from "./notion-settings.js";
 import { hideSkillClaude, showSkillTab } from "./skill-settings.js";
 import { logError, showFailure } from "./error-card.js";
 
 let settingsSeq = 0;
 
-export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "claude", "skill", "orca", "font", "update", "log"] as const;
+export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "notion", "claude", "skill", "orca", "font", "update", "log"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 // The tab shown; the settings screen opens on Google unless the way in names another.
@@ -49,6 +50,8 @@ export function selectSettingsTab(name: SettingsTab) {
   else hideSkillClaude();
   // The PCs that the owner agreed to put tsunagiai-mcp on are read each time the Orca tab is shown (A-37).
   if (name === "orca") showConsentCard();
+  // The workspaces are read each time the Notion tab is shown (N-1).
+  if (name === "notion") showNotionTab();
   // The log is read each time the Log tab is shown.
   if (name === "log") showLogTab();
   // The tokens are asked about only once the Slack tab is shown.
@@ -333,6 +336,7 @@ export async function loadSettings() {
 }
 
 export function initSettings() {
+  initNotionTab();
   for (const t of SETTINGS_TABS) $(`settings-tab-${t}`).onclick = () => selectSettingsTab(t);
   // Left and right move to the neighbour tab (the first and the last are neighbours), and the focus goes with it.
   $("settings-tabs").onkeydown = (e) => {
