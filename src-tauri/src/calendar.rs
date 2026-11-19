@@ -107,6 +107,10 @@ fn clip_description(text: String) -> String {
 /// The longest description that `list_events` gives Claude, in characters (C-6). The detail of the week (C-2) keeps `DESCRIPTION_MAX`.
 const CLAUDE_DESCRIPTION_MAX: usize = 1_000;
 
+/// The mark that `clip_for_claude` ends a cut text with is `CLIP_MARK_HEAD`, the number of characters left out, and `CLIP_MARK_TAIL`.
+const CLIP_MARK_HEAD: &str = "…（長いため、残り ";
+const CLIP_MARK_TAIL: &str = " 文字を省きました）";
+
 /// `text` cut to `CLAUDE_DESCRIPTION_MAX` characters, with a mark that says how many were left out; a text that fits is as it is.
 fn clip_for_claude(text: &str) -> String {
     let total = text.chars().count();
@@ -115,9 +119,24 @@ fn clip_for_claude(text: &str) -> String {
     }
     let head: String = text.chars().take(CLAUDE_DESCRIPTION_MAX).collect();
     format!(
-        "{head}…（長いため、残り {} 文字を省きました）",
+        "{head}{CLIP_MARK_HEAD}{}{CLIP_MARK_TAIL}",
         total - CLAUDE_DESCRIPTION_MAX
     )
+}
+
+/// Refuses a description that ends with the mark of `clip_for_claude`: it is what `list_events` gave, cut, and sending it back would erase the rest of the event's description.
+fn check_not_clipped(description: &str) -> Result<(), String> {
+    let marked = description
+        .strip_suffix(CLIP_MARK_TAIL)
+        .is_some_and(|rest| {
+            rest.rsplit_once(CLIP_MARK_HEAD)
+                .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        });
+    if marked {
+        Err("説明の終わりに、list_events が長いため切った印が付いています。切られた説明を送り返すと、元の説明の後ろが消えます。説明を変えないときは description を省いてください".into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Who organized an event; only whether that is the user is read.
@@ -486,7 +505,7 @@ pub struct EventItem {
     /// Invited people (rooms left out), and how many of them accepted.
     attendees: u32,
     accepted: u32,
-    /// The addresses of the invited besides the user (a room is among them), as the week's `Info.guests`.
+    /// The addresses of the invited besides the user (a room is among them), as the week's `Info.guests`; empty unless `editable`, because only a rewrite needs them.
     guests: Vec<String>,
     /// Whether the event can be changed or deleted (C-7).
     editable: bool,
@@ -524,7 +543,11 @@ impl From<&RawEvent> for EventItem {
             meet_url: e.meet_url.clone(),
             attendees: e.attendees,
             accepted: e.accepted,
-            guests: e.guests.clone(),
+            guests: if e.editable {
+                e.guests.clone()
+            } else {
+                Vec::new()
+            },
             editable: e.editable,
         }
     }
@@ -1721,7 +1744,8 @@ pub const FORM_TARGET: &str = "calendar-form";
 
 /// The fields of the target `calendar-form` for `event`: `form` is JSON with `eventId` (empty for a new event), `account`, `calendarId`, `title`, `allDay`, `start`, `end`, `guests` and `meet`, and `description` is the text.
 /// The screen bridge takes 8 fields of 10,000 characters at most, so the description has a field of its own.
-pub fn form_fields(event_id: Option<&str>, event: &NewEvent) -> Fields {
+/// With `keep_description` there is no `description` field, and the screen starts the form of an event with the description the event has.
+pub fn form_fields(event_id: Option<&str>, event: &NewEvent, keep_description: bool) -> Fields {
     let form = json!({
         "eventId": event_id.unwrap_or_default(),
         "account": event.account,
@@ -1733,10 +1757,11 @@ pub fn form_fields(event_id: Option<&str>, event: &NewEvent) -> Fields {
         "guests": event.guests,
         "meet": event.meet,
     });
-    Fields::from([
-        ("form".to_owned(), form.to_string()),
-        ("description".to_owned(), event.description.clone()),
-    ])
+    let mut fields = Fields::from([("form".to_owned(), form.to_string())]);
+    if !keep_description {
+        fields.insert("description".to_owned(), event.description.clone());
+    }
+    fields
 }
 
 /// The query parameters of a request.
@@ -2098,11 +2123,13 @@ fn send_updates(guests: bool) -> &'static str {
 /// time that is not used is `null` (so an all-day event can become a timed one and back).
 /// The Meet is added when it is wanted and the event has none, taken off when it is not wanted and the event has one, and left alone otherwise.
 /// With `keep_guests` the body names no `attendees`, so the guests the event has stay (`event.guests` is not read).
+/// With `keep_description` it names no `description`, so the description the event has stays (`event.description` is not read).
 fn build_patch(
     event: &NewEvent,
     request_id: &str,
     now: &ApiCurrent,
     keep_guests: bool,
+    keep_description: bool,
 ) -> Result<(Query, Value), String> {
     let Checked {
         title,
@@ -2120,10 +2147,12 @@ fn build_patch(
     };
     let mut body = json!({
         "summary": title,
-        "description": description,
         "start": start,
         "end": end,
     });
+    if !keep_description {
+        body["description"] = json!(description);
+    }
     let guests = if keep_guests { Vec::new() } else { guests };
     if !keep_guests {
         body["attendees"] = json!(patch_attendees(now, &guests));
@@ -2218,13 +2247,14 @@ async fn changeable(
 }
 
 /// Checks an event to rewrite (the input, and in Google the calendar, the organizer and that it is not a series) and builds its request, with the event as Google holds it now.
-/// `None` means the account must log in again. With `keep_guests` the request leaves the guests as they are.
+/// `None` means the account must log in again. With `keep_guests` the request leaves the guests as they are, and with `keep_description` the description.
 async fn prepare_update(
     dir: &Path,
     auth: &Auth,
     cache: &CalendarCache,
     edit: &EditedEvent,
     keep_guests: bool,
+    keep_description: bool,
 ) -> Result<Option<(Prepared, ApiCurrent)>, String> {
     const COMMAND: &str = "calendar_update_event";
     let event = &edit.event;
@@ -2244,7 +2274,7 @@ async fn prepare_update(
     else {
         return Ok(None);
     };
-    let (query, body) = build_patch(event, &request_id, &now, keep_guests)?;
+    let (query, body) = build_patch(event, &request_id, &now, keep_guests, keep_description)?;
     Ok(Some((Prepared { url, query, body }, now)))
 }
 
@@ -2284,13 +2314,14 @@ pub async fn update_event(
     cache: &CalendarCache,
     edit: &EditedEvent,
 ) -> Result<Option<CreatedEvent>, String> {
-    let Some((sending, _)) = prepare_update(dir, auth, cache, edit, false).await? else {
+    let Some((sending, _)) = prepare_update(dir, auth, cache, edit, false, false).await? else {
         return Ok(None);
     };
     send_update(dir, auth, cache, &edit.event.account, &sending).await
 }
 
-/// `update_event` for a tool of Claude (C-6). With `keep_guests` the guests stay as the event has them. Otherwise, when `edit` has a guest that the event does not have now,
+/// `update_event` for a tool of Claude (C-6). With `keep_description` the description stays as the event has it, and a description that `list_events` cut is refused, not sent back.
+/// With `keep_guests` the guests stay as the event has them. Otherwise, when `edit` has a guest that the event does not have now,
 /// nothing is sent (`Outcome::AskOwner`): the new guest is invited by the save. The guests who are on the event already are changed and told with no question.
 pub async fn update_event_for_claude(
     dir: &Path,
@@ -2298,8 +2329,14 @@ pub async fn update_event_for_claude(
     cache: &CalendarCache,
     edit: &EditedEvent,
     keep_guests: bool,
+    keep_description: bool,
 ) -> Result<Option<Outcome>, String> {
-    let Some((sending, now)) = prepare_update(dir, auth, cache, edit, keep_guests).await? else {
+    if !keep_description {
+        check_not_clipped(&edit.event.description)?;
+    }
+    let Some((sending, now)) =
+        prepare_update(dir, auth, cache, edit, keep_guests, keep_description).await?
+    else {
         return Ok(None);
     };
     if !keep_guests && has_new_guest(&now.addresses(), &check_guests(&edit.event.guests)?) {
@@ -3053,6 +3090,12 @@ mod tests {
         // An invitation, and an event of a calendar someone else owns, are not editable.
         assert_eq!(item(r#"{}"#, "owner")["editable"], false);
         assert_eq!(item(r#"{"self":true}"#, "reader")["editable"], false);
+        // The guests are for changing the event: an event that cannot be changed has none.
+        assert_eq!(item(r#"{}"#, "owner")["guests"], serde_json::json!([]));
+        assert_eq!(
+            item(r#"{"self":true}"#, "reader")["guests"],
+            serde_json::json!([])
+        );
         // A text that is blank is none, as the screen has it.
         let ev: ApiEvent = serde_json::from_str(
             r#"{"start":{"date":"2026-10-29"},"end":{"date":"2026-10-30"},"location":" ","description":""}"#,
@@ -4180,7 +4223,7 @@ mod tests {
     }
 
     fn patch_body(event: &NewEvent, now: &str) -> (Query, Value) {
-        build_patch(event, "req-1", &current(now), false).unwrap()
+        build_patch(event, "req-1", &current(now), false, false).unwrap()
     }
 
     #[test]
@@ -4309,7 +4352,7 @@ mod tests {
                 ..new_event()
             },
         ] {
-            let e = build_patch(&bad, "r", &ApiCurrent::default(), false).unwrap_err();
+            let e = build_patch(&bad, "r", &ApiCurrent::default(), false, false).unwrap_err();
             assert!(!e.is_ascii(), "not Japanese: {e}");
         }
     }
@@ -4353,7 +4396,8 @@ mod tests {
             meet: true,
             ..new_event()
         };
-        let (query, body) = build_patch(&event, "req-9", &ApiCurrent::default(), false).unwrap();
+        let (query, body) =
+            build_patch(&event, "req-9", &ApiCurrent::default(), false, false).unwrap();
         let answer = request_to(
             Method::PATCH,
             &event_url_of(&url, "e1"),
@@ -4512,7 +4556,7 @@ mod tests {
             guests: vec!["b@example.com".into(), "c@example.com".into()],
             ..new_event()
         };
-        let (_, body) = build_patch(&event, "r", &now, false).unwrap();
+        let (_, body) = build_patch(&event, "r", &now, false, false).unwrap();
         assert_eq!(
             body["attendees"],
             json!([
@@ -4529,12 +4573,12 @@ mod tests {
             title: "新しい題".into(),
             ..new_event()
         };
-        let (query, body) = build_patch(&event, "r", &now, true).unwrap();
+        let (query, body) = build_patch(&event, "r", &now, true, false).unwrap();
         assert!(!body.as_object().unwrap().contains_key("attendees"));
         assert_eq!(body["summary"], "新しい題");
         assert!(query.contains(&("sendUpdates", "all")));
         // No guest before: no one to tell.
-        let (query, body) = build_patch(&event, "r", &current("{}"), true).unwrap();
+        let (query, body) = build_patch(&event, "r", &current("{}"), true, false).unwrap();
         assert!(!body.as_object().unwrap().contains_key("attendees"));
         assert!(query.contains(&("sendUpdates", "none")));
     }
@@ -4547,7 +4591,7 @@ mod tests {
             description: "議題\n二行目".into(),
             ..new_event()
         };
-        let fields = form_fields(Some("ev1"), &event);
+        let fields = form_fields(Some("ev1"), &event, false);
         assert_eq!(
             fields.keys().map(String::as_str).collect::<Vec<_>>(),
             ["description", "form"]
@@ -4561,8 +4605,43 @@ mod tests {
         assert_eq!(form["meet"], true);
         assert_eq!(form["start"], "2026-11-20T10:00:00+09:00");
         // A new event has no ID.
-        let form: Value = serde_json::from_str(&form_fields(None, &event)["form"]).unwrap();
+        let form: Value = serde_json::from_str(&form_fields(None, &event, false)["form"]).unwrap();
         assert_eq!(form["eventId"], "");
+        // Kept, the description is not a field: the screen then keeps the event's own.
+        let kept = form_fields(Some("ev1"), &event, true);
+        assert_eq!(
+            kept.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["form"]
+        );
+    }
+
+    #[test]
+    fn a_patch_leaves_the_description_out_when_it_is_kept() {
+        let event = NewEvent {
+            description: "ignored".into(),
+            ..new_event()
+        };
+        let (_, body) = build_patch(&event, "r", &current("{}"), false, true).unwrap();
+        let named = body.as_object().unwrap();
+        assert!(!named.contains_key("description"));
+        assert!(named.contains_key("summary") && named.contains_key("start"));
+        let (_, body) = build_patch(&event, "r", &current("{}"), false, false).unwrap();
+        assert_eq!(body["description"], "ignored");
+    }
+
+    #[test]
+    fn a_description_that_list_events_cut_is_refused_in_japanese_and_a_plain_one_is_not() {
+        let cut = clip_for_claude(&"あ".repeat(CLAUDE_DESCRIPTION_MAX + 7));
+        let e = check_not_clipped(&cut).unwrap_err();
+        assert!(!e.is_ascii(), "not Japanese: {e}");
+        for plain in [
+            "".to_owned(),
+            "説明".to_owned(),
+            "あ".repeat(CLAUDE_DESCRIPTION_MAX),
+            "…（長いため、残り 7 文字を省きました）の話".to_owned(),
+        ] {
+            assert!(check_not_clipped(&plain).is_ok(), "{plain}");
+        }
     }
 
     /// `serve_once` answers for any path; this puts the event after its `.../events`.

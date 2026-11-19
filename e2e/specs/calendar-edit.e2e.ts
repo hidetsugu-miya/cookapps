@@ -440,6 +440,18 @@ describe("calendar: the form that Claude Code fills in", () => {
     ]);
   });
 
+  it("starts the form of an event of the week with the event's own description when Claude leaves the description out", async () => {
+    await openCalendar();
+    await openPane();
+    const update = await mock("calendar_update_event", { id: "ev1", meetUrl: null });
+    expect(await askScreen("write", "calendar-form", { form: JSON.stringify(wanted({ eventId: "ev1", title: "Team sync", start: rfc(today, "10:00"), end: rfc(today, "11:00"), guests: ["ann@example.com", "cy@example.com", "new@example.com"] })) })).toEqual({ ok: true });
+    await expect($(".cal-create")).toHaveAttribute("aria-label", "予定を編集");
+    await expect($('.cal-create [aria-label="説明"]')).toHaveValue("Review the plan.\nDocs: https://example.com/plan");
+    await saveButton().click();
+    const [call] = (await waitForCalls(update)) as { event: { description: string } }[];
+    expect(call.event.description).toBe("Review the plan.\nDocs: https://example.com/plan");
+  });
+
   it("refuses an event that is not in the week shown, and a form that is not made of its fields, and opens none", async () => {
     await openCalendar();
     await openPane();

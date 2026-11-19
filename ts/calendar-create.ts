@@ -256,12 +256,12 @@ function whenOf(allDay: boolean, start: string, end: string) {
 }
 
 // Opens the form on the event `info` (C-7), beside `node`, with `color` the color of its calendar.
-// `wanted` and `description` are the values that Claude hands the form (C-6); with none, the form starts with the event's own.
-export function openEdit(info: Info, color: string, node: HTMLElement, wanted?: Wanted, description = "") {
+// `wanted` and `description` are the values that Claude hands the form (C-6); with none, the form starts with the event's own (a `wanted` with no `description` keeps the event's description).
+export function openEdit(info: Info, color: string, node: HTMLElement, wanted?: Wanted, description?: string) {
   // The event is in the week as it was drawn.
   openForm(
     wanted
-      ? { title: wanted.title, ...whenOf(wanted.allDay, wanted.start, wanted.end), guests: wanted.guests, meet: wanted.meet, description }
+      ? { title: wanted.title, ...whenOf(wanted.allDay, wanted.start, wanted.end), guests: wanted.guests, meet: wanted.meet, description: description ?? info.description ?? "" }
       : { title: info.summary, ...whenOf(info.allDay, info.start, info.end), guests: info.guests, meet: info.meetUrl !== null, description: info.description ?? "" },
     { info, node, color },
   );
@@ -279,9 +279,9 @@ export function writeForm(fields: BridgeFields) {
   if (!wanted || ![wanted.eventId, wanted.account, wanted.calendarId, wanted.title, wanted.start, wanted.end].every(text) || typeof wanted.allDay !== "boolean" || typeof wanted.meet !== "boolean" || !Array.isArray(wanted.guests)) {
     throw new Error("欄 form に eventId、account、calendarId、title、allDay、start、end、guests、meet がそろっていません");
   }
-  const description = fields.description ?? "";
+  const description = fields.description;
   if (wanted.eventId === "") {
-    openForm({ title: wanted.title, ...whenOf(wanted.allDay, wanted.start, wanted.end), guests: wanted.guests.map(String), meet: wanted.meet, description }, null, { account: wanted.account, id: wanted.calendarId });
+    openForm({ title: wanted.title, ...whenOf(wanted.allDay, wanted.start, wanted.end), guests: wanted.guests.map(String), meet: wanted.meet, description: description ?? "" }, null, { account: wanted.account, id: wanted.calendarId });
     return;
   }
   const target = eventTarget(wanted.account, wanted.calendarId, wanted.eventId);
