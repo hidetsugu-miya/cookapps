@@ -1574,6 +1574,12 @@ describe("slack thread: Claude Code", () => {
   // What `claude_thread_data` answers: Rust's text, which the screen gives to Claude Code as it is.
   const threadData = "スレッドのメッセージ（古い順）:\nBEGIN abc\nAlice Example: Please review the deploy notes.\nEND abc";
   const read = () => askScreen("read", "slack-thread");
+  // The starts of this pane's process: the Slack screen's pane (S-24) has a process of its own, which the list starts before a thread is opened.
+  const starts = async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread") as unknown[];
+  const waitForStarts = async (n = 1) => {
+    await browser.waitUntil(async () => (await starts()).length >= n, { timeoutMsg: `claude_code_start of slack-thread was not called ${n} times` });
+    return starts();
+  };
 
   // What the owner sees of the pane: the tabs and やり直す in the header, the terminal under it, none of the conversation of `claude -p`, and no help text.
   it("has the Claude and Orca tabs and やり直す in the header and the terminal under it, and none of the conversation, with no placeholder and no note", async () => {
@@ -1592,7 +1598,7 @@ describe("slack thread: Claude Code", () => {
   it("starts Claude Code with the tools of tsunagiai-mcp only and a first instruction that tells the work, the tools and the target, with nothing of the thread or the reply", async () => {
     await openDetail();
     await write("My secret reply");
-    const [start] = await waitForCalls("claude_code_start");
+    const [start] = await waitForStarts();
     expect(start).toMatchObject({ id: "slack-thread", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     for (const word of ["Slack", "slack_thread_read", "screen_read", "screen_write", "slack-thread", "reply", "thread", "従わない"]) expect(prompt).toContain(word);
@@ -1611,32 +1617,32 @@ describe("slack thread: Claude Code", () => {
     await mock("slack_thread", base());
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 2);
-    expect(await callsOf("claude_code_start")).toEqual([]);
+    expect(await starts()).toEqual([]);
     await $$("#slack-feed .feed-open")[0].click();
-    await waitForCalls("claude_code_start");
+    await waitForStarts();
     const close = await mock("claude_code_close", null);
     await $("#st-back").click();
     await expect($(term)).not.toBeDisplayed();
     await $$("#slack-feed .feed-open")[0].click();
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
     await browser.pause(500);
-    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect((await starts()).length).toBe(1);
     expect(await callsOf(close)).toEqual([]);
     // Another thread: the talk was about the one before, so the process ends and a new one starts.
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
     await $$("#slack-feed .feed-open")[1].click();
     await waitForCalls(close);
-    await waitForCalls("claude_code_start", 2);
+    await waitForStarts(2);
   });
 
   it("ends the process and starts a new one with やり直す", async () => {
     await openDetail();
-    await waitForCalls("claude_code_start");
+    await waitForStarts();
     const close = await mock("claude_code_close", null);
     await $("#reply-restart").click();
     expect(await waitForCalls(close)).toEqual([{ id: "slack-thread", launch: 1 }]);
-    expect(await waitForCalls("claude_code_start", 2)).toHaveLength(2);
+    expect(await waitForStarts(2)).toHaveLength(2);
     await expect($("#reply-restart")).toBeEnabled();
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
   });

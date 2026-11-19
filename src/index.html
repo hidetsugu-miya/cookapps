@@ -545,6 +545,9 @@
           </header>
           <div id="sc-feed"></div>
           <div id="sc-reply">
+            <div id="sc-undo-bar" hidden>
+              <button id="sc-undo" class="text-btn" type="button">元に戻す</button>
+            </div>
             <p id="sc-error" class="pending fail" role="alert" hidden></p>
           </div>
         </section>
@@ -596,12 +599,9 @@
       <aside id="slack-claude" class="chat-pane" aria-label="Claude">
         <div class="chat-head">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
-          <button id="slack-claude-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+          <button id="slack-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
         </div>
-        <div id="slack-claude-log" class="chat-log"></div>
-        <div class="chat-foot">
-          <p id="slack-claude-chat-note" class="chat-note" hidden></p>
-        </div>
+        <div id="slack-claude-term"></div>
       </aside>
     </section>
     <section id="database" class="split-main" hidden>

@@ -56,6 +56,7 @@ pub const RULES: Rules = Rules {
         "todo-prompt",
         "todo-draft",
         "slack-thread",
+        "slack-channel",
     ],
     changes: &["todo", "calendar", "calendar-shown"],
     wait: Duration::from_secs(5),
@@ -643,7 +644,8 @@ mod tests {
                 "calendar-form",
                 "todo-prompt",
                 "todo-draft",
-                "slack-thread"
+                "slack-thread",
+                "slack-channel"
             ]
         );
         // The candidates of free time (C-6, #1063): a read and a write, no post.

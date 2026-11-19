@@ -3,6 +3,7 @@
 // Pressing a message or its replies opens the thread (slack-thread.ts), whose back button returns here at the same scroll position. Nothing here reads a channel: the read position is set from the unread list only.
 // The history is read when the channel is pressed, and again when it is pressed once more; a read that fails shows the error and "再読み込み". Everything is held in memory only.
 // Under the history is a field to post to the channel (S-21, `slack_channel_post`): what is written is kept per channel in memory, and a post that works empties it and reads the history again.
+// Claude Code (S-24, ts/slack-claude.ts) reads the history and the field, and writes the field, through the target "slack-channel" of ts/screen-bridge.ts (the field `channel` is only read, and the field `post` is read and written). What it writes goes into the field as it is, and 「元に戻す」 (`sc-undo`) takes it back. It never posts: only the arrow of the field does.
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { $, tag } from "./dom.js";
 import { formatDay } from "./format.js";
@@ -10,6 +11,7 @@ import { HASH_SVG, LOCK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { createRichEditor } from "./rich-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
+import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { openSlackThread } from "./slack-thread.js";
 import { applyReactionChange, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { toast } from "./toast.js";
@@ -35,6 +37,11 @@ let scroll = 0;
 
 // What is written for each channel (`{teamId}/{channel}`) as the Markdown of the rich field (a blank text is not kept), and the channel whose post is on its way.
 const drafts = new Map<string, string>();
+// The texts that Claude Code's writes replaced (newest last), by channel. A write can be taken back only while the field holds what that write put there.
+const undos = new Map<string, { before: string; after: string }[]>();
+// How long after the last key 「元に戻す」 is drawn again, so that it goes when the text was changed by hand.
+const STALE_DELAY = 150;
+let staleTimer = 0;
 let posting: string | null = null;
 // The channel whose text the field holds now (null: none, the field is empty).
 let shownKey: string | null = null;
@@ -60,6 +67,8 @@ const editor = createRichEditor({
     dirty = true;
     $("sc-error").hidden = true;
     editor.setSendDisabled(posting !== null || editor.blank());
+    clearTimeout(staleTimer);
+    staleTimer = window.setTimeout(drawUndo, STALE_DELAY);
   },
   onSubmit: () => post(),
 });
@@ -67,27 +76,43 @@ const editor = createRichEditor({
 // The chosen channel as `{teamId}/{channel}`, for the side menu.
 export const selectedChannel = () => (chosen ? `${chosen.teamId}/${chosen.channel}` : null);
 
-// The channel the Claude pane (S-24) talks about, with its messages as the history draws them, oldest first; null while the list, the watch or a thread is shown.
-export function slackChannelForClaude() {
-  if (!chosen || $("slack-channel").hidden) return null;
-  return { teamId: chosen.teamId, channel: chosen.channel, messages: (messages ?? []).map(({ name, ts, text }) => ({ name, ts, text })) };
+// 「元に戻す」 of the writes of Claude Code (S-24): shown while the field holds what the newest write of the chosen channel put there. A change of the owner's (or a post, which empties the field) makes every one unusable, and they are forgotten.
+function drawUndo() {
+  syncDraft();
+  const key = selectedChannel();
+  const list = key ? undos.get(key) : undefined;
+  if (key && list?.length && list[list.length - 1].after !== (drafts.get(key) ?? "")) list.length = 0;
+  $("sc-undo-bar").hidden = !list?.length;
+  $<HTMLButtonElement>("sc-undo").disabled = key !== null && posting === key;
 }
 
-// Puts the draft Claude wrote (S-24) into the field of the chosen channel, as Markdown, after what the field already holds (a blank line between); nothing is posted and nothing is replaced.
-// Nothing is done while no channel's history is shown, or while that channel's post is on its way.
-export function putSlackDraft(draft: string) {
-  const key = selectedChannel();
-  if (!key || $("slack-channel").hidden || posting === key) return;
+// The fields of the target "slack-channel": the open channel's history as `claude_channel_data` makes it (enclosed as data; a fixed line while no channel's history is shown or it is not read), and the post field's Markdown (empty while no channel is chosen).
+async function readFields(): Promise<Fields> {
   syncDraft();
-  const have = drafts.get(key) ?? "";
-  const next = `${have ? `${have.trimEnd()}\n\n` : ""}${draft.trim()}\n`;
-  if (editor.ready()) {
-    editor.set(next);
-    shownKey = key;
-    drafts.set(key, editor.markdown());
-  } else {
-    drafts.set(key, next);
-  }
+  const key = selectedChannel();
+  const post = (key && drafts.get(key)) || "";
+  if (!chosen || $("slack-channel").hidden) return { channel: "チャンネルの履歴は開いていません", post };
+  if (messages === null) return { channel: "チャンネルのメッセージはまだ読めていません", post };
+  const { teamId, channel } = chosen;
+  return { channel: await invoke("claude_channel_data", { channel: { teamId, channel, messages: messages.map(({ name, ts, text }) => ({ name, ts, text })) } }), post };
+}
+
+// Puts what Claude Code wrote into the post field of the chosen channel as it is, and keeps the text it replaced for 「元に戻す」. It posts nothing.
+function writeFields(fields: Fields) {
+  if ("channel" in fields) throw new Error("欄 channel は読むだけです");
+  const key = selectedChannel();
+  if (!key || $("slack-channel").hidden) throw new Error("チャンネルの履歴が開いていません");
+  if (posting === key) throw new Error("投稿の最中のため、書けません");
+  if (!editor.ready()) throw new Error("投稿の欄を読み込めていません");
+  syncDraft();
+  const before = drafts.get(key) ?? "";
+  const text = fields.post;
+  if (text.trim()) drafts.set(key, text);
+  else drafts.delete(key);
+  editor.set(text);
+  shownKey = key;
+  dirty = false;
+  if (text !== before) undos.set(key, [...(undos.get(key) ?? []), { before, after: text }]);
   $("sc-error").hidden = true;
   drawReply();
 }
@@ -112,6 +137,7 @@ function drawReply() {
   }
   editor.setBusy(posting !== null && posting === key);
   editor.setSendDisabled(posting !== null || !text);
+  drawUndo();
 }
 
 // Reads the rich field the first time the channel screen is shown, and draws the text of the channel in it when it is there.
@@ -283,5 +309,24 @@ export function initSlackChannel() {
   });
   feed().addEventListener("scroll", () => {
     if (!$("slack-channel").hidden) scroll = feed().scrollTop;
+  });
+  // Puts back the text that the newest write of Claude Code replaced.
+  $("sc-undo").onclick = () => {
+    const key = selectedChannel();
+    const last = key ? undos.get(key)?.at(-1) : undefined;
+    if (!key || !last || posting === key || !editor.ready()) return;
+    undos.get(key)!.pop();
+    if (last.before.trim()) drafts.set(key, last.before);
+    else drafts.delete(key);
+    editor.set(last.before);
+    shownKey = key;
+    dirty = false;
+    drawReply();
+  };
+  registerDraftTarget("slack-channel", {
+    names: ["post", "channel"],
+    isOpen: () => !$("slack-screen").hidden && !!$("slack-thread").hidden,
+    read: readFields,
+    write: writeFields,
   });
 }
