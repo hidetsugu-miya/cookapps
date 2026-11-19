@@ -59,6 +59,7 @@ function renderPopup() {
 function render() {
   if (!info) return;
   renderPopup();
+  $("app-version").textContent = `v${info.version}`;
   $("nav-settings").querySelector<HTMLElement>(".nav-dot")!.hidden = update === null;
   $("settings-tab-update").querySelector<HTMLElement>(".tab-dot")!.hidden = update === null;
   $("nav-settings").setAttribute("aria-label", update ? `設定（v${update.version} があります）` : "設定");

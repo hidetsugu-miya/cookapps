@@ -10,8 +10,8 @@ describe("sidebar", () => {
     const button = $("#claude-btn");
     await expect(button).toBeDisplayed();
     await expect(button).toHaveAttribute("aria-label", "Claude: claude@example.com");
-    // The bottom group is Claude, then settings last; the account avatars sit under the calendar icon.
-    expect(await bottomGroup()).toEqual(["claude-btn", "nav-settings"]);
+    // The bottom group is Claude, settings, then the version last; the account avatars sit under the calendar icon.
+    expect(await bottomGroup()).toEqual(["claude-btn", "nav-settings", "app-version"]);
     await expect($('#account-list button[aria-label="me@example.com"]')).toBeDisplayed();
     await expect($("#add-account")).not.toExist();
     await button.click();
@@ -25,6 +25,14 @@ describe("sidebar", () => {
     await button.moveTo();
     await browser.pause(600);
     await expect($(".tooltip")).not.toBeDisplayed();
+  });
+
+  it("shows the running version from app_info under settings", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await expect($("#app-version")).toHaveText("v1.2.3");
+    expect(await callsOf("app_info")).toHaveLength(1);
+    const [settings, version] = await Promise.all([rectOf("#nav-settings"), rectOf("#app-version")]);
+    expect(version.top).toBeGreaterThanOrEqual(settings.bottom);
   });
 
   it("starts the icons below the traffic lights, and is a place to drag the window by", async () => {
@@ -71,8 +79,8 @@ describe("sidebar", () => {
     expect(await browser.execute(() => document.getElementById("update-pop")!.contains(document.activeElement))).toBe(false);
     await expect($("#nav-settings .nav-dot")).toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-label", "設定（v9.9.9 があります）");
-    // The sidebar has no update button any more: the bottom group is Claude, then settings.
-    expect(await bottomGroup()).toEqual(["claude-btn", "nav-settings"]);
+    // The sidebar has no update button any more: the bottom group is Claude, settings, then the version.
+    expect(await bottomGroup()).toEqual(["claude-btn", "nav-settings", "app-version"]);
     expect(await callsOf("install_update")).toEqual([]);
     const install = await mock("install_update", null);
     const restart = await mock("restart_app", null);
@@ -174,9 +182,9 @@ describe("sidebar", () => {
   it("keeps settings at the bottom edge with no account, no Claude and no update", async () => {
     await boot({ inbox: { ...inbox(), accounts: [], threads: [], historyIds: {} }, claude_status: claudeMissing });
     await waitForCalls("claude_status");
-    expect(await bottomGroup()).toEqual(["nav-settings"]);
+    expect(await bottomGroup()).toEqual(["nav-settings", "app-version"]);
     // The bottom group ends 16px above the window's bottom edge.
-    expect(await browser.execute(() => Math.round(innerHeight - document.getElementById("nav-settings")!.getBoundingClientRect().bottom))).toBe(16);
+    expect(await browser.execute(() => Math.round(innerHeight - document.getElementById("app-version")!.getBoundingClientRect().bottom))).toBe(16);
   });
 
   // Waits until the last set_badge call is `args`.
