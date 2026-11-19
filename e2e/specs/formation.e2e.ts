@@ -3106,7 +3106,8 @@ describe("orchestration mode: the worktrees of the children are left out of the 
   const overview = (rows = [ownRow(), childRow()], worktrees = trees()) => orcaOverview(rows, worktrees, { terminals: [childTerminal()] });
   const withChild = () => formationList([formationEntry("formation", { children: [listedChild("child-a", "working", { repo: "api", branch: "child-a", path: CHILD_PATH })], counts: { planned: 0, waiting: 0, working: 1, done: 0 } })]);
   const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
-  const number = () => textsOf(`${PROJECT} .orca-n`);
+  // The project row has no count of its sessions (#1033): the counts are on the session rows.
+  const numberCount = () => count(`${PROJECT} .orca-n`);
   const arrow = () => $('#orca-feed [data-key="arrow:proj_api"]');
 
   // `ready`: the pill of the count is the sign that the list was read, and a formation with no child has none, so a spec of such a list names its own sign.
@@ -3125,17 +3126,16 @@ describe("orchestration mode: the worktrees of the children are left out of the 
     await expect($('.menu[role="menu"]')).toBeDisplayed();
   }
 
-  it("draws no row of a child's worktree under its project, neither its Claude session nor its plain terminal, and counts the sessions that are drawn", async () => {
+  it("draws no row of a child's worktree under its project, neither its Claude session nor its plain terminal, and draws no count of sessions on the project row", async () => {
     await openScreen();
     expect(await sessionTitles()).toEqual(["Own session"]);
-    expect(await number()).toEqual(["1"]);
+    expect(await numberCount()).toBe(0);
     expect(await count(`#orca-feed [data-session="claude:tab_child:leaf_1"], #orca-feed [data-session="orca:term_child_sh"]`)).toBe(0);
   });
 
   it("draws every session of the project when no child of the record is in its worktrees", async () => {
     await openScreen({ formation_list: formationList([formationEntry("formation")]) }, async () => (await sessionTitles()).length === 3);
     expect(await sessionTitles()).toEqual(["Own session", "Child session", "zsh"]);
-    expect(await number()).toEqual(["3"]);
     // A child whose worktree is not the path of any row leaves every session as it is, and so does the same path on another PC.
     await mock("formation_list", formationList([formationEntry("formation", { children: [listedChild("c", "working", { path: "/work/elsewhere" }), listedChild("d", "working", { path: CHILD_PATH, environment: "dev-server" })] })]));
     await browser.waitUntil(async () => (await count(".formation-row-count")) === 1);
@@ -3147,7 +3147,6 @@ describe("orchestration mode: the worktrees of the children are left out of the 
     expect(await sessionTitles()).toEqual(["Own session"]);
     await mock("formation_list", formationList([formationEntry("formation")]));
     await browser.waitUntil(async () => (await sessionTitles()).length === 3, { timeout: 15_000 });
-    expect(await number()).toEqual(["3"]);
   });
 
   it("keeps the folder of a child that works in a folder that was there, and the owner's session in it, and leaves only the child's own sessions out", async () => {
@@ -3158,7 +3157,6 @@ describe("orchestration mode: the worktrees of the children are left out of the 
     await openScreen({ orca_overview: inOwnFolder, formation_list: kept });
     await browser.waitUntil(async () => (await sessionTitles()).length === 2);
     expect(await sessionTitles()).toEqual(["Own session", "zsh"]);
-    expect(await number()).toEqual(["2"]);
     // The work pane has the owner's tabs only, and the folder stays among the worktrees of the plus.
     await mock("orca_start", { paneKey: null, handle: null });
     await pressPlus();
@@ -3176,7 +3174,7 @@ describe("orchestration mode: the worktrees of the children are left out of the 
     expect(await count("#orca-feed .orca-session")).toBe(0);
     await openScreen({ orca_overview: overview([childRow()], trees()) });
     expect(await count('#orca-feed [data-key^="arrow:"]')).toBe(0);
-    expect(await number()).toEqual([]);
+    expect(await numberCount()).toBe(0);
   });
 
   it("still counts a child's session in the sidebar button, which marks the work and the wait", async () => {
