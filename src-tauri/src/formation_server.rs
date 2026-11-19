@@ -4,16 +4,19 @@
 //! The pieces, from the bottom up.
 //! - The frame: XSalsa20-Poly1305 under a key for each direction, with a nonce that is the direction and a counter, so that a replayed, reordered or reused frame does not open.
 //! - The handshake: each side sends an ephemeral public key, and the keys are derived from the DH of the ephemeral keys and the DH of the two pinned (static) keys together with the transcript, so that one who does not know its static key cannot derive them.
-//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `page.read`, `page.answer`, `stop`).
+//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `page.read`, `page.answer`, `subscribe`, `stop`).
+//! - The pushes (#983): `subscribe` turns the connection into one that the daemon pushes requests through, so the PC can ask something of the app without a port on the app's PC. `Hub` is the daemon's end (`Hub::push`, fed by `push.sock` of `remote/`, which a `tsunagiai-mcp` of that PC reaches with `push_to_daemon`), `Pushes` is the app's end.
 //! - The server (`serve`, the daemon of `--serve`) and the client (`Client`), which the app uses.
 //!
 //! A key is in no error text and no `Debug` output (the types that hold one derive none).
-//! The files are in `remote/` of the config folder: `server.key` (secret, 0600), `server.pub`, `client.pub` (the app's key, pinned by `--client-key`), `version` (written by whoever puts the program there; `0.0.0` when missing) and `pid`.
+//! The files are in `remote/` of the config folder: `server.key` (secret, 0600), `server.pub`, `client.pub` (the app's key, pinned by `--client-key`), `version` (written by whoever puts the program there; `0.0.0` when missing), `pid` and `push.sock` (the socket of the pushes, for this user only).
 
 use std::{
+    future::Future,
     net::IpAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    pin::Pin,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -29,7 +32,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Notify, Semaphore},
+    sync::{mpsc, oneshot, Notify, Semaphore},
+    task::JoinSet,
     time::{timeout, Instant},
 };
 use tokio_tungstenite::{
@@ -63,6 +67,23 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONNECTIONS: usize = 16;
 /// The most formations one `children.read` names.
 const MAX_FORMATIONS: usize = 200;
+/// How often the daemon sends a frame on a connection of pushes that has nothing to push, so that the app hears a connection that was cut without a close.
+#[cfg(not(test))]
+const HEARTBEAT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const HEARTBEAT: Duration = Duration::from_millis(100);
+/// How long the app waits for any frame of a connection of pushes before it takes the connection for lost (three heartbeats).
+const PUSH_SILENCE: Duration = Duration::from_secs(60);
+/// How long the daemon waits for the app's answer to one push.
+#[cfg(not(test))]
+const PUSH_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const PUSH_ACK_TIMEOUT: Duration = Duration::from_millis(300);
+/// How long `Hub::push` takes in all: the wait for the line, the push and the answer.
+const PUSH_WAIT: Duration = Duration::from_secs(15);
+/// The pushes that wait for the connection at once.
+const PUSH_QUEUE: usize = 8;
+const NOT_CONNECTED: &str = "アプリがつながっていません";
 
 const REMOTE_DIR: &str = "remote";
 const SERVER_KEY_FILE: &str = "server.key";
@@ -70,6 +91,7 @@ const SERVER_PUB_FILE: &str = "server.pub";
 const CLIENT_PUB_FILE: &str = "client.pub";
 const VERSION_FILE: &str = "version";
 const PID_FILE: &str = "pid";
+const PUSH_SOCKET_FILE: &str = "push.sock";
 const DEFAULT_VERSION: &str = "0.0.0";
 
 /// The line `--serve` prints when the server is up: this prefix, the server's public key (base64) and its version, each after a space. The app reads it from the screen of a terminal, so it stays short.
@@ -377,6 +399,8 @@ pub struct RemoteChildren {
 struct Reply {
     body: Value,
     stop: bool,
+    /// The connection becomes a connection of pushes after this reply.
+    subscribe: bool,
 }
 
 impl Reply {
@@ -384,6 +408,7 @@ impl Reply {
         Self {
             body: json!({"ok": true, "result": result}),
             stop: false,
+            subscribe: false,
         }
     }
 
@@ -391,6 +416,7 @@ impl Reply {
         Self {
             body: json!({"ok": false, "error": message}),
             stop: false,
+            subscribe: false,
         }
     }
 }
@@ -520,12 +546,247 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
                 Err(e) => Reply::error(&e),
             }
         }
+        "subscribe" => Reply {
+            subscribe: true,
+            ..Reply::ok(json!({"subscribed": true}))
+        },
         "stop" => Reply {
             stop: true,
             ..Reply::ok(json!({"stopping": true}))
         },
         _ => Reply::error("その要求はありません"),
     }
+}
+
+// ---- the pushes ----
+
+/// What the daemon asks of the app: a method and its parameters, as a `Request` is. The daemon does not read them; the app's handler does.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PushRequest {
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+/// One push on its way to the app, and where the answer of the app goes.
+struct Delivery {
+    request: PushRequest,
+    done: oneshot::Sender<Result<(), String>>,
+}
+
+/// The daemon's end of the pushes: the one connection of the app that is open now (the newest `subscribe` replaces the one before it, which is closed).
+#[derive(Default)]
+pub struct Hub {
+    app: Mutex<Option<mpsc::Sender<Delivery>>>,
+}
+
+impl Hub {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn attach(&self) -> mpsc::Receiver<Delivery> {
+        let (sender, receiver) = mpsc::channel(PUSH_QUEUE);
+        *self.app.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
+        receiver
+    }
+
+    /// Pushes `request` to the app and waits for its answer: Ok when the app's handler took it, the handler's reason when it refused, and an error when no app is connected or the push did not reach it.
+    pub async fn push(&self, request: PushRequest) -> Result<(), String> {
+        let sender = self
+            .app
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or(NOT_CONNECTED)?;
+        let (done, answer) = oneshot::channel();
+        timeout(PUSH_WAIT, async {
+            sender
+                .send(Delivery { request, done })
+                .await
+                .map_err(|_| NOT_CONNECTED.to_owned())?;
+            answer
+                .await
+                .map_err(|_| "アプリに届きませんでした".to_owned())?
+        })
+        .await
+        .unwrap_or_else(|_| Err("時間内にアプリが受け取りませんでした".to_owned()))
+    }
+}
+
+/// One push on the connection and the app's answer to it. The outer error is a connection that failed (it ends); the inner one is the app's handler refusing the request.
+async fn deliver<S>(
+    socket: &mut WebSocketStream<S>,
+    channel: &mut Channel,
+    request: &PushRequest,
+) -> Result<Result<(), String>, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    const BROKEN: &str = "アプリとの接続が切れました";
+    let frame =
+        channel.seal(&serde_json::to_vec(&json!({"push": request})).map_err(|e| e.to_string())?)?;
+    socket
+        .send(Message::Binary(frame.into()))
+        .await
+        .map_err(|_| BROKEN.to_owned())?;
+    let answer = timeout(PUSH_ACK_TIMEOUT, next_binary(socket))
+        .await
+        .map_err(|_| "アプリが時間内に答えませんでした".to_owned())?
+        .and_then(|frame| channel.open(&frame))
+        .and_then(|plain| serde_json::from_slice::<Value>(&plain).ok())
+        .ok_or(BROKEN)?;
+    Ok(match answer["ack"].as_bool() {
+        Some(true) => Ok(()),
+        Some(false) => Err(answer["error"]
+            .as_str()
+            .unwrap_or("アプリが断りました")
+            .to_owned()),
+        None => return Err(BROKEN.to_owned()),
+    })
+}
+
+/// A connection after `subscribe`, to its end: the pushes that come to `deliveries` go out one at a time, each with the app's answer waited for, and a heartbeat goes out while there is none. Anything else the app sends ends it. It ends too when a newer `subscribe` took the place of this one (`deliveries` is closed).
+async fn push_loop<S>(
+    socket: &mut WebSocketStream<S>,
+    channel: &mut Channel,
+    mut deliveries: mpsc::Receiver<Delivery>,
+) -> Option<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let mut beat = tokio::time::interval(HEARTBEAT);
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    beat.tick().await;
+    loop {
+        tokio::select! {
+            delivery = deliveries.recv() => {
+                let delivery = delivery?;
+                let answer = deliver(socket, channel, &delivery.request).await;
+                let broken = answer.is_err();
+                let _ = delivery.done.send(answer.and_then(|app| app));
+                if broken {
+                    return None;
+                }
+            }
+            _ = next_binary(socket) => return None,
+            _ = beat.tick() => {
+                let frame = channel.seal(&serde_json::to_vec(&json!({"heartbeat": true})).ok()?).ok()?;
+                socket.send(Message::Binary(frame.into())).await.ok()?;
+            }
+        }
+    }
+}
+
+// ---- the socket of the pushes ----
+
+/// The socket that the daemon listens on for the requests of the `tsunagiai-mcp` of its PC, in `remote/` (a folder for this user only).
+pub fn push_socket(config: &Path) -> PathBuf {
+    remote_dir(config).join(PUSH_SOCKET_FILE)
+}
+
+/// One request from a `tsunagiai-mcp` of this PC: the whole of it is one `PushRequest` in JSON, and the daemon answers `{"ok": true}` or `{"ok": false, "error": …}` and closes.
+#[cfg(unix)]
+async fn local_handle(mut stream: tokio::net::UnixStream, hub: &Hub) -> Option<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut text = Vec::new();
+    timeout(
+        HANDSHAKE_DEADLINE,
+        (&mut stream)
+            .take(MAX_PAYLOAD as u64 + 1)
+            .read_to_end(&mut text),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let pushed = if text.len() > MAX_PAYLOAD {
+        Err("送る内容が大きすぎます".to_owned())
+    } else {
+        match serde_json::from_slice::<PushRequest>(&text) {
+            Ok(request) => hub.push(request).await,
+            Err(_) => Err("要求の形式が正しくありません".to_owned()),
+        }
+    };
+    let reply = match pushed {
+        Ok(()) => json!({"ok": true}),
+        Err(error) => json!({"ok": false, "error": error}),
+    };
+    stream
+        .write_all(&serde_json::to_vec(&reply).ok()?)
+        .await
+        .ok()?;
+    stream.shutdown().await.ok()
+}
+
+/// Listens on `socket` and hands what comes to `hub`, until the task ends. A file left by a daemon that is gone is replaced; the socket is for this user only.
+#[cfg(unix)]
+fn serve_local(socket: &Path, hub: Arc<Hub>) -> Result<tokio::task::JoinHandle<()>, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let failed = |e: std::io::Error| format!("{} を作れません: {e}", socket.display());
+    let _ = std::fs::remove_file(socket);
+    let listener = tokio::net::UnixListener::bind(socket).map_err(failed)?;
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600)).map_err(failed)?;
+    let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    Ok(tokio::spawn(async move {
+        let mut tasks = JoinSet::new();
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            let Ok(slot) = slots.clone().try_acquire_owned() else {
+                continue;
+            };
+            let hub = hub.clone();
+            tasks.spawn(async move {
+                local_handle(stream, &hub).await;
+                drop(slot);
+            });
+            while tasks.try_join_next().is_some() {}
+        }
+    }))
+}
+
+#[cfg(not(unix))]
+fn serve_local(_: &Path, _: Arc<Hub>) -> Result<tokio::task::JoinHandle<()>, String> {
+    Err("unix のみ対応しています".to_owned())
+}
+
+/// What a `tsunagiai-mcp` of the PC calls to ask something of the app: the daemon pushes `request` to the app that is connected and gives its answer. An error when no daemon runs, no app is connected or the app refused.
+#[cfg(unix)]
+pub async fn push_to_daemon(config: &Path, request: &PushRequest) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let send = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    timeout(PUSH_WAIT + HANDSHAKE_DEADLINE, async {
+        let mut stream = tokio::net::UnixStream::connect(push_socket(config))
+            .await
+            .map_err(|_| "サーバーが動いていません".to_owned())?;
+        stream.write_all(&send).await.map_err(|e| e.to_string())?;
+        stream.shutdown().await.map_err(|e| e.to_string())?;
+        let mut text = Vec::new();
+        (&mut stream)
+            .take(MAX_PAYLOAD as u64)
+            .read_to_end(&mut text)
+            .await
+            .map_err(|e| e.to_string())?;
+        let reply: Value = serde_json::from_slice(&text)
+            .map_err(|_| "サーバーの答えの形式が正しくありません".to_owned())?;
+        if reply["ok"] == true {
+            Ok(())
+        } else {
+            Err(reply["error"]
+                .as_str()
+                .unwrap_or("サーバーが断りました")
+                .to_owned())
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err("時間内に答えませんでした".to_owned()))
+}
+
+#[cfg(not(unix))]
+pub async fn push_to_daemon(_: &Path, _: &PushRequest) -> Result<(), String> {
+    Err("unix のみ対応しています".to_owned())
 }
 
 // ---- the server ----
@@ -568,8 +829,8 @@ fn sealed_reply(channel: &mut Channel, body: &Value) -> Option<Vec<u8>> {
     channel.seal(&bytes).ok()
 }
 
-/// One connection, to its end. Anything that is not right (a frame that does not open included) ends it with no answer.
-async fn handle<S>(stream: S, setup: &Setup, stop: &Notify) -> Option<()>
+/// One connection, to its end. Anything that is not right (a frame that does not open included) ends it with no answer. A `subscribe` turns it into a connection of pushes (`push_loop`), which it stays until it ends.
+async fn handle<S>(stream: S, setup: &Setup, hub: &Hub, stop: &Notify) -> Option<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -600,8 +861,13 @@ where
         let reply = tokio::task::spawn_blocking(move || dispatch(&config, &version, &request))
             .await
             .ok()?;
+        // The connection is the one of the pushes from before the reply, so a push right after it is not lost.
+        let deliveries = reply.subscribe.then(|| hub.attach());
         let sealed = sealed_reply(&mut channel, &reply.body)?;
         socket.send(Message::Binary(sealed.into())).await.ok()?;
+        if let Some(deliveries) = deliveries {
+            return push_loop(&mut socket, &mut channel, deliveries).await;
+        }
         if reply.stop {
             stop.notify_one();
             return Some(());
@@ -609,14 +875,21 @@ where
     }
 }
 
-/// Serves `listener` until a client sends `stop`.
+/// Serves `listener` until a client sends `stop`, with a hub of its own.
 pub async fn serve(listener: TcpListener, setup: Setup) {
+    serve_with(listener, setup, Hub::new()).await;
+}
+
+/// `serve` with the hub that the pushes of the daemon go through. The connections end when this does.
+pub async fn serve_with(listener: TcpListener, setup: Setup, hub: Arc<Hub>) {
     let setup = Arc::new(setup);
     let stop = Arc::new(Notify::new());
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
             () = stop.notified() => return,
+            _ = connections.join_next(), if !connections.is_empty() => {}
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else {
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -625,9 +898,9 @@ pub async fn serve(listener: TcpListener, setup: Setup) {
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
                     continue;
                 };
-                let (setup, stop) = (setup.clone(), stop.clone());
-                tokio::spawn(async move {
-                    handle(stream, &setup, &stop).await;
+                let (setup, hub, stop) = (setup.clone(), hub.clone(), stop.clone());
+                connections.spawn(async move {
+                    handle(stream, &setup, &hub, &stop).await;
                     drop(slot);
                 });
             }
@@ -814,6 +1087,71 @@ impl Client {
     /// Stops the server.
     pub async fn stop(&mut self) -> Result<(), String> {
         self.call("stop", Value::Null).await.map(|_| ())
+    }
+
+    /// Turns the connection into one that the daemon pushes requests through (`Pushes::run`). The one that was subscribed before, if any, is closed by the daemon.
+    pub async fn subscribe(mut self) -> Result<Pushes, String> {
+        self.call("subscribe", Value::Null).await?;
+        Ok(Pushes {
+            socket: self.socket,
+            channel: self.channel,
+        })
+    }
+}
+
+/// What the app does with one push: Ok when it took the request, the reason when it refuses it (the daemon passes the reason to whoever asked).
+pub type PushHandler = Arc<
+    dyn Fn(PushRequest) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+>;
+
+/// The app's end of a connection of pushes.
+pub struct Pushes {
+    socket: WebSocketStream<TcpStream>,
+    channel: Channel,
+}
+
+impl Pushes {
+    /// Takes the pushes of the daemon one at a time, answers each with what `handler` says, and goes on until the connection ends: closed, silent for `PUSH_SILENCE` (the daemon's heartbeat did not come), or broken. The reason it ended.
+    pub async fn run(mut self, handler: &PushHandler) -> String {
+        const BAD: &str = "サーバーの答えの形式が正しくありません";
+        loop {
+            let frame = match timeout(PUSH_SILENCE, next_binary(&mut self.socket)).await {
+                Ok(Some(frame)) => frame,
+                Ok(None) => return "接続が閉じられました".to_owned(),
+                Err(_) => return "サーバーが黙っています".to_owned(),
+            };
+            let Some(plain) = self.channel.open(&frame) else {
+                return "サーバーの答えを開けませんでした".to_owned();
+            };
+            let Ok(message) = serde_json::from_slice::<Value>(&plain) else {
+                return BAD.to_owned();
+            };
+            if message["heartbeat"] == true {
+                continue;
+            }
+            let Ok(request) = serde_json::from_value::<PushRequest>(message["push"].clone()) else {
+                return BAD.to_owned();
+            };
+            let answer = match handler(request).await {
+                Ok(()) => json!({"ack": true}),
+                Err(error) => json!({"ack": false, "error": error}),
+            };
+            let sent = match serde_json::to_vec(&answer) {
+                Ok(bytes) => self.channel.seal(&bytes),
+                Err(e) => Err(e.to_string()),
+            };
+            let Ok(sealed) = sent else {
+                return BAD.to_owned();
+            };
+            if self
+                .socket
+                .send(Message::Binary(sealed.into()))
+                .await
+                .is_err()
+            {
+                return "接続が閉じられました".to_owned();
+            }
+        }
     }
 }
 
@@ -1074,6 +1412,7 @@ fn stop_running(dir: &Path, running: &Running) -> Result<(), String> {
         return Err("動いているサーバーを止められません".to_owned());
     }
     let _ = std::fs::remove_file(dir.join(PID_FILE));
+    let _ = std::fs::remove_file(dir.join(PUSH_SOCKET_FILE));
     Ok(())
 }
 
@@ -1146,8 +1485,10 @@ pub async fn run_daemon(config: &Path, bind: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("{bind}:{PORT} で待ち受けられません: {e}"))?;
     let pid = std::process::id();
+    let hub = Hub::new();
+    let local = serve_local(&push_socket(config), hub.clone())?;
     write_private(&dir, PID_FILE, &pid_line(pid, &version, bind))?;
-    serve(
+    serve_with(
         listener,
         Setup {
             config: config.to_owned(),
@@ -1155,15 +1496,18 @@ pub async fn run_daemon(config: &Path, bind: &str) -> Result<(), String> {
             client_public,
             version,
         },
+        hub,
     )
     .await;
-    // The file of a server that was replaced is another process's: leave it.
+    local.abort();
+    // The files of a server that was replaced are another process's: leave them.
     if std::fs::read_to_string(dir.join(PID_FILE))
         .ok()
         .and_then(|text| parse_pid_line(&text))
         .is_some_and(|r| r.pid as u32 == pid)
     {
         let _ = std::fs::remove_file(dir.join(PID_FILE));
+        let _ = std::fs::remove_file(dir.join(PUSH_SOCKET_FILE));
     }
     Ok(())
 }
@@ -1911,6 +2255,7 @@ mod tests {
 
     struct Served {
         config: PathBuf,
+        hub: Arc<Hub>,
         port: u16,
         client_secret: [u8; 32],
         server_public: [u8; 32],
@@ -1930,9 +2275,11 @@ mod tests {
             client_public,
             version: "9.9.9".to_owned(),
         };
-        let task = tokio::spawn(serve(listener, setup));
+        let hub = Hub::new();
+        let task = tokio::spawn(serve_with(listener, setup, hub.clone()));
         Served {
             config,
+            hub,
             port,
             client_secret,
             server_public,
@@ -2131,7 +2478,10 @@ mod tests {
             version: "9.9.9".to_owned(),
         };
         let (client_end, server_end) = tokio::io::duplex(64 * 1024);
-        let server = tokio::spawn(async move { handle(server_end, &setup, &Notify::new()).await });
+        let server =
+            tokio::spawn(
+                async move { handle(server_end, &setup, &Hub::new(), &Notify::new()).await },
+            );
         let (mut socket, _) =
             client_async_with_config("ws://x/".to_owned(), client_end, Some(socket_config()))
                 .await
@@ -2197,5 +2547,244 @@ mod tests {
         );
         served.task.abort();
         std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    // ---- the pushes ----
+
+    fn request(method: &str) -> PushRequest {
+        PushRequest {
+            method: method.to_owned(),
+            params: json!({"path": "a.html"}),
+        }
+    }
+
+    /// A handler that keeps what it is given and answers with `refuse` (a refusal) or Ok.
+    fn recording(seen: &Arc<Mutex<Vec<PushRequest>>>, refuse: Option<&'static str>) -> PushHandler {
+        let seen = seen.clone();
+        Arc::new(move |request| {
+            seen.lock().unwrap().push(request);
+            Box::pin(async move { refuse.map_or(Ok(()), |reason| Err(reason.to_owned())) })
+        })
+    }
+
+    async fn subscribed(served: &Served, handler: PushHandler) -> tokio::task::JoinHandle<String> {
+        let pushes = served.client().await.subscribe().await.unwrap();
+        tokio::spawn(async move { pushes.run(&handler).await })
+    }
+
+    #[tokio::test]
+    async fn a_request_of_the_daemon_is_pushed_to_the_app_and_its_answer_comes_back() {
+        let served = served("net-push").await;
+        // Nobody is connected yet.
+        assert_eq!(
+            served.hub.push(request("preview.open")).await,
+            Err(NOT_CONNECTED.to_owned())
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _app = subscribed(&served, recording(&seen, None)).await;
+        served.hub.push(request("preview.open")).await.unwrap();
+        served.hub.push(request("other")).await.unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [request("preview.open"), request("other")]
+        );
+        // The connection stays: a push after some heartbeats arrives too.
+        tokio::time::sleep(HEARTBEAT * 3).await;
+        served.hub.push(request("late")).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 3);
+        // The server still answers the calls of other connections.
+        assert_eq!(served.client().await.version().await.unwrap(), "9.9.9");
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_request_that_the_app_refuses_comes_back_with_its_reason() {
+        let served = served("net-push-refused").await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _app = subscribed(&served, recording(&seen, Some("html ではありません"))).await;
+        assert_eq!(
+            served.hub.push(request("preview.open")).await,
+            Err("html ではありません".to_owned())
+        );
+        // A refusal is the answer to one request and the connection goes on.
+        assert_eq!(
+            served.hub.push(request("preview.open")).await,
+            Err("html ではありません".to_owned())
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_newer_subscription_takes_the_place_of_the_one_before_it() {
+        let served = served("net-push-replace").await;
+        let (first_seen, second_seen) = (
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let first = subscribed(&served, recording(&first_seen, None)).await;
+        let _second = subscribed(&served, recording(&second_seen, None)).await;
+        assert_eq!(
+            timeout(Duration::from_secs(5), first)
+                .await
+                .unwrap()
+                .unwrap(),
+            "接続が閉じられました"
+        );
+        served.hub.push(request("preview.open")).await.unwrap();
+        assert!(first_seen.lock().unwrap().is_empty());
+        assert_eq!(second_seen.lock().unwrap().len(), 1);
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn another_key_gets_no_connection_of_pushes_and_takes_nothing_from_the_app() {
+        let served = served("net-push-keys").await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _app = subscribed(&served, recording(&seen, None)).await;
+        // A client that holds another static key is not answered, so it cannot subscribe.
+        let stranger = Client::connect("127.0.0.1", served.port, [3; 32], served.server_public)
+            .await
+            .unwrap();
+        assert!(stranger.subscribe().await.is_err());
+        // A server that does not hold the pinned key is not believed either.
+        let (_, other_public) = pair(5);
+        let believed =
+            Client::connect("127.0.0.1", served.port, served.client_secret, other_public)
+                .await
+                .unwrap();
+        assert!(believed.subscribe().await.is_err());
+        // Neither displaced the app: its connection still takes the pushes.
+        served.hub.push(request("preview.open")).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_does_not_answer_a_push_is_cut_and_the_push_fails() {
+        let served = served("net-push-silent").await;
+        let (mut socket, mut channel) = raw(&served).await;
+        let subscribe = channel
+            .seal(&serde_json::to_vec(&json!({"method": "subscribe"})).unwrap())
+            .unwrap();
+        socket
+            .send(Message::Binary(subscribe.into()))
+            .await
+            .unwrap();
+        let reply = channel
+            .open(&next_binary(&mut socket).await.unwrap())
+            .unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&reply).unwrap()["ok"], true);
+        // The daemon's frames while there is nothing to push are heartbeats.
+        let frame = next_binary(&mut socket).await.unwrap();
+        let beat: Value = serde_json::from_slice(&channel.open(&frame).unwrap()).unwrap();
+        assert_eq!(beat, json!({"heartbeat": true}));
+        // A push that is not answered ends the connection and fails.
+        let hub = served.hub.clone();
+        let pushed = tokio::spawn(async move { hub.push(request("preview.open")).await });
+        let mut pushes = 0;
+        while let Some(frame) = next_binary(&mut socket).await {
+            let message: Value = serde_json::from_slice(&channel.open(&frame).unwrap()).unwrap();
+            if message["push"]["method"] == "preview.open" {
+                pushes += 1;
+            }
+        }
+        assert_eq!(pushes, 1);
+        let error = pushed.await.unwrap().unwrap_err();
+        assert!(error.contains("答えませんでした"), "{error}");
+        // The connection is gone, so nobody is connected.
+        assert_eq!(
+            served.hub.push(request("preview.open")).await,
+            Err(NOT_CONNECTED.to_owned())
+        );
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_request_of_the_pcs_mcp_reaches_the_app_through_the_socket_of_the_daemon() {
+        use std::os::unix::fs::PermissionsExt;
+        // A short path: the name of a socket has a limit of about a hundred bytes.
+        let config = std::env::temp_dir().join(format!("tsg{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&config);
+        private_dir(&remote_dir(&config)).unwrap();
+        let hub = Hub::new();
+        let local = serve_local(&push_socket(&config), hub.clone()).unwrap();
+        assert_eq!(
+            std::fs::metadata(push_socket(&config))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        // No app is connected.
+        assert_eq!(
+            push_to_daemon(&config, &request("preview.open")).await,
+            Err(NOT_CONNECTED.to_owned())
+        );
+        // The app subscribes on a server that shares the hub.
+        let (client_secret, client_public) = pair(1);
+        let (server_secret, server_public) = pair(2);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let setup = Setup {
+            config: config.clone(),
+            secret: server_secret,
+            client_public,
+            version: "9.9.9".to_owned(),
+        };
+        let server = tokio::spawn(serve_with(listener, setup, hub));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let pushes = Client::connect("127.0.0.1", port, client_secret, server_public)
+            .await
+            .unwrap()
+            .subscribe()
+            .await
+            .unwrap();
+        let handler = recording(&seen, None);
+        let app = tokio::spawn(async move { pushes.run(&handler).await });
+        push_to_daemon(&config, &request("preview.open"))
+            .await
+            .unwrap();
+        assert_eq!(*seen.lock().unwrap(), [request("preview.open")]);
+        // Something that is not a request is refused, and nothing reaches the app.
+        let refused = {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut stream = tokio::net::UnixStream::connect(push_socket(&config))
+                .await
+                .unwrap();
+            stream.write_all(b"not json").await.unwrap();
+            stream.shutdown().await.unwrap();
+            let mut text = String::new();
+            stream.read_to_string(&mut text).await.unwrap();
+            serde_json::from_str::<Value>(&text).unwrap()
+        };
+        assert_eq!(refused["ok"], false);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        // A file left where the socket goes is replaced, and a daemon that has gone leaves nothing to push to.
+        local.abort();
+        let _ = local.await;
+        std::fs::remove_file(push_socket(&config)).unwrap();
+        std::fs::write(push_socket(&config), "stale").unwrap();
+        let again = serve_local(&push_socket(&config), Hub::new()).unwrap();
+        assert_eq!(
+            push_to_daemon(&config, &request("preview.open")).await,
+            Err(NOT_CONNECTED.to_owned())
+        );
+        again.abort();
+        std::fs::remove_file(push_socket(&config)).unwrap();
+        assert_eq!(
+            push_to_daemon(&config, &request("preview.open")).await,
+            Err("サーバーが動いていません".to_owned())
+        );
+        app.abort();
+        server.abort();
+        std::fs::remove_dir_all(&config).unwrap();
     }
 }
