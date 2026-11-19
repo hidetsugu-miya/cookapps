@@ -1703,6 +1703,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #mail-handoff { min-width: 400px; }
 #todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
 #todo-claude { flex: 1; min-height: 0; }
+/* The area of the terminal fills what is left of the pane before the process starts, so that pressing it can start it (T-7). */
+#todo-claude-term { flex: 1; min-height: 0; }
 /* A-9: on the Todo screen the pane follows the detail, under the comments, in the scroll of #todo-main: it is as high as its content, and the terminal of a session has a height of its own (the pane has none to fill). */
 #todo-handoff { flex: none; max-width: 980px; margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 #todo-handoff .ho-main, #todo-handoff .ho-form.ho-fill { flex: none; }
