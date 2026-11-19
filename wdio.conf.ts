@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { resolve } from "node:path";
 
@@ -57,7 +57,7 @@ if (only !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(only)) throw new Error(`E
 const onlySpec = only === undefined ? undefined : `./e2e/specs/${only}.e2e.ts`;
 if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec} does not exist`);
 
-// `E2E_MAX_INSTANCES` sets how many apps start and run at once, for a machine with fewer cores than this one (`.github/workflows/e2e.yml` sets 2); unset, six start. The service starts one app for each capability, so a number under six makes that many capabilities, not fewer workers over six apps.
+// `E2E_MAX_INSTANCES` sets how many apps start and run at once, for a machine with fewer cores than this one (`.github/workflows/e2e.yml` sets 2 and 3); unset, six start. The service starts one app for each capability, so a number under six makes that many capabilities, not fewer workers over six apps.
 // The first N - 1 capabilities name their specs, and the last one excludes them, as in the six. The named specs are spread by their seconds in the list above (the 16 specs of the table, largest first, each into the app with the least seconds so far; the last app starts with the 101 seconds of settings, sidebar, orca-peek and claude-code, which are not in the table and always run in the last app, as does a new spec). With 1 every spec runs in one app.
 // A number of six or more changes nothing but `maxInstances`.
 const maxInstancesEnv = process.env.E2E_MAX_INSTANCES;
@@ -82,29 +82,66 @@ const specSeconds: Record<string, number> = {
   "todo-claude": 6,
 };
 const unnamedSeconds = 101;
-const spreadSpecs = (apps: number) => {
-  const bins = Array.from({ length: apps }, (_, i) => ({ specs: [] as string[], seconds: i === apps - 1 ? unnamedSeconds : 0 }));
-  for (const [name, seconds] of Object.entries(specSeconds).sort((a, b) => b[1] - a[1])) {
+const specPath = (name: string) => `./e2e/specs/${name}.e2e.ts`;
+// Each spec, largest first, goes into the bin with the least seconds so far; the last bin starts with `lastStart` seconds (the specs of no table that run there).
+const spread = (entries: [string, number][], count: number, lastStart: number) => {
+  const bins = Array.from({ length: count }, (_, i) => ({ specs: [] as string[], seconds: i === count - 1 ? lastStart : 0 }));
+  for (const [name, seconds] of [...entries].sort((a, b) => b[1] - a[1])) {
     const bin = bins.reduce((least, bin) => (bin.seconds < least.seconds ? bin : least));
-    bin.specs.push(`./e2e/specs/${name}.e2e.ts`);
+    bin.specs.push(name);
     bin.seconds += seconds;
   }
-  return bins.slice(0, -1).map((bin) => bin.specs);
+  return bins;
 };
+const spreadSpecs = (apps: number) =>
+  spread(Object.entries(specSeconds), apps, unnamedSeconds)
+    .slice(0, -1)
+    .map((bin) => bin.specs.map(specPath));
 const groups = maxInstances < namedSpecs.length + 1 ? spreadSpecs(maxInstances) : namedSpecs;
+
+// `E2E_SHARD={i}/{k}` (1 <= i <= k, for example `2/3`) runs only the i-th of k sets of specs, so that k runners each take a share (`.github/workflows/e2e.yml` runs 3 of them). Unset, every spec runs, as before.
+// The sets are made as the apps are: the 16 specs of the table are spread over k sets by their seconds, and the last set starts with the 101 seconds of the specs that are not in the table (every other file of `e2e/specs/`, a new one included), which it also runs.
+// Inside the set, `E2E_MAX_INSTANCES` apps (six when unset) share the specs in the same way, the last one starting with those 101 seconds when the set has them. Every capability names its specs (nothing is excluded), so each spec of the set runs once, and an app that would get no spec is not made.
+// It cannot be used with `E2E_ONLY`, which runs one spec in one app whatever the set: the two are refused together.
+const shardEnv = process.env.E2E_SHARD;
+const shardMatch = shardEnv === undefined ? null : /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(shardEnv);
+if (shardEnv !== undefined && (shardMatch === null || Number(shardMatch[1]) > Number(shardMatch[2]))) throw new Error(`E2E_SHARD must be {i}/{k} with 1 <= i <= k, such as "2/3", got "${shardEnv}"`);
+if (shardEnv !== undefined && only !== undefined) throw new Error("E2E_SHARD and E2E_ONLY cannot be set together: E2E_ONLY runs one spec in one app");
+const shardCapabilities = (index: number, count: number) => {
+  const last = index === count;
+  const unnamed = last
+    ? readdirSync("e2e/specs")
+        .filter((file) => file.endsWith(".e2e.ts"))
+        .map((file) => file.slice(0, -".e2e.ts".length))
+        .filter((name) => !Object.hasOwn(specSeconds, name))
+    : [];
+  const mine = spread(Object.entries(specSeconds), count, unnamedSeconds)[index - 1].specs;
+  const apps = spread(
+    mine.map((name): [string, number] => [name, specSeconds[name]]),
+    maxInstances,
+    last ? unnamedSeconds : 0,
+  );
+  apps[apps.length - 1].specs.push(...unnamed);
+  return apps
+    .filter((app) => app.specs.length > 0)
+    .map((app) => appCapability({ "wdio:specs": app.specs.map(specPath) }));
+};
+const capabilities =
+  onlySpec !== undefined
+    ? [appCapability({ "wdio:specs": [onlySpec] })]
+    : shardMatch !== null
+      ? shardCapabilities(Number(shardMatch[1]), Number(shardMatch[2]))
+      : [
+          ...groups.map((specs) => appCapability({ "wdio:specs": specs })),
+          appCapability({ "wdio:exclude": groups.flat() }),
+        ];
 
 export const config = {
   runner: "local",
   specs: ["./e2e/specs/**/*.e2e.ts"],
   maxInstances,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
-  capabilities:
-    onlySpec !== undefined
-      ? [appCapability({ "wdio:specs": [onlySpec] })]
-      : [
-          ...groups.map((specs) => appCapability({ "wdio:specs": specs })),
-          appCapability({ "wdio:exclude": groups.flat() }),
-        ],
+  capabilities,
   framework: "mocha",
   reporters: ["spec"],
   // A `browser.execute` that loses its result costs the 3 s script timeout plus a retry, which used up the default 5 s of one `waitUntil`; 15 s fits that and stays far under the test's 60 s.
