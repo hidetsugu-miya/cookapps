@@ -1285,7 +1285,19 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-session-subagents, .orca-session-shell { display: inline-flex; align-items: center; gap: 3px; }
 .orca-session-subagents { color: var(--effort-high); }
 .orca-session-shell { color: var(--muted); }
-.orca-session-counts svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.orca-session-counts svg, .orca-work svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* A-8: the arrow at the left of a session that has work in it, and its breakdown under the row: a line for each subagent (its name and its task) and for the command, each with the icon of its kind. */
+.orca-sess { position: relative; }
+.orca-session-arrow { position: absolute; left: 4px; top: 4px; width: 24px; height: 24px; padding: 0; border-radius: 8px; }
+.orca-session-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.orca-session-arrow[aria-expanded="true"] svg { transform: rotate(90deg); }
+.orca-session-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-works { margin: 0 0 1px 32px; }
+.orca-work { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 10px; font-size: calc(12px * var(--fs)); line-height: 18px; }
+.orca-work-agent svg { color: var(--effort-high); }
+.orca-work-shell svg { color: var(--muted); }
+.orca-work-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.orca-work-task { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 /* A-33: the name of the saved environment a project of the list is in (not a session), at the right end of its row. */
 .orca-env { flex: none; margin-left: auto; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 400; line-height: 16px; }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }

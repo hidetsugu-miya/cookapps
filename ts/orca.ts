@@ -13,6 +13,7 @@ import type { OrcaLocal } from "./bindings/OrcaLocal";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
 import type { OrcaRow } from "./bindings/OrcaRow";
+import type { OrcaSubagent } from "./bindings/OrcaSubagent";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
 import type { OrcaTerminal } from "./bindings/OrcaTerminal";
@@ -100,6 +101,8 @@ let cursor: string | null = null;
 let projectKey: string | null = null;
 // The projects open in the list (their sessions under them), by key, kept in memory only. Each has its own state: selecting a project opens it, its arrow opens and closes it, and a project that starts to work opens again.
 const opened = new Set<string>();
+// The sessions whose breakdown (the subagents and the command at work) is open under their row, by tab id, kept in memory only. A session starts closed, and one that left the list is forgotten.
+const worksOpen = new Set<string>();
 // The projects with a working session, in the order they entered that group. A read does not reorder them (the project list of the read is newest first by activity, which moves with the work); one that starts to work is put first, one that stops leaves the group.
 let workingOrder: string[] = [];
 // The sessions that worked at the last read that worked, by project (the pane keys of the rows): a project opens when a read has one that was not here.
@@ -214,6 +217,8 @@ interface Tab {
   latest: string | null;
   // How many subagents of a Claude session are at work, which its row in the list shows at its right end (the tab shows none); 0 for the rest.
   subagents: number;
+  // The subagents at work with their names and tasks, which the breakdown of its row in the list shows (the tab shows none); empty for the rest.
+  agents: OrcaSubagent[];
   // The command of the shell a Claude session is running (empty when Orca gave none), which its row in the list shows as a badge left of the subagents' (the tab shows none); null when it runs none, and for the rest.
   shell: string | null;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
@@ -269,25 +274,25 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target) ?? gitWorktrees.get(gitKey(f.target, f.path))?.label;
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, shell: null, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, agents: [], shell: null, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.path))?.label;
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, shell: null, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   for (const d of definitionsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.query.path)?.where ?? mix.worktrees.find((w) => w.path === d.query.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.query.path))?.label;
-    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, shell: null, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -378,6 +383,40 @@ function countNode(className: string, icon: string, n: number, label: string) {
   return badge;
 }
 
+// A line of the breakdown of a session: the icon of its kind, then the name and the task of a subagent, or the command. Everything comes from outside, so it is text and never markup.
+function workNode(className: string, icon: string, text: string, task: string | null = null) {
+  const line = tag("div", `orca-work ${className}`);
+  line.innerHTML = icon;
+  const name = tag("span", "orca-work-name", text);
+  name.title = task === null ? text : `${text}: ${task}`;
+  line.append(name);
+  if (task !== null) line.append(tag("span", "orca-work-task", task));
+  return line;
+}
+
+// A session of the open project and, when it has work in it, the arrow at its left and the breakdown under it while the arrow is open.
+function sessionWithWorks(t: Tab, key: string) {
+  const wrap = tag("div", "orca-sess");
+  wrap.append(sessionNode(t, key));
+  if (t.agents.length === 0 && t.shell === null) return wrap;
+  const open = worksOpen.has(t.id);
+  const arrow = tag("button", "icon-btn orca-session-arrow");
+  arrow.type = "button";
+  arrow.dataset.key = `works:${t.id}`;
+  arrow.setAttribute("aria-expanded", String(open));
+  arrow.setAttribute("aria-label", open ? "作業の内訳を閉じる" : "作業の内訳を開く");
+  arrow.innerHTML = CHEVRON_SVG;
+  arrow.onclick = () => toggleWorks(t.id);
+  wrap.append(arrow);
+  if (open) {
+    const list = tag("div", "orca-works");
+    list.append(...t.agents.map((a) => workNode("orca-work-agent", ROBOT_SVG, a.name === "" ? "サブエージェント" : a.name, a.task ?? null)));
+    if (t.shell !== null) list.append(workNode("orca-work-shell", PLAY_SVG, t.shell === "" ? "シェルを実行中" : t.shell));
+    wrap.append(list);
+  }
+  return wrap;
+}
+
 // A session of the open project: its status icon and title at the left, and at the right end an icon and a number for each kind of work in it (none for a kind that is 0). It is selected when it is the tab selected.
 function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
@@ -441,7 +480,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, environment:
   wrap.append(arrow);
   if (open) {
     const list = tag("div", "orca-sessions");
-    list.append(...tabs.map((t) => sessionNode(t, key)));
+    list.append(...tabs.map((t) => sessionWithWorks(t, key)));
     wrap.append(list);
   }
   return wrap;
@@ -491,6 +530,8 @@ function trackWorking() {
   workingIds = now;
   const known = new Set(mix.projects.map((p) => p.key));
   for (const k of opened) if (!known.has(k)) opened.delete(k);
+  const live = new Set(mix.rows.flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])));
+  for (const id of worksOpen) if (!live.has(id)) worksOpen.delete(id);
 }
 
 // The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them).
@@ -540,7 +581,7 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, listedTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.shell, t.environment])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.latest, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const hidden = hiddenSessions();
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, shownSessions(p, hidden), placeOf(p)];
@@ -642,7 +683,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine.map(({ latest, subagents, shell, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
+    key: JSON.stringify([mine.map(({ latest, subagents, agents, shell, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
@@ -1180,6 +1221,12 @@ function selectProject(key: string) {
 // The arrow of a project: opens or closes its sessions in the list, and only that (the selection, the tabs and the work pane stay as they are).
 function toggleProject(key: string) {
   if (!opened.delete(key)) opened.add(key);
+  draw();
+}
+
+// The arrow of a session: opens or closes its breakdown, and only that.
+function toggleWorks(id: string) {
+  if (!worksOpen.delete(id)) worksOpen.add(id);
   draw();
 }
 
