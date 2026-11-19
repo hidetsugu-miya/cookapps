@@ -99,9 +99,9 @@ export function closeMonthPop(restoreFocus = false) {
 
 function openMonthPop() {
   const pop = $("cal-month-pop");
-  const [bar, main, title] = [$("cal-bar"), $("cal-main"), $("cal-title")];
+  const [bar, screen, title] = [$("cal-bar"), $("calendar"), $("cal-title")];
   pop.style.top = `${bar.offsetHeight}px`;
-  pop.style.left = `${title.getBoundingClientRect().left - main.getBoundingClientRect().left}px`;
+  pop.style.left = `${title.getBoundingClientRect().left - screen.getBoundingClientRect().left}px`;
   pop.hidden = false;
   title.setAttribute("aria-expanded", "true");
 }

@@ -271,16 +271,27 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .images-bar .text-btn:disabled { opacity: .4; cursor: default; }
 
 /* Calendar: --hour is set from HOUR_PX in ts/calendar.ts. */
-#calendar { flex: 1; min-height: 0; display: flex; --gutter: 56px; }
+#calendar { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
+/* The panel and the week sit side by side under the bar, which runs across the whole width (C-1). */
+#cal-frame { flex: 1; min-height: 0; display: flex; }
 #cal-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* C-4: the panel that chooses the calendars to show: a column like #slack-side, 248px wide. */
 #cal-side { flex: none; width: 248px; box-sizing: border-box; display: flex; flex-direction: column; background: var(--bar); border-right: 1px solid var(--line); }
-/* C-1, C-4: the bar of the week and the heading row of the panel are the tinted band of the Todo header (#todo-body > header), of the same height, so that the two lines meet. */
-#cal-side-bar, #cal-bar { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; background: var(--soft); border-bottom: 2px solid var(--accent); }
-#cal-side-bar { padding: 0 8px 0 16px; }
-#cal-side-bar .icon-btn:hover:not(:disabled), #cal-bar .icon-btn:hover:not(:disabled) { background: var(--hover); }
-#cal-side-head { margin: 0; font-size: calc(14px * var(--fs)); font-weight: 600; }
+/* C-1: the bar is the tinted band of the Todo header (#todo-body > header), across the whole width over the panel and the week. What goes at its right end takes margin-left: auto. */
+#cal-bar { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; gap: 4px; padding: 0 16px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+#cal-bar .icon-btn:hover:not(:disabled) { background: var(--hover); }
 #cal-bar .list-toggle { margin-right: 8px; }
+/* C-6: the ✳ at the right end of the bar, filled while the pane is open; the pane is a column at the right of the week, under the bar, a share of the frame between 30% and 45% (the divider of ts/split.ts holds the same range). */
+/* C-6 (#1063): the chip of the candidates in the bar, and the frames in the week: dashed, in --dot, and deaf to the pointer, so a press on the free place under one still makes an event (C-5). */
+#cal-slots-chip { margin-left: 8px; }
+#cal-slots-clear { margin: 0; padding: 0 2px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.cal-slot { position: absolute; z-index: 1; left: 1px; right: 1px; top: calc(var(--hour) * var(--s) / 60); height: calc(var(--hour) * var(--d) / 60 - 1px); box-sizing: border-box; overflow: hidden; border: 2px dashed var(--dot); border-radius: 4px; background: color-mix(in srgb, var(--dot) 7%, transparent); pointer-events: none; }
+.cal-slot-label { padding: 1px 4px; color: var(--dot); font-size: calc(11px * var(--fs)); font-weight: 600; line-height: 1.3; white-space: nowrap; }
+#cal-bar-claude { margin-left: auto; color: var(--claude); }
+#cal-bar-claude[aria-pressed="true"], #cal-bar-claude[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
+#cal-claude { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
+#cal-claude .chat-head { box-sizing: border-box; height: 48px; }
+#cal-claude-term { flex: 1; min-height: 0; }
 #cal-side-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 12px; }
 #cal-month { flex: none; padding: 8px 8px 10px; border-bottom: 1px solid var(--line); }
 .cal-side-account { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin: 14px 0 2px; padding: 0 8px; box-sizing: border-box; border: 0; border-radius: 8px; background: none; color: var(--ink-soft); font: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; text-align: left; cursor: pointer; }
@@ -300,8 +311,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .cal-side-item input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--c); cursor: pointer; }
 .cal-side-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .cal-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#cal-bar { gap: 4px; padding: 0 16px; }
-#cal-heading { margin: 0 0 0 8px; font-size: calc(20px * var(--fs)); font-weight: 600; }
+#cal-heading { flex: 0 1 auto; margin: 0 0 0 8px; font-size: calc(20px * var(--fs)); font-weight: 600; }
 #cal-title { padding: 2px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
 #cal-title:hover, #cal-title[aria-expanded="true"] { background: var(--hover); }
 #cal-title:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

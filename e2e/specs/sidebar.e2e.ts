@@ -258,7 +258,7 @@ describe("sidebar", () => {
   });
 });
 
-// A-23: only the screens with a list at the side (Todo, Orca) and the calendar's panel (C-4) have the button that closes it.
+// A-23: only the screens with a list at the side (Todo, Orca) and the calendar's bar (C-1, C-4) have the button that closes it.
 describe("sidebar: the button that closes a list (A-23)", () => {
   const shown = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".list-toggle")].filter((b) => b.offsetParent !== null).length);
 
@@ -271,7 +271,7 @@ describe("sidebar: the button that closes a list (A-23)", () => {
     }
     await $("#nav-calendar").click();
     await expect($("#nav-calendar")).toHaveAttribute("aria-current", "page");
-    await expect($("#cal-side-toggle")).toBeDisplayed();
+    await expect($("#cal-bar-toggle")).toBeDisplayed();
     expect(await shown()).toBe(1);
     // Todo has one, so the count above is not a count of nothing.
     await $("#nav-todo").click();
