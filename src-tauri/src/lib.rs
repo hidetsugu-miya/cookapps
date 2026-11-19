@@ -270,6 +270,9 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             start_badge_clock(app.handle().clone());
             tauri::async_runtime::spawn(slack::socket::start_all(app.handle().clone()));
+            // The connection of pushes to the server of each saved environment's PC (A-37, #983); E2E has no Orca to list them.
+            #[cfg(not(feature = "e2e"))]
+            formation_remote::start_pushes(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

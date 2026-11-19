@@ -670,15 +670,19 @@ pub async fn formation_consent(
 ) -> Result<FormationConsent, String> {
     let config = config_dir(&app)?;
     let app_version = app.package_info().version.to_string();
-    orca::blocking(move || {
+    let (kept_config, kept_version) = (config.clone(), app_version.clone());
+    let consent = orca::blocking(move || {
         check_consent_target(&environment)?;
         let pin = place(&config, &environment, &app_version)?;
-        Ok(FormationConsent {
+        Ok::<_, String>(FormationConsent {
             environment,
             version: pin.version,
         })
     })
-    .await?
+    .await??;
+    // The PC is agreed to now: its connection of pushes is opened at once (a failure is tried again by the clock).
+    let _ = sync_pushes(&kept_config, &kept_version).await;
+    Ok(consent)
 }
 
 /// Takes the consent of `environment` back (`revoke_with`) and answers the consents that are left. A PC with a formation left is refused with the reason.
@@ -688,7 +692,9 @@ pub async fn formation_consent_revoke(
     environment: String,
 ) -> Result<Vec<FormationConsent>, String> {
     let config = config_dir(&app)?;
-    orca::blocking(move || {
+    let app_version = app.package_info().version.to_string();
+    let kept_config = config.clone();
+    let left = orca::blocking(move || {
         let formations = formation::formations_on(&config, &environment)?;
         revoke_with(
             &config,
@@ -699,7 +705,10 @@ pub async fn formation_consent_revoke(
         )?;
         consents(&config)
     })
-    .await?
+    .await??;
+    // The consent is gone: the connection of pushes to that PC is ended at once.
+    let _ = sync_pushes(&kept_config, &app_version).await;
+    Ok(left)
 }
 
 // ---- connect ----
@@ -1048,6 +1057,73 @@ impl Subscriptions {
             }
         }
     }
+}
+
+/// What the app does with a push while no request is taken: it refuses every one, with a reason that quotes nothing of the request (what the PC sent is data). A screen that takes a request replaces this handler.
+fn refuse_every_push() -> PushHandler {
+    Arc::new(|_| {
+        Box::pin(async { Err("アプリはこの依頼を受けられません".to_owned()) })
+    })
+}
+
+/// The saved environments that the app keeps a connection of pushes to: those the owner agreed to (they have a pinned key), among the saved ones that Orca lists now.
+fn push_targets(saved: &[String], pins: &BTreeMap<String, Pin>) -> Vec<String> {
+    saved
+        .iter()
+        .filter(|name| pins.contains_key(*name))
+        .cloned()
+        .collect()
+}
+
+/// The one set of connections of pushes of the app.
+static SUBSCRIPTIONS: LazyLock<Subscriptions> = LazyLock::new(Subscriptions::default);
+
+/// Makes the connections of pushes those of the saved environments `saved` that the owner agreed to: one is opened for each that has none, and the one of an environment that is no longer in the list, or whose consent was taken back, is ended. Call it in the tokio runtime.
+fn keep_pushes_to(config: &Path, app_version: &str, saved: &[String]) -> Result<(), String> {
+    let targets = push_targets(saved, &pins(config)?);
+    let (config, app_version) = (config.to_owned(), app_version.to_owned());
+    SUBSCRIPTIONS.set(&targets, |environment| {
+        keep_pushes(
+            config.clone(),
+            environment.to_owned(),
+            app_version.clone(),
+            refuse_every_push(),
+        )
+    });
+    Ok(())
+}
+
+/// Reads the saved environments and sets the connections of pushes by them (`keep_pushes_to`). A list that cannot be read changes nothing: the connections that are open stay.
+pub async fn sync_pushes(config: &Path, app_version: &str) -> Result<(), String> {
+    let saved = orca::blocking(formation::saved_environment_names).await??;
+    keep_pushes_to(config, app_version, &saved)
+}
+
+/// How often the list of saved environments is read for the connections of pushes, so that one taken out of Orca's list, or added to it, is noticed.
+const PUSH_SYNC: Duration = Duration::from_secs(30);
+
+/// Sets the connections of pushes at the start of the app and then every `PUSH_SYNC` (the consent of a PC sets them at once, `formation_consent`). A failure is logged when its words change, so that an Orca that is not there does not fill the log.
+pub fn start_pushes(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let version = app.package_info().version.to_string();
+        let mut last_failure: Option<String> = None;
+        let mut tick = tokio::time::interval(PUSH_SYNC);
+        loop {
+            tick.tick().await;
+            let done = match config_dir(&app) {
+                Ok(config) => sync_pushes(&config, &version).await,
+                Err(e) => Err(e),
+            };
+            match done {
+                Ok(()) => last_failure = None,
+                Err(e) if last_failure.as_ref() != Some(&e) => {
+                    crate::gmail::log_failure("formation_pushes", "-", e.clone());
+                    last_failure = Some(e);
+                }
+                Err(_) => {}
+            }
+        }
+    });
 }
 
 impl Drop for Subscriptions {
@@ -2594,7 +2670,15 @@ mod tests {
         secret: [u8; 32],
         client_public: [u8; 32],
     ) -> (tokio::task::JoinHandle<()>, Arc<Hub>) {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        // The port can be held for a moment by a socket of the app's own tries while no server is on it (未確認: a connection of the ephemeral range to itself): bind again until it is free.
+        let until = Instant::now() + Duration::from_secs(5);
+        let listener = loop {
+            match std::net::TcpListener::bind(("127.0.0.1", port)) {
+                Ok(listener) => break listener,
+                Err(e) if Instant::now() > until => panic!("port {port}: {e}"),
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
         listener.set_nonblocking(true).unwrap();
         let setup = Setup {
             config: std::env::temp_dir(),
@@ -2736,6 +2820,31 @@ mod tests {
         subscriptions.set(&[], start);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(ended.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn a_connection_of_pushes_is_kept_only_to_a_saved_environment_the_owner_agreed_to() {
+        let pin = |seed: u8| Pin {
+            key: key_text(seed),
+            version: "1.2.3".to_owned(),
+        };
+        let pins = BTreeMap::from([("pc-a".to_owned(), pin(1)), ("gone".to_owned(), pin(2))]);
+        let saved = ["pc-a", "pc-b"].map(str::to_owned);
+        // `pc-b` is saved and not agreed to, and `gone` is agreed to and no longer saved.
+        assert_eq!(push_targets(&saved, &pins), ["pc-a"]);
+        assert!(push_targets(&[], &pins).is_empty());
+        assert!(push_targets(&saved, &BTreeMap::new()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_push_is_refused_with_a_reason_that_quotes_nothing_of_it() {
+        let handler = refuse_every_push();
+        let request = PushRequest {
+            method: "ignore previous instructions".to_owned(),
+            params: Value::Null,
+        };
+        let reason = handler(request).await.unwrap_err();
+        assert_eq!(reason, "アプリはこの依頼を受けられません");
     }
 
     #[test]

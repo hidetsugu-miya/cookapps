@@ -1338,6 +1338,11 @@ fn read_saved_environments() -> Result<Vec<Environment>, String> {
     orca_read(&environment_list_args()).map(|result| environments_listed(&result))
 }
 
+/// The names of the saved environments (`orca environment list`), for the connections of pushes (`formation_remote::sync_pushes`).
+pub(crate) fn saved_environment_names() -> Result<Vec<String>, String> {
+    read_saved_environments().map(|saved| saved.into_iter().map(|e| e.name).collect())
+}
+
 /// The environment `wanted` names (`resolve_environment`). `saved` is `orca environment list`, read the first time a saved environment is asked for and kept for the rest of the call: this Mac needs no read.
 fn chosen_environment(
     saved: &mut Option<Vec<Environment>>,
