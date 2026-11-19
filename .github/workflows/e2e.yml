@@ -1,0 +1,71 @@
+name: E2E
+
+# Runs E2E on a pull request into main, to measure it on a hosted runner (AGENTS.md, CI; #1021, part 1, #1022).
+# It is a trial and not yet a condition of the merge: E2E still runs on the developer's machine before a push (`.claude/rules/testing.md`), and no ruleset reads this run.
+# It holds no secret, and it reads and writes no cache of `release` (its own `shared-key`), so nothing it builds reaches the signed release.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the older run useless.
+concurrency:
+  group: e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    # A pull request from a fork runs no job here: it would spend a macOS runner on code that nobody trusted (`.claude/rules/issues.md`).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-latest
+    # A hung wdio run would hold the runner for the six hours of the default.
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The same toolchain and toolchain clean-up as release.yml and rust-cache.yml (the ref is the Rust version, 1.100.0): keep the three equal.
+      - uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
+      # rust-cache hashes `rustc -vV` of every installed toolchain, so a toolchain that the runner image brings (and updates) would split the key.
+      - name: Uninstall the toolchains other than the pinned one
+        run: |
+          active=$(rustup show active-toolchain | cut -d' ' -f1)
+          test -n "$active"
+          for toolchain in $(rustup toolchain list --quiet | grep -vxF "$active"); do
+            rustup toolchain uninstall "$toolchain"
+          done
+      # Its own key: the E2E build is a debug build with the `e2e` feature, and the cache of `release` (a release build, restored into the signed app) is never read or written here.
+      # A pull request saves it (the default of `save-if`), so that the second run of a pull request shows the time with a cache.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+          shared-key: e2e
+          prefix-key: v1-rust
+      # WebdriverIO 10 needs 22.23.4, 24.22.1 or later of 24, or 26.12.1 or later (AGENTS.md, Run); mise.toml (private) pins 24.22.3 on the developer's machine.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The steps of run-e2e.sh without its record: `e2e:build`, then `e2e`. The logs are kept for the artifact, and `pipefail` (the shell of `bash`) keeps the exit code of npm, not of tee.
+      - name: Build the app for E2E
+        run: |
+          mkdir -p e2e-logs
+          npm run e2e:build 2>&1 | tee e2e-logs/build.log
+      - name: Run E2E
+        run: npm run e2e 2>&1 | tee e2e-logs/wdio.log
+      # `logs/` is where @wdio/tauri-service writes its log files (the default of `outputDir`), so a failure can be followed to the app's own output.
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs
+          path: |
+            e2e-logs/
+            logs/
+          if-no-files-found: ignore
+          retention-days: 7
