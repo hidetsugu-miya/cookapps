@@ -2090,6 +2090,11 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-open-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .database-open-item .database-open-close { flex: none; width: 22px; height: 22px; margin: 0 4px 0 -6px; color: inherit; }
 .database-open-item .database-open-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* D-9: the plus at the right end of the strip, which opens a query. */
+.database-open-add { flex: none; align-self: center; width: 28px; height: 28px; margin: 0 0 2px 4px; color: var(--ink-soft); }
+.database-open-add:hover:not(:disabled) { background: var(--hover); }
+.database-open-add:disabled { opacity: .4; cursor: default; }
+.database-open-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 #database-work { flex: 1; min-height: 0; overflow: auto; }
 .database-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 10px 0 calc(6px + var(--depth, 0) * 16px); border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .database-btn:hover { background: var(--hover); }
@@ -2146,6 +2151,15 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-grid th { position: sticky; overflow: hidden; text-overflow: ellipsis; top: 0; background: var(--surface); border-top: 1px solid var(--line); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; }
 .database-sql-text { flex: none; box-sizing: border-box; width: 100%; min-height: 96px; resize: vertical; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); line-height: 1.5; }
 .database-sql-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
+/* D-9: a query tab: the selects of the connection and the database above the field, and between the field and the result a line that is dragged to change the height of the field (D-6). */
+.database-query-bar { flex: none; display: flex; gap: 8px; margin-bottom: 12px; }
+.database-query-select { min-width: 0; max-width: 50%; height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); font: inherit; color: #333; }
+.database-query-select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-query .database-sql-text { resize: none; }
+.database-query-split { flex: none; position: relative; height: 9px; margin-bottom: 4px; cursor: row-resize; user-select: none; -webkit-user-select: none; }
+.database-query-split::before { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--line); }
+.database-query-split:hover::before, .database-query-split:focus-visible::before { top: 3px; height: 3px; border-radius: 2px; background: var(--accent); }
+.database-query-split:focus-visible { outline: none; }
 .database-sql-bar { flex: none; display: flex; justify-content: flex-end; padding: 8px 0 12px; }
 .database-sql-bar .text-btn:disabled { opacity: .4; cursor: default; }
 .database-sql-bar .text-btn:disabled:hover { background: var(--surface); }

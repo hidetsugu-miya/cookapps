@@ -1,5 +1,5 @@
-// The work pane of the database screen (D-3, D-4, D-9): the strip of the open tabs (オブジェクト, which cannot be closed, and one tab for each table that was opened) and under it the body of the selected one: for オブジェクト the database that was pressed last, with the tabs テーブル (its tables with their estimated rows, size and engine, a row opens its table) and SQL, and for a table the tabs of that table.
-// Drawing only. The tabs of a table are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here; the tabs of a database are `DATABASE_TABS`, and its SQL tab is the one of D-6.
+// The work pane of the database screen (D-3, D-4, D-6, D-9): the strip of the open tabs (オブジェクト, which cannot be closed, one tab for each table that was opened and one for each query, and ＋ at the right end) and under it the body of the selected one: for オブジェクト the table list of the database that was pressed last (its tables with their estimated rows, size and engine, a row opens its table), for a table the tabs of that table, and for a query its selects, its field and its result.
+// Drawing only. The tabs of a table are `TABS`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6), which only the Orca screen's tabs have (the database screen's SQL is in the query tabs, `queryNode`).
 // The body of a table (its tabs) and the SQL of a database are drawn into any box, with no screen state behind them: the database screen draws them in `#database-work` (`drawDatabaseWork`), and the work pane of the Orca screen draws one tab each into its own box (`drawTableTab`, A-43).
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
@@ -27,41 +27,45 @@ export interface StructureState {
   data: DatabaseStructure | null;
 }
 
-// The SQL tab of the connection and database that the tree has selected: the text as typed, and the result of the run asked for last. `data` is none before a run and after an error. `view` numbers the SQL view (a new query makes a new one): it is in the key of a draw, so a new query is drawn again even when the text typed and not run was the only difference.
+// The text of a SQL field as typed, and the result of the run asked for last (a query tab of the database screen, D-9, or a tab of the Orca screen, A-43). `data` is none before a run and after an error.
 export interface SqlState {
-  view: number;
   text: string;
   loading: boolean;
   error: string | null;
   data: DatabaseSqlResult | null;
 }
 
-// A tab of the strip that is a table: `key` names it to the actions, `title` is its database and table.
+// A tab of the strip that is a table or a query: `key` names it to the actions, `label` is its text and `title` says what it holds.
 export interface OpenTab {
   key: string;
-  table: string;
+  label: string;
   title: string;
 }
 
+// A query tab (D-9): the connection and the database it runs on, with the ones that can be chosen, the text and the result (D-6), and the height of the field when it was dragged.
+export interface QueryState {
+  key: string;
+  connections: { id: string; name: string }[];
+  connection: string;
+  databases: string[];
+  database: string;
+  height: number | null;
+  sql: SqlState;
+}
+
+// What the pane under the strip draws: nothing, the table list of a database (オブジェクト), the tabs of a table, or a query.
+export type WorkBody =
+  | { kind: "none" }
+  | { kind: "objects"; database: string; loading: boolean; error: string | null; tables: DatabaseTable[] }
+  // The connection and the database name the grid whose column widths are kept.
+  | { kind: "table"; connection: string; database: string; table: string; tab: string; records: RecordsState; structure: StructureState | null }
+  | { kind: "query"; query: QueryState };
+
 export interface WorkState {
-  // The tables that were opened, in the order they were opened, and the key of the selected one (none: オブジェクト is selected).
+  // The tabs that were opened, in the order they were opened, and the key of the selected one (none: オブジェクト is selected).
   tabs: OpenTab[];
   active: string | null;
-  // The connection the database belongs to; with the database, the table and the tab it names the grid whose column widths are kept.
-  connection: string;
-  database: string;
-  loading: boolean;
-  error: string | null;
-  tables: DatabaseTable[];
-  // The selected tab of the database, while no table is open: "tables" or "sql".
-  databaseTab: string;
-  // The table of the selected tab of the strip, or none for オブジェクト; with it, the selected tab and the state of its records.
-  table: string | null;
-  tab: string;
-  records: RecordsState | null;
-  structure: StructureState | null;
-  // The SQL tab of the connection and database: the one the tab of a table shows too.
-  sql: SqlState;
+  body: WorkBody;
 }
 
 // A tab of the work pane of the Orca screen (A-43): a table with its tabs (records, structure and SQL), or, with no table, the SQL tab of a database. The connection and the database name the grids whose column widths are kept.
@@ -86,11 +90,16 @@ export interface WorkActions {
   pageInput: (text: string) => void;
   // Selects the tab `id`; the table stays.
   tab: (id: string) => void;
-  // Selects the tab `id` of the database, while no table is open.
-  databaseTab: (id: string) => void;
-  // Keeps the text of the SQL tab as it is typed; nothing is drawn.
+  // Opens a query tab (＋).
+  addQuery: () => void;
+  // Changes the connection of the query tab that is selected (its database becomes the first one of the connection) and its database.
+  queryConnection: (id: string) => void;
+  queryDatabase: (name: string) => void;
+  // Keeps the height of the field of the query tab that is selected, after it was dragged.
+  queryHeight: (px: number) => void;
+  // Keeps the text of the SQL field as it is typed; nothing is drawn.
   sqlText: (text: string) => void;
-  // Runs the text of the SQL tab.
+  // Runs the text of the SQL field.
   runSql: () => void;
   // Opens the table of a row of the table list, as a press on its row in the tree does.
   openTable: (table: string) => void;
@@ -125,19 +134,13 @@ const TABS = [
   { id: "sql", label: "SQL" },
 ];
 
-// The tabs of a database, in order.
-const DATABASE_TABS = [
-  { id: "tables", label: "テーブル" },
-  { id: "sql", label: "SQL" },
-];
-
 const STRUCTURE_COLUMNS = ["名前", "型", "NULL", "キー", "既定値", "注釈"];
 
 let drawn = "";
 // Which grid the pane drew last: the same one drawn again (a rewrite or a press of a row, D-10) keeps its scroll position, as the box that scrolls is made again.
 let drawnGrid = "";
 
-function tableNode(state: WorkState, actions: WorkActions) {
+function tableNode(tables: DatabaseTable[], actions: WorkActions) {
   const table = tag("table", "database-tables");
   const head = tag("tr");
   for (const [label, numeric] of [["名前", false], ["行数（概算）", true], ["サイズ", true], ["エンジン", false]] as const) {
@@ -147,7 +150,7 @@ function tableNode(state: WorkState, actions: WorkActions) {
   thead.append(head);
   table.append(thead);
   const body = tag("tbody");
-  for (const t of state.tables) {
+  for (const t of tables) {
     const tr = tag("tr");
     tr.tabIndex = 0;
     tr.dataset.key = `table-${t.name}`;
@@ -186,7 +189,7 @@ function tabsNode(tabs: { id: string; label: string }[], active: string, pick: (
   return bar;
 }
 
-// The strip over the pane (D-9): オブジェクト first, which has no close button, then a tab for each open table. The close button is beside the tab, not in it, so that pressing it never selects the tab.
+// The strip over the pane (D-9): オブジェクト first, which has no close button, then a tab for each open table or query, and at the right end ＋, which opens a query. The close button is beside the tab, not in it, so that pressing it never selects the tab.
 function openTabsNode(state: WorkState, actions: WorkActions) {
   const item = (key: string, label: string, title: string, selected: boolean, pick: () => void, close: (() => void) | null) => {
     const wrap = tag("div", "database-open-item");
@@ -212,9 +215,16 @@ function openTabsNode(state: WorkState, actions: WorkActions) {
     }
     return wrap;
   };
+  const add = tag("button", "icon-btn database-open-add");
+  add.type = "button";
+  add.dataset.key = "new-query";
+  add.setAttribute("aria-label", "新規クエリ");
+  add.innerHTML = PLUS_SVG;
+  add.onclick = actions.addQuery;
   return [
     item("objects", "オブジェクト", "オブジェクト", state.active === null, () => actions.openTab(null), null),
-    ...state.tabs.map((t) => item(t.key, t.table, t.title, t.key === state.active, () => actions.openTab(t.key), () => actions.closeOpenTab(t.key))),
+    ...state.tabs.map((t) => item(t.key, t.label, t.title, t.key === state.active, () => actions.openTab(t.key), () => actions.closeOpenTab(t.key))),
+    add,
   ];
 }
 
@@ -348,9 +358,8 @@ function structureNode(structure: StructureState, sizes: string) {
   return box;
 }
 
-// The SQL tab: the text field and the run button above, the result as a grid under them, and under the grid the copy, and the rows and the time as Rust worded them.
-function sqlNode(sql: SqlState, actions: TabActions, sizes: string) {
-  const box = tag("div", "database-records database-sql");
+// The field of a SQL text (D-6): what is typed is only kept, and nothing is drawn.
+function sqlField(sql: SqlState, actions: TabActions) {
   const input = tag("textarea", "database-sql-text");
   input.value = sql.text;
   input.rows = 8;
@@ -358,8 +367,18 @@ function sqlNode(sql: SqlState, actions: TabActions, sizes: string) {
   input.dataset.key = "sql-input";
   input.setAttribute("aria-label", "SQL");
   input.oninput = () => actions.sqlText(input.value);
+  return input;
+}
+
+// The row with 実行, under the field, at the right.
+function runBar(sql: SqlState, actions: TabActions) {
   const bar = tag("div", "database-sql-bar");
   bar.append(pagerButton("run", "実行", sql.loading, actions.runSql));
+  return bar;
+}
+
+// The result of a run as a grid, and under it the copy, and the rows and the time as Rust worded them.
+function sqlResultNodes(sql: SqlState, sizes: string) {
   const scroll = tag("div", "database-records-scroll");
   if (sql.error !== null) scroll.append(note(sql.error, true));
   else if (sql.data !== null && sql.data.columns.length > 0) {
@@ -370,7 +389,93 @@ function sqlNode(sql: SqlState, actions: TabActions, sizes: string) {
   const summary = tag("span", "database-range", sql.loading ? "実行中…" : (sql.data?.summary ?? ""));
   summary.setAttribute("role", "status");
   footer.append(copyButton(sql.data, sql.loading), summary);
-  box.append(input, bar, scroll, footer);
+  return [scroll, footer];
+}
+
+// The SQL of a database on the Orca screen (A-43): the text field and the run button above, the result as a grid under them, and under the grid the copy, and the rows and the time as Rust worded them.
+function sqlNode(sql: SqlState, actions: TabActions, sizes: string) {
+  const box = tag("div", "database-records database-sql");
+  box.append(sqlField(sql, actions), runBar(sql, actions), ...sqlResultNodes(sql, sizes));
+  return box;
+}
+
+const SPLIT_MIN = 96;
+const SPLIT_STEP = 24;
+
+// The line between the field and the result of a query tab (D-9): dragged with pointer events on the document, or moved with the arrow keys, it changes the height of the field. The writes of a drag are gathered into one per animation frame, and the height is kept when the drag ends.
+function splitNode(input: HTMLTextAreaElement, remember: (px: number) => void) {
+  const split = tag("div", "database-query-split");
+  split.tabIndex = 0;
+  split.dataset.key = "query-split";
+  split.setAttribute("role", "separator");
+  split.setAttribute("aria-orientation", "horizontal");
+  split.setAttribute("aria-label", "入力の高さ");
+  // The field keeps room for the run bar, the line and a few rows of the result.
+  const clamp = (px: number) => Math.round(Math.min(Math.max(SPLIT_MIN, px), Math.max(SPLIT_MIN, (input.parentElement?.getBoundingClientRect().height ?? 0) - 200)));
+  split.onpointerdown = (down) => {
+    if (down.button !== 0) return;
+    down.preventDefault();
+    const pointer = down.pointerId;
+    const start = input.getBoundingClientRect().height;
+    let height = start;
+    let frame = 0;
+    const flush = () => {
+      frame = 0;
+      input.style.height = `${height}px`;
+    };
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== pointer) return;
+      height = clamp(start + e.clientY - down.clientY);
+      if (!frame) frame = requestAnimationFrame(flush);
+    };
+    const end = (e: PointerEvent) => {
+      if (e.pointerId !== pointer) return;
+      cancelAnimationFrame(frame);
+      flush();
+      if (height !== start) remember(height);
+      document.removeEventListener("pointermove", move, true);
+      document.removeEventListener("pointerup", end, true);
+      document.removeEventListener("pointercancel", end, true);
+    };
+    document.addEventListener("pointermove", move, true);
+    document.addEventListener("pointerup", end, true);
+    document.addEventListener("pointercancel", end, true);
+  };
+  split.onkeydown = (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const height = clamp(input.getBoundingClientRect().height + (e.key === "ArrowDown" ? SPLIT_STEP : -SPLIT_STEP));
+    input.style.height = `${height}px`;
+    remember(height);
+  };
+  return split;
+}
+
+function pick(key: string, label: string, options: { value: string; text: string }[], value: string, change: (value: string) => void) {
+  const select = tag("select", "database-query-select");
+  select.dataset.key = key;
+  select.setAttribute("aria-label", label);
+  for (const o of options) {
+    const option = tag("option", "", o.text);
+    option.value = o.value;
+    select.append(option);
+  }
+  select.value = value;
+  select.onchange = () => change(select.value);
+  return select;
+}
+
+// A query tab (D-9): the selects of the connection and the database above, then the field, 実行, the line that changes the height of the field and the result.
+function queryNode(query: QueryState, actions: WorkActions) {
+  const box = tag("div", "database-records database-sql database-query");
+  const bar = tag("div", "database-query-bar");
+  bar.append(
+    pick("query-connection", "接続", query.connections.map((c) => ({ value: c.id, text: c.name })), query.connection, actions.queryConnection),
+    pick("query-database", "データベース", query.databases.map((name) => ({ value: name, text: name })), query.database, actions.queryDatabase),
+  );
+  const input = sqlField(query.sql, actions);
+  if (query.height !== null) input.style.height = `${query.height}px`;
+  box.append(bar, input, runBar(query.sql, actions), splitNode(input, actions.queryHeight), ...sqlResultNodes(query.sql, ["query", query.key, "sql"].join("\0")));
   return box;
 }
 
@@ -399,16 +504,17 @@ const versionOf = (data: object) => {
 // What a draw is compared by: every answer of Rust is its number.
 const keyOf = (state: unknown) => JSON.stringify(state, (name, value) => (name === "data" && value !== null && typeof value === "object" ? versionOf(value) : value));
 
-// The title, the tabs and the body of a table: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6).
-function tableNodes(state: { connection: string; database: string; table: string; tab: string; records: RecordsState; structure: StructureState | null; sql: SqlState }, actions: TabActions): Node[] {
+// The title, the tabs and the body of a table: the records tab (D-4), the structure tab (D-5) and, when the screen gives a `sql`, the SQL tab (D-6; the database screen has none, its SQL is in the query tabs, D-9).
+function tableNodes(state: { connection: string; database: string; table: string; tab: string; records: RecordsState; structure: StructureState | null; sql: SqlState | null }, actions: TabActions): Node[] {
   const sizes = (tab: string) => [state.connection, state.database, state.table, tab].join("\0");
+  const { sql } = state;
   return [
     tag("h3", "database-work-title", `${state.database}.${state.table}`),
-    tabsNode(TABS, state.tab, actions.tab),
+    tabsNode(sql === null ? TABS.filter((t) => t.id !== "sql") : TABS, state.tab, actions.tab),
     state.tab === "structure" && state.structure !== null
       ? structureNode(state.structure, sizes("structure"))
-      : state.tab === "sql"
-        ? sqlNode(state.sql, actions, [state.connection, state.database, "sql"].join("\0"))
+      : state.tab === "sql" && sql !== null
+        ? sqlNode(sql, actions, [state.connection, state.database, "sql"].join("\0"))
         : recordsNode(state.records, actions, sizes("records")),
   ];
 }
@@ -426,26 +532,24 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   const openField = active instanceof HTMLInputElement && active.classList.contains("database-cell-input") ? active : null;
   strip.hidden = state === null;
   strip.replaceChildren(...(state === null ? [] : openTabsNode(state, actions)));
-  // A body that fills the pane (the tabs of a table, or the SQL tab of a database) scrolls inside it, with its footer kept.
-  box.classList.toggle("database-fill", state !== null && (state.table !== null || state.databaseTab === "sql"));
+  const body = state?.body ?? { kind: "none" };
+  // A body that fills the pane (the tabs of a table, or a query) scrolls inside it, with its footer kept.
+  box.classList.toggle("database-fill", body.kind === "table" || body.kind === "query");
   if (state === null) return box.replaceChildren();
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
   const scroller = box.querySelector<HTMLElement>(".database-records-scroll");
-  const grid = state.table === null ? "" : [state.connection, state.database, state.table, state.tab, state.records?.page].join("\0");
+  const grid = body.kind === "table" ? [body.connection, body.database, body.table, body.tab, body.records.page].join("\0") : body.kind === "query" ? `query\0${body.query.key}` : "";
   const scrolled = scroller !== null && grid === drawnGrid ? ([scroller.scrollTop, scroller.scrollLeft] as const) : null;
   drawnGrid = grid;
   const nodes: Node[] = [];
-  // The one SQL result of a connection and a database is shared by the tab of the database and the tab SQL of each of its tables, so its column widths are named by the three alone (D-4).
-  const sqlSizes = [state.connection, state.database, "sql"].join("\0");
-  if (state.table !== null && state.records !== null) {
-    nodes.push(...tableNodes({ ...state, table: state.table, records: state.records }, actions));
-  } else {
-    nodes.push(tag("h3", "database-work-title", state.database), tabsNode(DATABASE_TABS, state.databaseTab, actions.databaseTab));
-    if (state.databaseTab === "sql") nodes.push(sqlNode(state.sql, actions, sqlSizes));
-    else if (state.loading) nodes.push(note("読み込み中…", false));
-    else if (state.error !== null) nodes.push(note(state.error, true));
-    else if (state.tables.length > 0) nodes.push(tableNode(state, actions));
+  if (body.kind === "table") nodes.push(...tableNodes({ ...body, sql: null }, actions));
+  else if (body.kind === "query") nodes.push(queryNode(body.query, actions));
+  else if (body.kind === "objects") {
+    nodes.push(tag("h3", "database-work-title", body.database));
+    if (body.loading) nodes.push(note("読み込み中…", false));
+    else if (body.error !== null) nodes.push(note(body.error, true));
+    else if (body.tables.length > 0) nodes.push(tableNode(body.tables, actions));
   }
   box.replaceChildren(...nodes);
   const kept = box.querySelector<HTMLElement>(".database-records-scroll");

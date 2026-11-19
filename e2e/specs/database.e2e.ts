@@ -1112,7 +1112,7 @@ describe("database: tree", () => {
       await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
       await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "false");
       expect(await count("#database-work table.database-tables")).toBe(0);
-      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造"]);
     });
 
     it("opens the records on Enter on a row of the table list, a row that takes the focus", async () => {
@@ -1134,7 +1134,7 @@ describe("database: tree", () => {
 
     it("draws the tab レコード, selected, in place of the table list", async () => {
       await openTable();
-      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造"]);
       await expect($("#database-work [role='tab'][aria-selected='true']")).toHaveText("レコード");
       expect(await count("#database-work table.database-tables")).toBe(0);
     });
@@ -1475,7 +1475,7 @@ describe("database: tree", () => {
 
     it("has no control that changes a row but the four of D-10, and the page field is the only input while no cell is rewritten: the tabs, the reload, the copy, the four buttons of D-10 and the four page buttons", async () => {
       await openTable();
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", "", "", "", "", "", ""]);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "", "", "", "", "", "", "", "", "", ""]);
       expect(await count("#database-work input")).toBe(1);
       expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
       await $("#database-work .database-grid tbody tr:first-child td:nth-child(2)").doubleClick();
@@ -2028,6 +2028,25 @@ describe("database: tree", () => {
         await expect(changes()).not.toExist();
       });
 
+      it("asks before a query is opened with the plus, keeps the table and the changes on キャンセル, and opens the query on 捨てる", async () => {
+        await openEdits();
+        await rewrite(1, 2, "Alicia");
+        await $('#database-work-tabs [data-key="new-query"]').click();
+        await expect(popup()).toBeDisplayed();
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        await expect(popup()).not.toExist();
+        await expect($("#database-work h3")).toHaveText("shop.users");
+        await expect(changes()).toHaveText("変更 1 件");
+        expect(await count("#database-work-tabs [data-key^='open-query-']")).toBe(0);
+        await $('#database-work-tabs [data-key="new-query"]').click();
+        await $('.pop[role="alertdialog"] .text-btn.danger').click();
+        await expect($('#database-work-tabs [data-key="open-query-1"]')).toHaveAttribute("aria-selected", "true");
+        await expect($("#database-work .database-sql-text")).toBeDisplayed();
+        await $('#database-work-tabs [data-key="open-p1/d/shop/t/users"]').click();
+        await expect(cell(1, 2)).toHaveText("Alice");
+        await expect(changes()).not.toExist();
+      });
+
       it("asks before the same table is read again by a press on its row, the tab オブジェクト, the database row, a close of its tab, and asks nothing with nothing gathered", async () => {
         await openEdits();
         await rewrite(1, 2, "Alicia");
@@ -2139,7 +2158,7 @@ describe("database: tree", () => {
       expect(await selectedTabs()).toEqual(["users"]);
       await expect(openTab("users")).toHaveAttribute("title", "shop.users");
       await expect(closeOf("users")).toHaveAttribute("aria-label", "users を閉じる");
-      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造"]);
       await expect($("#database-work h3")).toHaveText("shop.users");
       expect(await count("#database-work table.database-tables")).toBe(0);
     });
@@ -2208,7 +2227,6 @@ describe("database: tree", () => {
       await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "true");
       await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "false");
       expect(await callsOf("database_tables")).toEqual(tables);
-      await expect($('#database-work [data-tab="tables"]')).toHaveAttribute("aria-selected", "true");
     });
 
     it("selects オブジェクト on a press on the database in the tree, and keeps the tabs", async () => {
@@ -2275,10 +2293,10 @@ describe("database: tree", () => {
       expect(await stripTabs()).toEqual(["オブジェクト"]);
     });
 
-    it("has no control on the strip but the tabs and the close buttons", async () => {
+    it("has no control on the strip but the tabs, the close buttons and the plus", async () => {
       await openShop();
       await pressTable("users", users, "1–1 行目");
-      expect(await count(`${strip} button`)).toBe(3);
+      expect(await count(`${strip} button`)).toBe(4);
       expect(await count(`${strip} input, ${strip} textarea, ${strip} [placeholder]`)).toBe(0);
     });
   });
@@ -2330,7 +2348,7 @@ describe("database: tree", () => {
 
     it("has the tabs レコード and 構造 with レコード selected, and calls database_structure on a press of 構造 only", async () => {
       await openTable();
-      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造"]);
       await expect(tab("records")).toHaveAttribute("aria-selected", "true");
       await expect(tab("structure")).toHaveAttribute("aria-selected", "false");
       expect(await callsOf("database_structure")).toEqual([]);
@@ -2481,13 +2499,12 @@ describe("database: tree", () => {
       await mock("database_structure", structure);
       await tab("structure").click();
       await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", ""]);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", ""]);
       expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
     });
   });
 
-  describe("sql of a table", () => {
-    const page0 = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目 / 約 1,200 行" });
+  describe("query tabs", () => {
     const result = databaseSqlResult(
       ["id", "name", "deleted_at"],
       [
@@ -2497,23 +2514,39 @@ describe("database: tree", () => {
       "2 行 / 12 ms",
     );
     const text = "SELECT id, name, deleted_at FROM users;";
-    const ran = (sql = text, database = "shop") => ({ id: "p1", database, sql });
-    const tab = (id: string) => $(`#database-work [data-tab="${id}"]`);
+    const ran = (sql = text, database = "shop", id = "p1") => ({ id, database, sql });
+    const strip = "#database-work-tabs";
+    const add = () => $(`${strip} [data-key="new-query"]`);
+    const stripTabs = () => textsOf(`${strip} [role="tab"]`);
+    const selectedTabs = () => browser.execute((s) => [...document.querySelectorAll(`${s} [role="tab"][aria-selected="true"]`)].map((e) => e.textContent), strip);
+    const openTab = (key: string) => $(`${strip} [data-key="open-${key}"]`);
+    const closeOf = (key: string) => $(`${strip} [data-key="close-${key}"]`);
     const input = () => $("#database-work .database-sql-text");
     const run = () => $('#database-work [data-key="run"]');
     const range = () => $("#database-work .database-range");
-    const grid = () =>
-      browser.execute(() => [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const split = () => $('#database-work [data-key="query-split"]');
+    const grid = () => browser.execute(() => [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const options = (key: string) => browser.execute((k) => [...document.querySelectorAll(`#database-work [data-key="${k}"] option`)].map((o) => o.textContent), key);
+    const chosen = (key: string) => browser.execute((k) => (document.querySelector(`#database-work [data-key="${k}"]`) as HTMLSelectElement).value, key);
+    const choose = (key: string, value: string) =>
+      browser.execute(
+        (k, v) => {
+          const select = document.querySelector<HTMLSelectElement>(`#database-work [data-key="${k}"]`)!;
+          select.value = v;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        key,
+        value,
+      );
+    const fieldHeight = () => browser.execute(() => Math.round(document.querySelector("#database-work .database-sql-text")!.getBoundingClientRect().height));
+    const dragSplit = (dy: number) => browser.action("pointer").move({ origin: split() }).down().move({ origin: "pointer", x: 0, y: dy }).up().perform();
 
-    // The app with the table users of the database shop pressed, and the tab SQL selected.
-    async function openSql() {
+    // The connection p1 open, its database shop pressed with its table list drawn, and the plus pressed: a query tab on shop is selected.
+    async function openQuery() {
       await openTree();
       await row("p1/d/shop").click();
-      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
-      const records = await mock("database_records", page0);
-      await row("p1/d/shop/t/users").click();
-      await waitForCalls(records);
-      await tab("sql").click();
+      await waitForCount("#database-work tbody tr", 3);
+      await add().click();
       await expect(input()).toBeDisplayed();
     }
 
@@ -2523,8 +2556,108 @@ describe("database: tree", () => {
       await run().click();
     }
 
+    it("has the plus at the right end of the strip, a button with a drawn icon and no text", async () => {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount("#database-work tbody tr", 3);
+      await expect(add()).toBeDisplayed();
+      await expect(add()).toHaveAttribute("aria-label", "新規クエリ");
+      await expect(add()).toHaveText("");
+      expect(await count(`${strip} [data-key="new-query"] svg`)).toBe(1);
+      expect(await browser.execute((s) => document.querySelector(s)!.lastElementChild!.getAttribute("data-key"), strip)).toBe("new-query");
+      expect(await stripTabs()).toEqual(["オブジェクト"]);
+      expect(await callsOf("database_sql")).toEqual([]);
+    });
+
+    it("opens a query tab named 無題 @{database} on the plus, selected, with the caret in the field and nothing called", async () => {
+      await openQuery();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
+      await expect(openTab("query-1")).toHaveAttribute("title", "Example direct · shop");
+      await expect(closeOf("query-1")).toHaveAttribute("aria-label", "無題 @shop を閉じる");
+      expect(await browser.execute(() => document.activeElement === document.querySelector("#database-work .database-sql-text"))).toBe(true);
+      await expect(input()).toHaveValue("");
+      await expect(input()).toHaveAttribute("aria-label", "SQL");
+      expect(await count("#database-work table.database-tables")).toBe(0);
+      expect(await count("#database-work [role='tab']")).toBe(0);
+      expect(await count("#database-work [placeholder]")).toBe(0);
+      await expect(range()).toHaveText("");
+      expect(await callsOf("database_sql")).toEqual([]);
+      expect(await callsOf("database_tables")).toHaveLength(1);
+    });
+
+    it("has the selects of the connection and the database above the field: the open connections and the databases of the one chosen", async () => {
+      await openQuery();
+      await mock("database_connect", ["app"]);
+      await row("p2").click();
+      await waitForCount('#database-side-feed [data-key^="p2/d/"]', 1);
+      expect(await options("query-connection")).toEqual(["Example direct", "Example tunnel"]);
+      expect(await options("query-database")).toEqual(["information_schema", "shop"]);
+      expect(await chosen("query-connection")).toBe("p1");
+      expect(await chosen("query-database")).toBe("shop");
+      await expect($('#database-work [data-key="query-connection"]')).toHaveAttribute("aria-label", "接続");
+      await expect($('#database-work [data-key="query-database"]')).toHaveAttribute("aria-label", "データベース");
+      const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-query > *")].map((e) => e.className.split(" ")[0]));
+      expect(order.slice(0, 3)).toEqual(["database-query-bar", "database-sql-text", "database-sql-bar"]);
+    });
+
+    it("changes the database with its select: the text and the result stay, the tab takes the name, and the run goes to that database", async () => {
+      await openQuery();
+      await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      await choose("query-database", "information_schema");
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @information_schema"]);
+      await expect(input()).toHaveValue(text);
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      expect(await chosen("query-database")).toBe("information_schema");
+      const command = await mock("database_sql", result);
+      await run().click();
+      expect(await waitForCalls(command)).toEqual([ran(text, "information_schema")]);
+    });
+
+    it("changes the connection with its select: its first database is chosen, and the run goes to that connection", async () => {
+      await openQuery();
+      await mock("database_connect", ["app", "logs"]);
+      await row("p2").click();
+      await waitForCount('#database-side-feed [data-key^="p2/d/"]', 2);
+      await choose("query-connection", "p2");
+      expect(await chosen("query-connection")).toBe("p2");
+      expect(await options("query-database")).toEqual(["app", "logs"]);
+      expect(await chosen("query-database")).toBe("app");
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @app"]);
+      await expect(openTab("query-1")).toHaveAttribute("title", "Example tunnel · app");
+      const command = await mock("database_sql", result);
+      await runText();
+      expect(await waitForCalls(command)).toEqual([ran(text, "app", "p2")]);
+    });
+
+    it("starts from what the tree has selected: its database, else the first database of the connection, and the select can change it", async () => {
+      await openTree();
+      await row("p1/d/information_schema").click();
+      await waitForCount("#database-work tbody tr", 3);
+      await add().click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @information_schema"]);
+      await row("p1").click();
+      await add().click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @information_schema", "無題 @information_schema"]);
+      expect(await selectedTabs()).toEqual(["無題 @information_schema"]);
+      expect(await chosen("query-database")).toBe("information_schema");
+      expect(await callsOf("database_tables")).toHaveLength(1);
+    });
+
+    it("keeps the pane with the query when a connection row of the tree is pressed, and the plus still opens a query", async () => {
+      await openQuery();
+      await row("p1").click();
+      await expect(row("p1")).toHaveAttribute("aria-pressed", "true");
+      await expect($(strip)).toBeDisplayed();
+      await expect(input()).toBeDisplayed();
+      await add().click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop", "無題 @information_schema"]);
+    });
+
     it("draws the vertical lines and changes the width of a column by its grip, kept when the statement is run again", async () => {
-      await openSql();
+      await openQuery();
       await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
@@ -2539,23 +2672,8 @@ describe("database: tree", () => {
       expect(await columnWidths(2)).toEqual(sized);
     });
 
-    it("has the tab SQL after 構造, which calls nothing when it is pressed and draws the field and 実行 with no placeholder and no text of help", async () => {
-      await openSql();
-      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造", "SQL"]);
-      await expect(tab("sql")).toHaveAttribute("aria-selected", "true");
-      await expect(tab("records")).toHaveAttribute("aria-selected", "false");
-      expect(await callsOf("database_sql")).toEqual([]);
-      expect(await callsOf("database_structure")).toEqual([]);
-      await expect(input()).toHaveAttribute("aria-label", "SQL");
-      await expect(input()).toHaveValue("");
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "実行", ""]);
-      expect(await count("#database-work [placeholder]")).toBe(0);
-      expect(await count("#database-work .database-grid")).toBe(0);
-      await expect(range()).toHaveText("");
-    });
-
-    it("runs the text as typed with the id, the database of the tree and the table's database, and draws the result as the grid of the records", async () => {
-      await openSql();
+    it("runs the text as typed with the id, the database and the text, and draws the result as the grid of the records", async () => {
+      await openQuery();
       const command = await mock("database_sql", result);
       await runText();
       expect(await waitForCalls(command)).toEqual([ran()]);
@@ -2571,7 +2689,7 @@ describe("database: tree", () => {
     });
 
     it("shows 実行中… with 実行 off and the old result kept while it runs, and draws the new result after", async () => {
-      await openSql();
+      await openQuery();
       await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
@@ -2588,13 +2706,28 @@ describe("database: tree", () => {
       await expect(run()).toBeEnabled();
     });
 
+    it("draws the answer of a run on the tab that ran it when another tab is selected meanwhile", async () => {
+      await openQuery();
+      const command = await mock("database_sql", holds);
+      await runText();
+      await waitForCalls(command);
+      await add().click();
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
+      await release("database_sql", result);
+      await expect(range()).toHaveText("");
+      await expect(input()).toHaveValue("");
+      await openTab("query-1").click();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      await expect(input()).toHaveValue(text);
+    });
+
     it("puts the copy at the left of the footer, off before a run and while one runs, and copies the result as Rust made it", async () => {
-      await openSql();
+      await openQuery();
       await stubClipboard();
       const copy = $('#database-work [data-key="copy"]');
       await expect(copy).toBeDisabled();
-      const text = "id\tname\tdeleted_at\n1\tAlice\tNULL";
-      await mock("database_sql", { ...result, tsv: text });
+      const copied = "id\tname\tdeleted_at\n1\tAlice\tNULL";
+      await mock("database_sql", { ...result, tsv: copied });
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
       const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
@@ -2602,7 +2735,7 @@ describe("database: tree", () => {
       await expect(copy).toBeEnabled();
       await copy.click();
       await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
-      expect(await copiedTexts()).toEqual([text]);
+      expect(await copiedTexts()).toEqual([copied]);
       const wait = await mock("database_sql", holds);
       await run().click();
       await waitForCalls(wait);
@@ -2613,7 +2746,7 @@ describe("database: tree", () => {
     });
 
     it("says under the table that the rows were cut, as Rust worded it", async () => {
-      await openSql();
+      await openQuery();
       const cut = "先頭の 1,000 行だけを表示しています（残りは読み込んでいません） / 120 ms";
       const rows = Array.from({ length: 1000 }, (_, i) => [databaseCell(String(i + 1), "number")]);
       await mock("database_sql", databaseSqlResult(["n"], rows, cut));
@@ -2623,7 +2756,7 @@ describe("database: tree", () => {
     });
 
     it("draws only the line for a statement with no row", async () => {
-      await openSql();
+      await openQuery();
       await mock("database_sql", databaseSqlResult([], [], "0 行 / 2 ms"));
       await runText("SET @a = 1");
       await expect(range()).toHaveText("0 行 / 2 ms");
@@ -2632,7 +2765,7 @@ describe("database: tree", () => {
     });
 
     it("draws the rows a write changed as the footer, as Rust worded it, with no grid and the copy off", async () => {
-      await openSql();
+      await openQuery();
       await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
@@ -2646,7 +2779,7 @@ describe("database: tree", () => {
     });
 
     it("shows the error of MySQL in the danger color, drops the old result, keeps the text and the connection, and runs again", async () => {
-      await openSql();
+      await openQuery();
       await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
@@ -2670,8 +2803,8 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-note")).toBe(0);
     });
 
-    it("closes the tree of a connection that the run shows lost, and says why under the connection", async () => {
-      await openSql();
+    it("closes the tree of a connection that the run shows lost, with its query tabs, and says why under the connection", async () => {
+      await openQuery();
       await mock("database_sql", rejects(lost));
       await mock("database_connections", []);
       await runText();
@@ -2680,47 +2813,11 @@ describe("database: tree", () => {
       expect(await notes()).toEqual([lost]);
       await expect(dot("p1")).toHaveAttribute("data-state", "closed");
       expect(await count("#database-work > *")).toBe(0);
-    });
-
-    it("keeps the text and the result when the tab changes and when another table of the database is pressed, and runs on the same database", async () => {
-      await openSql();
-      const command = await mock("database_sql", result);
-      await runText();
-      await expect(range()).toHaveText("2 行 / 12 ms");
-      await tab("records").click();
-      await tab("sql").click();
-      await expect(input()).toHaveValue(text);
-      await expect(range()).toHaveText("2 行 / 12 ms");
-      await row("p1/d/shop/t/orders").click();
-      await waitForCalls("database_records", 2);
-      await tab("sql").click();
-      await expect($("#database-work h3")).toHaveText("shop.orders");
-      await expect(input()).toHaveValue(text);
-      await expect(range()).toHaveText("2 行 / 12 ms");
-      await run().click();
-      expect(await waitForCalls(command, 2)).toEqual([ran(), ran()]);
-    });
-
-    it("uses the database of the table that is pressed, with an empty field for a database that has not been used", async () => {
-      await openSql();
-      await mock("database_sql", result);
-      await runText();
-      await expect(range()).toHaveText("2 行 / 12 ms");
-      await row("p1/d/information_schema").click();
-      await waitForCount('#database-side-feed [data-key^="p1/d/information_schema/t/"]', 3);
-      await row("p1/d/information_schema/t/users").click();
-      await waitForCalls("database_records", 2);
-      await tab("sql").click();
-      await expect($("#database-work h3")).toHaveText("information_schema.users");
-      await expect(input()).toHaveValue("");
-      await expect(range()).toHaveText("");
-      const command = await mock("database_sql", result);
-      await runText("SELECT 1");
-      expect(await waitForCalls(command)).toEqual([ran("SELECT 1", "information_schema")]);
+      await expect($(strip)).not.toBeDisplayed();
     });
 
     it("sends a field that is empty as it is, and shows the refusal of Rust", async () => {
-      await openSql();
+      await openQuery();
       await mock("database_sql", rejects("SQL を入力してください"));
       await mock("database_connections", ["p1"]);
       await run().click();
@@ -2728,11 +2825,161 @@ describe("database: tree", () => {
       await expect($("#database-work .database-note")).toHaveText("SQL を入力してください");
     });
 
-    it("has no other control on the tab than the tabs, 実行 and the copy, and the field is the only input", async () => {
-      await openSql();
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "実行", ""]);
+    it("has no other control on a query than the two selects, 実行 and the copy, the line, and the field is the only input", async () => {
+      await openQuery();
+      expect(await textsOf("#database-work button")).toEqual(["実行", ""]);
+      expect(await count("#database-work select")).toBe(2);
       expect(await count("#database-work input, #database-work [contenteditable]")).toBe(0);
       expect(await count("#database-work textarea")).toBe(1);
+      await expect(split()).toHaveAttribute("role", "separator");
+    });
+
+    it("keeps the text and the result of each query in its own tab", async () => {
+      await openQuery();
+      const command = await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      await add().click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
+      await expect(openTab("query-2")).toHaveAttribute("aria-selected", "true");
+      await expect(input()).toHaveValue("");
+      await expect(range()).toHaveText("");
+      expect(await count("#database-work .database-grid")).toBe(0);
+      await input().setValue("SELECT 2");
+      await openTab("query-1").click();
+      await expect(input()).toHaveValue(text);
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      expect(await grid()).toHaveLength(2);
+      await openTab("query-2").click();
+      await expect(input()).toHaveValue("SELECT 2");
+      await expect(range()).toHaveText("");
+      await mock("database_sql", databaseSqlResult(["n"], [[databaseCell("2", "number")]], "1 行 / 1 ms"));
+      await run().click();
+      await expect(range()).toHaveText("1 行 / 1 ms");
+      await openTab("query-1").click();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      expect(await callsOf(command)).toEqual([ran()]);
+    });
+
+    it("keeps a query when the table list or the tab of a table is selected and comes back to it, calling nothing", async () => {
+      await openQuery();
+      await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      await $(`${strip} [data-key="open-objects"]`).click();
+      expect(await count("#database-work table.database-tables")).toBe(1);
+      expect(await count("#database-work .database-sql-text")).toBe(0);
+      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls("database_records");
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop", "users"]);
+      await openTab("query-1").click();
+      await expect(input()).toHaveValue(text);
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      expect(await callsOf("database_sql")).toHaveLength(1);
+      expect(await callsOf("database_records")).toHaveLength(1);
+    });
+
+    it("closes a query tab with its button, calling nothing, drops its text, and selects オブジェクト when it was the selected one", async () => {
+      await openQuery();
+      await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      await add().click();
+      await closeOf("query-2").click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["オブジェクト"]);
+      expect(await count("#database-work table.database-tables")).toBe(1);
+      await closeOf("query-1").click();
+      expect(await stripTabs()).toEqual(["オブジェクト"]);
+      await add().click();
+      await expect(openTab("query-3")).toHaveAttribute("aria-selected", "true");
+      await expect(input()).toHaveValue("");
+      await expect(range()).toHaveText("");
+      expect(await callsOf("database_sql")).toHaveLength(1);
+    });
+
+    it("keeps the selected query when another tab is closed", async () => {
+      await openQuery();
+      await add().click();
+      await closeOf("query-1").click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
+      await expect(input()).toBeDisplayed();
+    });
+
+    it("changes the height of the field by dragging the line between the field and the result, held to a lower limit, kept by the tab", async () => {
+      await openQuery();
+      await mock("database_sql", result);
+      await runText();
+      await expect(range()).toHaveText("2 行 / 12 ms");
+      const before = await fieldHeight();
+      await dragSplit(50);
+      near(await fieldHeight(), before + 50);
+      const grown = await fieldHeight();
+      await run().click();
+      await waitForCalls("database_sql", 2);
+      expect(await fieldHeight()).toBe(grown);
+      await dragSplit(-300);
+      const least = await fieldHeight();
+      expect(least).toBeLessThan(before);
+      expect(least).toBeGreaterThanOrEqual(90);
+      await dragSplit(50);
+      near(await fieldHeight(), least + 50);
+      expect(await callsOf("database_sql")).toHaveLength(2);
+    });
+
+    it("keeps the height of the field in each tab", async () => {
+      await openQuery();
+      const before = await fieldHeight();
+      await dragSplit(40);
+      near(await fieldHeight(), before + 40);
+      const grown = await fieldHeight();
+      await add().click();
+      expect(await fieldHeight()).toBe(before);
+      await openTab("query-1").click();
+      expect(await fieldHeight()).toBe(grown);
+    });
+
+    it("changes the height of the field with the arrow keys on the line", async () => {
+      await openQuery();
+      const before = await fieldHeight();
+      await browser.execute(() => document.querySelector<HTMLElement>('#database-work [data-key="query-split"]')!.focus());
+      await browser.keys("ArrowDown");
+      near(await fieldHeight(), before + 24);
+      await browser.keys("ArrowUp");
+      near(await fieldHeight(), before);
+    });
+
+    it("has no tab SQL inside a database and a table, and no tabs on the table list", async () => {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount("#database-work tbody tr", 3);
+      expect(await count("#database-work [role='tab'], #database-work .database-tabs, #database-work [data-tab]")).toBe(0);
+      expect(await count("#database-work textarea")).toBe(0);
+      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls("database_records");
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造"]);
+      expect(await count('#database-work [data-tab="sql"], #database-work textarea')).toBe(0);
+      expect(await callsOf("database_sql")).toEqual([]);
+    });
+
+    it("closes the query tabs of a connection that is disconnected, and keeps those of another connection", async () => {
+      await openQuery();
+      await mock("database_connect", ["app"]);
+      await row("p2").click();
+      await waitForCount('#database-side-feed [data-key^="p2/d/"]', 1);
+      await add().click();
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop", "無題 @app"]);
+      await mock("database_disconnect", null);
+      await pickFromMenu("p2", 2);
+      await waitForCount('#database-side-feed [data-key^="p2/d/"]', 0);
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["オブジェクト"]);
+      await pickFromMenu("p1", 2);
+      await expect($(strip)).not.toBeDisplayed();
     });
   });
 
@@ -2746,14 +2993,15 @@ describe("database: tree", () => {
     expect(await count('#database-side-feed [data-key^="p1/d/shop/t/"]')).toBe(0);
   });
 
-  describe("tabs and menu of a database", () => {
-    const tab = (id: string) => $(`#database-work [data-tab="${id}"]`);
+  describe("menu of a database", () => {
     const input = () => $("#database-work .database-sql-text");
     const run = () => $('#database-work [data-key="run"]');
-    const range = () => $("#database-work .database-range");
     const result = databaseSqlResult(["id"], [[databaseCell("1", "number")]], "1 行 / 3 ms");
     const text = "SELECT id FROM users";
     const ran = (sql = text, database = "shop") => ({ id: "p1", database, sql });
+    const strip = "#database-work-tabs";
+    const stripTabs = () => textsOf(`${strip} [role="tab"]`);
+    const selectedTabs = () => browser.execute((s) => [...document.querySelectorAll(`${s} [role="tab"][aria-selected="true"]`)].map((e) => e.textContent), strip);
     // Picks the item (1 新規クエリ, 2 データベースを閉じる) of the menu of the database row `key`.
     const pickDb = async (key: string, item: 1 | 2) => {
       await rightPress(key);
@@ -2765,82 +3013,6 @@ describe("database: tree", () => {
       await row("p1/d/shop").click();
       await waitForCount("#database-work tbody tr", 3);
     }
-    // Types the text in the SQL tab and runs it.
-    async function runText() {
-      await input().setValue(text);
-      await run().click();
-      await expect(range()).toHaveText("1 行 / 3 ms");
-    }
-
-    it("has the tabs テーブル and SQL after the name of a database, テーブル selected with the table list, and a press on SQL calls nothing", async () => {
-      await openShop();
-      expect(await textsOf("#database-work [role='tab']")).toEqual(["テーブル", "SQL"]);
-      await expect(tab("tables")).toHaveAttribute("aria-selected", "true");
-      await expect(tab("sql")).toHaveAttribute("aria-selected", "false");
-      await tab("sql").click();
-      await expect(tab("sql")).toHaveAttribute("aria-selected", "true");
-      await expect(input()).toBeDisplayed();
-      await expect(input()).toHaveAttribute("aria-label", "SQL");
-      await expect(input()).toHaveValue("");
-      expect(await count("#database-work [placeholder]")).toBe(0);
-      expect(await count("#database-work table")).toBe(0);
-      expect(await textsOf("#database-work button")).toEqual(["テーブル", "SQL", "実行", ""]);
-      await expect($("#database-work h3")).toHaveText("shop");
-      await tab("tables").click();
-      await waitForCount("#database-work tbody tr", 3);
-      expect(await count("#database-work textarea")).toBe(0);
-      expect(await callsOf("database_tables")).toHaveLength(1);
-      expect(await callsOf("database_sql")).toEqual([]);
-    });
-
-    it("runs the text of the SQL tab of a database with the id and the database it shows, and keeps the text and the result when the tab テーブル is pressed", async () => {
-      await openShop();
-      await tab("sql").click();
-      const command = await mock("database_sql", result);
-      await runText();
-      expect(await waitForCalls(command)).toEqual([ran()]);
-      expect(await count("#database-work .database-grid")).toBe(1);
-      await tab("tables").click();
-      await tab("sql").click();
-      await expect(input()).toHaveValue(text);
-      await expect(range()).toHaveText("1 行 / 3 ms");
-    });
-
-    it("shares the text and the result with the tab SQL of a table of the database", async () => {
-      await openShop();
-      await tab("sql").click();
-      await mock("database_sql", result);
-      await runText();
-      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
-      await row("p1/d/shop/t/users").click();
-      await waitForCalls("database_records");
-      await expect($("#database-work h3")).toHaveText("shop.users");
-      await tab("sql").click();
-      await expect(input()).toHaveValue(text);
-      await expect(range()).toHaveText("1 行 / 3 ms");
-    });
-
-    it("keeps the tab on a second press of the database that the pane shows, and selects テーブル on a press from a table or another database", async () => {
-      await openShop();
-      await tab("sql").click();
-      await row("p1/d/shop").click();
-      await expect(row("p1/d/shop")).toHaveAttribute("aria-expanded", "false");
-      await expect(tab("sql")).toHaveAttribute("aria-selected", "true");
-      await row("p1/d/information_schema").click();
-      await waitForCalls("database_tables", 2);
-      await expect($("#database-work h3")).toHaveText("information_schema");
-      await expect(tab("tables")).toHaveAttribute("aria-selected", "true");
-      await tab("sql").click();
-      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
-      await row("p1/d/shop").click();
-      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
-      await tab("sql").click();
-      await row("p1/d/shop/t/users").click();
-      await waitForCalls("database_records");
-      await row("p1/d/shop").click();
-      await expect($("#database-work h3")).toHaveText("shop");
-      await expect(tab("tables")).toHaveAttribute("aria-selected", "true");
-    });
 
     it("opens the menu of a database row at the pointer with 新規クエリ and データベースを閉じる, selecting and calling nothing, and has none on a table row", async () => {
       await openShop();
@@ -2863,65 +3035,47 @@ describe("database: tree", () => {
       expect(await callsOf("database_disconnect")).toEqual([]);
     });
 
-    it("opens the SQL tab of the database with an empty field, no result and the caret in it on 新規クエリ", async () => {
+    it("opens a query tab of the database on 新規クエリ with an empty field, no result and the caret in it, selecting the row and calling nothing", async () => {
       await openShop();
-      await tab("sql").click();
-      await mock("database_sql", result);
-      await runText();
-      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
-      await row("p1/d/shop/t/orders").click();
-      await waitForCalls("database_records");
       await pickDb("p1/d/shop", 1);
-      await expect($("#database-work h3")).toHaveText("shop");
-      await expect(tab("sql")).toHaveAttribute("aria-selected", "true");
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
       await expect(row("p1/d/shop")).toHaveAttribute("aria-pressed", "true");
       await expect(input()).toHaveValue("");
-      await expect(range()).toHaveText("");
+      await expect($("#database-work .database-range")).toHaveText("");
       expect(await count("#database-work .database-grid")).toBe(0);
       expect(await browser.execute(() => document.activeElement === document.querySelector("#database-work .database-sql-text"))).toBe(true);
-      expect(await callsOf("database_sql")).toHaveLength(1);
+      expect(await callsOf("database_sql")).toEqual([]);
       expect(await callsOf("database_tables")).toHaveLength(1);
     });
 
-    it("empties the field on 新規クエリ when its text was typed and not run", async () => {
+    it("opens a tab of its own on each 新規クエリ, with the text of the one before kept in it, and keeps the tab of a table that is open", async () => {
       await openShop();
-      await tab("sql").click();
-      await input().setValue(text);
-      await expect(input()).toHaveValue(text);
-      await pickDb("p1/d/shop", 1);
-      await expect(input()).toHaveValue("");
-      expect(await callsOf("database_sql")).toEqual([]);
-    });
-
-    it("keeps the width of a column of the SQL result for the tab of the database and the tabs SQL of its tables, which share the result", async () => {
-      await openShop();
-      await tab("sql").click();
-      await mock("database_sql", result);
-      await runText();
-      const before = await columnWidths(1);
-      await dragGrip(1, 120);
-      const sized = await columnWidths(1);
-      for (const w of sized) near(w, before[0] + 120);
       await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
-      await row("p1/d/shop/t/orders").click();
+      await row("p1/d/shop/t/users").click();
       await waitForCalls("database_records");
-      await tab("sql").click();
-      await run().click();
-      await waitForCalls("database_sql", 2);
-      await expect(range()).toHaveText("1 行 / 3 ms");
-      expect(await columnWidths(1)).toEqual(sized);
+      await pickDb("p1/d/shop", 1);
+      await input().setValue(text);
+      await pickDb("p1/d/shop", 1);
+      expect(await stripTabs()).toEqual(["オブジェクト", "users", "無題 @shop", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
+      await expect(input()).toHaveValue("");
+      await $(`${strip} [data-key="open-query-1"]`).click();
+      await expect(input()).toHaveValue(text);
     });
 
     it("opens a new query on a database that is not open, without reading its tables, and runs on that database", async () => {
       await openTree();
       await pickDb("p1/d/information_schema", 1);
-      await expect($("#database-work h3")).toHaveText("information_schema");
-      await expect(tab("sql")).toHaveAttribute("aria-selected", "true");
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @information_schema"]);
+      await expect(row("p1/d/information_schema")).toHaveAttribute("aria-pressed", "true");
       await expect(row("p1/d/information_schema")).toHaveAttribute("aria-expanded", "false");
       expect(await callsOf("database_tables")).toEqual([]);
       const command = await mock("database_sql", result);
-      await runText();
+      await input().setValue(text);
+      await run().click();
       expect(await waitForCalls(command)).toEqual([ran(text, "information_schema")]);
+      await expect($("#database-work .database-range")).toHaveText("1 行 / 3 ms");
     });
 
     it("closes the tree of the database on データベースを閉じる, keeps the connection, and empties the pane that showed it", async () => {
@@ -2940,6 +3094,20 @@ describe("database: tree", () => {
       await waitForCount("#database-work tbody tr", 3);
     });
 
+    it("keeps the query tabs of a database on データベースを閉じる, which closes the tabs of its tables only", async () => {
+      await openShop();
+      await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls("database_records");
+      await pickDb("p1/d/shop", 1);
+      await input().setValue(text);
+      await pickDb("p1/d/shop", 2);
+      await expect(row("p1/d/shop")).toHaveAttribute("aria-expanded", "false");
+      expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop"]);
+      expect(await selectedTabs()).toEqual(["無題 @shop"]);
+      await expect(input()).toHaveValue(text);
+    });
+
     it("empties the pane on データベースを閉じる when it showed a table of the database, and leaves a pane that shows another database", async () => {
       await openShop();
       await mock("database_records", databaseRecords(["id"], [[databaseCell("1", "number")]]));
@@ -2952,6 +3120,7 @@ describe("database: tree", () => {
       await expect(row("p1")).toHaveAttribute("aria-pressed", "true");
     });
   });
+
 
   it("has 切断 in the menu of an open connection only, between 編集 and 削除", async () => {
     await openTree();

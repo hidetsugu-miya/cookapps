@@ -104,7 +104,7 @@ function create(target: string | null, project: string, profile: DatabaseProfile
     title: table === null ? `SQL · ${database} · ${profile.name}` : `${table} · ${profile.name}`,
     records: null,
     structure: null,
-    sql: { view: 0, text: "", loading: false, error: null, data: null },
+    sql: { text: "", loading: false, error: null, data: null },
     wantFocus: false,
     el,
     actions: {
