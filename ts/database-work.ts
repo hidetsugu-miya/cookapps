@@ -1,5 +1,6 @@
 // The work pane of the database screen (D-3, D-4, D-9): the strip of the open tabs (オブジェクト, which cannot be closed, and one tab for each table that was opened) and under it the body of the selected one: for オブジェクト the database that was pressed last, with the tabs テーブル (its tables with their estimated rows, size and engine, a row opens its table) and SQL, and for a table the tabs of that table.
 // Drawing only. The tabs of a table are `TABS` and their body is drawn in the branch of `state.table`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6) are here; the tabs of a database are `DATABASE_TABS`, and its SQL tab is the one of D-6.
+// The body of a table (its tabs) and the SQL of a database are drawn into any box, with no screen state behind them: the database screen draws them in `#database-work` (`drawDatabaseWork`), and the work pane of the Orca screen draws one tab each into its own box (`drawTableTab`, A-43).
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
@@ -61,6 +62,17 @@ export interface WorkState {
   sql: SqlState;
 }
 
+// A tab of the work pane of the Orca screen (A-43): a table with its tabs (records, structure and SQL), or, with no table, the SQL tab of a database. The connection and the database name the grids whose column widths are kept.
+export interface TabState {
+  connection: string;
+  database: string;
+  table: string | null;
+  tab: string;
+  records: RecordsState | null;
+  structure: StructureState | null;
+  sql: SqlState;
+}
+
 export interface WorkActions {
   // Selects the tab of the strip with the key (none: オブジェクト).
   openTab: (key: string | null) => void;
@@ -81,6 +93,9 @@ export interface WorkActions {
   // Opens the table of a row of the table list, as a press on its row in the tree does.
   openTable: (table: string) => void;
 }
+
+// What the body of a table or of a SQL tab asks of its screen.
+export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql">;
 
 // The tabs of a table, in order. The body of the selected one is drawn in `drawDatabaseWork`, where the body of a tab that is added goes.
 const TABS = [
@@ -208,7 +223,7 @@ function copyButton(data: { columns: unknown[]; tsv: string } | null, loading: b
 }
 
 // The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page.
-function recordsNode(records: RecordsState, actions: WorkActions, sizes: string) {
+function recordsNode(records: RecordsState, actions: TabActions, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
   if (records.error !== null) scroll.append(note(records.error, true));
@@ -271,7 +286,7 @@ function structureNode(structure: StructureState, sizes: string) {
 }
 
 // The SQL tab: the text field and the run button above, the result as a grid under them, and under the grid the copy, and the rows and the time as Rust worded them.
-function sqlNode(sql: SqlState, actions: WorkActions, sizes: string) {
+function sqlNode(sql: SqlState, actions: TabActions, sizes: string) {
   const box = tag("div", "database-records database-sql");
   const input = tag("textarea", "database-sql-text");
   input.value = sql.text;
@@ -318,8 +333,25 @@ const versionOf = (data: object) => {
   return versionCount;
 };
 
+// What a draw is compared by: every answer of Rust is its number.
+const keyOf = (state: unknown) => JSON.stringify(state, (name, value) => (name === "data" && value !== null && typeof value === "object" ? versionOf(value) : value));
+
+// The title, the tabs and the body of a table: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6).
+function tableNodes(state: { connection: string; database: string; table: string; tab: string; records: RecordsState; structure: StructureState | null; sql: SqlState }, actions: TabActions): Node[] {
+  const sizes = (tab: string) => [state.connection, state.database, state.table, tab].join("\0");
+  return [
+    tag("h3", "database-work-title", `${state.database}.${state.table}`),
+    tabsNode(TABS, state.tab, actions.tab),
+    state.tab === "structure" && state.structure !== null
+      ? structureNode(state.structure, sizes("structure"))
+      : state.tab === "sql"
+        ? sqlNode(state.sql, actions, [state.connection, state.database, "sql"].join("\0"))
+        : recordsNode(state.records, actions, sizes("records")),
+  ];
+}
+
 export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) {
-  const key = JSON.stringify(state, (name, value) => (name === "data" && value !== null && typeof value === "object" ? versionOf(value) : value));
+  const key = keyOf(state);
   if (key === drawn) return;
   drawn = key;
   const box = $("database-work");
@@ -338,16 +370,7 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   // The one SQL result of a connection and a database is shared by the tab of the database and the tab SQL of each of its tables, so its column widths are named by the three alone (D-4).
   const sqlSizes = [state.connection, state.database, "sql"].join("\0");
   if (state.table !== null && state.records !== null) {
-    const sizes = (tab: string) => [state.connection, state.database, state.table, tab].join("\0");
-    nodes.push(
-      tag("h3", "database-work-title", `${state.database}.${state.table}`),
-      tabsNode(TABS, state.tab, actions.tab),
-      state.tab === "structure" && state.structure !== null
-        ? structureNode(state.structure, sizes("structure"))
-        : state.tab === "sql"
-          ? sqlNode(state.sql, actions, sqlSizes)
-          : recordsNode(state.records, actions, sizes("records")),
-    );
+    nodes.push(...tableNodes({ ...state, table: state.table, records: state.records }, actions));
   } else {
     nodes.push(tag("h3", "database-work-title", state.database), tabsNode(DATABASE_TABS, state.databaseTab, actions.databaseTab));
     if (state.databaseTab === "sql") nodes.push(sqlNode(state.sql, actions, sqlSizes));
@@ -363,9 +386,31 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   }
 }
 
-// Puts the focus and the caret in the field of the SQL tab (a new query).
-export function focusSqlField() {
-  const field = $("database-work").querySelector<HTMLTextAreaElement>('[data-key="sql-input"]');
+// What each box of a tab of the Orca screen shows now.
+const tabDrawn = new WeakMap<HTMLElement, string>();
+
+// Draws a tab of the work pane of the Orca screen into its box (A-43): a table with its tabs, or the SQL of a database. The box is drawn again only when what it shows changes, and the focus and the caret stay.
+export function drawTableTab(box: HTMLElement, state: TabState, actions: TabActions) {
+  const key = keyOf(state);
+  if (key === tabDrawn.get(box)) return;
+  tabDrawn.set(box, key);
+  const active = document.activeElement as HTMLElement | null;
+  const focused = active !== null && box.contains(active) ? active.dataset?.key : undefined;
+  const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
+  box.classList.add("database-fill");
+  const nodes: Node[] = state.table !== null ? [] : [tag("h3", "database-work-title", state.database), sqlNode(state.sql, actions, [state.connection, state.database, "sql"].join("\0"))];
+  if (state.table !== null) nodes.push(...(state.records === null ? [tag("h3", "database-work-title", `${state.database}.${state.table}`)] : tableNodes({ ...state, table: state.table, records: state.records }, actions)));
+  box.replaceChildren(...nodes);
+  if (focused) {
+    const again = box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`);
+    again?.focus({ preventScroll: true });
+    if (caret !== null && again instanceof HTMLTextAreaElement) again.setSelectionRange(caret[0], caret[1]);
+  }
+}
+
+// Puts the focus and the caret in the field of the SQL tab (a new query), in `box` (the work pane of the database screen when none is given).
+export function focusSqlField(box: HTMLElement = $("database-work")) {
+  const field = box.querySelector<HTMLTextAreaElement>('[data-key="sql-input"]');
   field?.focus({ preventScroll: true });
   field?.setSelectionRange(0, 0);
 }

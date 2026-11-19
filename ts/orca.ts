@@ -1,6 +1,6 @@
 // The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine or of a saved environment);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
-// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history, and the definition of a name of the editor (A-34, orca-definition.ts), one tab for a project, that opens in a pane under the pane of the editor.
+// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history, and the definition of a name of the editor (A-34, orca-definition.ts), one tab for a project, that opens in a pane under the pane of the editor, and so are a table and the SQL of a database from the database part of the file pane (A-43, orca-database-tabs.ts).
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments.
@@ -9,6 +9,7 @@
 // A search field in the row of the heading 「プロジェクト」 (A-19), opened by the magnifier at the right end of the row or by ⌘J, narrows the projects by name.
 // While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
+import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { OrcaLocal } from "./bindings/OrcaLocal";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
@@ -23,13 +24,15 @@ import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { childrenKnown, currentFormation, deselectFormation, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
-import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
+import { closeConnectionTabs, closeDatabaseTab, databaseTabsOf, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
+import { initOrcaDatabase } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, resolveServers, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
@@ -206,10 +209,10 @@ export function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34).
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43).
 interface Tab {
   id: string;
-  kind: "claude" | "plain" | "file" | "diff" | "definition";
+  kind: "claude" | "plain" | "file" | "diff" | "definition" | "database";
   status: OrcaStatus;
   label: string;
   title: string;
@@ -234,8 +237,8 @@ interface Tab {
   gem?: boolean;
 }
 
-// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name.
-const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition";
+// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name; or the page of a database (it has the main worktree of its project, so the file pane keeps its worktree).
+const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition" || t.kind === "database";
 
 // Where an item of a list is (A-6): the saved environment's name, null for this machine (an item with no `environment` is this machine's).
 const placeOf = (item: { environment?: string | null }) => item.environment ?? null;
@@ -293,6 +296,10 @@ function tabsOf(key: string): Tab[] {
   for (const d of definitionsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.query.path)?.where ?? mix.worktrees.find((w) => w.path === d.query.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.query.path))?.label;
     tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+  }
+  const main = mix.worktrees.find((w) => w.projectKey === key && w.isMain);
+  for (const d of databaseTabsOf(place, key)) {
+    tabs.push({ id: d.id, kind: "database", status: "done", label: "", title: d.title, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -608,8 +615,9 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : t.kind === "database" ? databaseIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   if (t.kind === "definition") wrap.dataset.definition = "true";
+  if (t.kind === "database") wrap.dataset.database = "true";
   if (t.kind === "file") {
     wrap.dataset.file = "true";
     if (t.outside) {
@@ -662,6 +670,13 @@ function diffIcon() {
 function definitionIcon() {
   const icon = tag("span", "orca-ic orca-file-tab-ic");
   icon.innerHTML = DEFINITION_SVG;
+  return icon;
+}
+
+// The mark of a database tab.
+function databaseIcon() {
+  const icon = tag("span", "orca-ic orca-file-tab-ic");
+  icon.innerHTML = DATABASE_SVG;
   return icon;
 }
 
@@ -756,6 +771,18 @@ function syncDefinition(tabs: Tab[]) {
   showDefinitions(placements);
 }
 
+// Shows the page of the database tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
+function syncDatabase(tabs: Tab[]) {
+  const layout = shown() ? currentLayout() : null;
+  const placements: { id: string; host: HTMLElement }[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = tabOfId(tabs, pane.selected);
+    const host = editorHostOf(pane.id);
+    if (tab?.kind === "database" && host) placements.push({ id: tab.id, host });
+  }
+  showDatabaseTabs(placements);
+}
+
 // The git worktrees that the list of branches of the file pane showed and Orca's list lacks (A-25), by target and path: the label of their heading and of the tabs of their files, and the git branch they are on.
 const gitWorktrees = new Map<string, { project: string; target: string | null; path: string; label: string; gitBranch: string }>();
 const gitKey = (target: string | null, path: string) => `${target ?? ""}\n${path}`;
@@ -825,6 +852,22 @@ function openPlace(place: DefinitionOpen) {
   else chooseTab(id);
   draw();
   goTo(id, line, character);
+}
+
+// A table of the database part of the file pane was pressed (A-43): it opens as a tab in the focused pane and is selected, with the first page of its records; one that is open already is selected and read again.
+function openDatabaseTable(profile: DatabaseProfileView, database: string, table: string) {
+  if (projectKey === null || view === null) return;
+  started = null;
+  chooseTab(openTable(projectPlace(projectKey), projectKey, profile, database, table).tab.id);
+  draw();
+}
+
+// 「新規クエリ」 of a database of the database part was pressed (A-43): the SQL of the database opens as a new tab in the focused pane, and takes the typing.
+function openDatabaseQuery(profile: DatabaseProfileView, database: string) {
+  if (projectKey === null || view === null) return;
+  started = null;
+  chooseTab(openQuery(projectPlace(projectKey), projectKey, profile, database).id);
+  draw();
 }
 
 // The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
@@ -935,7 +978,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
+  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
@@ -989,6 +1032,7 @@ function draw() {
   syncEditor(tabs);
   syncDiff(tabs);
   syncDefinition(tabs);
+  syncDatabase(tabs);
 }
 
 // ---- the stream of a saved environment ----
@@ -1305,8 +1349,8 @@ async function closeTab(tab: Tab) {
     draw();
     return;
   }
-  if (tab.kind === "diff" || tab.kind === "definition") {
-    (tab.kind === "diff" ? closeDiff : closeDefinition)(tab.id);
+  if (tab.kind === "diff" || tab.kind === "definition" || tab.kind === "database") {
+    (tab.kind === "diff" ? closeDiff : tab.kind === "definition" ? closeDefinition : closeDatabaseTab)(tab.id);
     closing.delete(tab.id);
     draw();
     return;
@@ -1537,6 +1581,9 @@ export function initOrca() {
   initOrcaEditor({ changed: draw, error: (e) => showFailure("orca", e), definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
   initLsp({ changed: ({ target, project }) => resolveServers(target, project) });
   initDefinition({ open: openPlace });
+  initOrcaDatabase({ table: openDatabaseTable, query: openDatabaseQuery, gone: (id) => {
+      if (closeConnectionTabs(id)) draw();
+    } });
   initOrcaFiles({ open: (relative) => openFile(relative), diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
     // A git worktree that Orca's list lacks is on the branch the switch made, which the list cannot say.

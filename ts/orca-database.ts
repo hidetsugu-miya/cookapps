@@ -1,6 +1,7 @@
-// The database part of the file pane of the Orca screen (A-43): the connections of the database screen (D-1) as the tree of D-3, in the fourth part of the pane. A press on a connection opens it (`database_connect`) and lists its databases, a press on a database lists its tables (`database_tables`), as the side menu of the database screen does; the tree is drawn by the same module (database-side.ts). A press on a table only selects its row.
-// This module holds the list that `database_profiles` last answered and what each connection has opened here; the database screen holds its own (database.ts), and the two share only Rust's sessions (a connection opened in one is open in the other, and a press here reads again). The menus have no edit and no delete (the edit pane belongs to the database screen), and the menu of a database has no new query.
+// The database part of the file pane of the Orca screen (A-43): the connections of the database screen (D-1) as the tree of D-3, in the fourth part of the pane. A press on a connection opens it (`database_connect`) and lists its databases, a press on a database lists its tables (`database_tables`), as the side menu of the database screen does; the tree is drawn by the same module (database-side.ts). A press on a table selects its row and opens it as a tab of the work pane.
+// This module holds the list that `database_profiles` last answered and what each connection has opened here; the database screen holds its own (database.ts), and the two share only Rust's sessions (a connection opened in one is open in the other, and a press here reads again). The menus have no edit and no delete (the edit pane belongs to the database screen).
 // The list and the open connections (`database_connections`) are read each time the part is shown, and nothing is read at an interval.
+// A press on a table, and 「新規クエリ」 of a database, open a tab of the work pane (A-43, orca-database-tabs.ts), which the screen makes (`hooks`); a connection that is disconnected, deleted from the list or closed by Rust takes its tabs with it (`gone`).
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
@@ -26,6 +27,14 @@ interface ConnectionState {
   databases: string[];
   byName: Map<string, DatabaseState>;
 }
+
+// What the screen does for the part: opens the tab of a table or the SQL tab of a database in the work pane, and closes the tabs of a connection that is not open any more.
+interface Handlers {
+  table: (profile: DatabaseProfileView, database: string, table: string) => void;
+  query: (profile: DatabaseProfileView, database: string) => void;
+  gone: (id: string) => void;
+}
+let hooks: Handlers = { table: () => {}, query: () => {}, gone: () => {} };
 
 let profiles: DatabaseProfileView[] = [];
 let selected: Selected | null = null;
@@ -77,8 +86,16 @@ async function read() {
     const [list, open] = await Promise.all([invoke("database_profiles"), invoke("database_connections")]);
     if (seq !== loadSeq) return;
     profiles = list;
-    for (const id of [...connections.keys()]) if (!list.some((p) => p.id === id)) connections.delete(id);
-    for (const [id, c] of connections) if (c.connected && !c.loading && !open.includes(id)) connections.delete(id);
+    for (const id of [...connections.keys()]) {
+      if (list.some((p) => p.id === id)) continue;
+      connections.delete(id);
+      hooks.gone(id);
+    }
+    for (const [id, c] of connections) {
+      if (!c.connected || c.loading || open.includes(id)) continue;
+      connections.delete(id);
+      hooks.gone(id);
+    }
     for (const p of list) {
       if (!open.includes(p.id)) continue;
       const c = connections.get(p.id) ?? emptyConnection();
@@ -103,10 +120,18 @@ async function dropClosed(): Promise<string[]> {
   const dropped = [...connections].filter(([id, c]) => c.connected && !open.includes(id)).map(([id]) => id);
   for (const id of dropped) {
     connections.delete(id);
+    hooks.gone(id);
     if (selected?.id === id) selected = { id, database: null, table: null };
   }
   if (dropped.length > 0) draw();
   return dropped;
+}
+
+// A read of a tab of the work pane showed the stream of the connection broken: when Rust closed it, its tree closes and says why, and its tabs close.
+export async function lostConnection(id: string, error: string) {
+  if (!(await dropClosed()).includes(id)) return;
+  connections.set(id, { ...emptyConnection(), expanded: true, error });
+  draw();
 }
 
 // Opens the connection (when it is not open) and reads its databases.
@@ -135,6 +160,7 @@ async function openConnection(profile: DatabaseProfileView) {
     c.databases = [];
     c.byName.clear();
     c.error = String(e);
+    hooks.gone(profile.id);
   }
   c.loading = false;
   c.output = null;
@@ -190,9 +216,17 @@ const actions: SideActions = {
     }
     void openDatabase(profile, c, name);
   },
+  // The table opens as a tab of the work pane.
   pressTable: (profile, database, table) => {
     selected = { id: profile.id, database, table };
     draw();
+    hooks.table(profile, database, table);
+  },
+  // The SQL of the database opens as a tab of the work pane.
+  newQuery: (profile, database) => {
+    selected = { id: profile.id, database, table: null };
+    draw();
+    hooks.query(profile, database);
   },
   // The tree of the database closes and the connection stays.
   closeDatabase: (profile, database) => {
@@ -203,6 +237,7 @@ const actions: SideActions = {
   },
   disconnect: async (profile) => {
     connections.delete(profile.id);
+    hooks.gone(profile.id);
     if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
     closing.add(profile.id);
     draw();
@@ -221,7 +256,8 @@ export function syncOrcaDatabase(shown: boolean) {
   on = shown;
 }
 
-export function initOrcaDatabase() {
+export function initOrcaDatabase(handlers: Handlers) {
+  hooks = handlers;
   // Rust tells each line that the script of a connection writes while the connection opens (D-3). A line for a connection that is not opening here is dropped.
   window.__TAURI__.event.listen<DatabaseScriptOutput>("database-script-output", ({ payload }) => {
     const c = connections.get(payload.id);

@@ -17,7 +17,7 @@ import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
-import { initOrcaDatabase, syncOrcaDatabase } from "./orca-database.js";
+import { syncOrcaDatabase } from "./orca-database.js";
 import { syncLsp } from "./orca-lsp.js";
 import { toast } from "./toast.js";
 import { showFailure } from "./error-card.js";
@@ -929,5 +929,4 @@ export function initOrcaFiles(on: { open: (relative: string) => void; diff: (rel
   $("orca-files-mode-server").onclick = () => chooseMode("server");
   $("orca-files-mode-database").innerHTML = DATABASE_SVG;
   $("orca-files-mode-database").onclick = () => chooseMode("database");
-  initOrcaDatabase();
 }

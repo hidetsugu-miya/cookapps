@@ -2107,9 +2107,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-dot[data-state="connecting"] { background: var(--agent-working); }
 .database-note { margin: 0; padding: 2px 8px 2px calc(26px + var(--depth, 0) * 16px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .database-note.danger { color: var(--danger); }
-#database-work { padding: 16px 24px; font-size: calc(13px * var(--fs)); }
+#database-work, .orca-database-tab { padding: 16px 24px; font-size: calc(13px * var(--fs)); }
 .database-work-title { margin: 0 0 12px; font-size: calc(15px * var(--fs)); overflow-wrap: anywhere; }
-#database-work .database-note { padding: 0; }
+#database-work .database-note, .orca-database-tab .database-note { padding: 0; }
 .database-tables { width: 100%; border-collapse: collapse; }
 .database-tables th, .database-tables td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .database-tables th { color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; border-top: 1px solid var(--line); }
@@ -2118,7 +2118,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-tables tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .database-tables .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* D-4: the tabs of a table, the grid of its records and, under it, the range and the pager. */
-#database-work.database-fill { display: flex; flex-direction: column; }
+#database-work.database-fill, .orca-database-tab.database-fill { display: flex; flex-direction: column; }
+/* A-43: a table or the SQL of a database as a tab of the work pane of the Orca screen, in the host of the editor, which draws the same body as the database screen's work pane. */
+.orca-database-tab { flex: 1; min-height: 0; overflow: auto; }
 .database-tabs { flex: none; display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
 .database-tab { height: 32px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: var(--muted); cursor: pointer; }
 .database-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: inherit; font-weight: 600; }
