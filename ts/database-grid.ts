@@ -172,8 +172,9 @@ export function gridNode(columns: string[], rows: DatabaseCell[][], widthKey: st
       if (cell.kind === "text") td.title = cell.text;
       if (held) {
         paintCell(td, cell, r, i, held.edit);
-        // Whether the cell can be rewritten is asked when it is pressed twice: the grid is not made again when that changes.
+        // Whether the cell can be rewritten is asked when it is pressed twice: the grid is not made again when that changes. A cell that holds a field is left to it: a double press in the field (a word selected) opens no second one.
         td.ondblclick = () => {
+          if (td.firstElementChild !== null) return;
           const now = held.edit;
           if (now.editable(r, i) && !now.deleted(r)) editCell(td, now.startText(r, i), (text) => held.edit.commit(r, i, text));
         };

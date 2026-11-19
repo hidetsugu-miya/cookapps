@@ -1512,7 +1512,7 @@ describe("database: tree", () => {
       const changes = () => $("#database-work .database-changes");
       const popup = () => $('.pop[role="alertdialog"]');
       const colorOf = (r: number, c: number) => browser.execute((rr, cc) => getComputedStyle(document.querySelector(`#database-work .database-grid tbody tr:nth-child(${rr}) td:nth-child(${cc})`)!).color, r, c);
-      // The page's own double press on a cell, as the other specs press twice (the driver's double click is checked once, below).
+      // The page's own double press on a cell, as the other specs press twice: the driver's double click reaches no cell of WKWebView with a dblclick (the cells of the first spec below stay the same elements and no field opens), so a press is the driver's and the second is the page's.
       const doublePress = (r: number, c: number) =>
         browser.execute(
           (rr, cc, once) => {
@@ -1539,7 +1539,7 @@ describe("database: tree", () => {
         return { calls, apply };
       }
 
-      it("keeps the rows and the cells in place when a row is pressed, so that a real double press reaches the cell and opens its field", async () => {
+      it("keeps the rows and the cells in place when a row is pressed, so that a double press after it reaches the cell and opens its field", async () => {
         await openEdits();
         await browser.execute(() => {
           for (const td of document.querySelectorAll("#database-work .database-grid td")) (td as HTMLElement & { kept?: boolean }).kept = true;
@@ -1547,10 +1547,27 @@ describe("database: tree", () => {
         await cell(1, 2).click();
         await expect($("#database-work tbody tr:nth-child(1)")).toHaveElementClass("selected");
         expect(await browser.execute(() => [...document.querySelectorAll("#database-work .database-grid td")].every((td) => (td as HTMLElement & { kept?: boolean }).kept === true))).toBe(true);
-        await cell(1, 2).doubleClick();
+        await doublePress(1, 2);
         await field().waitForExist();
         expect(await field().getValue()).toBe("Alice");
         await expect($("#database-work tbody tr:nth-child(1)")).toHaveElementClass("selected");
+      });
+
+      it("opens no second field on a double press inside the field that is open, so that the cell keeps its text", async () => {
+        await openEdits();
+        await startEdit(1, 2);
+        await field().setValue("Alicia");
+        await browser.execute(
+          (once) => {
+            if (!window.__e2e_once__(once)) return;
+            document.querySelector("#database-work .database-cell input")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+          },
+          onceId(),
+        );
+        expect(await count("#database-work .database-cell input")).toBe(1);
+        expect(await field().getValue()).toBe("Alicia");
+        await browser.keys("Escape");
+        await expect(cell(1, 2)).toHaveText("Alice");
       });
 
       it("keeps the field that is open, with the focus, when something else draws the pane", async () => {
@@ -1727,6 +1744,8 @@ describe("database: tree", () => {
 
       it("shows the refusal of ✓ on a card and keeps every change, so that ✓ can be pressed again", async () => {
         const { calls } = await openEdits();
+        // The connection is still open on Rust's side, so the refusal closes nothing (D-3).
+        await mock("database_connections", ["p1"]);
         const failing = await mock("database_apply", rejects("1 件目の更新で、対象の行が 0 行ありました。変更はすべて取り消しました"));
         await rewrite(1, 2, "Alicia");
         await button("apply").click();
@@ -1735,7 +1754,8 @@ describe("database: tree", () => {
         await expect(cell(1, 2)).toHaveText("Alicia");
         await expect(changes()).toHaveText("変更 1 件");
         await expect(button("apply")).toBeEnabled();
-        expect(await callsOf(calls)).toEqual([]);
+        // Only the read that opened the table: the refusal reads nothing again.
+        expect(await callsOf(calls)).toEqual([read(0)]);
         const again = await mock("database_apply", { inserted: 0, updated: 1, deleted: 0 });
         await mock("database_records", fresh);
         await button("apply").click();
@@ -1765,7 +1785,8 @@ describe("database: tree", () => {
         await expect(pageInput()).toHaveElementProperty("readOnly", true);
         await pageInput().click();
         await browser.keys("Enter");
-        expect(await callsOf(calls)).toEqual([]);
+        // Only the read that opened the table: nothing was read while something is gathered.
+        expect(await callsOf(calls)).toEqual([read(0)]);
         await button("revert").click();
         for (const key of ["reload", "next", "last"]) await expect(button(key)).toBeEnabled();
         await expect(pageInput()).toHaveElementProperty("readOnly", false);
