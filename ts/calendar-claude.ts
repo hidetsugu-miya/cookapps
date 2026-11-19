@@ -1,4 +1,4 @@
-// The Claude pane of the calendar screen (C-6): Claude Code in a terminal (A-36, ts/claude-code.ts), with the tools of tsunagiai-mcp only (no built-in tools), at the right of the week and under the bar.
+// The Claude pane of the calendar screen (C-6): Claude Code in a terminal (A-36, ts/claude-code.ts), with the tools of tsunagiai-mcp only (no built-in tools; the calendar ones, and in the auto permission mode, #1074), at the right of the week and under the bar.
 // The pane's elements are in `index.html` (`cal-claude`, `cal-claude-term`, the host of the terminal, `cal-claude-restart` and the divider `cal-split`); the ✳ at the right end of the bar opens and closes it.
 // Closed, the pane and the divider are not drawn and nothing runs; the week takes the whole width. Open, the terminal is shown while the screen is in view, and the process goes on while it is hidden (another screen, a hidden window).
 // Closing ends the process with everything it started. `closeCalendarClaude` is the one place that closes the pane.
@@ -40,7 +40,7 @@ export function syncCalendarClaude() {
   if (!open) return;
   const host = $("cal-claude-term");
   if (document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
-  if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
+  if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, permissionMode: "auto", prompt: firstPrompt() }, OWNER);
 }
 
 // The screen is left.

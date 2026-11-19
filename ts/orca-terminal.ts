@@ -19,6 +19,7 @@
 import type { Appearance } from "./bindings/Appearance";
 import type { ClaudeCodeEvent } from "./bindings/ClaudeCodeEvent";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
+import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { TerminalColors } from "./bindings/TerminalColors";
 import type { TerminalSettings } from "./bindings/TerminalSettings";
@@ -57,14 +58,14 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 
 // Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
-// `pty` is what a pty is started with: whether Claude Code keeps its own tools, the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
+// `pty` is what a pty is started with: whether Claude Code keeps its own tools, how it asks for a tool ("manual" asks for every tool that writes, "auto" is the calendar pane's, #1074), the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
 // `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, or a read that says the terminal is not listed, which also stops the mirror's reads. The last screen stays drawn.
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
   path: string;
   environment: string | null;
-  pty?: { builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; onEnd?: () => void };
+  pty?: { builtinTools: boolean; permissionMode: ClaudeCodePermissionMode; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; onEnd?: () => void };
   onGone?: () => void;
 }
 
@@ -560,7 +561,7 @@ function startPty(instance: Instance) {
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   const { handle, pty } = instance.source;
-  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, skill: pty?.skill ?? null, prompt: pty?.prompt ?? null, channel }).then(
+  instance.ready = invoke("claude_code_start", { id: handle, viewport, builtinTools: pty?.builtinTools ?? false, permissionMode: pty?.permissionMode ?? "manual", skill: pty?.skill ?? null, prompt: pty?.prompt ?? null, channel }).then(
     (launch) => launch,
     (e) => {
       if (instance.channel === channel) drawPty(instance, { kind: "ended", message: String(e), clean: false });

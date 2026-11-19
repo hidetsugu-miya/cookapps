@@ -145,7 +145,7 @@ describe("development screen: orchestration", () => {
   it("starts the orchestrator with the pane id of its formation, Claude Code's own tools, no skill and no project, in the size of the left pane", async () => {
     await openFormation();
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "formation:formation", builtinTools: true, skill: null });
+    expect(start).toMatchObject({ id: "formation:formation", builtinTools: true, permissionMode: "manual", skill: null });
     const { cols, rows } = (start as { viewport: { cols: number; rows: number } }).viewport;
     expect(cols).toBeGreaterThan(30);
     expect(rows).toBeGreaterThan(8);

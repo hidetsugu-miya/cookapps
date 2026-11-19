@@ -870,7 +870,7 @@ describe("orca: definition (A-34)", () => {
     await expect(paneOf()).toBeDisplayed();
     await expect($("#orca-lsp-claude-term.claude-code-pane")).toBeDisplayed();
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "lsp-claude", builtinTools: true, skill: null, prompt: askText });
+    expect(start).toMatchObject({ id: "lsp-claude", builtinTools: true, permissionMode: "manual", skill: null, prompt: askText });
     // Under the cards, inside the language server part.
     expect(await browser.execute(() => document.getElementById("orca-lsp-cards")!.nextElementSibling?.id)).toBe("orca-lsp-claude");
     expect(await callsOf("lsp_settings_set")).toEqual([]);
