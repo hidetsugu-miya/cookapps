@@ -19,11 +19,11 @@ pub mod write;
 use std::{
     collections::HashMap,
     path::Path,
-    sync::{LazyLock, Mutex, MutexGuard},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -33,6 +33,8 @@ const FILE: &str = "database-profiles.json";
 const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai.database";
 const NAME_MAX: usize = 100;
 const PORT_MAX: u32 = 65535;
+/// The event that tells the screen a line of the output of the script of a connection that opens (D-3, #1027).
+const SCRIPT_OUTPUT_EVENT: &str = "database-script-output";
 /// A save reads the file, changes it and writes it again by a temporary name beside it: two at once would lose a change.
 static SAVING: Mutex<()> = Mutex::new(());
 
@@ -55,6 +57,30 @@ pub struct DatabaseProfile {
     /// A number wider than a port, so that a value out of range reaches `check` and is refused in Japanese.
     /// A file saved while a connection with a script needed none (#719) may hold 0, which `check_address` refuses until the owner puts a port in.
     pub db_port: u32,
+}
+
+/// A line of the output of the script of the connection `id`, as the event `database-script-output` carries it. It is shown on the screen while the connection opens, and goes to no log and no file.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct DatabaseScriptOutput {
+    pub id: String,
+    pub line: String,
+}
+
+/// Tells the screen each line of the output of the script of the connection `id`.
+fn script_output_to_screen(app: &AppHandle, id: &str) -> script::OnLine {
+    let (app, id) = (app.clone(), id.to_owned());
+    Arc::new(move |line| {
+        // A screen that is not listening loses nothing: the line is only what it shows while the connection opens.
+        let _ = app.emit(
+            SCRIPT_OUTPUT_EVENT,
+            DatabaseScriptOutput {
+                id: id.clone(),
+                line,
+            },
+        );
+    })
 }
 
 /// A profile as the screen gets it.
@@ -428,9 +454,11 @@ fn test_password(
 /// Starts the script of `profile` when it has one (D-1) and answers where MySQL is reached, and the id of the script to end (none when there is no script).
 /// The host and the port are the connection's own, and are checked here too: a profile saved with none (#719) is refused until they are put in.
 /// The test of a connection (D-2) and the opening of one (D-3) both go through this.
+/// `on_line` gets the lines of the script's output while it is awaited (D-3).
 async fn open_endpoint(
     scripts: &script::Scripts,
     profile: &DatabaseProfile,
+    on_line: Option<script::OnLine>,
 ) -> Result<(mysql::Endpoint, Option<u64>), String> {
     let port = check_address(&profile.db_host, profile.db_port)?;
     let script = if profile.script.is_empty() {
@@ -438,7 +466,7 @@ async fn open_endpoint(
     } else {
         Some(
             scripts
-                .open(&profile.db_host, port, &profile.script)
+                .open(&profile.db_host, port, &profile.script, on_line)
                 .await?,
         )
     };
@@ -458,7 +486,7 @@ pub async fn test_connection(
     password: &str,
 ) -> Result<String, String> {
     let profile = check(profile, &[])?;
-    let (endpoint, script) = open_endpoint(scripts, &profile).await?;
+    let (endpoint, script) = open_endpoint(scripts, &profile, None).await?;
     let tested = mysql::server_version(&endpoint, &profile.username, password).await;
     if let Some(id) = script {
         scripts.close(id).await;
@@ -546,8 +574,9 @@ async fn open_session(
     scripts: &script::Scripts,
     profile: &DatabaseProfile,
     password: &str,
+    on_line: Option<script::OnLine>,
 ) -> Result<(), String> {
-    let (endpoint, script) = open_endpoint(scripts, profile).await?;
+    let (endpoint, script) = open_endpoint(scripts, profile, on_line).await?;
     let connection = match mysql::connect(&endpoint, &profile.username, password).await {
         Ok(connection) => connection,
         Err(e) => {
@@ -681,7 +710,8 @@ pub async fn database_connect(
             tokio::task::spawn_blocking(move || saved_login(&dir, &Keychain, &wanted))
                 .await
                 .map_err(|e| e.to_string())??;
-        open_session(&sessions, &scripts, &profile, &password).await?;
+        let on_line = script_output_to_screen(&app, &id);
+        open_session(&sessions, &scripts, &profile, &password, Some(on_line)).await?;
         // A save or a delete that came while it opened found no session to close: look again, and close what was opened with a login that is gone.
         let dir = config_dir(&app)?;
         let wanted = id.clone();
@@ -1546,7 +1576,7 @@ mod tests {
             db_port: 3307,
             ..direct("a")
         };
-        let (endpoint, script) = open_endpoint(&scripts, &profile).await.unwrap();
+        let (endpoint, script) = open_endpoint(&scripts, &profile, None).await.unwrap();
         assert_eq!(
             (endpoint.host.as_str(), endpoint.port, endpoint.scripted),
             ("db.example.com", 3307, false)
@@ -1564,7 +1594,7 @@ mod tests {
             ..scripted("a")
         };
         assert_eq!(
-            open_endpoint(&scripts, &old).await.unwrap_err(),
+            open_endpoint(&scripts, &old, None).await.unwrap_err(),
             "DB のホストを入力してください"
         );
         assert_eq!(
@@ -1578,7 +1608,9 @@ mod tests {
             ..scripted("a")
         };
         assert_eq!(
-            open_endpoint(&scripts, &out_of_range).await.unwrap_err(),
+            open_endpoint(&scripts, &out_of_range, None)
+                .await
+                .unwrap_err(),
             "ポートは 1 から 65535 の間で入力してください"
         );
         let no_port = DatabaseProfile {
@@ -1586,12 +1618,12 @@ mod tests {
             ..direct("a")
         };
         assert_eq!(
-            open_endpoint(&scripts, &no_port).await.unwrap_err(),
+            open_endpoint(&scripts, &no_port, None).await.unwrap_err(),
             "ポートは 1 から 65535 の間で入力してください"
         );
         let sessions = session::Sessions::default();
         assert_eq!(
-            open_session(&sessions, &scripts, &old, "pw")
+            open_session(&sessions, &scripts, &old, "pw", None)
                 .await
                 .unwrap_err(),
             "DB のホストを入力してください"
@@ -1616,7 +1648,7 @@ mod tests {
             db_port: u32::from(port),
             ..direct("a")
         };
-        let (endpoint, script) = open_endpoint(&scripts, &profile).await.unwrap();
+        let (endpoint, script) = open_endpoint(&scripts, &profile, None).await.unwrap();
         assert_eq!(
             (endpoint.host.as_str(), endpoint.port, endpoint.scripted),
             ("127.0.0.1", port, true)
@@ -1647,7 +1679,7 @@ mod tests {
         );
         let sessions = session::Sessions::default();
         assert_eq!(
-            open_session(&sessions, &scripts, &profile, "pw")
+            open_session(&sessions, &scripts, &profile, "pw", None)
                 .await
                 .unwrap_err(),
             expected
@@ -1657,7 +1689,7 @@ mod tests {
             script: String::new(),
             ..profile
         };
-        assert!(open_endpoint(&scripts, &plain).await.is_ok());
+        assert!(open_endpoint(&scripts, &plain, None).await.is_ok());
     }
 
     #[test]
@@ -1732,7 +1764,7 @@ mod tests {
         };
         let expected = "接続のスクリプトが、準備ができる前に終了しました（終了コード 0）。標準エラーの最後の行: no route";
         assert_eq!(
-            open_endpoint(&scripts, &profile).await.unwrap_err(),
+            open_endpoint(&scripts, &profile, None).await.unwrap_err(),
             expected
         );
         assert_eq!(
@@ -1743,7 +1775,7 @@ mod tests {
         );
         let sessions = session::Sessions::default();
         assert_eq!(
-            open_session(&sessions, &scripts, &profile, "pw")
+            open_session(&sessions, &scripts, &profile, "pw", None)
                 .await
                 .unwrap_err(),
             expected

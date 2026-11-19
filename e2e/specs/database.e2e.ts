@@ -1,6 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForLog } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForLog } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 // The read of the list at an interval (#866) put so far off that a spec that counts the reads of the list meets none of it.
@@ -881,6 +881,55 @@ describe("database: tree", () => {
     await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
     await expect(dot("p1")).toHaveAttribute("data-state", "connected");
     expect(await notes()).toEqual([]);
+  });
+
+  it("shows the last line of the script's output under the connection while it opens, as text, and keeps 接続中… until the first line", async () => {
+    await openDatabase();
+    const connect = await mock("database_connect", holds);
+    await row("p1").click();
+    await waitForCalls(connect);
+    expect(await notes()).toEqual(["接続中…"]);
+    await emitEvent("database-script-output", { id: "p1", line: "Starting session" });
+    await browser.waitUntil(async () => (await notes())[0] === "Starting session");
+    expect(await notes()).toEqual(["Starting session"]);
+    await emitEvent("database-script-output", { id: "p1", line: "<b>Port 3307</b> opened" });
+    await browser.waitUntil(async () => (await notes())[0] === "<b>Port 3307</b> opened");
+    expect(await notes()).toEqual(["<b>Port 3307</b> opened"]);
+    expect(await count("#database-side-feed .database-note b")).toBe(0);
+    await expect(dot("p1")).toHaveAttribute("data-state", "connecting");
+    // A line of a connection that is not opening shows nowhere.
+    await emitEvent("database-script-output", { id: "p2", line: "of another connection" });
+    await emitEvent("database-script-output", { id: "p1", line: "second" });
+    await browser.waitUntil(async () => (await notes())[0] === "second");
+    expect(await notes()).toEqual(["second"]);
+    await release("database_connect", ["shop"]);
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
+    expect(await notes()).toEqual([]);
+    // A line that comes after the opening ended is dropped.
+    await emitEvent("database-script-output", { id: "p1", line: "late" });
+    await emitEvent("database-script-output", { id: "p2", line: "late" });
+    expect(await notes()).toEqual([]);
+  });
+
+  it("drops the output of the script when the opening fails, and shows the error as before", async () => {
+    await openDatabase();
+    const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required";
+    const connect = await mock("database_connect", holds);
+    await row("p1").click();
+    await waitForCalls(connect);
+    await emitEvent("database-script-output", { id: "p1", line: "aws login required" });
+    await browser.waitUntil(async () => (await notes())[0] === "aws login required");
+    await release("database_connect", rejects(message));
+    await browser.waitUntil(async () => (await notes())[0] === message);
+    expect(await notes()).toEqual([message]);
+    await expect($("#database-side-feed .database-note")).toHaveElementClass("danger");
+    // The next opening starts with no line of the one before.
+    const again = await mock("database_connect", holds);
+    await row("p1").click();
+    await waitForCalls(again);
+    expect(await notes()).toEqual(["接続中…"]);
+    await release("database_connect", ["shop"]);
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
   });
 
   it("shows the error of a connection that cannot be opened under it, with a gray dot, and opens again on the next press", async () => {

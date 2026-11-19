@@ -6,6 +6,7 @@
 //! A port that something answers on before the script is run is an error, and the script is not run.
 //! The script is ready when a TCP connection to `{host}:{TSUNAGIAI_PORT}` succeeds. It fails when the script ends before that (an exit code of 0 too), when it is not ready in two minutes,
 //! and, once it was ready, when it ends: the connection is then closed. The error holds the last lines of the script's standard error.
+//! While it is awaited, the lines of its standard output and standard error go to the caller (`OnLine`, `screen_line`: the control characters taken out, each cut short), and after it is ready nothing more is given on (the output is still read, so that the script never waits for a pipe).
 //! The script runs in a process group of its own, which is sent SIGTERM when the connection is closed and the app exits, and SIGKILL when it is still there after a few seconds.
 //!
 //! `start` takes the folder for the script file as a `&Path`, so that `tsunagiai-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
@@ -18,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex as StdMutex,
     },
     time::{Duration, Instant},
@@ -27,7 +28,7 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
     net::TcpStream,
-    process::{Child, Command},
+    process::{Child, ChildStderr, ChildStdout, Command},
     sync::{oneshot, watch, Mutex},
     task::JoinHandle,
 };
@@ -89,6 +90,48 @@ fn with_shebang(body: &str) -> String {
         body.to_owned()
     } else {
         format!("#!/bin/sh\n{body}")
+    }
+}
+
+/// Where the lines of a script's output go while the script is awaited (the connection that opens shows the last one, D-3, #1027).
+/// It is called with a line that `screen_line` made, never an empty one.
+pub type OnLine = Arc<dyn Fn(String) + Send + Sync>;
+
+/// What a line of the output is on the screen: the control characters taken out (a tab becomes a space) and the line cut to `shorten`'s length; none when no text is left.
+fn screen_line(raw: &str) -> Option<String> {
+    let text: String = raw
+        .chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect();
+    let text = shorten(&text);
+    (!text.is_empty()).then_some(text)
+}
+
+/// Gives the lines of the output on while `awaited` holds, and nothing after that: a script that stays up writes for as long as it runs.
+#[derive(Clone)]
+struct Sink {
+    on_line: OnLine,
+    awaited: Arc<AtomicBool>,
+}
+
+impl Sink {
+    fn line(&self, raw: &str) {
+        if !self.awaited.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(text) = screen_line(raw) {
+            (self.on_line)(text);
+        }
+    }
+}
+
+/// Ends the wait for the script when `start` returns, by any way.
+struct Awaiting(Arc<AtomicBool>);
+
+impl Drop for Awaiting {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
     }
 }
 
@@ -209,20 +252,48 @@ async fn spawn(command: &mut Command) -> std::io::Result<Child> {
     }
 }
 
-/// Reads the standard error to its end, keeping the last lines. Text that is not UTF-8 is read with replacement characters.
-async fn read_stderr<R: AsyncRead + Unpin>(stderr: R, tail: Arc<StdMutex<VecDeque<String>>>) {
-    let mut reader = BufReader::new(stderr);
+/// Reads `stream` to its end, line by line, and gives each to `each`. Text that is not UTF-8 is read with replacement characters.
+async fn read_lines<R: AsyncRead + Unpin>(stream: R, mut each: impl FnMut(&str)) {
+    let mut reader = BufReader::new(stream);
     let mut line = Vec::new();
     loop {
         line.clear();
         match reader.read_until(b'\n', &mut line).await {
             Ok(0) | Err(_) => return,
-            Ok(_) => {
-                let text = String::from_utf8_lossy(&line);
-                push_tail(&mut tail.lock().unwrap_or_else(|e| e.into_inner()), &text);
-            }
+            Ok(_) => each(&String::from_utf8_lossy(&line)),
         }
     }
+}
+
+/// Reads the standard output and the standard error to their ends (the script must never wait for a pipe to be emptied): the lines of both go to `sink`, and the last lines of the standard error are kept in `tail`.
+async fn read_output(
+    stdout: Option<ChildStdout>,
+    stderr: Option<ChildStderr>,
+    tail: Arc<StdMutex<VecDeque<String>>>,
+    sink: Option<Sink>,
+) {
+    let out = async {
+        if let Some(stdout) = stdout {
+            read_lines(stdout, |text| {
+                if let Some(sink) = &sink {
+                    sink.line(text);
+                }
+            })
+            .await;
+        }
+    };
+    let err = async {
+        if let Some(stderr) = stderr {
+            read_lines(stderr, |text| {
+                push_tail(&mut tail.lock().unwrap_or_else(|e| e.into_inner()), text);
+                if let Some(sink) = &sink {
+                    sink.line(text);
+                }
+            })
+            .await;
+        }
+    };
+    tokio::join!(out, err);
 }
 
 /// Sends `signal` to every process of the group. False when the group has no process left (or the OS has no groups).
@@ -355,12 +426,14 @@ impl Drop for Script {
 
 /// Starts the script `body` written in a folder of `dir`, with `port` given as `TSUNAGIAI_PORT` and `COOKAPPS_PORT`, and answers when `host:port` answers, or why it does not.
 /// A port that answers before the script is run is an error, and nothing is run.
+/// While the script is awaited, each line of its output goes to `on_line` (none: the output is read and dropped).
 pub async fn start(
     dir: &Path,
     host: &str,
     port: u16,
     body: &str,
     timing: Timing,
+    on_line: Option<OnLine>,
 ) -> Result<Script, String> {
     // A name that cannot be looked up is not in use: the script may be what makes it known.
     let mut addrs = resolve(host, port).await;
@@ -381,7 +454,7 @@ pub async fn start(
         .env(PORT_ENV, port.to_string())
         .env(OLD_PORT_ENV, port.to_string())
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(unix)]
@@ -395,10 +468,15 @@ pub async fn start(
     };
     let pgid = child.id().and_then(|p| i32::try_from(p).ok()).unwrap_or(0);
     let tail = Arc::new(StdMutex::new(VecDeque::new()));
-    let reader = match child.stderr.take() {
-        Some(stderr) => tokio::spawn(read_stderr(stderr, tail.clone())),
-        None => tokio::spawn(async {}),
-    };
+    let awaited = Arc::new(AtomicBool::new(true));
+    let _awaiting = Awaiting(awaited.clone());
+    let sink = on_line.map(|on_line| Sink { on_line, awaited });
+    let reader = tokio::spawn(read_output(
+        child.stdout.take(),
+        child.stderr.take(),
+        tail.clone(),
+        sink,
+    ));
     let (stop, stopped) = oneshot::channel();
     let (done_tx, done) = watch::channel(None);
     let task = tokio::spawn(supervise(
@@ -468,8 +546,15 @@ pub struct Scripts {
 
 impl Scripts {
     /// Starts the script `body`, in a folder of the system's temporary folder, and answers its id (what `close` takes) once `host:port` answers. The error is in Japanese.
-    pub async fn open(&self, host: &str, port: u16, body: &str) -> Result<u64, String> {
-        let script = start(&std::env::temp_dir(), host, port, body, TIMING).await?;
+    /// The lines of its output go to `on_line` until then (`start`).
+    pub async fn open(
+        &self,
+        host: &str,
+        port: u16,
+        body: &str,
+        on_line: Option<OnLine>,
+    ) -> Result<u64, String> {
+        let script = start(&std::env::temp_dir(), host, port, body, TIMING, on_line).await?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.open.lock().await.insert(id, script);
         Ok(id)
@@ -630,6 +715,23 @@ mod tests {
     }
 
     #[test]
+    fn a_line_of_the_output_loses_its_control_characters_and_is_cut() {
+        assert_eq!(screen_line("hello\n").as_deref(), Some("hello"));
+        assert_eq!(
+            screen_line("\u{1b}[32mok\u{1b}[0m\r").as_deref(),
+            Some("[32mok[0m")
+        );
+        assert_eq!(screen_line("a\tb\u{7}c").as_deref(), Some("a bc"));
+        assert_eq!(screen_line("\u{85}x\u{9f}y").as_deref(), Some("xy"));
+        assert_eq!(screen_line("   \t \n"), None);
+        assert_eq!(screen_line("\u{1b}\u{7}\r\n"), None);
+        assert_eq!(screen_line(""), None);
+        let long = screen_line(&"x".repeat(1000)).unwrap();
+        assert_eq!(long.chars().count(), 301);
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
     fn says_each_failure_in_japanese_with_the_last_lines() {
         let limit = Duration::from_secs(120);
         let before = failure_text(Stage::Early, &exit(Some(0), &["a", "b"]), limit);
@@ -766,7 +868,7 @@ mod tests {
                 "echo \"${PORT_ENV} ${OLD_PORT_ENV}\" > '{}'\nsleep 30",
                 out.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
                 .await
                 .unwrap();
             assert_eq!(script.exited(), None);
@@ -798,7 +900,7 @@ mod tests {
                 "#!/bin/bash\necho \"$BASH_VERSION\" > '{}'\nsleep 30",
                 out.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
                 .await
                 .unwrap();
             for _ in 0..100 {
@@ -811,6 +913,55 @@ mod tests {
             script.stop().await;
         }
 
+        /// A place for the lines that a script's output gives while it is awaited.
+        fn collect() -> (OnLine, Arc<StdMutex<Vec<String>>>) {
+            let lines = Arc::new(StdMutex::new(Vec::new()));
+            let into = lines.clone();
+            let on_line: OnLine = Arc::new(move |line| into.lock().unwrap().push(line));
+            (on_line, lines)
+        }
+
+        #[tokio::test]
+        async fn gives_the_lines_of_both_outputs_while_it_is_awaited_and_keeps_the_error_tail() {
+            let dir = Dir::new("lines");
+            let (on_line, lines) = collect();
+            let result = start(
+                &dir.0,
+                HOST,
+                free_port(),
+                "echo one\nsleep 0.3\necho two >&2\nsleep 0.3\necho '  '\nprintf 'x\\033y\\n'\nexit 1",
+                quick(10_000),
+                Some(on_line),
+            )
+            .await;
+            assert_eq!(*lines.lock().unwrap(), ["one", "two", "xy"]);
+            // The standard error is still the error's tail, and the standard output is not.
+            assert_eq!(
+                result.err().as_deref(),
+                Some("接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: two")
+            );
+        }
+
+        #[tokio::test]
+        async fn gives_no_line_once_the_script_is_ready_and_still_reads_what_it_writes() {
+            let dir = Dir::new("after-ready");
+            let port = free_port();
+            let marker = dir.file("up");
+            let _listener = listen_after(port, marker.clone());
+            let (on_line, lines) = collect();
+            let body = format!(
+                "echo before\ntouch '{}'\nsleep 1\necho late\necho late >&2\nsleep 30",
+                marker.display()
+            );
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), Some(on_line))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(1_800)).await;
+            assert!(!lines.lock().unwrap().contains(&"late".to_owned()));
+            assert_eq!(script.exited(), None);
+            script.stop().await;
+        }
+
         #[tokio::test]
         async fn fails_with_the_last_lines_when_it_ends_before_it_is_ready_even_with_exit_code_0() {
             let dir = Dir::new("early");
@@ -820,6 +971,7 @@ mod tests {
                 free_port(),
                 "echo one >&2\necho two >&2\necho three >&2\nexit 0",
                 quick(10_000),
+                None,
             )
             .await;
             assert_eq!(
@@ -838,6 +990,7 @@ mod tests {
                 free_port(),
                 "echo nope >&2\nexit 7",
                 quick(10_000),
+                None,
             )
             .await
             .err()
@@ -858,7 +1011,7 @@ mod tests {
             );
             let started = Instant::now();
             // 2 s, not less: on a loaded machine the stderr of the script was not read yet after 400 ms.
-            let err = start(&dir.0, HOST, free_port(), &body, quick(2_000))
+            let err = start(&dir.0, HOST, free_port(), &body, quick(2_000), None)
                 .await
                 .err()
                 .unwrap();
@@ -882,6 +1035,7 @@ mod tests {
                 port,
                 &format!("touch '{}'\nsleep 1\necho oops >&2\nexit 3", up.display()),
                 quick(10_000),
+                None,
             )
             .await
             .unwrap();
@@ -911,7 +1065,7 @@ mod tests {
                 "trap '' TERM\necho $$ > '{}'\nwhile true; do sleep 0.1; done",
                 pid_file.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
                 .await
                 .unwrap();
             let pid = read_pid(&pid_file).await;
@@ -932,7 +1086,7 @@ mod tests {
             let body = format!("sleep 300 &\necho $! > '{}'\nwait", pid_file.display());
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let script = runtime
-                .block_on(start(&dir.0, HOST, port, &body, quick(10_000)))
+                .block_on(start(&dir.0, HOST, port, &body, quick(10_000), None))
                 .unwrap();
             let child = runtime.block_on(read_pid(&pid_file));
             assert!(alive(child));
@@ -958,7 +1112,9 @@ mod tests {
                 grace: Duration::from_secs(3),
             };
             let body = format!("touch '{}'\nsleep 30", up.display());
-            let script = start(&dir.0, HOST, port, &body, timing).await.unwrap();
+            let script = start(&dir.0, HOST, port, &body, timing, None)
+                .await
+                .unwrap();
             let started = Instant::now();
             script.stop().await;
             assert!(
@@ -974,7 +1130,7 @@ mod tests {
             let port = listener.local_addr().unwrap().port();
             let ran = dir.file("ran");
             let body = format!("echo run > '{}'\nsleep 30", ran.display());
-            let err = start(&dir.0, HOST, port, &body, quick(10_000))
+            let err = start(&dir.0, HOST, port, &body, quick(10_000), None)
                 .await
                 .err()
                 .unwrap();
@@ -993,7 +1149,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let _listener = listen_after(port, ran);
-            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
                 .await
                 .unwrap();
             script.stop().await;
@@ -1006,7 +1162,7 @@ mod tests {
             assert!(resolve(host, 3307).await.is_empty());
             let ran = dir.file("ran");
             let body = format!("echo run > '{}'\necho waiting >&2\nsleep 30", ran.display());
-            let err = start(&dir.0, host, free_port(), &body, quick(1_500))
+            let err = start(&dir.0, host, free_port(), &body, quick(1_500), None)
                 .await
                 .err()
                 .unwrap();
@@ -1024,7 +1180,7 @@ mod tests {
             let _listener = listen_after(port, up.clone());
             let scripts = Scripts::default();
             let body = format!("touch '{}'\nsleep 30", up.display());
-            let id = scripts.open(HOST, port, &body).await.unwrap();
+            let id = scripts.open(HOST, port, &body, None).await.unwrap();
             assert_eq!(scripts.exited(id).await, None);
             scripts.close(id).await;
             assert!(scripts.open.lock().await.is_empty());
@@ -1038,7 +1194,7 @@ mod tests {
             let _listener = listen_after(port, up.clone());
             let scripts = Scripts::default();
             let body = format!("touch '{}'\nsleep 30", up.display());
-            let script = start(&dir.0, HOST, port, &body, quick(10_000))
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
                 .await
                 .unwrap();
             scripts.open.lock().await.insert(5, script);

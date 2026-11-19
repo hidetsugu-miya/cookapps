@@ -20,6 +20,8 @@ export interface ConnectionNode {
   // The connection is open (Rust holds its session): the dot is on.
   connected: boolean;
   loading: boolean;
+  // The last line of the script's output while the connection opens, or none.
+  output: string | null;
   error: string | null;
   databases: DatabaseNode[];
 }
@@ -135,7 +137,7 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
   item.append(button);
   if (node.expanded) {
     const children = tag("div", "database-children");
-    if (node.loading) children.append(note(node.connected ? "読み込み中…" : "接続中…", 1, false));
+    if (node.loading) children.append(note(node.connected ? "読み込み中…" : (node.output ?? "接続中…"), 1, false));
     if (node.error !== null) children.append(note(node.error, 1, true));
     children.append(...databaseNodes(node, selected, actions));
     item.append(children);

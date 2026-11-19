@@ -3,6 +3,7 @@
 // Rust holds the open connections (the session and its script); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory in the tab of the table, and the SQL text and result for the connection and database that were selected last.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
+import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
@@ -29,6 +30,8 @@ interface ConnectionState {
   expanded: boolean;
   connected: boolean;
   loading: boolean;
+  // The last line of the output of the connection's script while it opens (D-3, #1027); none until it writes one. Dropped when the opening ends.
+  output: string | null;
   error: string | null;
   databases: string[];
   byName: Map<string, DatabaseState>;
@@ -70,7 +73,7 @@ let watcher: number | null = null;
 // The quiet read that is on its way: a quiet read asked meanwhile is this one.
 let quietRead: Promise<DatabaseProfileView[] | null> | null = null;
 
-const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
+const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, output: null, error: null, databases: [], byName: new Map() });
 const emptySql: SqlState = { view: 0, text: "", loading: false, error: null, data: null };
 // The number of the last SQL view made: a new query makes a new view, which is drawn again whatever was typed in the one before.
 let sqlViews = 0;
@@ -104,6 +107,7 @@ function sideState(): SideState {
         expanded: c.expanded,
         connected: c.connected,
         loading: c.loading,
+        output: c.output,
         error: c.error,
         databases: c.databases.map((name) => {
           const d = databaseOf(c, name);
@@ -240,6 +244,7 @@ async function openConnection(profile: DatabaseProfileView) {
   connections.set(profile.id, c);
   c.expanded = true;
   c.loading = true;
+  c.output = null;
   c.error = null;
   draw();
   try {
@@ -263,6 +268,7 @@ async function openConnection(profile: DatabaseProfileView) {
     c.error = String(e);
   }
   c.loading = false;
+  c.output = null;
   draw();
 }
 
@@ -512,4 +518,11 @@ export function initDatabase() {
   add.onclick = () => openDatabaseForm(null, save, test);
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
   initDatabaseTerminal();
+  // Rust tells each line that the script of a connection writes while the connection opens. A line that comes after the opening ended, or for a connection that is not opening, is dropped.
+  window.__TAURI__.event.listen<DatabaseScriptOutput>("database-script-output", ({ payload }) => {
+    const c = connections.get(payload.id);
+    if (c === undefined || !c.loading || c.connected) return;
+    c.output = payload.line;
+    draw();
+  });
 }
