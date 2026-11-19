@@ -1,6 +1,6 @@
 // The Todo prompt screen: the instructions Claude follows to turn a Slack message into a task. The user edits them in a field, or with Claude Code (S-3, A-36, ts/claude-code.ts),
 // which reads and writes the field through the target "todo-prompt" of ts/screen-bridge.ts. Only the save button writes them (Rust keeps them in the settings folder).
-// The pane's terminal and its 「やり直す」 button are made here, in the `<aside id="prompt-chat">` of `index.html`, in place of the conversation's log, 「クリア」 and note.
+// The pane's elements are in `index.html` (`prompt-term`, the host of the terminal, and `prompt-restart`), and 「元に戻す」 (`prompt-undo`) is in the header; ts/nav.ts hides the terminal when the screen is left.
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { claudeCodeStarted, closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { redrawPromptRow } from "./claude.js";
@@ -28,11 +28,6 @@ const OWNER = "todo-prompt";
 
 // What Claude Code wrote into the field and the text it replaced, newest last. A write can be taken back with 「元に戻す」 only while the field holds what that write put there.
 const undos: { before: string; after: string }[] = [];
-// 「元に戻す」, in the header before 「デフォルトに戻す」; it is there while a write can be taken back.
-const undoButton = tag("button", "text-btn", "元に戻す");
-undoButton.id = "prompt-undo";
-undoButton.type = "button";
-undoButton.hidden = true;
 
 // The first instruction of Claude Code: that this is the work of rewriting the instructions of the Todo summary, and the tools it has. Nothing that comes from outside is in it (the field is read through the tool), and it says that the field's text is what is edited.
 function firstPrompt() {
@@ -74,12 +69,12 @@ function showPromptError(e: unknown) {
 }
 
 // Draws what follows from the state: the status, the buttons and the field.
-export function refreshPrompt() {
+function refreshPrompt() {
   const [now, text] = [saved, draft];
   const loaded = now !== null && text !== null;
   // A way back is usable only while the field holds what the write put there: a change by hand, or the other buttons, take it away.
   if (undos.length && undos[undos.length - 1].after !== text) undos.length = 0;
-  undoButton.hidden = undos.length === 0;
+  $("prompt-undo").hidden = undos.length === 0;
   const dirty = loaded && text !== now.body;
   $("prompt-status").hidden = !dirty;
   $<HTMLButtonElement>("prompt-save").disabled = !dirty || busy;
@@ -130,6 +125,9 @@ function syncPromptClaude() {
   if (draft === null || document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
   if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
 }
+
+// The screen is left (every way out goes through `setScreen`, ts/nav.ts).
+export const hidePromptClaude = () => hideClaudeCode(OWNER);
 
 const refusal = (e: string): never => {
   throw new Error(e);
@@ -184,15 +182,7 @@ export function initPrompt() {
     refreshPrompt();
   };
   $("prompt-reset").onblur = disarmReset;
-  // The pane: the terminal and 「やり直す」 take the place of the conversation's log, 「クリア」 and note.
-  const term = tag("div");
-  term.id = "prompt-term";
-  $("prompt-log").replaceWith(term);
-  $("prompt-chat-note").remove();
-  const restart = tag("button", "text-btn chat-clear", "やり直す");
-  restart.id = "prompt-restart";
-  restart.type = "button";
-  $("prompt-clear").replaceWith(restart);
+  const restart = $<HTMLButtonElement>("prompt-restart");
   // Ends the process and starts a new one in the same place. The button waits until the start has answered, because a restart pressed before would end the one that is starting.
   restart.onclick = () => {
     restart.disabled = true;
@@ -201,7 +191,7 @@ export function initPrompt() {
     void claudeCodeStarted(ID).then(() => (restart.disabled = false));
   };
   // Puts back the text that the newest write of Claude Code replaced.
-  undoButton.onclick = () => {
+  $("prompt-undo").onclick = () => {
     const last = undos[undos.length - 1];
     if (draft === null || busy || !last) return;
     undos.pop();
@@ -210,14 +200,11 @@ export function initPrompt() {
     $("prompt-error").hidden = true;
     refreshPrompt();
   };
-  $("prompt-reset").before(undoButton);
   registerDraftTarget("todo-prompt", {
     names: ["body"],
     isOpen: () => !$("prompt").hidden && draft !== null,
     read: () => ({ body: draft! }),
     write: writeFields,
   });
-  // The screen is left by every way the sidebar and the buttons have, so the terminal follows the screen's own `hidden`.
-  new MutationObserver(syncPromptClaude).observe($("prompt"), { attributes: true, attributeFilter: ["hidden"] });
   document.addEventListener("visibilitychange", syncPromptClaude);
 }

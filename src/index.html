@@ -493,6 +493,7 @@
         <h1>Todo の要約プロンプト</h1>
         <span id="prompt-status" class="status warn" hidden>未保存の変更</span>
         <span class="grow"></span>
+        <button id="prompt-undo" type="button" class="text-btn" hidden>元に戻す</button>
         <button id="prompt-reset" class="text-btn">デフォルトに戻す</button>
         <button id="prompt-save" class="text-btn primary">保存</button>
       </header>
@@ -516,10 +517,9 @@
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
             Claude と編集
-            <button id="prompt-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+            <button id="prompt-restart" type="button" class="text-btn chat-clear">やり直す</button>
           </div>
-          <div id="prompt-log" class="chat-log"></div>
-          <p id="prompt-chat-note" class="chat-note" hidden></p>
+          <div id="prompt-term"></div>
         </aside>
       </div>
     </section>

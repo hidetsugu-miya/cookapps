@@ -16,6 +16,7 @@ import { showSlackList } from "./slack-list.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { fetchOpenComments } from "./todo-comments.js";
 import { hideSlackComposeClaude } from "./slack-compose-claude.js";
+import { hidePromptClaude } from "./todo-prompt.js";
 import { hideTodoClaude, syncTodoClaude } from "./todo-claude.js";
 import { todoState } from "./todo-data.js";
 import { show } from "./view.js";
@@ -99,6 +100,8 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   if (name !== "calendar") hideCalendarClaude();
   // The same for the Claude pane of the Slack compose screen, which is left by every screen the sidebar shows.
   hideSlackComposeClaude();
+  // The same for the Claude pane of the Todo prompt screen, which "戻る" and the sidebar leave through here.
+  hidePromptClaude();
   if (name !== "orca") {
     hideFormation();
     // The language server's settings are read by the clock only while the Orca screen is shown (A-34).
