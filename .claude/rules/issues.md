@@ -149,6 +149,7 @@ Push the branch after release-verifier passes, open the pull request, send the c
 The issue closes at the merge, and the Release PR shows what has not reached the app yet.
 The night run puts all its issues in one pull request, with one `Closes #n` line for each.
 A ruleset on main requires the statuses `e2e` and `review`, and that the branch contains main, so a change tested on an old main cannot merge.
+The status `e2e` means different things by branch (at the owner's instruction, 2026-11-19; #1023): for a feature's branch `post-checks.sh` sends it as `success` with "E2E runs at the Release PR", because E2E is not run for a feature's pull request; for `release/next` it sends it only when the E2E record exists (`check-release-e2e.sh`, `e2e.md`). The ruleset cannot tell the head branches apart, so `e2e` stays required, and it is what stops the merge of a Release PR whose E2E has not passed.
 Only the pass or failure goes to GitHub: review findings stay local, because they describe faults that are not fixed yet.
 
 ```sh

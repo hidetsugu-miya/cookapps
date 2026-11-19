@@ -92,12 +92,25 @@ npm run e2e
 
 ## Running and recording
 
+### Run E2E once, when the Release PR is prepared, not for a feature's pull request
+
+A feature's pull request runs `run-ci.sh` and the review, and no `run-e2e.sh`. `run-e2e.sh` runs once, on the branch `release/next`, after it has taken in main and written `CHANGELOG.md`, before the push (`.claude/skills/release/SKILL.md`). The result is a condition of the Release PR's merge: `pre-git.sh` refuses the push of `release/next` without that record, and `post-checks.sh` sends the status `e2e` of that PR only with it (`check-release-e2e.sh`). For every other branch `post-checks.sh` sends `e2e` as `success` with the description "E2E runs at the Release PR", because the ruleset of main requires `e2e` and cannot tell the branches apart (`issues.md`).
+At the owner's instruction, 2026-11-19; #1023. GitHub's runner took about 13 minutes for one run, and some specs failed only on the runner, so the run is local, and once for the Release PR (measured in #1021).
+When a feature changes or adds a spec in `e2e/specs/`, run that spec with `run-e2e.sh --only {spec name}` until it passes before the pull request: it writes no record and is no gate, but a new spec must not wait for the Release PR to run for the first time.
+
+```text
+Good: a feature's pull request -> run-ci.sh and the review -> merge; the Release PR is prepared -> run-e2e.sh once -> push -> post-checks.sh
+Good: a feature adds e2e/specs/foo.e2e.ts -> run-e2e.sh --only foo until it passes -> run-ci.sh and the review
+Bad:  run-e2e.sh on every feature branch
+Bad:  push release/next with no E2E record of its own
+```
+
 ### Run E2E with `.claude/tools/run-e2e.sh`, and keep a record per HEAD
 
 Run it when the working tree is clean (after a commit).
 `run-e2e.sh [checkout path]` runs `e2e:build` and `e2e` (and, beside `e2e`, `run-ci.sh` when HEAD has no passing CI record; see below), then writes JSON (sha, version, clean, passed, tests, script_timeouts, finished_at) to `.claude/e2e/{HEAD SHA}` in the main checkout, and the full output to `.claude/e2e/{HEAD SHA}.log`.
 `script_timeouts` counts the WebDriver commands whose result never came back. A passing run can hide them behind webdriver's retry, so read this count and the log before saying anything about E2E speed or stability.
-`pre-git.sh`, `post-checks.sh` and release-verifier use this record, through `.claude/tools/check-e2e.sh`, to confirm that E2E passed for HEAD. The record of the static checks and unit tests has the same shape in `.claude/ci/{HEAD SHA}` (`run-ci.sh`, `check-ci.sh`; `testing.md`).
+`pre-git.sh` and `post-checks.sh` use this record, through `.claude/tools/check-release-e2e.sh` (which calls `check-e2e.sh` for HEAD), to confirm that E2E passed for the Release PR's HEAD: the record of HEAD, or the newest record of `origin/main..HEAD` with only release work (README, CHANGELOG, `docs/`) after it. Only `release/next` is asked for it. release-verifier does not read it. The record of the static checks and unit tests has the same shape in `.claude/ci/{HEAD SHA}` (`run-ci.sh`, `check-ci.sh`; `testing.md`).
 `guard-e2e.sh` blocks every write to either record except a direct call of its own command (`run-e2e.sh`, `run-ci.sh`). Never write them by hand.
 After `e2e:build`, `run-e2e.sh` starts `run-ci.sh` of its own checkout in the background (under `nice -n 10`, so that wdio keeps the cores), if `check-ci.sh` finds no passing, clean CI record for HEAD, and runs `e2e` beside it (#420). cargo is used only up to `e2e:build`, and wdio runs the built binary, so the two do not wait for each other's `target/debug` lock, and `cargo test` and clippy never write `target/debug/tsunagiai` (no integration test builds it). The CI record is `run-ci.sh`'s as before, and the record of E2E is the result of E2E alone (`passed`, `tests`, `script_timeouts`); the exit code of `run-e2e.sh` is non-zero when either failed, and the output of `run-ci.sh` is printed after the E2E lines. `--only` runs no CI.
 
@@ -134,7 +147,7 @@ After a full run, sum the seconds of each app from its log (the lines `[webkit â
 When an app takes more than 180 seconds, move specs among the apps in `namedSpecs` so that the sums come close, and write the new seconds in the comment of `wdio.conf.ts` (at the owner's instruction, 2026-11-18; #930).
 When the seconds of all the specs divided by the number of apps are still over 180, add one capability, measure the next full run, and keep it only when wdio got shorter.
 No app is shorter than its longest spec: split such a spec by its parts instead ("Keep one `e2e/specs/{screen}.e2e.ts` per screen").
-The slowest app sets the length of every run, and every round of the review waits for E2E: on 2026-11-18 the last app held ten specs and took 345 of wdio's 351 seconds, while the other four ended in 128 to 161.
+The slowest app sets the length of every run, and the Release PR waits for E2E: on 2026-11-18 the last app held ten specs and took 345 of wdio's 351 seconds, while the other four ended in 128 to 161.
 An app costs about 1 GB of memory (measured on 2026-11-18: five apps took about 5 GB of the 64 GB), so the cost of one more is the competition for the cores, which only a run shows.
 
 ```text
@@ -147,14 +160,14 @@ Bad:  add a capability without measuring, or leave an app at 300 seconds because
 
 `run-e2e.sh --only {spec name}` (for example `--only inbox`) runs `e2e/specs/{name}.e2e.ts` in one app, builds first (`e2e:build`), and writes no record: it works on a dirty tree, and its output goes to `.claude/e2e/only-{name}.log` (at the owner's instruction, 2026-11-12; #485).
 It sets `E2E_ONLY`, which `wdio.conf.ts` reads to cut the capabilities down to one that names that spec. The specs are not passed with `--spec`, so the spec does not run in several apps.
-Use it to run a spec that failed in `run-e2e.sh` until it passes, then run `run-e2e.sh` once for the record. It is not a record, and `pre-git.sh` and release-verifier do not accept it.
+Use it to run a spec that a feature changed or added, and a spec that failed in the Release PR's `run-e2e.sh`: first to tell a chance failure from a defect (a spec that passes alone is read for how it failed, and the full run is repeated once on the same HEAD when no code needs a fix), then until it passes; for a defect at the Release PR, the fix goes through its own `fix/` pull request and `run-e2e.sh` runs again when the Release PR is prepared again (`.claude/skills/release/SKILL.md`). It is not a record, and `pre-git.sh` does not accept it.
 
 ```sh
 .claude/tools/run-e2e.sh --only todo-prompt   # one app, one spec, no record
 ```
 
 ```text
-Good: run-e2e.sh fails in inbox -> fix -> run-e2e.sh --only inbox until it passes -> run-e2e.sh once
+Good: run-e2e.sh fails in inbox at the Release PR -> a fix/ pull request -> run-e2e.sh --only inbox until it passes -> merge -> prepare the Release PR again and run run-e2e.sh once
 Bad:  wdio run wdio.conf.ts --spec e2e/specs/inbox.e2e.ts, which runs inbox in more than one app
 Bad:  take a pass of --only for the E2E record
 ```
