@@ -116,6 +116,8 @@ async function openPrompt() {
     $("prompt-fixed").textContent = saved.fixed;
     $("prompt-fixed-after").textContent = saved.fixedAfter;
   }
+  // The field and the buttons are enabled once the instructions are in (`refreshPrompt`).
+  refreshPrompt();
   syncPromptClaude();
 }
 
