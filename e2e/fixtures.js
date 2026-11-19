@@ -45,6 +45,7 @@ const answers = {
   set_calendar_first_day: null,
   calendar_choices: { accounts: [], needsLogin: [], failed: {} },
   set_calendar_shown: null,
+  calendar_owned: { accounts: [], needsLogin: [], failed: {} },
   inbox: { accounts: [], threads: [], needsLogin: [], failed: {}, historyIds: {} },
   sync: { kind: "unchanged" },
   todoist_cached: null,

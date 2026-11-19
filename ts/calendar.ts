@@ -3,6 +3,7 @@ import type { AllDayItem } from "./bindings/AllDayItem";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
+import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
 import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
@@ -55,6 +56,7 @@ export function resetCalendar(dropKept: boolean) {
   if (dropKept) keptWeeks = Promise.resolve([]);
   calRefresh = true;
   forgetCalendarChoices();
+  forgetOwnedCalendars();
 }
 
 // Forgets the weeks drawn and fetched so far (not the calendar lists behind them).
@@ -166,6 +168,8 @@ function renderWeek(w: Week) {
     el("cal-allday-label", "終日"),
     ...days.map((_, i) => {
       const cell = el("cal-cell");
+      // An empty place of the band makes an all-day event (C-5); a chip is the detail's own.
+      cell.onclick = (e) => e.target === cell && openCreate(w.weekStart, i, true, 0);
       cell.append(...w.allDay.filter((e) => e.day === i).map(allDayChip));
       return cell;
     }),
@@ -180,6 +184,8 @@ function renderWeek(w: Week) {
     gutter,
     ...days.map((_, i) => {
       const col = el("cal-col");
+      // An empty place of the column makes an event of the hour pressed (C-5); an event box is the detail's own.
+      col.onclick = (e) => e.target === col && openCreate(w.weekStart, i, false, Math.floor((e.clientY - col.getBoundingClientRect().top) / HOUR_PX) * 60);
       col.append(...w.timed.filter((e) => e.day === i).map(eventBox));
       return col;
     }),
@@ -209,6 +215,8 @@ function renderWeek(w: Week) {
   setRelogin("calendar", w.needsLogin, (a) => `${a} はカレンダーを読むため再ログインが必要です`, addAccount);
   // A detail open on an event of the old draw follows it into this one.
   endEvents();
+  // The same for a form of C-5 that is open.
+  redrawDraft(w.weekStart);
   refreshPopup();
   if (!calScrolled) {
     // Two hours before now at the top (11:00 shows from 9:00); a little less keeps the hour label whole.
@@ -315,6 +323,7 @@ function choiceChanged() {
 
 const moveWeek = (date: string) => {
   closeDetail();
+  closeCreate();
   calDate = date;
   loadCalendar(false, true);
 };
@@ -322,6 +331,8 @@ const moveWeek = (date: string) => {
 export function initCalendar() {
   initCalendarSide(choiceChanged);
   initCalendarMonth(moveWeek);
+  // A saved event: the week is read again, which draws it.
+  initCalendarCreate(() => loadCalendar(true));
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
   $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));

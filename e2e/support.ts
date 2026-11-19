@@ -353,6 +353,21 @@ export const calendarChoices = (): CalendarChoices => ({
   failed: {},
 });
 
+// The calendars of the account that an event can be created in (`calendar_owned`): its primary calendar (the ID is the account's address), the default of a form, and "Work".
+export const ownedCalendars = (): CalendarChoices => ({
+  accounts: [
+    {
+      account,
+      calendars: [
+        { id: "work", name: "Work", color: "#1e7b52", mine: true, shown: true },
+        { id: account, name: "Me", color: null, mine: true, shown: true },
+      ],
+    },
+  ],
+  needsLogin: [],
+  failed: {},
+});
+
 // ---- Todoist ----
 
 // The `dueAt` a fixture task carries: the epoch milliseconds of `time` (`HH:MM`, midnight by default) `day` days from today, in local time.

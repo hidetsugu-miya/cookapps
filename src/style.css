@@ -377,6 +377,36 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .cal-pop-desc { max-height: 160px; overflow-y: auto; white-space: pre-wrap; }
 .cal-pop-foot { display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .cal-pop-cal { flex: 1; min-width: 0; color: var(--muted); font-size: calc(12px * var(--fs)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* C-5: the draft of an event being created and the form beside it (ts/calendar-create.ts): the frame of the detail, 400px wide. */
+.cal-draft { position: absolute; z-index: 1; left: 2px; right: 2px; top: calc(var(--hour) * var(--s) / 60); height: calc(var(--hour) * var(--d) / 60 - 1px); box-sizing: border-box; overflow: hidden; padding: 2px 6px; border-radius: 4px; background: var(--c); color: var(--on-accent); font-size: calc(12px * var(--fs)); line-height: 1.35; outline: 2px solid var(--surface); box-shadow: 0 6px 16px rgba(0, 0, 0, .22); }
+.cal-draft-chip { position: static; height: auto; padding: 0 6px; outline: 0; box-shadow: none; white-space: nowrap; text-overflow: ellipsis; }
+.cal-draft-time { opacity: .9; }
+.pop.cal-create { width: 400px; }
+.cal-create .cal-pop-dot { margin-top: 13px; }
+.cal-create-title { box-sizing: border-box; width: 100%; padding: 6px 0 8px; border: 0; border-bottom: 2px solid var(--line); background: none; color: inherit; font: inherit; font-size: calc(18px * var(--fs)); outline: none; }
+.cal-create-title:focus { border-bottom-color: var(--accent); }
+.cal-create-title::placeholder, .cal-create textarea::placeholder, .cal-create-guests input::placeholder { color: var(--muted); }
+.cal-create .cal-pop-row > svg { margin-top: 7px; }
+.cal-create-col { display: flex; flex-direction: column; gap: 6px; }
+.cal-create-when { display: flex; gap: 6px; }
+.cal-create input[type="date"], .cal-create input[type="time"], .cal-create select { box-sizing: border-box; height: 30px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs)); }
+.cal-create input[type="date"] { width: 140px; }
+.cal-create input[type="time"] { width: 100px; }
+.cal-create select { width: 100%; }
+.cal-create input:focus-visible, .cal-create select:focus-visible, .cal-create textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.cal-create-allday { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.cal-create-allday input { margin: 0; accent-color: var(--accent); }
+.cal-create-guests { box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--chip-line); border-radius: 12px; font-size: calc(12px * var(--fs)); }
+.cal-create-guests:focus-within { border-color: var(--accent); }
+.cal-create-guests input { flex: 1; min-width: 120px; padding: 3px 2px; border: 0; outline: none; background: none; color: inherit; font: inherit; }
+.cal-create .text-btn.cal-create-meet-add { height: 32px; color: var(--google); font-weight: 600; }
+.cal-create-card { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 2px 12px; border-radius: 12px; background: var(--soft); font-weight: 600; }
+.cal-create-card .icon-btn { width: 28px; height: 28px; }
+.cal-create textarea { box-sizing: border-box; width: 100%; padding: 7px 10px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs)); resize: vertical; outline: none; }
+.cal-create textarea:focus { border-color: var(--accent); }
+.cal-create-error { flex: 1; min-width: 0; color: var(--danger); font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
+.cal-create-error .text-btn { margin-left: 8px; }
+.cal-create .text-btn:disabled { opacity: .4; cursor: default; }
 .cal-now { position: absolute; z-index: 2; pointer-events: none; }
 .cal-now-line { left: 0; right: 0; border-top: 2px solid #ff9f43; }
 .cal-now-line::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ff9f43; }

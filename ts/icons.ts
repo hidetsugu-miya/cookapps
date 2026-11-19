@@ -42,6 +42,7 @@ export const DOWNLOAD_SVG = svgOf('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/>
 export const MEET_SVG = svgOf('<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>');
 export const PIN_SVG = svgOf('<path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>');
 export const LINES_SVG = svgOf('<path d="M4 6h16M4 12h16M4 18h10"/>');
+export const CLOCK_SVG = svgOf('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>');
 export const PEOPLE_SVG = svgOf('<circle cx="9" cy="8" r="3.5"/><path d="M3 20c.6-3.6 3-5.5 6-5.5s5.4 1.9 6 5.5M16 5a3.5 3.5 0 0 1 0 6.5M18 14.8c1.7.8 2.7 2.5 3 5.2"/>');
 export const ORCA_SVG = svgOf('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>');
 // The button that makes a formation (A-37): the tree of a leader and its teammates, with a plus at the corner.
