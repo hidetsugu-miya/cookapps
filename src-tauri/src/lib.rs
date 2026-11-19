@@ -22,6 +22,7 @@ pub mod images;
 mod keychain;
 pub mod lsp;
 pub mod mail_address;
+pub mod mail_attach;
 pub mod mail_send;
 pub mod markdown_patch;
 pub mod notion;
@@ -299,6 +300,8 @@ pub fn run() {
             gmail::untrash,
             gmail::unarchive,
             gmail::set_read,
+            mail_attach::mail_attach_check,
+            mail_attach::mail_attach_pick,
             mail_send::send_mail,
             gmail::sync,
             images::fetch_images,

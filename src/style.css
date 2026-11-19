@@ -206,6 +206,12 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #mail-reply-body .rich-input { flex: 1 1 0; min-height: 0; max-height: none; display: flex; flex-direction: column; }
 #mail-reply-body .rich-input .milkdown { flex: 1 0 auto; display: flex; flex-direction: column; }
 #mail-reply-body .rich-input .ProseMirror { flex: 1 0 auto; }
+.mail-attach { flex: none; display: flex; flex-wrap: wrap; gap: 4px 6px; padding: 6px 12px 0; }
+.mail-attach-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 2px 0 8px; border: 1px solid var(--chip-line); border-radius: 999px; font-size: calc(12px * var(--fs)); }
+.mail-attach-chip > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-attach-size { flex: none; color: var(--ink-soft); }
+.mail-attach-chip button:disabled, .mail-reply-foot .icon-btn:disabled, #new-mail-foot .icon-btn:disabled { opacity: .4; cursor: default; }
+#new-mail .mail-attach { padding: 6px 0 0; }
 .mail-reply-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
 .mail-reply-foot #mail-reply-discard { margin-left: auto; }
 .mail-reply-foot .text-btn:disabled { opacity: .4; cursor: default; }

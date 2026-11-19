@@ -91,6 +91,9 @@ const answers = {
   orca_terminal_read: [],
   orca_terminal_input: null,
   orca_open_url: null,
+  // M-12: a file may always be added; a spec that picks files mocks `mail_attach_pick`.
+  mail_attach_check: null,
+  mail_attach_pick: [],
   orca_attach_file: { text: "/work/example/.orca/drops/image.png ", bracketed: true },
   orca_files_ignored: [],
   // A-39: no entry differs from HEAD; a spec that checks the marks mocks `orca_files_changes`.

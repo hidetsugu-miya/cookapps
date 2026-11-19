@@ -116,8 +116,10 @@
               <div id="mail-reply-bcc-field" class="mail-reply-field"><input id="mail-reply-bcc-input" class="mail-reply-input" aria-label="Bcc を追加" autocomplete="off" spellcheck="false"></div>
             </div>
             <div id="mail-reply-body"></div>
+            <div id="mail-reply-attach" class="mail-attach" hidden></div>
             <div class="mail-reply-foot">
               <button id="mail-reply-send" class="text-btn primary" type="button" disabled>送信</button>
+              <button id="mail-reply-attach-open" class="icon-btn" type="button" aria-label="ファイルを添付"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
               <button id="mail-reply-undo" class="text-btn" type="button" hidden>元に戻す</button>
               <button id="mail-reply-discard" class="text-btn" type="button">破棄</button>
             </div>
@@ -148,8 +150,10 @@
           <input id="new-mail-subject" aria-label="件名" autocomplete="off">
         </div>
         <textarea id="new-mail-body" aria-label="本文"></textarea>
+        <div id="new-mail-attach" class="mail-attach" hidden></div>
         <div id="new-mail-foot">
           <button id="new-mail-send" class="text-btn primary" type="button" disabled>送信</button>
+          <button id="new-mail-attach-open" class="icon-btn" type="button" aria-label="ファイルを添付"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
           <button id="new-mail-undo" class="text-btn" type="button" hidden>元に戻す</button>
         </div>
       </section>

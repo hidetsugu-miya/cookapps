@@ -1,9 +1,10 @@
-// The reply field at the bottom of the open thread (M-10), shown when the reply button of the latest message is pressed: the kind of reply, who it goes to as chips, Cc and Bcc, the text (the rich editor, Markdown), and "送信" / "破棄".
+// The reply field at the bottom of the open thread (M-10), shown when the reply button of the latest message is pressed: the kind of reply, who it goes to as chips, Cc and Bcc, the text (the rich editor, Markdown), the files (M-12), and "送信" / "破棄".
 import type { ReplyChoices } from "./bindings/ReplyChoices";
 import { $ } from "./dom.js";
 import { applySync } from "./inbox.js";
 import { invoke } from "./ipc.js";
 import { addDraftSide, clearUndo, type DraftSide, refreshUndo } from "./mail-draft.js";
+import { mailAttachments } from "./mail-attach.js";
 import { recipientRows } from "./mail-recipients.js";
 import { createRichEditor } from "./rich-editor.js";
 import { showFailure } from "./error-card.js";
@@ -31,6 +32,8 @@ let sendingIn = -1;
 // Counts the times the field was reset, so that a send that outlives its thread can tell that the field is another one's now, even for the same thread opened again.
 let session = 0;
 const recipients = recipientRows("mail-reply");
+// The files of the reply (M-12), made by initReply.
+let attachments: ReturnType<typeof mailAttachments>;
 // Reads the thread again after a reply went out.
 let reload: (target: ReplyTarget) => Promise<void>;
 // The open thread as Claude Code reads it (ts/thread.ts).
@@ -54,6 +57,7 @@ function syncSend() {
   if (wait !== waiting) {
     waiting = wait;
     editor.setBusy(wait);
+    attachments.setBusy(wait);
   }
   // A change of the text by hand makes the way back of Claude Code's writes unusable (M-10).
   refreshUndo();
@@ -68,6 +72,7 @@ function fill(m: Mode) {
 function clear() {
   mode().value = "one";
   editor.set("");
+  attachments.clear();
   recipients.reset(choices.one.to, choices.one.cc);
   syncSend();
 }
@@ -119,6 +124,7 @@ async function send() {
   if (sending || !sent || !editor.ready() || editor.blank()) return;
   const started = session;
   recipients.commitAll();
+  const files = attachments.files();
   sending = true;
   sendingIn = started;
   syncSend();
@@ -133,6 +139,7 @@ async function send() {
         body: editor.markdown(),
         markdown: true,
         replyThreadId: sent.id,
+        ...(files.length > 0 ? { attachments: files } : {}),
       },
     });
     // The thread was left while the mail went out: the field is another thread's now.
@@ -186,6 +193,7 @@ export function initReply(reloadThread: (target: ReplyTarget) => Promise<void>, 
   addDraftSide(side);
   mode().onchange = () => fill(mode().value as Mode);
   recipients.init();
+  attachments = mailAttachments($("mail-reply"), $("mail-reply-attach"), $<HTMLButtonElement>("mail-reply-attach-open"), "mail-reply");
   $("mail-reply-body").append(editor.el);
   $("mail-reply-send").onclick = send;
   $("mail-reply-discard").onclick = discard;

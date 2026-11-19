@@ -1,16 +1,19 @@
-// The screen that writes a new mail (M-11): the sender, the recipients as chips, the subject and the text, "送信" in the band fixed at the bottom, and "戻る" and "破棄" that go back to the inbox.
+// The screen that writes a new mail (M-11): the sender, the recipients as chips, the subject and the text, the files (M-12), "送信" in the band fixed at the bottom, and "戻る" and "破棄" that go back to the inbox.
 import { accountButtons } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { applySync } from "./inbox.js";
 import { invoke } from "./ipc.js";
 import { addMailKey } from "./mail-claude.js";
 import { addDraftSide, clearUndo, type DraftSide, refreshUndo } from "./mail-draft.js";
+import { mailAttachments } from "./mail-attach.js";
 import { recipientRows } from "./mail-recipients.js";
 import { currentScreen, setScreen, showNewMailScreen } from "./nav.js";
 import { toast } from "./toast.js";
 import { showFailure } from "./error-card.js";
 
 const recipients = recipientRows("new-mail");
+// The files of the new mail (M-12), made by initMailCompose.
+let attachments: ReturnType<typeof mailAttachments>;
 // The sender of the mail being written.
 let account = "";
 let sending = false;
@@ -23,6 +26,7 @@ const body = () => $<HTMLTextAreaElement>("new-mail-body");
 
 function syncSend() {
   $<HTMLButtonElement>("new-mail-send").disabled = sending || body().value.trim() === "";
+  attachments.setBusy(sending);
   // A change of the text by hand makes the way back of Claude Code's writes unusable (M-11).
   refreshUndo();
 }
@@ -47,6 +51,7 @@ function openCompose() {
   drawFrom(accounts);
   subject().value = "";
   body().value = "";
+  attachments.clear();
   recipients.reset([], []);
   syncSend();
   showNewMailScreen();
@@ -56,6 +61,7 @@ function openCompose() {
 // "戻る" and "破棄": back to the inbox, what was written is dropped.
 function leave() {
   openCount++;
+  attachments.clear();
   clearUndo(side);
   setScreen("mail");
 }
@@ -65,6 +71,7 @@ async function send() {
   recipients.commitAll();
   const seq = openCount;
   const sender = account;
+  const files = attachments.files();
   sending = true;
   syncSend();
   try {
@@ -76,6 +83,7 @@ async function send() {
         bcc: recipients.mailboxes("bcc"),
         subject: subject().value,
         body: body().value,
+        ...(files.length > 0 ? { attachments: files } : {}),
       },
     });
     // The text stays when the account must log in again.
@@ -118,6 +126,7 @@ export function initMailCompose() {
   // The right side holds one talk with Claude Code for each new mail.
   addMailKey(() => (currentScreen() === "new-mail" ? `new:${openCount}` : null));
   recipients.init();
+  attachments = mailAttachments($("new-mail"), $("new-mail-attach"), $<HTMLButtonElement>("new-mail-attach-open"), "mail-compose");
   $("mail-compose").onclick = openCompose;
   $("new-mail-back").onclick = leave;
   $("new-mail-discard").onclick = leave;

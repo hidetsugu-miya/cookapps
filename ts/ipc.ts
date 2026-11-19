@@ -50,6 +50,7 @@ import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
+import type { PickedAttachment } from "./bindings/PickedAttachment";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { MenuEntry } from "./bindings/MenuEntry";
@@ -162,6 +163,10 @@ export interface Commands {
   set_read: { args: Thread & { read: boolean }; result: boolean | null };
   // Sends the mail from the account (a reply when `replyThreadId` is set). null: that account must log in again. true: sent.
   send_mail: { args: Account & { mail: OutgoingMail }; result: boolean | null };
+  // M-12: whether a file may be added to a mail that holds `held` bytes of files already (a refusal is a Japanese message); the page reads the file only after it was accepted. null: it may.
+  mail_attach_check: { args: { name: string; size: number; held: number }; result: null };
+  // M-12: opens the dialog that picks files, and answers them read (the dialog gives the place, never the page); an empty list when it was cancelled.
+  mail_attach_pick: { args: { held: number }; result: PickedAttachment[] };
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };
