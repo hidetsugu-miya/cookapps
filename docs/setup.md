@@ -20,7 +20,8 @@ title: セットアップと起動
    - Windows では `%APPDATA%\jp.mysis.tsunagiai\client_secret.json`（`C:\Users\{ユーザー名}\AppData\Roaming\jp.mysis.tsunagiai\client_secret.json`）です。
    - ファイルが無いと、ログイン時に配置先の絶対パス付きでエラーが出ます。
 
-要求するスコープは `gmail.modify` と `calendar.readonly` です。
+要求するスコープは `gmail.modify`、`calendar.readonly` と `calendar.events.owned`（予定の作成）です。
+予定の作成のスコープが付く前にログインしたアカウントは、予定を保存すると「再ログイン」が表示されるので、押して許可し直します。
 カレンダーのスコープが付く前にログインしたアカウントは、カレンダーを開くと「再ログイン」が表示されるので、押して許可し直します。
 同意画面が「外部」かつ「テスト」のままだと、リフレッシュトークンは 7 日で失効します。
 組織の外のアカウントも使う場合は、同意画面を「外部」「本番環境」にします。
