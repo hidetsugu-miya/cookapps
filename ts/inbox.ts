@@ -48,7 +48,7 @@ export async function removeRow(command: "archive" | "trash", account: string, i
   } catch (e) {
     // Back by the state it has now: a mark-as-read meanwhile moves it to the read section.
     place(li, li.classList.contains("unread"));
-    // A row drawn from the kept list before the load answered is not in rows; without it the next sync adds the thread again.
+    // A load that answered meanwhile left this pending row out of rows; without it the next sync adds the thread again.
     if (t && !rows.has(key)) rows.set(key, { t, li });
     showFailure("inbox", e);
   } finally {
@@ -81,7 +81,7 @@ let loading = 0;
 // Per account, the mailbox history ID as of the last load or sync: where the next sync starts.
 export const historyIds = new Map<string, string>();
 
-// Set when a load answers; the kept list of the last run, which is drawn first at startup, must not come after it.
+// Set when a load answers: until then the list shows the loading note.
 let inboxLoaded = false;
 
 // A load that failed (the call, or an account in its answer) is repeated by the sync round at `nextReload`, and at once by the button of the failure display.
@@ -162,17 +162,8 @@ function drawThreads(inbox: Inbox) {
   if (focus) rows.get(focus.key)?.li.querySelector<HTMLElement>(focus.selector)?.focus();
 }
 
-// Draws the list the last run kept while the first load is still on its way, or the loading note when there is none; a failed read leaves the rows to the load. Its rows work like the loaded ones.
-export async function showKeptInbox() {
-  let kept: Inbox | null = null;
-  try {
-    kept = await invoke("inbox_cached");
-  } catch {}
-  if (inboxLoaded) return;
-  if (kept) {
-    renderAccounts(kept);
-    drawThreads(kept);
-  }
+// Shows the list at startup, so that the loading note is seen until the first load answers.
+export function showInboxList() {
   if (currentScreen() === "mail") show("list");
 }
 

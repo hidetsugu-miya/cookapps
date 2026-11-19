@@ -132,11 +132,9 @@ pub struct ThreadItem {
     /// Email address of the account the thread belongs to.
     account: String,
     from: String,
-    /// The name of `from` (`Name <addr>`); empty when it has none. Kept files from before it was added lack it: `fill_sender` fills it.
-    #[serde(default)]
+    /// The name of `from` (`Name <addr>`); empty when it has none.
     from_name: String,
-    /// The address of `from`. Empty in a kept file from before it was added, like `from_name`.
-    #[serde(default)]
+    /// The address of `from`.
     from_address: String,
     subject: String,
     snippet: String,
@@ -179,15 +177,6 @@ impl ThreadItem {
                 .any(|m| m.label_ids.iter().any(|l| l == "UNREAD")),
             id: t.id,
             snippet: t.snippet,
-        }
-    }
-
-    /// Splits `from` into the name and the address when a kept file from before they were added left both empty.
-    fn fill_sender(&mut self) {
-        if self.from_name.is_empty() && self.from_address.is_empty() {
-            let sender = split_address(&self.from);
-            self.from_name = sender.name;
-            self.from_address = sender.address;
         }
     }
 }
@@ -997,45 +986,20 @@ pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox,
     })
 }
 
-/// The file the last complete load is kept in.
+/// The file that earlier versions kept the last load in. Nothing writes or reads it now: `inbox` deletes what is left, and `auth` deletes it with an account.
 pub(crate) const CACHE_FILE: &str = "inbox-cache.json";
 
-/// Only a load that got every account is kept: a partial one would draw the missing accounts' mail as gone.
-fn worth_caching(inbox: &Inbox) -> bool {
-    !inbox.accounts.is_empty() && inbox.needs_login.is_empty() && inbox.failed.is_empty()
-}
-
-/// A load that succeeds is kept in `inbox-cache.json` for `inbox_cached`.
 #[tauri::command]
 pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("inbox", "-", e))?;
     let inbox = load_inbox(&dir, &auth, "inbox").await?;
-    if worth_caching(&inbox) {
-        // Off the reply: the screen does not wait for the write and its fsync.
-        let kept = inbox.clone();
-        tokio::task::spawn_blocking(move || {
-            if let Err(e) = disk_cache::save(
-                &dir,
-                CACHE_FILE,
-                &kept,
-                kept.accounts.iter().map(String::as_str),
-            ) {
-                log_failure("inbox_cache", "-", e);
-            }
-        });
-    }
+    // Off the reply: the screen does not wait for the delete. A missing file counts as deleted.
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = disk_cache::remove(&dir, CACHE_FILE) {
+            log_failure("inbox_cache", "-", e);
+        }
+    });
     Ok(inbox)
-}
-
-/// The inbox of the last complete load, to draw before `inbox` answers. `None` when none is kept.
-#[tauri::command]
-pub async fn inbox_cached(app: AppHandle) -> Option<Inbox> {
-    let dir = config_dir(&app).ok()?;
-    let mut inbox: Inbox = tokio::task::spawn_blocking(move || disk_cache::load(&dir, CACHE_FILE))
-        .await
-        .ok()??;
-    inbox.threads.iter_mut().for_each(ThreadItem::fill_sender);
-    Some(inbox)
 }
 
 #[derive(Deserialize, Default)]
@@ -1755,33 +1719,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_complete_load_is_kept() {
-        let complete = Inbox {
-            accounts: vec!["a@example.com".into()],
-            threads: vec![],
-            needs_login: vec![],
-            failed: HashMap::new(),
-            history_ids: HashMap::new(),
-        };
-        assert!(worth_caching(&complete));
-        let no_accounts = Inbox {
-            accounts: vec![],
-            ..complete.clone()
-        };
-        assert!(!worth_caching(&no_accounts));
-        let needs_login = Inbox {
-            needs_login: vec!["a@example.com".into()],
-            ..complete.clone()
-        };
-        assert!(!worth_caching(&needs_login));
-        let failed = Inbox {
-            failed: HashMap::from([("a@example.com".to_string(), "boom".to_string())]),
-            ..complete
-        };
-        assert!(!worth_caching(&failed));
-    }
-
-    #[test]
     fn converts_metadata_thread_to_item() {
         let json = r#"{
             "id": "t1",
@@ -1827,23 +1764,6 @@ mod tests {
         );
         assert_eq!(item.date_ms, 0);
         assert!(!item.unread);
-    }
-
-    #[test]
-    fn a_kept_thread_from_before_the_sender_was_split_is_read_and_filled() {
-        let kept = r#"{"id":"t1","account":"me@example.com","from":"\"Bob B\" <b@example.com>","subject":"s","snippet":"x","dateMs":1,"unread":true}"#;
-        let mut item: ThreadItem = serde_json::from_str(kept).unwrap();
-        assert_eq!(
-            (item.from_name.as_str(), item.from_address.as_str()),
-            ("", "")
-        );
-        item.fill_sender();
-        assert_eq!(item.from_name, "Bob B");
-        assert_eq!(item.from_address, "b@example.com");
-        // A kept thread that has them is left as it is.
-        item.from_name = "Kept".into();
-        item.fill_sender();
-        assert_eq!(item.from_name, "Kept");
     }
 
     #[test]

@@ -7,7 +7,7 @@
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
 The one exception is the launchd job that the owner registered, which runs once a day, at 00:30: `nightly.sh ship` runs `ship` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; once a day since 2026-11-07, at 05:00 since 2026-11-07, at 00:30 since 2026-11-08; Discussion #160).
 Do not start an issue with `needs:owner`: a product decision is still open.
-Invoking `ship` is that instruction: it implements the open issues in the order of the plan, up to 10 points in one run, one after another in a worktree of its own (at the owner's instruction, 2026-11-09; Discussion #293; the worktree of its own, 2026-11-19; #1006).
+Invoking `ship` is that instruction: it implements the open issues in the order of the plan, up to 20 points in one run, one after another in a worktree of its own (at the owner's instruction, 2026-11-09; Discussion #293; the worktree of its own, 2026-11-19; #1006).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13
@@ -104,7 +104,7 @@ Good: the owner says "implement the Notion integration in one go, in a session" 
 Good: #60 has session and is first in the plan -> the 00:30 run starts the next issue, and its hand-over says that #60 waits for a session
 Good: the owner says "do the parts of the database screen" in a session -> the session takes the parts with session in the order of the plan, in one pull request
 Bad:  an issue looks large to the agent -> the agent adds session
-Bad:  the 00:30 run starts one part with session because it fits the 10 points
+Bad:  the 00:30 run starts one part with session because it fits the 20 points
 Bad:  a part of a split issue with session is made without session, and the night run starts it
 ```
 

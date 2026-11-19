@@ -8,6 +8,8 @@ import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
+import type { DatabaseApplied } from "./bindings/DatabaseApplied";
+import type { DatabaseChange } from "./bindings/DatabaseChange";
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
@@ -137,7 +139,6 @@ export interface Commands {
   calendar_choices: { args: undefined; result: CalendarChoices };
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   inbox: { args: undefined; result: Inbox };
-  inbox_cached: { args: undefined; result: Inbox | null };
   sync: { args: Account & { startHistoryId: string }; result: Sync };
   thread: { args: Thread; result: ThreadDetail | null };
   thread_held: { args: Thread; result: HeldThread | null };
@@ -529,6 +530,8 @@ export interface Commands {
   database_structure: { args: { id: string; database: string; table: string }; result: DatabaseStructure };
   // D-4: a page of the records of a table of the open connection `id` (`page` counts from 0), each value already text; one more row is read to tell whether a next page exists. The estimated rows are read with the page 0 only; `estimate` is the one that the page shown holds (null for none), which a later page answers again.
   database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null; typed?: string }; result: DatabaseRecords };
+  // D-4: writes the `changes` (inserts, updates and deletes the records tab has gathered; an update and a delete name their row by the whole key of the `database_records` answer, and a value of null is NULL) to a table in one transaction. Any failure, and an update or a delete that does not match exactly one row, rolls all back. Answers the rows written of each kind.
+  database_apply: { args: { id: string; database: string; table: string; changes: DatabaseChange[] }; result: DatabaseApplied };
   // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is committed at once (D-2).
   database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
   // D-3: closes the connection `id` and ends its script.

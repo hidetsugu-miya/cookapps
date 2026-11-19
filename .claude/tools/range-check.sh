@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 合格のあとに止めない指摘（Medium・Low）を直した差分の範囲確認（.claude/rules/review.md）。release-verifier を起動せずに、決まった処理で確かめて HEAD の合格記録を書く（#932）。
-# 使い方: range-check.sh {合格したコミット} {指摘の一覧のファイル}
+# マージ済みの版の止めない指摘（Medium・Low）だけを直した差分の範囲確認（.claude/rules/review.md）。ブランチの合格のあとに指摘を直すことはしない（#1012）。release-verifier を起動せずに、決まった処理で確かめて HEAD の合格記録を書く（#932）。
+# 使い方: range-check.sh {合格したコミット} {指摘の一覧のファイル}（通常は range-check.sh origin/main {一覧}）
 # 一覧のファイルは 1 行 1 件で、各行に直した指摘の `path` か `path:line` を含む（行の残りは自由。例: `[L-1] ts/slack.ts:120 空の返事を描かない`）。
 # 指摘の修正に伴うテスト・説明のファイルは、元の指摘の ID を付けた行として一覧に書いてよい（例: `[L-1] e2e/specs/inbox.e2e.ts 指摘 L-1 の修正に伴うテスト`）。指摘と関係のない変更を書いてはいけない。
 # 確かめる順: 作業ツリーがクリーン、合格したコミットが合格記録を持つか origin/main の祖先か同じ（main のコミットは main に入るときゲートを通っている。マージ済みの版の指摘だけを直す PR は `range-check.sh origin/main {一覧}` で通す）、そのコミットが HEAD の祖先で HEAD と異なる、HEAD の CI と E2E の記録が合格、

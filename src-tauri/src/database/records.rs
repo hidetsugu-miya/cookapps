@@ -5,6 +5,9 @@
 //! `cell_of` is the one place that turns it into what the screen draws, from the name of the column's type (`TypeInfo::name`) and the bytes, and it never fails: bytes that do not fit their type are told as binary.
 //! A NULL is the text "NULL", a binary value is its length only, and a text longer than `TEXT_MAX` characters is cut with "…" (the rest is kept nowhere).
 //! The SQL tab (#635) draws its result with the same cells.
+//!
+//! The answer also tells what the screen may write back (#863): the columns that name one row (`key`, chosen by `choose_key` from the unique indexes of `information_schema.STATISTICS`),
+//! and for each row which cells can be written (`is_editable`: not binary, not a text that was cut) and whether the row can be updated or deleted at all (`row_edit`: the table has a key, and the cell of each key column can be written).
 
 use std::borrow::Cow;
 
@@ -26,6 +29,10 @@ use super::{
 pub const PAGE_SIZE: u64 = 100;
 /// The characters of a text that a cell keeps.
 pub const TEXT_MAX: usize = 200;
+/// The columns of the unique indexes of the table bound to the two `?` (its schema and its name), one row for each column of an index: the name of the index, the place of the column in it, the column (none for an expression of MySQL 8) and `NULLABLE` (`YES` or empty).
+const KEYS: &str = "SELECT CAST(INDEX_NAME AS CHAR), CAST(SEQ_IN_INDEX AS UNSIGNED), CAST(COLUMN_NAME AS CHAR), CAST(NULLABLE AS CHAR) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND NON_UNIQUE = 0";
+/// The name MySQL gives the primary key.
+const PRIMARY: &str = "PRIMARY";
 /// The estimated number of rows of the table bound to the two `?`: its schema and its name.
 const ESTIMATE: &str = "SELECT CAST(TABLE_ROWS AS UNSIGNED) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
 
@@ -70,6 +77,22 @@ pub struct DatabaseRecords {
     pub pages: String,
     /// The page as the copy button copies it (`cells_tsv`, #668).
     pub tsv: String,
+    /// The columns that name one row: the primary key, else the columns of a unique key that none of them may be NULL; empty when the table has neither (`choose_key`).
+    pub key: Vec<String>,
+    /// What can be written back, one for each row of `rows` (`row_edit`).
+    pub edits: Vec<DatabaseRowEdit>,
+}
+
+/// What can be written back of one row (#863).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseRowEdit {
+    /// The row can be updated and deleted: the table has a key, and the cell of each of its columns is whole (not cut, not binary).
+    pub can_change: bool,
+    /// For each cell of the row: its value can be written. A text cut at `TEXT_MAX` characters and a binary value cannot, as their full values are kept nowhere.
+    pub cells: Vec<bool>,
 }
 
 /// A name of the database or of a table or column, quoted for the SQL text: between backticks, a backtick inside doubled.
@@ -103,6 +126,80 @@ pub fn cut_text(text: &str) -> String {
         Some((end, _)) => format!("{}…", &text[..end]),
         None => text.to_owned(),
     }
+}
+
+/// Whether `cell` holds the whole value, so that it can be written back: a NULL, a number and a text that was not cut can; binary and a cut text (`TEXT_MAX` characters and the "…") cannot.
+/// An uncut text has at most `TEXT_MAX` characters, so one with more was cut.
+pub fn is_editable(cell: &DatabaseCell) -> bool {
+    match cell.kind {
+        DatabaseCellKind::Binary => false,
+        DatabaseCellKind::Text => cell.text.chars().nth(TEXT_MAX).is_none(),
+        DatabaseCellKind::Null | DatabaseCellKind::Number => true,
+    }
+}
+
+/// What can be written back of `row`, whose cells are those of `columns`, when the table's key is `key`.
+/// A row can be changed only when the table has a key and the cell of each key column is there, whole and not NULL.
+pub fn row_edit(columns: &[String], key: &[String], row: &[DatabaseCell]) -> DatabaseRowEdit {
+    let cells: Vec<bool> = row.iter().map(is_editable).collect();
+    let can_change = !key.is_empty()
+        && key.iter().all(|name| {
+            columns
+                .iter()
+                .position(|c| c == name)
+                .is_some_and(|i| cells[i] && row[i].kind != DatabaseCellKind::Null)
+        });
+    DatabaseRowEdit { can_change, cells }
+}
+
+/// One column of a unique index, as `KEYS` answers it: the name of the index, the place of the column in it, the column and `NULLABLE`.
+pub type KeyRow = (String, u64, Option<String>, Option<String>);
+
+/// The columns that name one row, from the columns of the unique indexes: the primary key, else the unique key with the fewest columns (the first by name when they are as many) that none of them may be NULL; empty for none.
+/// An index with an expression in it (no column name) or a column that may be NULL does not name a row: two rows may hold NULL there. The columns are in the order of the index.
+pub fn choose_key(rows: &[KeyRow]) -> Vec<String> {
+    let mut names: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    let columns_of = |name: &str| -> Option<Vec<String>> {
+        let mut entries: Vec<&KeyRow> = rows.iter().filter(|r| r.0 == name).collect();
+        entries.sort_by_key(|r| r.1);
+        entries
+            .iter()
+            .map(|(_, _, column, nullable)| {
+                column
+                    .clone()
+                    .filter(|_| nullable.as_deref() != Some("YES"))
+            })
+            .collect()
+    };
+    let usable: Vec<(&str, Vec<String>)> = names
+        .into_iter()
+        .filter_map(|name| columns_of(name).map(|columns| (name, columns)))
+        .filter(|(_, columns)| !columns.is_empty())
+        .collect();
+    if let Some((_, columns)) = usable.iter().find(|(name, _)| *name == PRIMARY) {
+        return columns.clone();
+    }
+    usable
+        .into_iter()
+        .min_by_key(|(_, columns)| columns.len())
+        .map(|(_, columns)| columns)
+        .unwrap_or_default()
+}
+
+/// The key of `database`.`table` (`choose_key`), read on the session. A view has no index, so no key.
+pub async fn read_key(
+    connection: &mut MySqlConnection,
+    database: &str,
+    table: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, KeyRow>(KEYS)
+        .bind(database)
+        .bind(table)
+        .fetch_all(&mut *connection)
+        .await?;
+    Ok(choose_key(&rows))
 }
 
 fn array<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
@@ -387,7 +484,14 @@ pub async fn read(
     };
     let last_page = last_page(offset, rows.len(), estimate);
     let columns = columns.unwrap_or_default();
+    let key = read_key(connection, database, table).await?;
+    let edits = rows
+        .iter()
+        .map(|row| row_edit(&columns, &key, row))
+        .collect();
     Ok(DatabaseRecords {
+        key,
+        edits,
         tsv: cells_tsv(&columns, &rows),
         columns,
         summary: format_summary(offset, rows.len(), estimate),
@@ -762,6 +866,126 @@ mod tests {
         );
         // a field is quoted once, not again when it is copied
         assert_eq!(tsv(&["q"], &[vec!["a\tb"]]), "q\n\"a\tb\"");
+    }
+
+    fn key_row(index: &str, seq: u64, column: Option<&str>, nullable: &str) -> KeyRow {
+        (
+            index.to_owned(),
+            seq,
+            column.map(str::to_owned),
+            Some(nullable.to_owned()),
+        )
+    }
+
+    fn strings(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_key_is_the_primary_key_and_a_composite_one_is_in_the_order_of_its_index() {
+        let rows = vec![
+            key_row("PRIMARY", 2, Some("b"), ""),
+            key_row("PRIMARY", 1, Some("a"), ""),
+            key_row("by_code", 1, Some("code"), ""),
+        ];
+        assert_eq!(choose_key(&rows), strings(&["a", "b"]));
+        assert!(KEYS.contains("NON_UNIQUE = 0") && KEYS.matches('?').count() == 2);
+    }
+
+    #[test]
+    fn with_no_primary_key_the_unique_key_of_the_fewest_columns_that_cannot_be_null_is_the_key() {
+        let rows = vec![
+            key_row("pair", 1, Some("x"), ""),
+            key_row("pair", 2, Some("y"), ""),
+            key_row("nullable", 1, Some("n"), "YES"),
+            key_row("zeta", 1, Some("z"), ""),
+            key_row("alpha", 1, Some("p"), ""),
+        ];
+        // `alpha` and `zeta` have one column each, and the first by name wins; `nullable` may hold two NULLs, so it names no row
+        assert_eq!(choose_key(&rows), strings(&["p"]));
+        let only_wide = vec![
+            key_row("pair", 1, Some("x"), ""),
+            key_row("pair", 2, Some("y"), ""),
+            key_row("nullable", 1, Some("n"), "YES"),
+        ];
+        assert_eq!(choose_key(&only_wide), strings(&["x", "y"]));
+    }
+
+    #[test]
+    fn an_index_with_a_nullable_column_or_an_expression_names_no_row_and_no_index_is_no_key() {
+        // one nullable column in a composite index is enough to leave it out
+        let mixed = vec![
+            key_row("pair", 1, Some("x"), ""),
+            key_row("pair", 2, Some("y"), "YES"),
+        ];
+        assert_eq!(choose_key(&mixed), Vec::<String>::new());
+        // an expression of MySQL 8 has no column name
+        let expression = vec![key_row("by_lower", 1, None, "")];
+        assert_eq!(choose_key(&expression), Vec::<String>::new());
+        assert_eq!(choose_key(&[]), Vec::<String>::new());
+    }
+
+    fn texts(kind: DatabaseCellKind, text: &str) -> DatabaseCell {
+        cell(kind, text.to_owned())
+    }
+
+    #[test]
+    fn a_cell_can_be_written_unless_it_is_binary_or_a_text_that_was_cut() {
+        assert!(is_editable(&cell_of("VARCHAR", None)));
+        assert!(is_editable(&cell_of("INT", Some(&5i32.to_le_bytes()))));
+        assert!(is_editable(&cell_of("VARCHAR", Some(b""))));
+        let exact = "あ".repeat(TEXT_MAX);
+        assert!(is_editable(&cell_of("TEXT", Some(exact.as_bytes()))));
+        let long = "あ".repeat(TEXT_MAX + 1);
+        assert!(!is_editable(&cell_of("TEXT", Some(long.as_bytes()))));
+        assert!(!is_editable(&cell_of("BLOB", Some(b"abc"))));
+        assert!(!is_editable(&cell_of("INT", Some(&[1, 2, 3]))));
+        assert!(is_editable(&cell_of("DATETIME", Some(&[0]))));
+        // a text that is not cut and ends with the sign of a cut is still whole
+        assert!(is_editable(&texts(DatabaseCellKind::Text, "wait…")));
+    }
+
+    #[test]
+    fn a_row_can_change_only_with_a_key_whose_cells_are_whole() {
+        let columns = strings(&["id", "note", "photo"]);
+        let key = strings(&["id"]);
+        let whole = vec![
+            texts(DatabaseCellKind::Number, "1"),
+            texts(DatabaseCellKind::Text, "a"),
+            binary_cell(10),
+        ];
+        let edit = row_edit(&columns, &key, &whole);
+        assert_eq!(
+            edit,
+            DatabaseRowEdit {
+                can_change: true,
+                cells: vec![true, true, false]
+            }
+        );
+        // a table with no key can change no row, and the cells are still told
+        let none = row_edit(&columns, &[], &whole);
+        assert!(!none.can_change);
+        assert_eq!(none.cells, vec![true, true, false]);
+        // a key cell that is cut, binary or NULL, and a key column that is not in the page
+        let cut = "x".repeat(TEXT_MAX + 1);
+        let text_key = strings(&["note"]);
+        let long = vec![
+            texts(DatabaseCellKind::Number, "1"),
+            cell(DatabaseCellKind::Text, cut_text(&cut)),
+            binary_cell(1),
+        ];
+        assert!(!row_edit(&columns, &text_key, &long).can_change);
+        assert!(!row_edit(&columns, &strings(&["photo"]), &whole).can_change);
+        let null = vec![
+            cell(DatabaseCellKind::Null, "NULL".to_owned()),
+            texts(DatabaseCellKind::Text, "a"),
+            binary_cell(1),
+        ];
+        assert!(!row_edit(&columns, &key, &null).can_change);
+        assert!(!row_edit(&columns, &strings(&["hidden"]), &whole).can_change);
+        // one of two key columns that is not whole is enough
+        let pair = strings(&["id", "photo"]);
+        assert!(!row_edit(&columns, &pair, &whole).can_change);
     }
 
     #[test]

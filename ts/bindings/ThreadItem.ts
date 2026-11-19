@@ -6,10 +6,10 @@ export type ThreadItem = { id: string,
  */
 account: string, from: string, 
 /**
- * The name of `from` (`Name <addr>`); empty when it has none. Kept files from before it was added lack it: `fill_sender` fills it.
+ * The name of `from` (`Name <addr>`); empty when it has none.
  */
 fromName: string, 
 /**
- * The address of `from`. Empty in a kept file from before it was added, like `from_name`.
+ * The address of `from`.
  */
 fromAddress: string, subject: string, snippet: string, dateMs: number, unread: boolean, };

@@ -19,6 +19,10 @@ latest: string | null,
  */
 subagents: number, 
 /**
+ * The command of the shell the agent is running (A-8): `Some` while its last tool is `Bash` and its main agent works (the command's first line, empty when Orca gave none); `None` otherwise.
+ */
+shell?: string | null, 
+/**
  * When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
  */
 atMs: number, 

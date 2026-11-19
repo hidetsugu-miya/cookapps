@@ -583,6 +583,8 @@ export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra
   lastPage: null,
   pages: "",
   tsv: "",
+  key: [],
+  edits: rows.map((row) => ({ canChange: false, cells: row.map(() => true) })),
   ...extra,
 });
 

@@ -2,7 +2,7 @@
 # Runs the ship skill headlessly from the main checkout; launchd starts it every day at 00:30 (.claude/skills/ship/SKILL.md, "Rules").
 # Usage: nightly.sh ship  (the exit code is claude's)
 # Keeps one run with a lock directory, writes .claude/nightly/ship-{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
-# The skill gets NIGHTLY_DEADLINE_EPOCH, the end of its 3 hours (03:30 for the job), which it checks with nightly-limit.sh before it starts something new (nothing kills the process at the deadline; nightly-limit.sh also holds a run to 10 points), and HANDOVER_RUN_START (handover.sh).
+# The skill gets NIGHTLY_DEADLINE_EPOCH, the end of its 3 hours (03:30 for the job), which it checks with nightly-limit.sh before it starts something new (nothing kills the process at the deadline; nightly-limit.sh also holds a run to 20 points), and HANDOVER_RUN_START (handover.sh).
 set -u
 if [ $# -ne 1 ]; then
   echo "使い方: nightly.sh ship" >&2

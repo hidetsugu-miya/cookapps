@@ -275,6 +275,19 @@ function writeAgain(instance: Instance, data: string) {
   });
 }
 
+// Draws the terminal with the WebGL renderer, after `term.open`. When the GPU takes the context away, or WebGL2 is not there at all, the addon is let go and xterm.js draws with its DOM renderer again.
+// The E2E build keeps the DOM renderer, because its specs read the text of `.xterm-rows`; only e2e/fixtures.js sets `__e2e_timers__` (even when empty), and a spec that wants WebGL sets `__e2e_webgl__`.
+function useWebgl(term: XTerm) {
+  if ("__e2e_timers__" in window && !window.__e2e_webgl__) return;
+  try {
+    const webgl = new WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch {
+    // No WebGL2: the DOM renderer, which `term.open` set up, stays.
+  }
+}
+
 function newInstance(source: TermSource, owner: string): Instance {
   const el = document.createElement("div");
   el.className = "orca-term-box";
@@ -308,6 +321,7 @@ function newInstance(source: TermSource, owner: string): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
+  useWebgl(term);
   const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, failing: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {

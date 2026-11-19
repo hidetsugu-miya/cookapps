@@ -7,14 +7,14 @@
 #   In a night run (NIGHTLY_DEADLINE_EPOCH is set) no when the unit rule says so. Exit 3. A unit is a Release PR of its own: one point:8 issue, or all the `solo` parts (the label `issue-plan` gives the parts of a point:8 issue it split) of one parent issue.
 #   The parts of one unit start together in a night; an issue that is not in the unit, and a part of another unit, do not start with it, before it or after it.
 #   A session of the owner has no unit rule (.claude/skills/ship/SKILL.md, "Rules"): it may bundle issues of any units.
-#   In a night run also no once the deadline has passed (exit 1), and no when the points of the issues in hand and of #n add up to more than 10 (exit 3; a smaller issue may still fit).
+#   In a night run also no once the deadline has passed (exit 1), and no when the points of the issues in hand and of #n add up to more than 20 (exit 3; a smaller issue may still fit).
 # Exit 0: yes. Exit 1: no, the deadline has passed (stdout says why). Exit 3: no, #n does not fit the points, or it waits for a session or for its unit (stdout says why). Exit 2: wrong usage, or an issue without a point label.
 # nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the run it starts. A session of the owner has none, so it is never limited in time, in points, by the unit rule or by `session`.
 # The points of an issue are its `point:*` label, read with gh. Checking by hand: NIGHTLY_NOW_EPOCH replaces the current time, NIGHTLY_DEADLINE_EPOCH may be set by hand,
 # and NIGHTLY_POINTS_LIST (lines of "{issue number} {points} [{unit}]"; unit is `i{n}` for a point:8 issue, `p:{parent number}` for a `solo` part of a parent (`i{n}` when it has none), and absent for any other issue) replaces the labels read with gh,
 # and with it NIGHTLY_SESSION_LIST (the numbers of the issues with `session`, separated by commas or spaces).
 set -u
-MAX_POINTS=10
+MAX_POINTS=20
 usage() {
   echo "使い方: nightly-limit.sh issue {n} [--taken {a,b,...}]" >&2
   exit 2
