@@ -29,7 +29,7 @@ Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the pla
 """
 import argparse
 import contextlib
-import errno
+import fcntl
 import json
 import os
 import re
@@ -919,8 +919,14 @@ def claims_dir(git_common_dir):
 
 
 def live_worktrees(porcelain):
-    """-> the real paths of the worktrees in the output of `git worktree list --porcelain`."""
-    return {os.path.realpath(line[len("worktree "):]) for line in porcelain.splitlines() if line.startswith("worktree ")}
+    """-> the real paths of the worktrees in the output of `git worktree list --porcelain`, without the ones whose directory is gone (git marks them `prunable`)."""
+    live = set()
+    for block in porcelain.split("\n\n"):
+        lines = block.splitlines()
+        path = next((line[len("worktree "):] for line in lines if line.startswith("worktree ")), None)
+        if path is not None and not any(line == "prunable" or line.startswith("prunable ") for line in lines):
+            live.add(os.path.realpath(path))
+    return live
 
 
 def read_owner(claim):
@@ -948,32 +954,30 @@ def read_claims(root, live):
 
 def claim_issue(root, n, owner, live):
     """Claims issue n for the worktree `owner`. -> None when it is the owner's, or the path of the other worktree that holds it.
-    The claim is made whole in a directory of its own and renamed into place: a rename onto a directory that has files fails, so exactly one claimant wins, and no reader sees a claim without its owner.
-    A claim whose owner is no longer in `live` is stale: it is moved away (one claimant wins that rename too) and the claim is tried again."""
+    Claimants take turns: each holds an exclusive `flock` on the claims directory while it reads the claim and changes it, so exactly one claimant wins, also at a stale claim (reading it and moving it away is no longer a gap that another claimant can use).
+    The claim is made whole in a directory of its own and renamed into place, so a reader, which takes no lock, never sees a claim without its owner.
+    A claim whose owner is no longer in `live` (or that has no owner) is stale: it is moved away and replaced."""
     os.makedirs(root, exist_ok=True)
     claim = os.path.join(root, str(n))
-    while True:
-        tmp = tempfile.mkdtemp(prefix=".claim-", dir=root)
-        with open(os.path.join(tmp, "owner"), "w", encoding="utf-8") as f:
-            f.write(owner + "\n")
-        try:
-            os.rename(tmp, claim)
-            return None
-        except OSError as e:
-            shutil.rmtree(tmp, ignore_errors=True)
-            if e.errno not in (errno.ENOTEMPTY, errno.EEXIST):
-                raise
+    fd = os.open(root, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
         holder = read_owner(claim)
         if holder == owner:
             return None
         if holder in live:
             return holder
-        gone = f"{claim}.stale-{uuid.uuid4().hex}"
-        try:
+        tmp = tempfile.mkdtemp(prefix=".claim-", dir=root)
+        with open(os.path.join(tmp, "owner"), "w", encoding="utf-8") as f:
+            f.write(owner + "\n")
+        if os.path.lexists(claim):
+            gone = f"{claim}.stale-{uuid.uuid4().hex}"
             os.rename(claim, gone)
-        except FileNotFoundError:
-            continue
-        shutil.rmtree(gone, ignore_errors=True)
+            shutil.rmtree(gone, ignore_errors=True)
+        os.rename(tmp, claim)
+        return None
+    finally:
+        os.close(fd)
 
 
 def worktree_list():

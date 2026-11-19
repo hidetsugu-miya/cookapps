@@ -6,7 +6,7 @@
 #   そのパスがあって別のブランチか detached なら、使用中として理由を stderr に出して exit 3。
 #   そのブランチが別の worktree（main の checkout を含む）で checkout 済みなら、使用中として exit 3（release/next も同じ。後から来た側は手を出さない）。
 #   それ以外は worktree を作る。ブランチがローカルにあればそれを（origin/main にマージ済みなら origin/main まで進める）、origin/{ブランチ} があればそれを追跡して、どちらもなければ origin/main から新しく切る。
-#   作ったあとに、.worktreeinclude のコピー（main の checkout のものが正）、main の checkout の src-tauri/target の APFS の clone（差分ビルド用の incremental/ は消す。失敗したら警告を出して空から始める）、npm ci をする。
+#   作ったあとに、.worktreeinclude のコピー（main の checkout のものが正）、main の checkout の src-tauri/target の APFS の clone（差分ビルド用の incremental/ は消す。失敗したら警告を出して空から始める）、node_modules の準備をする。node_modules は、package-lock.json が main の checkout のものと同じなら main の checkout の node_modules の clone、違うとき、main の checkout に node_modules がないとき、clone に失敗したときは npm ci。
 # --park: 今いるディレクトリの worktree（.claude/worktrees/ の下のリンクされた worktree）を消す。空いているときだけ消し、そうでなければ exit 3。
 #   空いている = 作業ツリーがきれいで、HEAD がどれかのリモートブランチに含まれる（origin/main か、push 済みのブランチ。失う変更もコミットもない）。
 #   消すのは worktree（git worktree remove。--force は使わない。ignored なファイルは一緒に消える）、origin/main にマージ済みのそのブランチ（push 済みでマージ前のブランチは残す）、持ち主がこの worktree の issue の claim（plan-release.py claim）。最後の行に main の checkout のパスを出す。
@@ -98,6 +98,14 @@ if [ -d "$main/src-tauri/target" ]; then
     echo "警告: src-tauri/target をコピーできませんでした（空からビルドします）" >&2
   fi
 fi
+# node_modules も clone で写す。ただし package-lock.json が main の checkout のものと同じときだけ。違うとき、main の checkout に node_modules がないとき、clone に失敗したとき（作りかけは消す）は npm ci をする。
 # mise.toml をコピーしたあとに実行する（Node の版は mise が決める）。
-[ ! -f "$dest/package-lock.json" ] || (cd "$dest" && mise exec -- npm ci --silent)
+if [ -f "$dest/package-lock.json" ]; then
+  if cmp -s "$main/package-lock.json" "$dest/package-lock.json" && [ -d "$main/node_modules" ] && cp -cpR "$main/node_modules" "$dest/node_modules"; then
+    :
+  else
+    rm -rf "$dest/node_modules"
+    (cd "$dest" && mise exec -- npm ci --silent)
+  fi
+fi
 echo "$dest"

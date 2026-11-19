@@ -1112,6 +1112,14 @@ class Claims(unittest.TestCase):
             self.assertEqual(pr.live_worktrees(text), {f"{d}/m", f"{d}/w"})
         self.assertEqual(pr.live_worktrees(""), set())
 
+    def test_a_worktree_whose_directory_is_gone_is_not_live(self):
+        text = (
+            "worktree /w/m\nHEAD abc\nbranch refs/heads/main\n\n"
+            "worktree /w/gone\nHEAD def\nbranch refs/heads/gone\nprunable gitdir file points to non-existent location\n\n"
+            "worktree /w/bare\nHEAD 111\ndetached\nprunable\n"
+        )
+        self.assertEqual(pr.live_worktrees(text), {os.path.realpath("/w/m")})
+
     def test_a_free_issue_is_claimed_with_the_path_of_the_owner(self):
         with tempfile.TemporaryDirectory() as d:
             root = os.path.join(d, "claims")
@@ -1136,6 +1144,14 @@ class Claims(unittest.TestCase):
             self.assertIsNone(pr.claim_issue(root, 7, "/w/b", {"/w/b"}))
             with open(os.path.join(root, "7", "owner"), encoding="utf-8") as f:
                 self.assertEqual(f.read().strip(), "/w/b")
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_a_claim_with_no_owner_is_taken_over(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            os.makedirs(os.path.join(root, "7"))
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/a", {"/w/a"}))
+            self.assertEqual(pr.read_claims(root, {"/w/a"}), {7: "/w/a"})
             self.assertEqual(os.listdir(root), ["7"])
 
     def test_of_many_claimants_at_once_exactly_one_wins(self):
@@ -1240,6 +1256,13 @@ class ClaimCommand(unittest.TestCase):
     def test_the_claim_of_a_removed_worktree_is_taken_over(self):
         self.run_claim(self.a, "--worktree", self.a, "5")
         self.git("worktree", "remove", self.a)
+        code, out, err = self.run_claim(self.b, "--worktree", self.b, "5")
+        self.assertEqual((code, out.splitlines(), err), (0, ["claimed #5"], ""))
+
+    def test_the_claim_of_a_worktree_whose_directory_alone_is_gone_is_taken_over(self):
+        self.run_claim(self.a, "--worktree", self.a, "5")
+        shutil.rmtree(self.a)  # `git worktree list` still names it, as prunable
+        self.assertIn(self.a, self.git("worktree", "list", "--porcelain"))
         code, out, err = self.run_claim(self.b, "--worktree", self.b, "5")
         self.assertEqual((code, out.splitlines(), err), (0, ["claimed #5"], ""))
 
@@ -2015,9 +2038,30 @@ class UseWorktree(unittest.TestCase):
         self.git(self.main, "add", ".gitignore")
         self.commit(self.main, "a.txt", "a\n", "first")
         self.git(self.main, "push", "-q", "origin", "main")
+        # a `mise` that only records where `mise exec -- npm ci` was run
+        self.fake_bin = os.path.join(t, "bin")
+        self.mise_log = os.path.join(t, "mise.log")
+        os.makedirs(self.fake_bin)
+        with open(os.path.join(self.fake_bin, "mise"), "w") as f:
+            f.write('#!/bin/sh\necho "$PWD $*" >> "$FAKE_MISE_LOG"\nmkdir -p node_modules/from-npm-ci\n')
+        os.chmod(os.path.join(self.fake_bin, "mise"), 0o755)
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def npm_ci_runs(self):
+        try:
+            with open(self.mise_log) as f:
+                return f.read().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def main_with_node_modules(self, lock="lock\n"):
+        self.commit(self.main, "package-lock.json", lock, "lock")
+        self.git(self.main, "push", "-q", "origin", "main")
+        os.makedirs(os.path.join(self.main, "node_modules", "p"))
+        with open(os.path.join(self.main, "node_modules", "p", "y"), "w") as f:
+            f.write("m\n")
 
     def wt(self, branch):
         return os.path.join(self.main, ".claude", "worktrees", branch.replace("/", "-"))
@@ -2029,7 +2073,8 @@ class UseWorktree(unittest.TestCase):
         self.git(cwd, "commit", "-q", "-m", message)
 
     def run_script(self, arg, cwd=None):
-        r = subprocess.run(["bash", self.script, arg], capture_output=True, text=True, cwd=cwd or self.main)
+        env = {**os.environ, "PATH": f"{self.fake_bin}{os.pathsep}{os.environ['PATH']}", "FAKE_MISE_LOG": self.mise_log}
+        r = subprocess.run(["bash", self.script, arg], capture_output=True, text=True, cwd=cwd or self.main, env=env)
         return r.returncode, r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "", r.stderr
 
     def use(self, branch):
@@ -2156,6 +2201,46 @@ class UseWorktree(unittest.TestCase):
         copy = os.path.join(path, "src-tauri", "target", "debug")
         self.assertTrue(os.path.exists(os.path.join(copy, "deps", "y")))
         self.assertFalse(os.path.exists(os.path.join(copy, "incremental")))
+
+    def test_node_modules_is_cloned_when_the_lock_file_is_the_same_and_npm_ci_is_not_run(self):
+        self.main_with_node_modules()
+        code, path, err = self.use("feat/one")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(os.path.join(path, "node_modules", "p", "y")))
+        self.assertEqual(self.npm_ci_runs(), [])
+
+    def test_npm_ci_is_run_when_the_lock_file_differs_from_the_main_checkouts(self):
+        self.main_with_node_modules()
+        with open(os.path.join(self.main, "package-lock.json"), "w") as f:
+            f.write("older\n")  # the main checkout is behind origin/main
+        code, path, err = self.use("feat/one")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
+        self.assertFalse(os.path.exists(os.path.join(path, "node_modules", "p")))
+
+    def test_npm_ci_is_run_when_the_main_checkout_has_no_node_modules(self):
+        self.commit(self.main, "package-lock.json", "lock\n", "lock")
+        self.git(self.main, "push", "-q", "origin", "main")
+        code, path, err = self.use("feat/one")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
+
+    def test_npm_ci_is_run_when_the_clone_of_node_modules_fails(self):
+        self.main_with_node_modules()
+        unreadable = os.path.join(self.main, "node_modules", "p", "y")
+        os.chmod(unreadable, 0)
+        try:
+            code, path, err = self.use("feat/one")
+        finally:
+            os.chmod(unreadable, 0o600)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
+        self.assertFalse(os.path.exists(os.path.join(path, "node_modules", "p")))  # the half-made copy is gone
+
+    def test_no_lock_file_means_no_node_modules_and_no_npm_ci(self):
+        _, path, _ = self.use("feat/one")
+        self.assertEqual(self.npm_ci_runs(), [])
+        self.assertFalse(os.path.exists(os.path.join(path, "node_modules")))
 
     def test_park_removes_the_worktree_and_the_merged_branch_and_prints_the_main_checkout(self):
         _, path, _ = self.use("feat/one")
