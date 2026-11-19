@@ -398,7 +398,7 @@ describe("database: edit pane, the Claude tab and reload", () => {
     expect(await textsOf('#database-terminal-tabs [role="tab"]')).toEqual(["Claude"]);
     await expect(tab()).toHaveAttribute("aria-selected", "true");
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "database-claude", builtinTools: true, skill: null });
+    expect(start).toMatchObject({ id: "database-claude", builtinTools: true, permissionMode: "manual", skill: null });
     await expect($("#database-claude-term.claude-code-pane")).toBeDisplayed();
     await noOrca();
   });

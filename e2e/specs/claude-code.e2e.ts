@@ -5,7 +5,7 @@ import { boot, callsOf, inbox, mock, rejects, sendClaudeCode, waitForCalls } fro
 const HOST = "claude-code-host";
 const OWNER = "e2e-claude-code";
 
-async function openHost(id = "pane-1", options: { builtinTools?: boolean; skill?: { name: string; screen: "slack-thread" }; prompt?: string } = {}) {
+async function openHost(id = "pane-1", options: { builtinTools?: boolean; permissionMode?: "manual" | "auto"; skill?: { name: string; screen: "slack-thread" }; prompt?: string } = {}) {
   await boot({ inbox: inbox() });
   await browser.execute((host) => {
     const el = document.createElement("div");
@@ -17,7 +17,7 @@ async function openHost(id = "pane-1", options: { builtinTools?: boolean; skill?
 }
 
 // Shows the pane's terminal in the host (the first show starts the process).
-const show = (id: string, options: { builtinTools?: boolean; skill?: { name: string; screen: "slack-thread" }; prompt?: string } = {}) =>
+const show = (id: string, options: { builtinTools?: boolean; permissionMode?: "manual" | "auto"; skill?: { name: string; screen: "slack-thread" }; prompt?: string } = {}) =>
   browser.execute(
     async (host, o, opts, owner) => {
       const path = "/js/claude-code.js";
@@ -51,7 +51,7 @@ describe("claude code pane", () => {
   it("starts the process once with the pane's id, the size of its host and no built-in tools, and calls no Orca command", async () => {
     await openHost();
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "pane-1", builtinTools: false, skill: null });
+    expect(start).toMatchObject({ id: "pane-1", builtinTools: false, permissionMode: "manual", skill: null });
     const { cols, rows } = (start as { viewport: { cols: number; rows: number } }).viewport;
     expect(cols).toBeGreaterThan(40);
     expect(rows).toBeGreaterThan(8);
@@ -61,7 +61,13 @@ describe("claude code pane", () => {
   it("gives the start the choice of built-in tools and the saved skill", async () => {
     await openHost("pane-2", { builtinTools: true, skill: { name: "reply", screen: "slack-thread" } });
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "pane-2", builtinTools: true, skill: { name: "reply", screen: "slack-thread" } });
+    expect(start).toMatchObject({ id: "pane-2", builtinTools: true, permissionMode: "manual", skill: { name: "reply", screen: "slack-thread" } });
+  });
+
+  it("gives the start the permission mode the screen asks for, and manual when it asks for none", async () => {
+    await openHost("pane-auto", { permissionMode: "auto" });
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "pane-auto", permissionMode: "auto" });
   });
 
   it("gives the start the first instruction of the pane, and none when the screen gives none", async () => {

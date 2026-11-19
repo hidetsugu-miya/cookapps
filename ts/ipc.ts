@@ -62,6 +62,7 @@ import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { ScreenAnswer } from "./bindings/ScreenAnswer";
 import type { Skill } from "./bindings/Skill";
+import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { NewEvent } from "./bindings/NewEvent";
@@ -355,8 +356,8 @@ export interface Commands {
   orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
-  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `skill` is a saved skill it is given, `prompt` is its first instruction (1 to 20,000 characters, null for none; passed as `claude [prompt]`, and the orchestrator takes none from here). The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
-  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; channel: unknown }; result: number };
+  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `permissionMode` is "manual" (it asks the owner for every tool that writes) or "auto" (the calendar pane, #1074; Rust refuses it with `builtinTools` and for the orchestrator), `skill` is a saved skill it is given, `prompt` is its first instruction (1 to 20,000 characters, null for none; passed as `claude [prompt]`, and the orchestrator takes none from here). The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
+  claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; permissionMode: ClaudeCodePermissionMode; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; channel: unknown }; result: number };
   // A-36: types `text` into the pane `id` as it is (no Enter is added).
   claude_code_input: { args: { id: string; text: string }; result: null };
   // A-36: the new size of the pane `id` in cells.

@@ -385,18 +385,38 @@ const FORMATION_KEPT_TOOLS: [&str; 4] = ["list_inbox", "get_thread", "list_event
 fn router(formation: bool) -> ToolRouter<Tsunagiai> {
     let mut router = Tsunagiai::tool_router();
     if formation {
-        let writes: Vec<String> = router
-            .list_all()
-            .into_iter()
-            .map(|t| t.name.to_string())
-            .filter(|name| !FORMATION_KEPT_TOOLS.contains(&name.as_str()))
-            .collect();
-        for name in writes {
-            router.remove_route(&name);
-        }
+        keep_only(&mut router, &FORMATION_KEPT_TOOLS);
         router.merge(Tsunagiai::formation_router());
     }
     router
+}
+
+/// Takes every tool out of `router` but the ones named in `kept`.
+fn keep_only(router: &mut ToolRouter<Tsunagiai>, kept: &[&str]) {
+    let others: Vec<String> = router
+        .list_all()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .filter(|name| !kept.contains(&name.as_str()))
+        .collect();
+    for name in others {
+        router.remove_route(&name);
+    }
+}
+
+/// The tools of the Claude pane of the calendar screen (C-6): the two that read and draw the calendar, and no other. The pane runs in the `auto` permission mode (#1074), so a tool that trashes a mail, posts to Slack or writes a connection would run with no question to the owner.
+const CALENDAR_TOOLS: [&str; 2] = ["list_events", "calendar_show_slots"];
+
+/// The tools of the calendar pane: `CALENDAR_TOOLS` only, offered to the client that `mcp-calendar.json` of A-36 starts with `--calendar`.
+fn calendar_router() -> ToolRouter<Tsunagiai> {
+    let mut router = Tsunagiai::tool_router();
+    keep_only(&mut router, &CALENDAR_TOOLS);
+    router
+}
+
+/// Whether `--calendar` is among `args`: the server then offers the tools of the calendar pane only.
+fn calendar_arg(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|arg| arg == "--calendar")
 }
 
 /// The name that follows `flag` in `args`, or none when `flag` is not there. The flag alone, or a name that is not a formation's name (`formation::check_name`), is an error.
@@ -1004,10 +1024,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let formation = formation_arg(std::env::args().skip(1))?;
+    let calendar = calendar_arg(std::env::args().skip(1));
+    if calendar && formation.is_some() {
+        return Err("--calendar と --formation は一緒に使えません".into());
+    }
     let server = Tsunagiai {
         auth: Auth::new(),
         dir: identity::config_dir()?,
-        router: router(formation.is_some()),
+        router: if calendar {
+            calendar_router()
+        } else {
+            router(formation.is_some())
+        },
         formation,
     };
     tokio::runtime::Builder::new_current_thread()
@@ -1022,12 +1050,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_post_answer, db_test_answer, formation_arg, formation_start_arg, lsp_environment,
-        project_args, router, screen_read_answer, todoist_answer, CalendarShowSlotsArgs,
-        DbProfileSaveArgs, FormationAgent, FormationFilesArgs, FormationGitArgs,
-        FormationLaunchArgs, FormationPlanArgs, FormationReadArgs, FormationWorktreesArgs,
-        LspServerArgs, LspServerSaveArgs, LspServerSettings, LspSshHostArgs, ScreenReadArgs,
-        ScreenWriteArgs, TodoistAddTaskArgs, Tsunagiai,
+        calendar_arg, calendar_router, compose_post_answer, db_test_answer, formation_arg,
+        formation_start_arg, lsp_environment, project_args, router, screen_read_answer,
+        todoist_answer, CalendarShowSlotsArgs, DbProfileSaveArgs, FormationAgent,
+        FormationFilesArgs, FormationGitArgs, FormationLaunchArgs, FormationPlanArgs,
+        FormationReadArgs, FormationWorktreesArgs, LspServerArgs, LspServerSaveArgs,
+        LspServerSettings, LspSshHostArgs, ScreenReadArgs, ScreenWriteArgs, TodoistAddTaskArgs,
+        Tsunagiai,
     };
 
     #[test]
@@ -1568,6 +1597,30 @@ mod tests {
         ] {
             assert!(formation_arg(args(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_calendar_flag_is_an_argument_of_its_own() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert!(calendar_arg(args(&["--calendar"])));
+        assert!(calendar_arg(args(&["--other", "--calendar"])));
+        for none in [&[][..], &["calendar"], &["--calendar=1"], &["--calendars"]] {
+            assert!(!calendar_arg(args(none)), "{none:?}");
+        }
+    }
+
+    #[test]
+    fn the_calendar_pane_is_offered_list_events_and_calendar_show_slots_only() {
+        let mut names: Vec<String> = calendar_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["calendar_show_slots", "list_events"]);
+        // The tools of every other client are as they were.
+        assert!(tool_names(false).iter().any(|n| n == "trash"));
+        assert!(tool_names(false).iter().any(|n| n == "list_inbox"));
     }
 
     #[test]

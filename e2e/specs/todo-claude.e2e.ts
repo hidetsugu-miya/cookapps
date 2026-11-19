@@ -100,7 +100,7 @@ describe("todo Claude pane", () => {
     await openTodo();
     await startByPress();
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "todo-claude", builtinTools: false, skill: null });
+    expect(start).toMatchObject({ id: "todo-claude", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     // The instruction says that this is a talk about the Todo, gives the date and the tools, and holds nothing of the tasks.
     expect(prompt).toContain("Todoist");

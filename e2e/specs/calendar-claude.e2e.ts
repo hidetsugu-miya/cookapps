@@ -43,7 +43,7 @@ describe("calendar Claude pane", () => {
     await openCalendar();
     await press($(star));
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "calendar-claude", builtinTools: false, skill: null });
+    expect(start).toMatchObject({ id: "calendar-claude", builtinTools: false, permissionMode: "auto", skill: null });
     const { prompt } = start as { prompt: string };
     expect(prompt).toContain("カレンダー");
     expect(prompt).toContain(today);
@@ -105,7 +105,7 @@ describe("calendar Claude pane", () => {
     expect((await callsOf("claude_code_start")).length).toBe(1);
     await press($(star));
     const starts = await waitForCalls("claude_code_start", 2);
-    expect(starts[1]).toMatchObject({ id: "calendar-claude", builtinTools: false, skill: null, prompt: (first as { prompt: string }).prompt });
+    expect(starts[1]).toMatchObject({ id: "calendar-claude", builtinTools: false, permissionMode: "auto", skill: null, prompt: (first as { prompt: string }).prompt });
     await expect($(star)).toHaveAttribute("aria-pressed", "true");
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
   });
@@ -151,7 +151,7 @@ describe("calendar Claude pane", () => {
     await $("#cal-claude-restart").click();
     expect(await waitForCalls(close)).toEqual([{ id: "calendar-claude", launch: 1 }]);
     const starts = await waitForCalls("claude_code_start", 2);
-    expect(starts[1]).toMatchObject({ id: "calendar-claude", builtinTools: false, skill: null, prompt: (starts[0] as { prompt: string }).prompt });
+    expect(starts[1]).toMatchObject({ id: "calendar-claude", builtinTools: false, permissionMode: "auto", skill: null, prompt: (starts[0] as { prompt: string }).prompt });
     await expect($("#cal-claude-restart")).toBeEnabled();
     await expect($(pane)).toBeDisplayed();
   });

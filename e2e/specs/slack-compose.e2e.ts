@@ -746,7 +746,7 @@ describe("slack compose screen: Claude Code", () => {
   it("starts Claude Code in the terminal with the tools of tsunagiai-mcp only and a first instruction that tells the work and the tools, with nothing of the mail", async () => {
     await openCompose();
     const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "slack-compose", builtinTools: false, skill: null });
+    expect(start).toMatchObject({ id: "slack-compose", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     // It says that this is the work of making the text for Slack and posting it, and names the tools; the mail's text and the subject are read through the tools.
     expect(prompt).toContain("Slack");

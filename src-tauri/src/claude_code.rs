@@ -2,6 +2,7 @@
 //! Claude Code runs in a folder of its own, `claude-code/` in the app config directory, which holds a launch script and the `--mcp-config` file. The script is written by the app in a fixed form
 //! (only paths the app decided are in it: nothing that comes from a mail, a message or a Todo), and it starts `claude --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {the file}` (the built-in tools stay on when the screen asks, as the database screen does).
 //! `manual` asks for every tool that writes, whatever `defaultMode` the owner's settings hold, and `--setting-sources user` leaves out the project and local settings of the shared folder, so an "always allow" chosen in one pane does not reach the others.
+//! The calendar pane (C-6) alone starts in `auto` (#1074, `start-auto.sh`): it runs with no built-in tools and with an MCP config (`mcp-calendar.json`) that starts `tsunagiai-mcp --calendar`, which offers only `list_events` and `calendar_show_slots`, so that nothing that writes runs unasked.
 //! The MCP config names `tsunagiai-mcp` next to the app's own executable (`Contents/MacOS/` in the bundle) and nothing else; the child is started as an argument array, with no shell of ours in between except `/bin/sh` running the script.
 //! A session is a process group of its own (the pseudo terminal makes the child a session leader): closing a pane, the end of the app, and a screen that no longer takes the output stop the whole group.
 //! What the terminal prints and the keys typed are only in the channel of the pane: no log line, no error text.
@@ -34,6 +35,11 @@ const FOLDER: &str = "claude-code";
 const MCP_FILE: &str = "mcp.json";
 const SCRIPT_FILE: &str = "start.sh";
 const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
+/// #1074: the script and the MCP config of a pane in the `auto` permission mode.
+const SCRIPT_AUTO_FILE: &str = "start-auto.sh";
+const MCP_CALENDAR_FILE: &str = "mcp-calendar.json";
+/// The argument that makes `tsunagiai-mcp` offer the tools of the calendar pane only (`list_events` and `calendar_show_slots`, C-6).
+const CALENDAR_MCP_ARG: &str = "--calendar";
 /// A-37: the orchestrator of a formation is the pane whose id is this prefix and the formation's name (the screen names its pane so), and it runs in `formations/{name}/` of the config directory, not in `claude-code/`.
 const FORMATION_ID_PREFIX: &str = "formation:";
 const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
@@ -72,6 +78,18 @@ pub enum ClaudeCodeEvent {
     Output { data: String },
     /// The process ended (`message` says how, in Japanese; `clean` is true only when it ended by itself with the exit code 0). Nothing follows.
     Ended { message: String, clean: bool },
+}
+
+/// How the pane's Claude Code asks for a tool (#1074): `manual` asks the owner for every tool that writes, `auto` runs the tools with no question, so it has the tools of the calendar only and none of Claude Code's own.
+/// The screen names one of the two, and any other text is refused when the argument is read.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "lowercase")]
+pub enum ClaudeCodePermissionMode {
+    #[default]
+    Manual,
+    Auto,
 }
 
 /// A saved skill that the pane's Claude Code is given with `--plugin-dir` (A-32).
@@ -114,6 +132,36 @@ fn launch_script(claude: &Path, mcp_config: &Path, builtin_tools: bool) -> Strin
         claude = sh_quote(&claude.to_string_lossy()),
         config = sh_quote(&mcp_config.to_string_lossy()),
     )
+}
+
+/// The launch script of a pane in the `auto` permission mode (#1074): the same shape as `launch_script` without the built-in tools, with `--permission-mode auto`, and the MCP config that offers the calendar tools only.
+fn auto_launch_script(claude: &Path, mcp_config: &Path) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
+         PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
+         exec {claude} --tools '' --permission-mode auto --setting-sources user --strict-mcp-config --mcp-config {config} \"$@\"\n",
+        claude = sh_quote(&claude.to_string_lossy()),
+        config = sh_quote(&mcp_config.to_string_lossy()),
+    )
+}
+
+/// What a start may ask for: `auto` runs tools with no question, so it is never given Claude Code's own tools (Bash would run unasked), and the orchestrator has its own script and mode (A-37).
+fn check_permission_mode(
+    formation: bool,
+    builtin_tools: bool,
+    mode: ClaudeCodePermissionMode,
+) -> Result<(), String> {
+    if mode != ClaudeCodePermissionMode::Auto {
+        return Ok(());
+    }
+    if builtin_tools {
+        return Err("auto mode のペインでは、Claude Code 自身のツールは使えません".to_owned());
+    }
+    if formation {
+        return Err("オーケストレーターの権限モードは、画面からは選べません".to_owned());
+    }
+    Ok(())
 }
 
 /// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, at the effort `high` (#911), and reading the project settings of its folder too.
@@ -215,20 +263,34 @@ fn claude_path() -> Result<PathBuf, String> {
 /// Two panes may start together and write the same files: one at a time (the files are replaced whole, with the same text for the same choice).
 static FILES: Mutex<()> = Mutex::new(());
 
-/// Writes `mcp.json` and the launch script in `claude-code/` of `config` and answers the script's path.
+/// Writes `mcp.json` and the launch script in `claude-code/` of `config` and answers the script's path. In the `auto` mode it writes `mcp-calendar.json` (`--calendar`) and `start-auto.sh` instead, and `builtin_tools` has been refused before (`check_permission_mode`).
 fn write_files(
     config: &Path,
     claude: &Path,
     mcp: &Path,
     builtin_tools: bool,
+    mode: ClaudeCodePermissionMode,
 ) -> Result<PathBuf, String> {
     let dir = claude_code_dir(config);
+    let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
+    if mode == ClaudeCodePermissionMode::Auto {
+        crate::accounts::write_atomic(
+            &dir,
+            MCP_CALENDAR_FILE,
+            &mcp_config(mcp, &[CALENDAR_MCP_ARG]),
+        )?;
+        crate::accounts::write_atomic(
+            &dir,
+            SCRIPT_AUTO_FILE,
+            &auto_launch_script(claude, &dir.join(MCP_CALENDAR_FILE)),
+        )?;
+        return Ok(dir.join(SCRIPT_AUTO_FILE));
+    }
     let script = if builtin_tools {
         SCRIPT_WITH_TOOLS_FILE
     } else {
         SCRIPT_FILE
     };
-    let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
     crate::accounts::write_atomic(&dir, MCP_FILE, &mcp_config(mcp, &[]))?;
     crate::accounts::write_atomic(
         &dir,
@@ -835,15 +897,18 @@ fn pane_prompt(prompt: Option<String>) -> Result<Option<String>, String> {
 }
 
 /// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and the projects saved with its formation (`formation.json`) as its first instruction.
+#[allow(clippy::too_many_arguments)]
 fn prepare(
     config: &Path,
     exe: &Path,
     formation: Option<&str>,
     builtin_tools: bool,
+    permission_mode: ClaudeCodePermissionMode,
     skill: Option<ClaudeCodeSkill>,
     prompt: Option<String>,
     (cols, rows): (u16, u16),
 ) -> Result<(Spec, Option<CallPlugin>), String> {
+    check_permission_mode(formation.is_some(), builtin_tools, permission_mode)?;
     let mcp = checked_mcp_binary(exe)?;
     let claude = claude_path()?;
     let connection = claude_auth::load_connection(config)?;
@@ -860,7 +925,7 @@ fn prepare(
         )
     } else {
         (
-            write_files(config, &claude, &mcp, builtin_tools)?,
+            write_files(config, &claude, &mcp, builtin_tools, permission_mode)?,
             claude_code_dir(config),
             prompt,
         )
@@ -876,7 +941,7 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise),
+/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual` or `auto` (#1074: `auto` is for the calendar pane, with the calendar tools only; with `builtin_tools`, or for the orchestrator, it is refused),
 /// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976: passed as `claude [prompt]` after a `--`, as the orchestrator's is; the orchestrator takes none from the screen). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -886,6 +951,7 @@ pub async fn claude_code_start(
     id: String,
     viewport: OrcaViewport,
     builtin_tools: bool,
+    permission_mode: ClaudeCodePermissionMode,
     skill: Option<ClaudeCodeSkill>,
     prompt: Option<String>,
     channel: Channel<ClaudeCodeEvent>,
@@ -902,6 +968,7 @@ pub async fn claude_code_start(
             &exe,
             formation_of(&id),
             builtin_tools,
+            permission_mode,
             skill,
             prompt,
             size,
@@ -1061,6 +1128,121 @@ mod tests {
             false,
         );
         assert!(script.contains(r"exec '/Users/o'\''neil/claude' --tools ''"));
+    }
+
+    #[test]
+    fn the_auto_script_has_no_built_in_tools_and_reads_only_the_calendar_mcp_config() {
+        let script = auto_launch_script(
+            Path::new("/Users/x/.local/bin/claude"),
+            Path::new("/c/app/claude-code/mcp-calendar.json"),
+        );
+        assert_eq!(
+            script,
+            "#!/bin/sh\n\
+             # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
+             PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
+             exec '/Users/x/.local/bin/claude' --tools '' --permission-mode auto --setting-sources user --strict-mcp-config --mcp-config '/c/app/claude-code/mcp-calendar.json' \"$@\"\n"
+        );
+        let quoted = auto_launch_script(Path::new("/Users/o'neil/claude"), Path::new("/c/m.json"));
+        assert!(
+            quoted.contains(r"exec '/Users/o'\''neil/claude' --tools '' --permission-mode auto")
+        );
+    }
+
+    #[test]
+    fn the_permission_mode_takes_manual_and_auto_and_nothing_else() {
+        let read = |text: &str| serde_json::from_str::<ClaudeCodePermissionMode>(text);
+        assert_eq!(
+            read("\"manual\"").unwrap(),
+            ClaudeCodePermissionMode::Manual
+        );
+        assert_eq!(read("\"auto\"").unwrap(), ClaudeCodePermissionMode::Auto);
+        for bad in [
+            "\"Auto\"",
+            "\"AUTO\"",
+            "\"plan\"",
+            "\"bypassPermissions\"",
+            "\"\"",
+            "\"manual \"",
+            "null",
+            "true",
+            "1",
+        ] {
+            assert!(read(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            ClaudeCodePermissionMode::default(),
+            ClaudeCodePermissionMode::Manual
+        );
+    }
+
+    #[test]
+    fn auto_is_refused_with_the_built_in_tools_and_for_the_orchestrator() {
+        use ClaudeCodePermissionMode::{Auto, Manual};
+        // manual is as it was, whatever the pane is.
+        for (formation, builtin_tools) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            assert_eq!(
+                check_permission_mode(formation, builtin_tools, Manual),
+                Ok(())
+            );
+        }
+        assert_eq!(check_permission_mode(false, false, Auto), Ok(()));
+        assert!(check_permission_mode(false, true, Auto)
+            .unwrap_err()
+            .contains("ツール"));
+        assert!(check_permission_mode(true, false, Auto)
+            .unwrap_err()
+            .contains("オーケストレーター"));
+        assert!(check_permission_mode(true, true, Auto).is_err());
+    }
+
+    #[test]
+    fn an_auto_start_writes_the_calendar_config_and_its_own_script_and_leaves_the_others() {
+        let config = temp_dir("files-auto");
+        let manual = write_files(
+            &config,
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+            false,
+            ClaudeCodePermissionMode::Manual,
+        )
+        .unwrap();
+        let manual_text = std::fs::read_to_string(&manual).unwrap();
+        let auto = write_files(
+            &config,
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+            false,
+            ClaudeCodePermissionMode::Auto,
+        )
+        .unwrap();
+        assert_eq!(auto, config.join("claude-code/start-auto.sh"));
+        let auto_text = std::fs::read_to_string(&auto).unwrap();
+        assert!(auto_text.contains(" --permission-mode auto "));
+        assert!(auto_text.contains("--tools ''"));
+        assert!(auto_text.contains(&format!(
+            "--mcp-config '{}'",
+            config.join("claude-code/mcp-calendar.json").display()
+        )));
+        let calendar: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(config.join("claude-code/mcp-calendar.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            calendar,
+            serde_json::json!({"mcpServers": {"tsunagiai": {
+                "command": "/app/tsunagiai-mcp",
+                "args": ["--calendar"]
+            }}})
+        );
+        // The manual script and `mcp.json` are as they were, and name no calendar flag.
+        assert_eq!(std::fs::read_to_string(&manual).unwrap(), manual_text);
+        assert!(manual_text.contains(" --permission-mode manual "));
+        let mcp = std::fs::read_to_string(config.join("claude-code/mcp.json")).unwrap();
+        assert!(!mcp.contains("--calendar"));
+        std::fs::remove_dir_all(config).unwrap();
     }
 
     #[test]
@@ -1225,6 +1407,7 @@ mod tests {
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
             false,
+            ClaudeCodePermissionMode::Manual,
         )
         .unwrap();
         assert_eq!(script, config.join("claude-code/start.sh"));
@@ -1236,6 +1419,7 @@ mod tests {
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
             true,
+            ClaudeCodePermissionMode::Manual,
         )
         .unwrap();
         assert_eq!(with_tools, config.join("claude-code/start-with-tools.sh"));
