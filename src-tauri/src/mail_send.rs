@@ -82,7 +82,7 @@ fn shown(s: &str) -> String {
 }
 
 /// A plain `local@domain`: ASCII, no quoting, no comment and no internationalized part.
-fn valid_address(addr: &str) -> bool {
+pub(crate) fn valid_address(addr: &str) -> bool {
     let Some((local, domain)) = addr.split_once('@') else {
         return false;
     };

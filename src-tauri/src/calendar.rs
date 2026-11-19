@@ -23,6 +23,7 @@ use crate::{
     auth::{config_dir, random_string, Auth},
     disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
+    mail_send::valid_address,
 };
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
@@ -1472,19 +1473,9 @@ fn shown_text(s: &str) -> String {
     s.chars().take(100).collect()
 }
 
-/// A plain `local@domain` with a dot in the domain, and no space, quote, bracket or comma.
+/// A guest address: a plain ASCII `local@domain` as a mail's (`valid_address`, which lets no format or look-alike character through) with a dot in the domain.
 fn valid_guest(addr: &str) -> bool {
-    let Some((local, domain)) = addr.split_once('@') else {
-        return false;
-    };
-    !local.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-        && addr.matches('@').count() == 1
-        && !addr
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || "<>(),;:\"\\[]".contains(c))
+    valid_address(addr) && addr.split_once('@').is_some_and(|(_, d)| d.contains('.'))
 }
 
 /// The guests as the API takes them: trimmed, each a valid address, none twice (the case of the address does not count).
@@ -2960,6 +2951,10 @@ mod tests {
             guests(&["a b@example.com"]),
             guests(&["<a@example.com>"]),
             guests(&["a@example.com,b@example.com"]),
+            // a format or zero-width character, or a look-alike letter, would send the invitation to another address than the chip shows
+            guests(&["a@exam\u{202E}ple.com"]),
+            guests(&["a\u{200B}@example.com"]),
+            guests(&["a@exаmple.com"]),
             guests(&["a@example.com", "A@EXAMPLE.com"]),
             NewEvent {
                 guests: many,

@@ -332,7 +332,7 @@ export function initCalendar() {
   initCalendarSide(choiceChanged);
   initCalendarMonth(moveWeek);
   // A saved event: the week is read again, which draws it.
-  initCalendarCreate(() => loadCalendar(true));
+  initCalendarCreate(() => loadCalendar());
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
   $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));

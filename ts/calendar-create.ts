@@ -33,15 +33,26 @@ interface Fields {
   color: string;
 }
 
-// The calendars that an event can be created in, read once the first time a form opens and kept; a failed read is made again at the next one.
-let owned: Promise<Choice[]> | null = null;
+// What `calendar_owned` answers: the calendars that an event can be created in, and the accounts that have none to list because they must log in again or failed.
+interface Owned {
+  list: Choice[];
+  needsLogin: string[];
+  failed: Record<string, string>;
+}
+
+// The calendars that an event can be created in, read once the first time a form opens and kept; a failed read, or one with no calendar, is made again at the next one.
+let owned: Promise<Owned> | null = null;
 // A login or a removal of an account makes the kept list stale.
 export function forgetOwnedCalendars() {
   owned = null;
 }
 function readOwned() {
   owned ??= invoke("calendar_owned")
-    .then((read) => read.accounts.flatMap((a) => a.calendars.map((c) => ({ account: a.account, id: c.id, name: c.name, color: c.color, shown: c.shown }))))
+    .then((read) => {
+      const list = read.accounts.flatMap((a) => a.calendars.map((c) => ({ account: a.account, id: c.id, name: c.name, color: c.color, shown: c.shown })));
+      if (list.length === 0) owned = null;
+      return { list, needsLogin: read.needsLogin, failed: read.failed };
+    })
     .catch((e) => {
       owned = null;
       throw e;
@@ -53,6 +64,16 @@ function readOwned() {
 function defaultChoice(list: Choice[]) {
   const pool = list.some((c) => c.shown) ? list.filter((c) => c.shown) : list;
   return pool.find((c) => c.account === pool[0].account && c.id === c.account) ?? pool[0];
+}
+
+// A line of the form's error that asks `account` to log in again, with the button that does it.
+function reloginLine(account: string, text: string) {
+  const login = tag("button", "text-btn", "再ログイン");
+  login.type = "button";
+  login.onclick = () => addAccount(account, login);
+  const line = tag("div", "");
+  line.append(text, login);
+  return line;
 }
 
 const colorOf = (c: Choice) => c.color || avatarColor(c.account);
@@ -217,7 +238,7 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   const commitGuest = () => {
     const text = guestInput.value.replace(/[,;]+$/, "").trim();
     guestInput.value = "";
-    if (!text) return;
+    if (!text || guests.some((g) => g.toLowerCase() === text.toLowerCase())) return;
     guests.push(text);
     drawGuests();
   };
@@ -371,10 +392,10 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
       const created = await invoke("calendar_create_event", { event });
       if (created === null) {
         // The account has not granted the permission to create events yet: log in again, as the week asks for it.
-        const login = tag("button", "text-btn", "再ログイン");
-        login.type = "button";
-        login.onclick = () => addAccount(c.account, login);
-        error.replaceChildren(`${c.account} は予定を作るため再ログインが必要です`, login);
+        const text = `${c.account} は予定を作るため再ログインが必要です`;
+        // A form closed meanwhile has no place for it, so it goes to a card.
+        if (open === here) error.replaceChildren(reloginLine(c.account, text));
+        else showFailure("calendar-create", text);
         return;
       }
       if (open === here) closeCreate();
@@ -396,8 +417,16 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   title.focus({ preventScroll: true });
 
   readOwned().then(
-    (list) => {
-      if (open !== here || list.length === 0) return;
+    ({ list, needsLogin, failed }) => {
+      if (open !== here) return;
+      if (list.length === 0) {
+        // No calendar to save in: say why, as the week does for its accounts.
+        error.replaceChildren(
+          ...needsLogin.map((a) => reloginLine(a, `${a} はカレンダーを読むため再ログインが必要です`)),
+          ...Object.entries(failed).map(([a, message]) => tag("div", "", `${a} のカレンダーの読み込みに失敗しました: ${message}`)),
+        );
+        return;
+      }
       choices = list;
       const multiple = new Set(list.map((c) => c.account)).size > 1;
       select.replaceChildren(...list.map((c) => new Option(multiple ? `${c.name}（${c.account}）` : c.name)));
@@ -421,8 +450,10 @@ export function initCalendarCreate(created: () => void) {
   document.addEventListener("keydown", (e) => {
     if (open && e.key === "Escape" && !composing(e)) closeCreate();
   });
+  // The draft is already in the week, so the popover is only put beside it again; the draft is drawn again by a change of the form and by the week's draw.
   const follow = () => {
-    if (open) drawDraft();
+    const draft = document.querySelector<HTMLElement>(".cal-draft");
+    if (open && draft) place(open.pop, draft);
   };
   $("cal-scroll").addEventListener("scroll", follow);
   window.addEventListener("resize", follow);

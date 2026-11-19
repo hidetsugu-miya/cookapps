@@ -732,6 +732,17 @@ describe("calendar: create an event", () => {
     expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com", "cy@example.com"]);
   });
 
+  it("does not add an address that a chip already shows, whatever its case", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await guestInput().setValue("ann@example.com");
+    await browser.keys("Enter");
+    await guestInput().setValue("Ann@Example.com");
+    await browser.keys("Enter");
+    await expect(guestInput()).toHaveValue("");
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com"]);
+  });
+
   it("turns the Meet button into a card, which a × turns back", async () => {
     await openCreateCalendar();
     await pressSlot(slotDay, 10);
@@ -773,7 +784,8 @@ describe("calendar: create an event", () => {
     ]);
     await waitForCount(".cal-create", 0);
     await waitForCount(".cal-draft", 0);
-    expect(await waitForCalls(week)).toContainEqual({ date: expect.any(String), firstDay: 0, refresh: true });
+    // The events only: the calendar lists are not listed again.
+    expect(await waitForCalls(week)).toContainEqual({ date: expect.any(String), firstDay: 0, refresh: false });
   });
 
   it("saves an all-day event with dates, and no times", async () => {
@@ -835,6 +847,60 @@ describe("calendar: create an event", () => {
     const login = await mock("login", account);
     await $(".cal-create-error .text-btn").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+  });
+
+  it("says in a card that the account must log in again when the form was closed during the save", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", holds);
+    await $(".cal-create .text-btn.primary").click();
+    await waitForCalls(create);
+    await browser.keys("Escape");
+    await waitForCount(".cal-create", 0);
+    await release(create, null);
+    await waitForText(CARD, `${account} は予定を作るため再ログインが必要です`);
+  });
+
+  it("says why in the form when no calendar can be listed, and keeps the save button disabled", async () => {
+    await openCreateCalendar({ accounts: [], needsLogin: [account], failed: { "you@example.com": "boom" } });
+    await pressSlot(slotDay, 10);
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining(`${account} はカレンダーを読むため再ログインが必要です`));
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining("you@example.com のカレンダーの読み込みに失敗しました: boom"));
+    await expect($(".cal-create .text-btn.primary")).toBeDisabled();
+    const login = await mock("login", account);
+    await $(".cal-create-error .text-btn").click();
+    expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+  });
+
+  it("reads the owned calendars again at the next form when the last answer had none", async () => {
+    await openCreateCalendar({ accounts: [], needsLogin: [], failed: { [account]: "boom" } });
+    await pressSlot(slotDay, 10);
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining("boom"));
+    await browser.keys("Escape");
+    await waitForCount(".cal-create", 0);
+    const owned = await mock("calendar_owned", ownedCalendars());
+    await pressSlot(slotDay, 10);
+    await waitForCalls(owned);
+    await browser.waitUntil(async () => (await count(".cal-create select option")) === 2, { timeoutMsg: "no calendars" });
+    await expect($(".cal-create-error")).toHaveText("");
+  });
+
+  it("moves the form with the draft when the week is scrolled, and does not draw the draft again", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await browser.execute(() => {
+      (document.querySelector(".cal-draft") as unknown as { kept: boolean }).kept = true;
+    });
+    await browser.execute(() => {
+      const scroll = document.getElementById("cal-scroll")!;
+      scroll.scrollTop += scroll.scrollTop > 40 ? -40 : 40;
+    });
+    // The scroll event is async: the draft is the same node and the form is open once it has been handled.
+    await browser.pause(300);
+    expect(await browser.execute(() => (document.querySelector(".cal-draft") as unknown as { kept?: boolean }).kept === true)).toBe(true);
+    expect(await count(".cal-create")).toBe(1);
+    expect(await count(".cal-draft")).toBe(1);
   });
 
   it("names the account beside each calendar when there are several accounts", async () => {
