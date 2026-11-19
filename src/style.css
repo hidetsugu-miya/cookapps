@@ -39,6 +39,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 /* The accounts of a function sit under its icon in a tray (the Google accounts under the calendar, the Slack workspaces under Slack); nav.ts shows the one that fits the screen. */
 .tray { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px; border-radius: 12px; background: var(--side-hover); }
 .tray:empty { display: none; }
+/* A-5: a screen that the side menu has turned off takes its button and its tray out of the sidebar (ts/nav.ts). */
+.menu-off { display: none !important; }
 .tray .avatar { width: 28px; height: 28px; font-size: calc(11px * var(--fs)); }
 .av-img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .account-btn { padding: 0; border: 0; font-family: inherit; cursor: pointer; }
