@@ -27,7 +27,7 @@ if [ -n "$only" ]; then
   mkdir -p "$main/.claude/e2e" || exit 2
   log="$main/.claude/e2e/only-$only.log"
   "$here/ensure-deps.sh" "$root" >"$log" 2>&1 \
-    && mise exec -- npm run e2e:build >>"$log" 2>&1 && E2E_ONLY="$only" mise exec -- npm run e2e >>"$log" 2>&1
+    && mise exec -- npm run e2e:build >>"$log" 2>&1 && E2E_ONLY="$only" mise exec -- env -u E2E_SHARD npm run e2e >>"$log" 2>&1
   code=$?
   [ "$code" -ne 0 ] && tail -n 40 "$log" >&2
   echo "E2E(--only $only): exit=${code}（記録は書きません）"
@@ -55,7 +55,8 @@ if [ "$code" -eq 0 ]; then
     nice -n 10 "$here/run-ci.sh" "$root" >"$ci_out" 2>&1 &
     ci_pid=$!
   fi
-  mise exec -- npm run e2e >>"$log" 2>&1
+  # E2E_SHARD は一部の spec しか走らせないので、記録を書くこの実行からは外す。
+  mise exec -- env -u E2E_SHARD npm run e2e >>"$log" 2>&1
   code=$?
 fi
 if [ -n "$ci_pid" ]; then
