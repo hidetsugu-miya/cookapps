@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Tests of the pure functions of plan-release.py, and of the shell tools around the nightly run (nightly-limit.sh, use-worktree.sh, handover.sh) and the hook post-gh.sh.
+"""Tests of the pure functions of plan-release.py, and of the shell tools around the nightly run (nightly-limit.sh, use-worktree.sh, ensure-deps.sh, handover.sh) and the hook post-gh.sh.
 No network and no gh.
 The hook and the tools it runs are this checkout's own copies (the ones beside this file), not the main checkout's, and the hooks write their log to a temporary directory (TSUNAGIAI_HOOK_LOG_DIR), never to the real logs/.
 Run: python3 -I .claude/tools/plan-release-test.py
 """
 import atexit
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -2010,6 +2011,120 @@ class NightlyLimit(unittest.TestCase):
             self.assertEqual(self.run_limit(*args)[0], 2, args)
 
 
+class EnsureDeps(unittest.TestCase):
+    """ensure-deps.sh in a temporary checkout, with a `mise` that records where `mise exec -- npm ci` ran."""
+
+    MARK = os.path.join("node_modules", ".tsunagiai-lock-sha256")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = os.path.realpath(self.tmp.name)
+        self.root = os.path.join(t, "checkout")
+        os.makedirs(self.root)
+        self.fake_bin = os.path.join(t, "bin")
+        self.mise_log = os.path.join(t, "mise.log")
+        os.makedirs(self.fake_bin)
+        with open(os.path.join(self.fake_bin, "mise"), "w") as f:
+            f.write(
+                '#!/bin/sh\necho "$PWD $*" >> "$FAKE_MISE_LOG"\n'
+                '[ -z "$FAKE_MISE_FAIL" ] || exit 1\n'
+                '# the lock changes while npm ci runs\n'
+                '[ -z "$FAKE_MISE_CHANGE_LOCK" ] || echo changed >> package-lock.json\n'
+                'rm -rf node_modules\nmkdir -p node_modules/from-npm-ci\n'
+            )
+        os.chmod(os.path.join(self.fake_bin, "mise"), 0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def lock(self, text="lock\n"):
+        with open(os.path.join(self.root, "package-lock.json"), "w") as f:
+            f.write(text)
+
+    def sha(self, text):
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def mark(self, value):
+        os.makedirs(os.path.join(self.root, "node_modules"), exist_ok=True)
+        with open(os.path.join(self.root, self.MARK), "w") as f:
+            f.write(value + "\n")
+
+    def read_mark(self):
+        try:
+            with open(os.path.join(self.root, self.MARK)) as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return None
+
+    def runs(self):
+        try:
+            with open(self.mise_log) as f:
+                return f.read().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def run_script(self, arg=True, cwd=None, **extra):
+        env = {**os.environ, "PATH": f"{self.fake_bin}{os.pathsep}{os.environ['PATH']}", "FAKE_MISE_LOG": self.mise_log, **extra}
+        args = ["bash", os.path.join(TOOLS, "ensure-deps.sh")] + ([self.root] if arg else [])
+        return subprocess.run(args, capture_output=True, text=True, cwd=cwd or self.root, env=env)
+
+    def test_missing_node_modules_is_installed_and_marked(self):
+        self.lock()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.runs(), [f"{self.root} exec -- npm ci --silent"])
+        self.assertEqual(self.read_mark(), self.sha("lock\n"))
+
+    def test_a_different_mark_is_installed_again(self):
+        self.lock()
+        self.mark(self.sha("old lock\n"))
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(len(self.runs()), 1)
+        self.assertEqual(self.read_mark(), self.sha("lock\n"))
+
+    def test_node_modules_without_a_mark_is_installed_again(self):
+        self.lock()
+        os.makedirs(os.path.join(self.root, "node_modules", "p"))
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(len(self.runs()), 1)
+        self.assertEqual(self.read_mark(), self.sha("lock\n"))
+
+    def test_the_same_mark_runs_nothing(self):
+        self.lock()
+        self.mark(self.sha("lock\n"))
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.runs(), [])
+
+    def test_no_lock_file_runs_nothing(self):
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.runs(), [])
+        self.assertFalse(os.path.exists(os.path.join(self.root, "node_modules")))
+
+    def test_a_failed_npm_ci_writes_no_mark_and_exits_non_zero(self):
+        self.lock()
+        r = self.run_script(FAKE_MISE_FAIL="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIsNone(self.read_mark())
+
+    def test_a_failed_npm_ci_drops_the_old_mark(self):
+        self.lock()
+        self.mark(self.sha("old lock\n"))
+        self.assertNotEqual(self.run_script(FAKE_MISE_FAIL="1").returncode, 0)
+        self.assertIsNone(self.read_mark())
+
+    def test_the_mark_is_the_hash_of_the_lock_read_before_npm_ci(self):
+        self.lock()
+        self.assertEqual(self.run_script(FAKE_MISE_CHANGE_LOCK="1").returncode, 0)
+        self.assertEqual(self.read_mark(), self.sha("lock\n"))
+
+    def test_no_argument_means_the_current_directory(self):
+        self.lock()
+        self.assertEqual(self.run_script(arg=False).returncode, 0)
+        self.assertEqual(self.runs(), [f"{self.root} exec -- npm ci --silent"])
+
+
 class UseWorktree(unittest.TestCase):
     """use-worktree.sh in a throwaway repository with a bare origin: one worktree for each branch."""
 
@@ -2027,8 +2142,8 @@ class UseWorktree(unittest.TestCase):
             self.git(self.main, "config", k, v)
         os.makedirs(os.path.join(self.main, ".claude", "tools"))
         self.script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
-        with open(os.path.join(TOOLS, "use-worktree.sh"), encoding="utf-8") as f, open(self.script, "w") as g:
-            g.write(f.read())
+        for name in ("use-worktree.sh", "ensure-deps.sh"):
+            shutil.copy(os.path.join(TOOLS, name), os.path.join(self.main, ".claude", "tools", name))
         with open(os.path.join(self.main, ".worktreeinclude"), "w") as f:
             f.write("# private\nsecret.txt\n")
         with open(os.path.join(self.main, "secret.txt"), "w") as f:
