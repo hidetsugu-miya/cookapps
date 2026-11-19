@@ -5,10 +5,10 @@ import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
-import { canEditCell, cellKey, changesOf, type EditState, markable, originalText } from "./database-edit.js";
+import { canEditCell, cellKey, changesOf, type EditState, isAdded, markable, originalText } from "./database-edit.js";
 import { type GridEdit, gridNode, syncEdit } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
-import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
+import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
 import { copyText } from "./view.js";
 
 // The page of records that was asked for last. `data` stays while the next page is read, and is none after an error. `edit` is what the page has gathered to write (D-10); a screen that cannot write gives none, and its records tab has no control to write.
@@ -99,11 +99,15 @@ export interface WorkActions {
 
 // What the records tab does with what it gathers (D-10).
 export interface EditActions {
+  // ＋ adds an empty row at the end of the page.
+  add: () => void;
+  // Keeps the value of a column of an added row: the text, null for NULL, or none for 自動.
+  addedCell: (index: number, column: number, value: string | null | undefined) => void;
   // Keeps the text a cell was rewritten to (the text it had before takes the rewrite back).
   cell: (row: number, column: number, text: string) => void;
   // Presses a row: it alone is selected, or, with `add`, it is added to or taken from the selected ones.
   select: (row: number, add: boolean) => void;
-  // − marks the selected rows to be deleted.
+  // − marks the selected rows of the page to be deleted, and takes back the selected rows that were added.
   markDelete: () => void;
   // ✓ writes what was gathered, in one call.
   apply: () => void;
@@ -244,20 +248,23 @@ function copyButton(data: { columns: unknown[]; tsv: string } | null, loading: b
 // The grid of the records tab with what it gathers (D-10): its cells, the marked rows and the pressed ones are drawn from `edit`. The grid is made once for an answer of Rust, as every grid is (`gridOf`), and each draw brings it up to date in place (`syncEdit`).
 function editGridNode(data: DatabaseRecords, edit: EditState, actions: EditActions, sizes: string) {
   const current: GridEdit = {
-    editable: (row, i) => !edit.applying && canEditCell(data, row, i),
+    editable: (row, i) => !edit.applying && (isAdded(data, row) || canEditCell(data, row, i)),
     rewritten: (row, i) => edit.cells[cellKey(row, i)],
-    startText: (row, i) => edit.cells[cellKey(row, i)] ?? originalText(data, row, i),
+    startText: (row, i) => (isAdded(data, row) ? (edit.added[row - data.rows.length]?.[i] ?? "") : (edit.cells[cellKey(row, i)] ?? originalText(data, row, i))),
     deleted: (row) => edit.deleted.includes(row),
     selected: (row) => edit.selected.includes(row),
     select: actions.select,
     commit: actions.cell,
+    added: edit.added.length,
+    addedValue: (index, i) => edit.added[index]?.[i],
+    commitAdded: actions.addedCell,
   };
   const grid = gridOf(data, () => gridNode(data.columns, data.rows, sizes, current));
   syncEdit(grid, current);
   return grid;
 }
 
-// The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page. A screen that writes (D-10) has − ✓ ✗ after the copy and the number of changes after the range; while something is gathered the page cannot be changed or read again.
+// The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page. A screen that writes (D-10) has ＋ − ✓ ✗ after the copy and the number of changes after the range; while something is gathered the page cannot be changed or read again.
 function recordsNode(records: RecordsState, actions: TabActions, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
@@ -300,6 +307,7 @@ function recordsNode(records: RecordsState, actions: TabActions, sizes: string) 
     const { data } = records;
     const busy = records.loading || edit.state.applying;
     pager.append(
+      iconButton("add", "行を追加", PLUS_SVG, busy || data === null || data.columns.length === 0, edit.actions.add),
       iconButton("remove", "選んだ行を削除", MINUS_SVG, busy || data === null || markable(data, edit.state).length === 0, edit.actions.markDelete),
       iconButton("apply", "変更を確定", CHECK_SVG, busy || changes === 0, edit.actions.apply),
       iconButton("revert", "変更を取り消す", CLOSE_SVG, busy || changes === 0, edit.actions.revert),

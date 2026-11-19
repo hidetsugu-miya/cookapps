@@ -421,6 +421,19 @@ async function applyChanges() {
 }
 
 const editActions: EditActions = {
+  add: () => {
+    if (!active) return;
+    active.edit.added = [...active.edit.added, {}];
+    draw();
+    // The new row is at the end of the page: bring it into view.
+    document.querySelector("#database-work .database-grid tbody tr.added:last-child")?.scrollIntoView({ block: "nearest" });
+  },
+  addedCell: (index, column, value) => {
+    if (!active || active.edit.added[index] === undefined) return;
+    const { [String(column)]: _, ...rest } = active.edit.added[index];
+    active.edit.added[index] = value === undefined ? rest : { ...rest, [String(column)]: value };
+    draw();
+  },
   cell: (row, column, text) => {
     const data = active?.records?.data;
     if (!active || !data) return;
@@ -440,7 +453,10 @@ const editActions: EditActions = {
     const data = active?.records?.data;
     if (!active || !data) return;
     const rows = markable(data, active.edit);
-    active.edit.deleted = [...active.edit.deleted, ...rows].sort((a, b) => a - b);
+    const n = data.rows.length;
+    // The rows of the page are marked; the rows that were added are taken back, and go as if they were never added.
+    active.edit.deleted = [...active.edit.deleted, ...rows.filter((row) => row < n)].sort((a, b) => a - b);
+    active.edit.added = active.edit.added.filter((_, k) => !rows.includes(n + k));
     active.edit.selected = [];
     draw();
   },

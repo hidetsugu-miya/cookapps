@@ -68,10 +68,22 @@ export interface GridEdit {
   selected: (row: number) => boolean;
   select: (row: number, add: boolean) => void;
   commit: (row: number, column: number, text: string) => void;
+  // The rows that were added, drawn after the rows of the page; the place of the added row `k` is the number of rows plus `k`.
+  added: number;
+  // What an added row holds in a column: the text, null for NULL, or none for 自動 (the table's own value).
+  addedValue: (index: number, column: number) => string | null | undefined;
+  // Keeps what a field of an added row says: the text, null for NULL, or none for 自動.
+  commitAdded: (index: number, column: number, value: string | null | undefined) => void;
+}
+
+// What an added row's field adds to the keys: Delete in an empty field makes the cell NULL, and Backspace in an empty one gives it back to 自動. Neither deletes anything there, so typing is not changed.
+interface AddedKeys {
+  null: () => void;
+  auto: () => void;
 }
 
 // The cell becomes a field: Enter (not the Enter of an IME conversion) and leaving the field keep the text, Escape gives the cell back as it was. A field that the draw takes away is not kept.
-function editCell(td: HTMLElement, start: string, commit: (text: string) => void) {
+function editCell(td: HTMLElement, start: string, commit: (text: string) => void, keys?: AddedKeys) {
   const shown = td.textContent ?? "";
   const input = tag("input", "database-cell-input");
   input.type = "text";
@@ -90,6 +102,11 @@ function editCell(td: HTMLElement, start: string, commit: (text: string) => void
     else if (e.key === "Escape") {
       e.stopPropagation();
       finish(false);
+    } else if (keys && input.value === "" && (e.key === "Delete" || e.key === "Backspace")) {
+      e.preventDefault();
+      finish(false);
+      if (e.key === "Delete") keys.null();
+      else keys.auto();
     }
   };
   input.onblur = () => {
@@ -102,7 +119,13 @@ function editCell(td: HTMLElement, start: string, commit: (text: string) => void
 }
 
 // The edit grids and what each holds now: the rows it was made from and the `GridEdit` of the last draw, which its handlers read when the event comes.
-const editing = new WeakMap<HTMLElement, { rows: DatabaseCell[][]; edit: GridEdit }>();
+// `columnCells` are the header and the cells of each column, which the width of a column is set on, the cells of the added rows too.
+interface Held {
+  rows: DatabaseCell[][];
+  edit: GridEdit;
+  columnCells: HTMLElement[][];
+}
+const editing = new WeakMap<HTMLElement, Held>();
 
 function paintRow(tr: HTMLElement, r: number, edit: GridEdit) {
   tr.classList.toggle("deleted", edit.deleted(r));
@@ -121,6 +144,43 @@ function paintCell(td: HTMLElement, cell: DatabaseCell, r: number, i: number, ed
   else td.removeAttribute("title");
 }
 
+// An added row as it is now: 自動 for a column that was left to the table, NULL, or the text; a cell that holds a field is left to the field.
+function paintAddedCell(td: HTMLElement, value: string | null | undefined) {
+  const text = value === undefined ? "自動" : (value ?? "NULL");
+  if (td.firstElementChild === null && td.textContent !== text) td.textContent = text;
+  td.dataset.kind = typeof value === "string" ? "text" : "null";
+  if (typeof value === "string") td.title = value;
+  else td.removeAttribute("title");
+}
+
+// A row that was added, with its cells as wide as the columns are now. It is made when the draw finds a place for it and lives while the row is there.
+function addedRowNode(held: Held, index: number) {
+  const place = held.rows.length + index;
+  const tr = tag("tr", "added");
+  tr.dataset.row = String(place);
+  tr.onclick = (e) => held.edit.select(place, e.metaKey || e.ctrlKey);
+  held.columnCells.forEach((cells, i) => {
+    const td = tag("td", "database-cell");
+    const head = cells[0];
+    if (head.style.width !== "") {
+      td.style.boxSizing = "border-box";
+      td.style.width = td.style.minWidth = td.style.maxWidth = head.style.width;
+    }
+    cells.push(td);
+    td.ondblclick = () => {
+      if (td.firstElementChild !== null) return;
+      const now = held.edit;
+      if (!now.editable(place, i)) return;
+      editCell(td, now.startText(place, i), (text) => held.edit.commitAdded(index, i, text === "" ? held.edit.addedValue(index, i) : text), {
+        null: () => held.edit.commitAdded(index, i, null),
+        auto: () => held.edit.commitAdded(index, i, undefined),
+      });
+    };
+    tr.append(td);
+  });
+  return tr;
+}
+
 // Brings the edit grid up to date with what is gathered, in place: no row and no cell is made again, so a press that presses a row leaves the cell under the pointer where it is (a double press reaches it), and a field that is open stays open.
 export function syncEdit(table: HTMLElement, edit: GridEdit) {
   const held = editing.get(table);
@@ -134,13 +194,26 @@ export function syncEdit(table: HTMLElement, edit: GridEdit) {
       paintCell(tr.cells[i], cell, r, i, edit);
     });
   });
+  // The rows that were added are the rows after the rows of the page: the last ones go when fewer are added, and a new one is made when more are.
+  const n = held.rows.length;
+  while (body.rows.length - n > edit.added) {
+    const gone = body.rows[body.rows.length - 1];
+    for (const [i, td] of [...gone.cells].entries()) held.columnCells[i].splice(held.columnCells[i].indexOf(td), 1);
+    gone.remove();
+  }
+  while (body.rows.length - n < edit.added) body.append(addedRowNode(held, body.rows.length - n));
+  for (let k = 0; k < edit.added; k++) {
+    const tr = body.rows[n + k];
+    paintRow(tr, n + k, edit);
+    for (let i = 0; i < tr.cells.length; i++) paintAddedCell(tr.cells[i], edit.addedValue(k, i));
+  }
 }
 
 export function gridNode(columns: string[], rows: DatabaseCell[][], widthKey: string, edit?: GridEdit) {
   const table = tag("table", "database-grid");
-  const held = edit ? { rows, edit } : null;
-  if (held) editing.set(table, held);
   const columnCells: HTMLElement[][] = columns.map(() => []);
+  const held = edit ? { rows, edit, columnCells } : null;
+  if (held) editing.set(table, held);
   const head = tag("tr");
   const kept = widths.get(widthKey);
   columns.forEach((name, i) => {

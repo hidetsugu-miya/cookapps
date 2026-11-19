@@ -2153,9 +2153,11 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .database-cell[data-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .database-cell[data-kind="null"], .database-cell[data-kind="binary"] { color: var(--muted); font-style: italic; }
-/* D-10: a pressed row, a cell that was rewritten (the accent on the soft color), a row marked to be deleted (struck through, in the danger color), and the field of a cell that is being rewritten. */
+/* D-10: a pressed row, a row that was added (the insert color), a cell that was rewritten (the accent on the soft color), a row marked to be deleted (struck through, in the danger color), and the field of a cell that is being rewritten. */
 .database-grid tr.selected td { background: var(--hover); }
 .database-grid td.changed { background: var(--soft); color: var(--accent); }
+.database-grid tr.added td { background: var(--diff-ins-bg); }
+.database-grid tr.added.selected td { background: color-mix(in srgb, var(--diff-ins-bg), var(--accent) 18%); }
 .database-grid tr.deleted td { color: var(--danger); text-decoration: line-through; }
 .database-cell-input { box-sizing: border-box; width: 100%; min-width: 8em; margin: -3px 0; padding: 2px 6px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; }
 .database-cell-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
