@@ -319,13 +319,13 @@ describe("calendar Claude pane: a change of Claude Code", () => {
     await $("#nav-calendar").click();
     await waitForText("#cal-body .cal-name", "Team sync");
     await waitForText("#cal-side-feed", "Work");
-    const weeks = (await callsOf("calendar_week")).length;
     const choices = (await callsOf("calendar_choices")).length;
     const changed = weekOfToday();
     changed.timed = changed.timed.slice(1);
+    // `mock` forgets the earlier calls, so any call of `calendar_week` from here on is a read after the change.
     await mock("calendar_week", changed);
     await emitEvent("screen-bridge-changed", "calendar");
-    await browser.waitUntil(async () => (await callsOf("calendar_week")).length > weeks, { timeoutMsg: "the week was not read again" });
+    await browser.waitUntil(async () => (await callsOf("calendar_week")).length > 0, { timeoutMsg: "the week was not read again" });
     await waitForCount("#cal-body .cal-event", changed.timed.length);
     await browser.waitUntil(async () => (await callsOf("calendar_choices")).length > choices, { timeoutMsg: "the calendars were not read again" });
   });
