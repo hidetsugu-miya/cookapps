@@ -92,6 +92,12 @@ struct ApiTask {
     due: Option<ApiDue>,
     #[serde(default)]
     child_order: i64,
+    /// Where the task stands among its siblings (the same project, section and parent), as a fractional index that sorts as text (T-2); `None` for a task Todoist has not given one yet.
+    #[serde(default)]
+    order_key: Option<String>,
+    /// The section of a top-level task; the task list does not show sections.
+    #[serde(default)]
+    section_id: Option<String>,
     /// Completed. The Sync API sends a task that was completed or deleted since the last sync.
     #[serde(default)]
     checked: bool,
@@ -599,6 +605,293 @@ fn move_under_request(id: &str, parent_id: &str) -> Result<(String, Value), Stri
         return Err("タスクを自分自身のサブタスクにはできません".into());
     }
     Ok((url, json!({ "parent_id": parent_id })))
+}
+
+/// The digits of Todoist's `order_key`, a fractional index (the scheme of the `fractional-indexing` library) in base 62: in order, so that keys sort as text.
+const KEY_DIGITS: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+/// The smallest key there is; nothing sorts before it.
+const SMALLEST_KEY: &str = "A00000000000000000000000000";
+const KEY_UNREADABLE: &str = "並び順を読めません。読み込み直してください";
+
+fn key_digit(c: u8) -> usize {
+    KEY_DIGITS.iter().position(|d| *d == c).unwrap_or(0)
+}
+
+/// How many characters the integer part of a key takes, by its first character: `a` to `z` give 2 to 27, `A` to `Z` give 27 to 2.
+fn key_integer_length(head: u8) -> Option<usize> {
+    match head {
+        b'a'..=b'z' => Some(usize::from(head - b'a') + 2),
+        b'A'..=b'Z' => Some(usize::from(b'Z' - head) + 2),
+        _ => None,
+    }
+}
+
+/// Splits a key into its integer part and its fraction (which does not end in `0`), and refuses text that is no key.
+fn split_key(key: &str) -> Result<(&str, &str), String> {
+    let integer = key
+        .bytes()
+        .next()
+        .and_then(key_integer_length)
+        .filter(|n| *n <= key.len());
+    match integer {
+        Some(n)
+            if key != SMALLEST_KEY
+                && key.bytes().all(|c| KEY_DIGITS.contains(&c))
+                && !key[n..].ends_with('0') =>
+        {
+            Ok(key.split_at(n))
+        }
+        _ => Err(KEY_UNREADABLE.to_owned()),
+    }
+}
+
+/// The integer that sorts right after the integer `x`, or `None` after the last one.
+fn key_increment(x: &str) -> Option<String> {
+    let (head, digits) = x.split_at(1);
+    let mut head = head.as_bytes()[0];
+    let mut digits = digits.as_bytes().to_vec();
+    let mut carry = true;
+    for d in digits.iter_mut().rev() {
+        let next = key_digit(*d) + 1;
+        if next == KEY_DIGITS.len() {
+            *d = KEY_DIGITS[0];
+        } else {
+            *d = KEY_DIGITS[next];
+            carry = false;
+            break;
+        }
+    }
+    if carry {
+        match head {
+            b'Z' => return Some("a0".to_owned()),
+            b'z' => return None,
+            _ => {}
+        }
+        head += 1;
+        if head > b'a' {
+            digits.push(KEY_DIGITS[0]);
+        } else {
+            digits.pop();
+        }
+    }
+    Some(format!(
+        "{}{}",
+        char::from(head),
+        String::from_utf8_lossy(&digits)
+    ))
+}
+
+/// The integer that sorts right before the integer `x`, or `None` before the first one.
+fn key_decrement(x: &str) -> Option<String> {
+    let (head, digits) = x.split_at(1);
+    let mut head = head.as_bytes()[0];
+    let mut digits = digits.as_bytes().to_vec();
+    let last = KEY_DIGITS[KEY_DIGITS.len() - 1];
+    let mut carry = true;
+    for d in digits.iter_mut().rev() {
+        match key_digit(*d) {
+            0 => *d = last,
+            n => {
+                *d = KEY_DIGITS[n - 1];
+                carry = false;
+                break;
+            }
+        }
+    }
+    if carry {
+        match head {
+            b'a' => return Some(format!("Z{}", char::from(last))),
+            b'A' => return None,
+            _ => {}
+        }
+        head -= 1;
+        if head < b'Z' {
+            digits.push(last);
+        } else {
+            digits.pop();
+        }
+    }
+    Some(format!(
+        "{}{}",
+        char::from(head),
+        String::from_utf8_lossy(&digits)
+    ))
+}
+
+/// A fraction between the fractions `a` and `b` (`None`: no upper bound), where `a` sorts before `b` and neither ends in `0`.
+fn key_midpoint(a: &str, b: Option<&str>) -> String {
+    if let Some(b) = b {
+        // The digits they share stay; a missing digit of `a` counts as 0.
+        let shared = b
+            .bytes()
+            .enumerate()
+            .take_while(|(i, c)| a.as_bytes().get(*i).copied().unwrap_or(KEY_DIGITS[0]) == *c)
+            .count();
+        if shared > 0 {
+            let rest = key_midpoint(a.get(shared..).unwrap_or(""), Some(&b[shared..]));
+            return format!("{}{rest}", &b[..shared]);
+        }
+    }
+    let digit_a = a.bytes().next().map_or(0, key_digit);
+    let digit_b = b
+        .and_then(|b| b.bytes().next())
+        .map_or(KEY_DIGITS.len(), key_digit);
+    if digit_b > digit_a + 1 {
+        return char::from(KEY_DIGITS[(digit_a + digit_b).div_ceil(2)]).to_string();
+    }
+    // The first digits are next to each other.
+    match b {
+        Some(b) if b.len() > 1 => b[..1].to_owned(),
+        _ => format!(
+            "{}{}",
+            char::from(KEY_DIGITS[digit_a]),
+            key_midpoint(a.get(1..).unwrap_or(""), None)
+        ),
+    }
+}
+
+/// A key that sorts between `a` and `b` (`None`: the start or the end of the list), by the rules of the `fractional-indexing` library, which Todoist's `order_key` follows.
+fn generate_key_between(a: Option<&str>, b: Option<&str>) -> Result<String, String> {
+    let parts_a = a.map(split_key).transpose()?;
+    let parts_b = b.map(split_key).transpose()?;
+    if a.zip(b).is_some_and(|(a, b)| a >= b) {
+        return Err(KEY_UNREADABLE.to_owned());
+    }
+    match (parts_a, parts_b) {
+        (None, None) => Ok("a0".to_owned()),
+        (None, Some((ib, fb))) => {
+            if ib == SMALLEST_KEY {
+                return Ok(format!("{ib}{}", key_midpoint("", Some(fb))));
+            }
+            if !fb.is_empty() {
+                return Ok(ib.to_owned());
+            }
+            key_decrement(ib).ok_or_else(|| KEY_UNREADABLE.to_owned())
+        }
+        (Some((ia, fa)), None) => {
+            Ok(key_increment(ia).unwrap_or_else(|| format!("{ia}{}", key_midpoint(fa, None))))
+        }
+        (Some((ia, fa)), Some((ib, fb))) => {
+            if ia == ib {
+                return Ok(format!("{ia}{}", key_midpoint(fa, Some(fb))));
+            }
+            let next = key_increment(ia).ok_or_else(|| KEY_UNREADABLE.to_owned())?;
+            if b.is_some_and(|b| next.as_str() < b) {
+                return Ok(next);
+            }
+            Ok(format!("{ia}{}", key_midpoint(fa, None)))
+        }
+    }
+}
+
+/// What `todoist_place` sends for a task (T-2).
+#[derive(Debug, PartialEq)]
+struct Placement {
+    /// The body of `POST /tasks/{id}/move`: the new parent, or the project when the task goes to the top; `None` when the task is there already.
+    move_body: Option<Value>,
+    /// The key that puts the task before its sibling `before_id` (last when there is none), between the keys of its new neighbours.
+    order_key: String,
+}
+
+/// Works out the move and the key that put task `id` under `parent_id`, or at the top of `project_id` when there is no parent, before the sibling `before_id` (the last one when `None`).
+/// The values come from the frontend and `tasks` is the last sync's: a task cannot go under itself or under one of its own subtasks, and the neighbours must have keys.
+fn place_task(
+    tasks: &[ApiTask],
+    id: &str,
+    parent_id: Option<&str>,
+    project_id: Option<&str>,
+    before_id: Option<&str>,
+) -> Result<Placement, String> {
+    valid_id(id, "タスク ID")?;
+    if let Some(parent_id) = parent_id {
+        valid_id(parent_id, "タスク ID")?;
+    }
+    if let Some(project_id) = project_id {
+        valid_id(project_id, "プロジェクト ID")?;
+    }
+    if let Some(before_id) = before_id {
+        valid_id(before_id, "タスク ID")?;
+    }
+    let not_found = || "タスクが見つかりません。読み込み直してください".to_owned();
+    let find = |id: &str| tasks.iter().find(|t| t.id == id);
+    let task = find(id).ok_or_else(not_found)?;
+    if let Some(parent_id) = parent_id {
+        find(parent_id).ok_or_else(not_found)?;
+        if parent_id == id {
+            return Err("タスクを自分自身のサブタスクにはできません".into());
+        }
+        // Up the parents of the new parent; the bound keeps a loop in the data from hanging the walk.
+        let mut above = Some(parent_id);
+        for _ in 0..=tasks.len() {
+            let Some(at) = above else { break };
+            if at == id {
+                return Err("タスクを自分のサブタスクの下には入れられません".into());
+            }
+            above = find(at).and_then(|t| t.parent_id.as_deref());
+        }
+    }
+    let project = match parent_id {
+        Some(_) => None,
+        None => Some(project_id.ok_or("プロジェクトを指定してください")?),
+    };
+    if before_id == Some(id) {
+        return Err("タスクを自分自身の前には置けません".into());
+    }
+    let mut siblings: Vec<&ApiTask> = tasks
+        .iter()
+        .filter(|t| t.id != id)
+        .filter(|t| match project {
+            None => t.parent_id.as_deref() == parent_id,
+            // The top level of a project: its tasks outside sections.
+            Some(project) => {
+                t.parent_id.is_none() && t.section_id.is_none() && t.project_id == project
+            }
+        })
+        .collect();
+    siblings.sort_by_key(|t| t.child_order);
+    let at = match before_id {
+        Some(before_id) => siblings
+            .iter()
+            .position(|t| t.id == before_id)
+            .ok_or("並べる位置のタスクが、移動先にありません")?,
+        None => siblings.len(),
+    };
+    fn key_of<'a>(t: &&'a ApiTask) -> Result<&'a str, String> {
+        t.order_key
+            .as_deref()
+            .ok_or_else(|| KEY_UNREADABLE.to_owned())
+    }
+    let before = at.checked_sub(1).and_then(|i| siblings.get(i));
+    let after = siblings.get(at);
+    let order_key = generate_key_between(
+        before.map(key_of).transpose()?,
+        after.map(key_of).transpose()?,
+    )?;
+    let moved = match project {
+        None => task.parent_id.as_deref() != parent_id,
+        Some(project) => {
+            task.parent_id.is_some() || task.section_id.is_some() || task.project_id != project
+        }
+    };
+    let move_body = moved.then(|| match (parent_id, project) {
+        (Some(parent_id), _) => json!({ "parent_id": parent_id }),
+        (None, project) => json!({ "project_id": project }),
+    });
+    Ok(Placement {
+        move_body,
+        order_key,
+    })
+}
+
+/// The `commands` of the Sync API that give task `id` the order key `order_key` (`item_update`; the documentation names it the way to reorder a task, and its reorder by `child_order` is deprecated).
+fn task_order_commands(id: &str, order_key: &str, uuid: &str) -> Result<String, String> {
+    valid_id(id, "タスク ID")?;
+    Ok(json!([{
+        "type": "item_update",
+        "uuid": uuid,
+        "args": { "id": id, "order_key": order_key },
+    }])
+    .to_string())
 }
 
 /// The `commands` of the Sync API that move project `id` under `parent_id`, as its last sub-project, or to the top when `None` (T-8; `project_move`). Both IDs come from the frontend, and a project cannot be its own parent.
@@ -1873,6 +2166,59 @@ pub async fn todoist_move_under(
     Ok(done.map(|_| true))
 }
 
+/// Puts a task in its place among its siblings (T-2): under `parent_id`, or at the top of `project_id` when there is no parent, before the sibling `before_id` (the last one when there is none).
+/// It sends `POST /tasks/{id}/move` unless the task is under that parent (or at that top) already, and then the key that puts it there (`item_update` of the Sync API).
+/// The siblings are those of the last load; the screen draws the place from the same load. A failure after the move leaves the task last: the reload shows it.
+#[tauri::command]
+pub async fn todoist_place(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+    parent_id: Option<String>,
+    project_id: Option<String>,
+    before_id: Option<String>,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_place";
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
+        return Ok(None);
+    };
+    let placement = {
+        let sync = state.sync.lock().await;
+        // The tasks of another account are no tasks of this one.
+        let tasks: &[ApiTask] = if sync.owner.as_deref() == Some(token.as_str()) {
+            &sync.tasks
+        } else {
+            &[]
+        };
+        place_task(
+            tasks,
+            &id,
+            parent_id.as_deref(),
+            project_id.as_deref(),
+            before_id.as_deref(),
+        )
+    }
+    .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    if let Some(body) = placement.move_body {
+        let url =
+            task_api_url(&id, Some("move")).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+        if request(&auth, &state, command, Method::POST, &url, Some(body))
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+    }
+    sync_command(&auth, &state, command, |uuid| {
+        task_order_commands(&id, &placement.order_key, uuid)
+    })
+    .await
+}
+
 /// Deletes a task for good; Todoist cannot undo it, so the screen asks twice.
 #[tauri::command]
 pub async fn todoist_delete(
@@ -1922,11 +2268,23 @@ pub async fn todoist_move_project(
     parent_id: Option<String>,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_move_project";
+    sync_command(&auth, &state, command, |uuid| {
+        project_move_commands(&id, parent_id.as_deref(), uuid)
+    })
+    .await
+}
+
+/// Sends one command of the Sync API, written by `build` from the UUID that names it, and reads its status. `Ok(None)` means a token is needed.
+async fn sync_command(
+    auth: &Auth,
+    state: &TodoistState,
+    command: &str,
+    build: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Option<bool>, String> {
     let mut random = [0_u8; 16];
     getrandom::fill(&mut random).map_err(|e| log_failure(command, TOKEN_USER, e.to_string()))?;
     let uuid = uuid_v4(random);
-    let commands = project_move_commands(&id, parent_id.as_deref(), &uuid)
-        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let commands = build(&uuid).map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let Some(token) = state
         .token()
         .await
@@ -2883,6 +3241,222 @@ mod tests {
             move_under_request("6XGg", "6XGg").unwrap_err(),
             "タスクを自分自身のサブタスクにはできません"
         );
+    }
+
+    fn keyed(id: &str, parent: Option<&str>, order: i64, key: &str) -> ApiTask {
+        task(json!({
+            "id": id, "parent_id": parent, "project_id": "P1",
+            "child_order": order, "order_key": key,
+        }))
+    }
+
+    /// A project with `A`, `B` and `C` at the top, and `A1` and `A2` under `A`.
+    fn placed() -> Vec<ApiTask> {
+        vec![
+            keyed("A", None, 1, "a0"),
+            keyed("B", None, 2, "a1"),
+            keyed("C", None, 3, "a2"),
+            keyed("A1", Some("A"), 1, "a0"),
+            keyed("A2", Some("A"), 2, "a1"),
+            task(json!({"id": "X", "project_id": "P2", "child_order": 1, "order_key": "a0"})),
+        ]
+    }
+
+    #[test]
+    fn order_keys_are_made_between_two_keys() {
+        for (a, b, want) in [
+            (None, None, "a0"),
+            (Some("a0"), None, "a1"),
+            (Some("a1"), None, "a2"),
+            (Some("a0"), Some("a1"), "a0V"),
+            (Some("a1"), Some("a2"), "a1V"),
+            (Some("a0V"), Some("a1"), "a0l"),
+            (Some("Zz"), Some("a0"), "ZzV"),
+            (Some("Zz"), Some("a1"), "a0"),
+            (None, Some("Y00"), "Xzzz"),
+            (Some("bzz"), None, "c000"),
+            (Some("a0"), Some("a0V"), "a0G"),
+            (Some("a0"), Some("a0G"), "a08"),
+            (Some("b125"), Some("b129"), "b127"),
+            (Some("a0"), Some("a1V"), "a1"),
+            (Some("Zz"), Some("a01"), "a0"),
+            (None, Some("a0V"), "a0"),
+            (None, Some("b999"), "b99"),
+            (None, Some("a0"), "Zz"),
+            (None, Some("a1"), "a0"),
+        ] {
+            let key = generate_key_between(a, b).unwrap();
+            assert_eq!(key, want, "{a:?} {b:?}");
+            if let Some(a) = a {
+                assert!(a < key.as_str(), "{a:?} {key}");
+            }
+            if let Some(b) = b {
+                assert!(key.as_str() < b, "{key} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn order_keys_refuse_keys_that_are_not_in_order_or_not_keys() {
+        for (a, b) in [
+            (Some("a1"), Some("a0")),
+            (Some("a0"), Some("a0")),
+            (Some(""), None),
+            (Some("a"), None),
+            (Some("a00"), None),
+            (Some("a0$"), None),
+            (None, Some("A00000000000000000000000000")),
+            (Some("あ"), None),
+        ] {
+            assert!(generate_key_between(a, b).is_err(), "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_task_placed_before_a_sibling_gets_a_key_between_its_neighbours() {
+        let tasks = placed();
+        // C before B, between A and B.
+        let p = place_task(&tasks, "C", None, Some("P1"), Some("B")).unwrap();
+        assert_eq!(p.order_key, "a0V");
+        assert_eq!(p.move_body, None);
+        // First: before A, nothing before it.
+        let p = place_task(&tasks, "C", None, Some("P1"), Some("A")).unwrap();
+        assert_eq!(p.order_key, "Zz");
+        // Last: no sibling to go before; the moved task itself does not count as a sibling.
+        let p = place_task(&tasks, "A", None, Some("P1"), None).unwrap();
+        assert_eq!(p.order_key, "a3");
+        assert_eq!(p.move_body, None);
+    }
+
+    #[test]
+    fn a_task_placed_under_another_task_moves_there_and_takes_its_place_among_the_subtasks() {
+        let tasks = placed();
+        let p = place_task(&tasks, "C", Some("A"), None, Some("A2")).unwrap();
+        assert_eq!(p.move_body, Some(json!({"parent_id": "A"})));
+        assert_eq!(p.order_key, "a0V");
+        // Under a task with no subtask yet, the first key.
+        let p = place_task(&tasks, "A1", Some("B"), None, None).unwrap();
+        assert_eq!(p.move_body, Some(json!({"parent_id": "B"})));
+        assert_eq!(p.order_key, "a0");
+        // Already under that parent: no move, only the order.
+        let p = place_task(&tasks, "A2", Some("A"), None, Some("A1")).unwrap();
+        assert_eq!(p.move_body, None);
+        assert_eq!(p.order_key, "Zz");
+    }
+
+    #[test]
+    fn a_subtask_placed_at_the_top_moves_to_the_project_and_one_in_a_section_too() {
+        let tasks = placed();
+        let p = place_task(&tasks, "A1", None, Some("P1"), Some("B")).unwrap();
+        assert_eq!(p.move_body, Some(json!({"project_id": "P1"})));
+        assert_eq!(p.order_key, "a0V");
+        // Another project's list: the task moves there too.
+        let p = place_task(&tasks, "X", None, Some("P1"), None).unwrap();
+        assert_eq!(p.move_body, Some(json!({"project_id": "P1"})));
+        assert_eq!(p.order_key, "a3");
+        let mut in_section = placed();
+        in_section[2] = task(json!({
+            "id": "C", "project_id": "P1", "section_id": "S1", "child_order": 3, "order_key": "a2",
+        }));
+        in_section.push(task(json!({
+            "id": "D", "project_id": "P1", "section_id": "S1", "child_order": 4, "order_key": "a9",
+        })));
+        let p = place_task(&in_section, "C", None, Some("P1"), None).unwrap();
+        assert_eq!(p.move_body, Some(json!({"project_id": "P1"})));
+        // The tasks of a section are not siblings of the top of the project: D is not the neighbour.
+        assert_eq!(p.order_key, "a2");
+    }
+
+    #[test]
+    fn a_task_is_not_placed_under_itself_or_below_itself() {
+        let tasks = placed();
+        assert_eq!(
+            place_task(&tasks, "A", Some("A"), None, None).unwrap_err(),
+            "タスクを自分自身のサブタスクにはできません"
+        );
+        assert_eq!(
+            place_task(&tasks, "A", Some("A1"), None, None).unwrap_err(),
+            "タスクを自分のサブタスクの下には入れられません"
+        );
+        let mut deep = placed();
+        deep.push(keyed("A11", Some("A1"), 1, "a0"));
+        assert_eq!(
+            place_task(&deep, "A", Some("A11"), None, Some("A11")).unwrap_err(),
+            "タスクを自分のサブタスクの下には入れられません"
+        );
+        // A loop in the data does not hang the walk.
+        let looped = vec![
+            keyed("A", None, 1, "a0"),
+            keyed("P", Some("Q"), 1, "a0"),
+            keyed("Q", Some("P"), 1, "a0"),
+        ];
+        assert!(place_task(&looped, "A", Some("P"), None, None).is_ok());
+    }
+
+    #[test]
+    fn a_task_is_not_placed_with_bad_values() {
+        let tasks = placed();
+        for (id, parent, project, before) in [
+            ("", None, Some("P1"), None),
+            ("a/b", None, Some("P1"), None),
+            ("A", Some("../x"), None, None),
+            ("A", None, Some("a b"), None),
+            ("A", Some("B"), None, Some("")),
+            ("A", Some("B"), None, Some("x/y")),
+        ] {
+            assert!(
+                place_task(&tasks, id, parent, project, before).is_err(),
+                "{id} {parent:?} {project:?} {before:?}"
+            );
+        }
+        let say = |r: Result<Placement, String>| r.unwrap_err();
+        assert_eq!(
+            say(place_task(&tasks, "A", None, None, None)),
+            "プロジェクトを指定してください"
+        );
+        assert_eq!(
+            say(place_task(&tasks, "Z", None, Some("P1"), None)),
+            "タスクが見つかりません。読み込み直してください"
+        );
+        assert_eq!(
+            say(place_task(&tasks, "A", Some("Z"), None, None)),
+            "タスクが見つかりません。読み込み直してください"
+        );
+        assert_eq!(
+            say(place_task(&tasks, "A", None, Some("P1"), Some("A"))),
+            "タスクを自分自身の前には置けません"
+        );
+        // A task of another parent is no place to go before.
+        assert_eq!(
+            say(place_task(&tasks, "C", Some("A"), None, Some("B"))),
+            "並べる位置のタスクが、移動先にありません"
+        );
+    }
+
+    #[test]
+    fn a_task_is_not_placed_next_to_one_with_no_key() {
+        let mut tasks = placed();
+        tasks[1] = task(json!({"id": "B", "project_id": "P1", "child_order": 2}));
+        // Before B, A is the neighbour that gives the key, and B is the one that lacks it.
+        assert_eq!(
+            place_task(&tasks, "C", None, Some("P1"), Some("B")).unwrap_err(),
+            "並び順を読めません。読み込み直してください"
+        );
+        // Last: C is the neighbour, B is not read.
+        assert!(place_task(&tasks, "A", None, Some("P1"), None).is_ok());
+    }
+
+    #[test]
+    fn the_order_command_sets_only_the_key() {
+        let text = task_order_commands("6XGg", "a0V", "u1").unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            json!([{
+                "type": "item_update", "uuid": "u1",
+                "args": {"id": "6XGg", "order_key": "a0V"},
+            }])
+        );
+        assert!(task_order_commands("a/b", "a0", "u1").is_err());
     }
 
     #[test]

@@ -195,6 +195,11 @@ export interface Commands {
   todoist_create_label: { args: { id: string; name: string; labels: string[] }; result: boolean | null };
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };
   todoist_move_under: { args: { id: string; parentId: string }; result: boolean | null };
+  // T-2: puts the task under parentId, or at the top of projectId when parentId is null, before the sibling beforeId (last when null). null: a token is needed.
+  todoist_place: {
+    args: { id: string; parentId: string | null; projectId: string | null; beforeId: string | null };
+    result: boolean | null;
+  };
   todoist_delete: { args: { id: string }; result: boolean | null };
   // T-8: archives the project (its sub-projects with it); its tasks are kept in Todoist. null: a token is needed.
   todoist_archive_project: { args: { id: string }; result: boolean | null };

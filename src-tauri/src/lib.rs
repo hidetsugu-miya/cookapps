@@ -321,6 +321,7 @@ pub fn run() {
             todoist::todoist_create_label,
             todoist::todoist_move,
             todoist::todoist_move_under,
+            todoist::todoist_place,
             todoist::todoist_delete,
             todoist::todoist_archive_project,
             todoist::todoist_delete_project,
