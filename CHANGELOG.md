@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.88.2
+
+T-7: Todo 画面を開いただけで、右の Claude のペインの Claude Code が起動し、頼んでいないのに返事をしていたのを直した（#1052）。ペインを押すか、右端の Claude のアイコンか「やり直す」を押したときに初めて起動する。
+
 ## v0.88.1
 
 T-7: Todo 画面の右の Claude のペインを、Claude Code の端末にした（#732）。見出しは「Claude」と「やり直す」だけで、提案のカード、モデルの選択、「クリア」はなくした。Claude Code は Todoist のプロジェクトとタスクを読み、タスクを足すときは毎回端末で許可を求める。足したタスクはすぐ一覧に出る。
