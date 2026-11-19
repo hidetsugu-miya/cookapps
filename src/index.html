@@ -736,10 +736,21 @@
       </header>
       <p id="slack-error" class="pending fail" role="alert" hidden></p>
       <div id="slack-main" class="split-main">
+        <aside id="slack-compose-claude" class="chat-pane" aria-label="Claude">
+          <div class="chat-head">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+            <button id="slack-compose-restart" type="button" class="text-btn chat-clear">やり直す</button>
+          </div>
+          <div id="slack-compose-term"></div>
+        </aside>
+        <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="35" aria-valuemax="60" aria-valuenow="45" tabindex="0"><span></span></div>
         <section id="slack-edit" aria-label="投稿する内容">
           <div id="slack-edit-head">
             <span class="prompt-label">元のメッセージ</span>
             <button id="slack-reset" class="text-btn" disabled>元の内容に戻す</button>
+          </div>
+          <div id="slack-undo-bar" hidden>
+            <button id="slack-undo" class="text-btn" type="button">元に戻す</button>
           </div>
           <div id="slack-edit-body">
             <div id="slack-preview" role="button" tabindex="0" aria-label="元のメッセージ"></div>
@@ -754,19 +765,6 @@
             <button id="slack-post" class="text-btn primary" disabled>投稿</button>
           </div>
         </section>
-        <aside id="slack-chat" class="chat-pane" aria-label="Claude">
-          <div class="chat-head">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
-            <button id="slack-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
-          </div>
-          <div id="slack-log" class="chat-log"></div>
-          <p id="slack-chat-note" class="chat-note" hidden></p>
-        </aside>
-        <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="行うことの幅" aria-valuemin="20" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
-        <aside id="slack-brief" aria-label="行うこと">
-          <div id="slack-brief-head"><span class="prompt-label">行うこと</span></div>
-          <ol id="slack-brief-list"></ol>
-        </aside>
       </div>
     </section>
     <footer id="footer">

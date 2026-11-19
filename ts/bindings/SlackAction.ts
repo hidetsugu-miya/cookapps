@@ -4,7 +4,7 @@ import type { Target } from "./Target";
 
 /**
  * One thing to do of the Slack compose screen (a card of "行うこと", S-1): one post, where it goes and what it holds.
- * The screen sends its list with a request to Claude, and the answer carries the list that the request made of it (S-4, S-23).
+ * The screen reads and writes its list through Claude Code's tools (S-4, #734): `slack_compose_read` and `slack_compose_write` take it and answer it.
  */
 export type SlackAction = { 
 /**
@@ -20,6 +20,6 @@ paste: boolean, text: string,
  */
 posted: PostedAt | null, 
 /**
- * `target` is one that an answer of Claude put there, not one the owner chose: a post by a request then needs it named in the request (S-23).
+ * `target` is one that Claude Code put there (a write of the screen's fields, S-4), not one the owner chose.
  */
 byClaude: boolean, };

@@ -1,7 +1,7 @@
 //! A-36 (#731): how the tools of `tsunagiai-mcp` read and write the fields a screen of the app holds (the text typed and not yet saved or sent), and how the app is told that something changed.
 //!
 //! The app opens one Unix domain socket, `screen-bridge.sock`, in its config folder (mode 0600, a stale file of an earlier start removed first). A client connects for one call: it sends one line of JSON (a `Request`) and reads one line (a `ScreenAnswer`).
-//! `read` and `write` name a target (a screen's set of fields, registered in `ts/screen-bridge.ts` and listed in `RULES.targets`): the app passes them to the screen as the event `screen-bridge-ask` and waits for the screen to answer through the command `screen_bridge_answer` (the value the screen holds now). `changed` tells the screens that something changed (the event `screen-bridge-changed`), and waits for nobody.
+//! `read`, `write` and `post` name a target (a screen's set of fields, registered in `ts/screen-bridge.ts` and listed in `RULES.targets`): the app passes them to the screen as the event `screen-bridge-ask` and waits for the screen to answer through the command `screen_bridge_answer` (the value the screen holds now; for a `post`, what the screen's own "投稿" did). `changed` tells the screens that something changed (the event `screen-bridge-changed`), and waits for nobody.
 //! Every request is checked here (`check`: the name of the target, of each field, and the length of each text) before the screen is asked, and the client checks it too before it connects.
 
 use std::{
@@ -44,12 +44,15 @@ pub struct Rules {
     pub targets: &'static [&'static str],
     pub changes: &'static [&'static str],
     pub wait: Duration,
+    /// How long the app waits for a screen's `post` (a post to Slack is on its way meanwhile).
+    pub post_wait: Duration,
 }
 
 pub const RULES: Rules = Rules {
-    targets: &[],
+    targets: &["slack-compose"],
     changes: &["todo"],
     wait: Duration::from_secs(5),
+    post_wait: Duration::from_secs(40),
 };
 
 /// The most fields in one write, the longest name of a target or a field, and the most characters of one text.
@@ -58,8 +61,9 @@ const MAX_NAME: usize = 32;
 const MAX_TEXT: usize = 10_000;
 /// The longest line of a request or of an answer, in bytes.
 const MAX_LINE: usize = 1024 * 1024;
-/// How long a client waits for the whole call (it is longer than `RULES.wait`, so the app's own error comes first), and how long the app waits for the line of a request.
+/// How long a client waits for the whole call (it is longer than `RULES.wait`, so the app's own error comes first; a `post` waits `POST_CALL_TIMEOUT`, longer than `RULES.post_wait`), and how long the app waits for the line of a request.
 const CALL_TIMEOUT: Duration = Duration::from_secs(8);
+const POST_CALL_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest path of a socket that `sockaddr_un` holds (104 bytes on macOS, with the NUL).
 #[cfg(unix)]
@@ -75,6 +79,8 @@ pub enum Request {
     Read { target: String },
     /// Replaces the text of each named field of `target`; the fields not named stay.
     Write { target: String, fields: Fields },
+    /// Does what the screen's own "投稿" does with what it holds now (#734); the answer's `fields` say what happened (`state`).
+    Post { target: String },
     /// Something changed (a name of `RULES.changes`, such as `todo`): the screens that registered for it read again.
     Changed { what: String },
 }
@@ -128,6 +134,7 @@ impl ScreenAnswer {
 pub enum ScreenOp {
     Read,
     Write,
+    Post,
 }
 
 /// What the app asks a screen (the event `screen-bridge-ask`); the screen answers it with `screen_bridge_answer(id, answer)`. `fields` is empty for a read.
@@ -177,7 +184,9 @@ fn check_listed(kind: &str, name: &str, listed: &[&str]) -> Result<(), String> {
 /// Checks a request before anything is asked of a screen: the target (it must be in `rules.targets`), the names of the fields, how many there are and how long each text is (counted in characters).
 pub fn check(request: &Request, rules: &Rules) -> Result<(), String> {
     match request {
-        Request::Read { target } => check_listed("画面", target, rules.targets),
+        Request::Read { target } | Request::Post { target } => {
+            check_listed("画面", target, rules.targets)
+        }
         Request::Changed { what } => check_listed("変更", what, rules.changes),
         Request::Write { target, fields } => {
             check_listed("画面", target, rules.targets)?;
@@ -264,14 +273,17 @@ async fn ask(
         Ok(Err(_)) => ScreenAnswer::failed("画面が答えませんでした"),
         Err(_) => {
             pending.forget(id);
-            ScreenAnswer::failed(
-                "画面が時間内に答えませんでした。画面が開いているか確かめてください",
-            )
+            // A post may have gone out: the owner is told to look, not to try again.
+            ScreenAnswer::failed(if op == ScreenOp::Post {
+                "投稿の結果を待ちきれませんでした。投稿されたかどうかは、つなぎAIの画面で確かめてください"
+            } else {
+                "画面が時間内に答えませんでした。画面が開いているか確かめてください"
+            })
         }
     }
 }
 
-/// Answers a request of a client: checks it, then asks the screen (a read and a write) or tells the screens (a change). `emit` is how the screens are told.
+/// Answers a request of a client: checks it, then asks the screen (a read, a write and a post) or tells the screens (a change). `emit` is how the screens are told.
 pub async fn handle(
     pending: &Pending,
     emit: impl Fn(Event) -> Result<(), String>,
@@ -299,6 +311,17 @@ pub async fn handle(
         }
         Request::Write { target, fields } => {
             ask(pending, &emit, rules.wait, ScreenOp::Write, target, fields).await
+        }
+        Request::Post { target } => {
+            ask(
+                pending,
+                &emit,
+                rules.post_wait,
+                ScreenOp::Post,
+                target,
+                Fields::new(),
+            )
+            .await
         }
     }
 }
@@ -348,10 +371,14 @@ pub fn socket_path(dir: &Path) -> PathBuf {
 
 // ---- the client (tsunagiai-mcp) ----
 
-/// Checks the request and sends it to the app. A read answers the fields, a write and a change an empty list. Every failure is a Japanese message: the app is not running, it did not answer in time, the screen is not open, the request was refused.
+/// Checks the request and sends it to the app. A read answers the fields, a post the fields that say what the screen did (`state`), a write and a change an empty list. Every failure is a Japanese message: the app is not running, it did not answer in time, the screen is not open, the request was refused.
 pub async fn request_app(dir: &Path, request: &Request) -> Result<Fields, String> {
     check(request, &RULES)?;
-    call(dir, request, CALL_TIMEOUT).await
+    let limit = match request {
+        Request::Post { .. } => POST_CALL_TIMEOUT,
+        _ => CALL_TIMEOUT,
+    };
+    call(dir, request, limit).await
 }
 
 #[cfg(unix)]
@@ -501,6 +528,7 @@ mod tests {
         targets: &["slack-compose", "mail-reply"],
         changes: &["todo"],
         wait: Duration::from_millis(300),
+        post_wait: Duration::from_millis(600),
     };
 
     fn read(target: &str) -> Request {
@@ -519,6 +547,12 @@ mod tests {
         }
     }
 
+    fn post(target: &str) -> Request {
+        Request::Post {
+            target: target.into(),
+        }
+    }
+
     #[test]
     fn a_request_is_one_json_object_tagged_by_its_op() {
         let parse = |text: &str| serde_json::from_str::<Request>(text);
@@ -531,6 +565,10 @@ mod tests {
             write("slack-compose", &[("text", "a\nb")])
         );
         assert_eq!(
+            parse(r#"{"op":"post","target":"slack-compose"}"#).unwrap(),
+            post("slack-compose")
+        );
+        assert_eq!(
             parse(r#"{"op":"changed","what":"todo"}"#).unwrap(),
             Request::Changed {
                 what: "todo".into()
@@ -540,6 +578,8 @@ mod tests {
             r#"{"op":"delete","target":"x"}"#,
             r#"{"target":"x"}"#,
             r#"{"op":"read"}"#,
+            r#"{"op":"post"}"#,
+            r#"{"op":"post","target":"x","fields":{}}"#,
             r#"{"op":"read","target":"x","extra":1}"#,
             r#"{"op":"write","target":"x","fields":{"a":1}}"#,
             "not json",
@@ -581,9 +621,16 @@ mod tests {
         assert!(check(&write("mail-reply", &[("body", "x")]), &LISTED).is_ok());
         let error = check(&read("todo"), &LISTED).unwrap_err();
         assert!(error.contains("slack-compose、mail-reply"), "{error}");
-        // The list the app has now is empty: no screen has registered its fields yet.
-        assert!(check(&read("slack-compose"), &RULES).is_err());
-        assert!(check(&write("slack-compose", &[("a", "b")]), &RULES).is_err());
+        // A post names a target of the list too.
+        assert!(check(&post("slack-compose"), &LISTED).is_ok());
+        assert!(check(&post("todo"), &LISTED).is_err());
+        // The list the app has now holds the Slack compose screen only.
+        assert!(check(&read("slack-compose"), &RULES).is_ok());
+        assert!(check(&post("slack-compose"), &RULES).is_ok());
+        assert!(check(&write("slack-compose", &[("a", "b")]), &RULES).is_ok());
+        assert_eq!(RULES.targets, ["slack-compose"]);
+        assert!(check(&read("mail-reply"), &RULES).is_err());
+        assert!(check(&post("mail-reply"), &RULES).is_err());
     }
 
     #[test]
@@ -685,6 +732,67 @@ mod tests {
                 fields: Fields::new(),
             })]
         );
+    }
+
+    #[tokio::test]
+    async fn a_post_asks_the_screen_to_do_what_its_button_does_and_answers_what_it_did() {
+        let pending = Arc::new(Pending::default());
+        let reply = ScreenAnswer {
+            ok: true,
+            fields: Some([("state".to_owned(), "posted".to_owned())].into()),
+            error: None,
+        };
+        let (seen, emit) = screen(&pending, Some(reply.clone()));
+        let answer = handle(&pending, emit, &LISTED, post("slack-compose")).await;
+        assert_eq!(answer, reply);
+        {
+            let seen = seen.lock().unwrap();
+            let Event::Ask(ask) = &seen[0] else {
+                panic!("{seen:?}")
+            };
+            assert_eq!((ask.op, ask.fields.len()), (ScreenOp::Post, 0));
+            let json = serde_json::to_value(ask).unwrap();
+            assert_eq!(json["op"], "post");
+        }
+        // The screen's refusal is the answer, and a target that is not listed asks no screen.
+        let (seen, emit) = screen(&pending, Some(ScreenAnswer::failed("投稿できません")));
+        let answer = handle(&pending, emit.clone(), &LISTED, post("slack-compose")).await;
+        assert_eq!(answer, ScreenAnswer::failed("投稿できません"));
+        let before = seen.lock().unwrap().len();
+        assert!(!handle(&pending, emit, &LISTED, post("todo")).await.ok);
+        assert_eq!(seen.lock().unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn a_post_waits_longer_than_a_read_and_never_tells_the_owner_to_try_again() {
+        let pending = Arc::new(Pending::default());
+        // The screen answers after 450 ms: a read (300 ms) is too late, a post (600 ms) is not.
+        let late = |pending: &Arc<Pending>| {
+            let pending = Arc::clone(pending);
+            move |event: Event| {
+                if let Event::Ask(ask) = event {
+                    let pending = Arc::clone(&pending);
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(450)).await;
+                        pending.answer(ask.id, ScreenAnswer::done());
+                    });
+                }
+                Ok(())
+            }
+        };
+        let read_answer = handle(&pending, late(&pending), &LISTED, read("slack-compose")).await;
+        assert!(read_answer.error.unwrap().contains("時間内"));
+        let post_answer = handle(&pending, late(&pending), &LISTED, post("slack-compose")).await;
+        assert_eq!(post_answer, ScreenAnswer::done());
+        // A screen that never answers a post: the words say to look at the screen.
+        let (_, emit) = screen(&pending, None);
+        let none = handle(&pending, emit, &LISTED, post("slack-compose")).await;
+        let error = none.error.unwrap();
+        assert!(
+            error.contains("投稿の結果") && error.contains("確かめて"),
+            "{error}"
+        );
+        assert!(!pending.answer(3, ScreenAnswer::done()));
     }
 
     #[tokio::test]
@@ -939,8 +1047,10 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error, NOT_RUNNING);
             // A request that the list refuses never reaches the socket.
-            let error = request_app(&dir, &read("slack-compose")).await.unwrap_err();
-            assert!(error.contains("ありません"), "{error}");
+            let error = request_app(&dir, &read("nowhere")).await.unwrap_err();
+            assert!(error.contains("slack-compose"), "{error}");
+            let error = request_app(&dir, &post("nowhere")).await.unwrap_err();
+            assert!(error.contains("slack-compose"), "{error}");
         }
 
         #[tokio::test]

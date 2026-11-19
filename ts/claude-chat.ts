@@ -1,14 +1,13 @@
-// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack compose screen (S-4), the Slack thread (S-7), and the Todo draft page (S-18):
+// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack thread (S-7), the Todo draft page (S-18) and the Slack screen's Claude pane (S-24):
 // the log with its diff cards, the request field that grows with its text, and the clear button. A proposal is applied to the owner's text, and the owner decides what to do with it.
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
-import type { SlackAction } from "./bindings/SlackAction";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), the things to do as it made them and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
-export type ChatAnswer = PromptEdit & { actions?: SlackAction[] | null; postRefused?: boolean; postConfirm?: boolean; draft?: string | null };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), or the draft of a post (the Slack screen's pane, S-24).
+export type ChatAnswer = PromptEdit & { draft?: string | null };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -25,12 +24,8 @@ export interface ChatConfig {
   apply: (text: string) => void;
   // Asks Claude about `text` with the conversation so far and the new request. Nothing is saved.
   ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<ChatAnswer>;
-  // Called with an answer that is kept (not one that arrives after the conversation was forgotten, nor a failure), before the text is changed and the log is drawn.
-  answered?: (answer: ChatAnswer) => void;
   // Draws the draft of a post an answer carries, under its reply; without it `draft` is not drawn.
   draft?: (draft: string) => HTMLElement;
-  // Called after `answered` and after a proposal was put in at once (`autoApply`), with an answer that is kept: the frame to draw under its reply, as a function that draws it again at every redraw (the frame keeps its own state), or null for none (the Slack compose screen's question of S-23 about where the posts go).
-  confirm?: (answer: ChatAnswer) => (() => HTMLElement) | null;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
   changed: () => void;
   // True while the owner's text must not be replaced (a proposal cannot be applied then).
@@ -39,11 +34,6 @@ export interface ChatConfig {
   copy?: (text: string) => void;
   // Whether the `-keys` element tells the keys of the request field (default true); the owner that says it elsewhere, or not at all, passes false and has no such element.
   keyHint?: boolean;
-  // True when the request field keeps the height the CSS gives it and scrolls inside (default false: it grows with its text).
-  fixedInput?: boolean;
-  // True when an answer that changes the text is put into it at once (default false: the proposal waits for "適用"). The log then keeps the number of changed lines and "元に戻す" instead of the diff.
-  // An answer that arrives after the text was changed, or while the text is locked, is not put in: it stays a proposal that cannot be applied.
-  autoApply?: boolean;
 }
 
 // A change Claude proposed: the whole new text, the lines that differ, and the text when it was asked (an `open` proposal applies only to that text).
@@ -51,9 +41,7 @@ interface Proposal {
   body: string;
   diff: DiffLine[];
   base: string;
-  state: "open" | "applied" | "rejected" | "reverted";
-  // Put into the text at once (`autoApply`): drawn as a count and "元に戻す", and the text it made is `body`.
-  auto?: boolean;
+  state: "open" | "applied" | "rejected";
 }
 export interface Turn {
   role: "user" | "assistant";
@@ -62,7 +50,6 @@ export interface Turn {
   failed?: boolean;
   proposal?: Proposal;
   draft?: string;
-  confirm?: () => HTMLElement;
 }
 
 // The oldest turns are dropped past this many. Rust keeps the last CHAT_TURNS of what it is sent.
@@ -80,8 +67,6 @@ export function createChat(cfg: ChatConfig) {
   let clearTimer = 0;
   // The apply buttons of the open proposals drawn now, with the line that says why one is disabled.
   let applyControls: { proposal: Proposal; apply: HTMLButtonElement; stale: HTMLElement }[] = [];
-  // The "元に戻す" buttons of the proposals put in at once: one works only while the text is still the one that proposal made.
-  let undoControls: { proposal: Proposal; undo: HTMLButtonElement }[] = [];
 
   function disarmClear() {
     clearTimeout(clearTimer);
@@ -106,33 +91,10 @@ export function createChat(cfg: ChatConfig) {
       // No text while the post of "投稿" is on its way is not a changed text.
       stale.hidden = proposal.base === text || text === null;
     }
-    for (const { proposal, undo } of undoControls) undo.disabled = proposal.body !== text || (cfg.locked?.() ?? false);
     return on;
   }
 
-  // What stays in the log of a proposal that was put in at once: how many lines it changed, and "元に戻す" while the text is still the one it made.
-  function appliedCard(p: Proposal) {
-    const card = tag("div", "chat-diff");
-    const foot = tag("div", "diff-foot");
-    if (p.state === "reverted") {
-      foot.append(tag("span", "diff-state", "元に戻しました"));
-    } else {
-      const lines = Math.max(1, p.diff.filter((d) => d.kind === "del").length, p.diff.filter((d) => d.kind === "ins").length);
-      const undo = tag("button", "text-btn", "元に戻す");
-      undo.onclick = () => {
-        cfg.apply(p.base);
-        p.state = "reverted";
-        draw();
-      };
-      undoControls.push({ proposal: p, undo });
-      foot.append(tag("span", "diff-count", `${lines} 行を変えました`), undo);
-    }
-    card.append(foot);
-    return card;
-  }
-
   function diffCard(p: Proposal) {
-    if (p.auto) return appliedCard(p);
     const card = tag("div", "chat-diff");
     for (const d of p.diff) card.append(tag("div", d.kind === "del" ? "diff-del" : "diff-ins", `${d.kind === "del" ? "-" : "+"} ${d.text}`));
     const foot = tag("div", "diff-foot");
@@ -166,13 +128,11 @@ export function createChat(cfg: ChatConfig) {
     const node = tag("div", "chat-ai", t.text);
     if (t.proposal) node.append(diffCard(t.proposal));
     if (t.draft && cfg.draft) node.append(cfg.draft(t.draft));
-    if (t.confirm) node.append(t.confirm());
     return node;
   }
 
   function draw() {
     applyControls = [];
-    undoControls = [];
     const thinking = tag("div", "pending");
     thinking.append(tag("span", "spin"), tag("span", "sp", "Claude が考えています…"));
     const log = $(id("log"));
@@ -191,7 +151,6 @@ export function createChat(cfg: ChatConfig) {
   // The layout is read only when the line count may have changed: when the text got shorter, or the field is too short for it.
   let typedLength = 0;
   function growInput() {
-    if (cfg.fixedInput) return;
     const [input, log] = [$<HTMLTextAreaElement>(id("input")), $(id("log"))];
     const shorter = input.value.length < typedLength;
     typedLength = input.value.length;
@@ -235,15 +194,6 @@ export function createChat(cfg: ChatConfig) {
     sending = false;
     // The conversation was forgotten meanwhile: the answer is dropped, and the request field is free again.
     if (mine !== generation) return cfg.changed();
-    if (answer) cfg.answered?.(answer);
-    const proposal = turn.proposal;
-    if (cfg.autoApply && proposal && proposal.body !== body && cfg.text() === body && !cfg.locked?.()) {
-      cfg.apply(proposal.body);
-      proposal.state = "applied";
-      proposal.auto = true;
-    }
-    // After the text was put in: the frame reads the text as it is now.
-    if (answer) turn.confirm = cfg.confirm?.(answer) ?? undefined;
     addTurn(turn);
     draw();
   }

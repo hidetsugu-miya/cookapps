@@ -89,7 +89,7 @@ import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackAction } from "./bindings/SlackAction";
-import type { SlackEdit } from "./bindings/SlackEdit";
+import type { ComposeRead } from "./bindings/ComposeRead";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
@@ -226,6 +226,11 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string; written: boolean };
     result: string;
   };
+  // The fields of the Slack compose screen that Claude Code reads (S-4, #734): `actions` are the cards of "行うこと" (the posted ones first), and the answer is the text of two JSON arrays, the cards with the numbers of their destinations and the destinations numbered from 1.
+  // Rust keeps the numbered destinations for the next write.
+  slack_compose_read: { args: { actions: SlackAction[] }; result: ComposeRead };
+  // The cards after a write of the field `actions` (the text of a JSON array, S-4): the posted ones as they were, and the ones to post as the write made them. A number that is outside its list, or any other fault, is a Japanese message. Nothing is posted or saved.
+  slack_compose_write: { args: { text: string; actions: SlackAction[] }; result: SlackAction[] };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
   // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `unreadChannels` the channels with something unread, each with its number of unread messages, the newest one (`to`) that "既読にする" sets the position to, and its threads with unread replies. Messages are kept in memory only.
@@ -297,16 +302,8 @@ export interface Commands {
   // `channel` is the channel the screen has open (null in the unread list and the watch, and then no Slack text is sent): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message),
   // and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first. The model and effort are those of `slackChat`. Nothing is saved.
   claude_chat_slack: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } | null; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackChatReply };
-  // Claude's proofreading of the original message of the Slack compose screen: the same answer, for `text` instead of the instructions, with `actions`, what the answer made of the things to do that are not posted
-  // (a destination it chose from the list Rust gave it, or the cards it wrote; null when it left them alone, S-4). `actions` of the arguments are the cards of "行うこと", the posted ones first.
-  // When the request asked to post (S-23) and Rust allowed it, Rust posted them from the top down by the path of `slack_post`, and the ones sent carry `posted`; `postError` is the failure that stopped it after one was sent. Nothing is saved.
-  // `skill` (optional, none or null for no skill) is the name of a saved skill (S-4); a name that is not one is refused, and with one the request may be empty.
-  claude_proofread_slack: {
-    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[]; skill?: string | null };
-    result: SlackEdit;
-  };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
-  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` is as in `claude_proofread_slack`.
+  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` (optional, none or null for no skill) is the name of a saved skill (S-7); a name that is not one is refused, and with one the request may be empty.
   claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string; skill?: string | null }; result: PromptEdit };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, and the owner corrects the file),
