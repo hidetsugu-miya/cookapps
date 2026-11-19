@@ -1,7 +1,7 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`) and which differ from HEAD (`orca_files_changes`, A-39); this module draws the folder at once, marks the ignored and the changed entries when the answers come, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
-// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts); the choice is kept in memory only, and the heading serves all, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server has none of.
+// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts), and a fourth for the connections of the database screen (A-43, orca-database.ts), which belong to no worktree and hide the heading; the choice is kept in memory only, and the heading serves the files, the history and the language server, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server and the connections have none of.
 import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
 import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
@@ -10,13 +10,14 @@ import type { OrcaGitChange } from "./bindings/OrcaGitChange";
 import type { OrcaGitMark } from "./bindings/OrcaGitMark";
 import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import { $, composing, tag } from "./dom.js";
-import { confirmDelete, confirmDeleteMany } from "./hint.js";
-import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG, SERVER_SVG } from "./icons.js";
+import { confirmDelete, confirmDeleteMany, confirmRevert } from "./hint.js";
+import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DATABASE_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MINUS_CIRCLE_SVG, MOVE_SVG, OPEN_SVG, PLUS_SVG, RETURN_SVG, SERVER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
+import { syncOrcaDatabase } from "./orca-database.js";
 import { syncLsp } from "./orca-lsp.js";
 import { toast } from "./toast.js";
 import { showFailure } from "./error-card.js";
@@ -40,7 +41,7 @@ interface Listing {
 
 let shown = false;
 // What the pane shows under the heading.
-let mode: "files" | "history" | "server" = "files";
+let mode: "files" | "history" | "server" | "database" = "files";
 let context: FilesContext | null = null;
 // A new tree (another worktree) ends the reads of the old one.
 let generation = 0;
@@ -111,15 +112,18 @@ export function toggleFiles() {
   syncModes();
 }
 
-// Shows the part of the pane that is chosen, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are, and the language server only while it is shown.
+// Shows the part of the pane that is chosen, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are, and the language server and the connections only while they are shown.
 function syncModes() {
   const part = shownPart();
   $("orca-files-tree").hidden = part !== "files";
   $("orca-history").hidden = part !== "history";
   $("orca-server").hidden = part !== "server";
-  for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["server", "orca-files-mode-server"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
+  $("orca-database").hidden = part !== "database";
+  $("orca-files-head").hidden = part === "database";
+  for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["server", "orca-files-mode-server"], ["database", "orca-files-mode-database"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
   syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && part === "history");
   syncLsp(context === null ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "server");
+  syncOrcaDatabase(shown && part === "database");
   if (shown && part === "files" && context !== null && !listings.has("")) void readDir("");
 }
 
@@ -127,7 +131,7 @@ function syncModes() {
 const shownPart = () => mode;
 const showsHistory = () => shownPart() === "history";
 
-function chooseMode(next: "files" | "history" | "server") {
+function chooseMode(next: "files" | "history" | "server" | "database") {
   if (mode === next) return;
   mode = next;
   syncModes();
@@ -292,7 +296,7 @@ async function reload(quiet = false, clock = false) {
 // With `clock` it is the read of the clock of the Orca screen (A-18, A-27), which says nothing: the tree is drawn again only where a folder changed, the history only when its first commits are not the ones held (`checkHistory`), and a read that fails keeps what is shown.
 export function refreshFiles(clock = false) {
   if (!shown || context === null) return;
-  if (shownPart() === "server") return;
+  if (shownPart() === "server" || shownPart() === "database") return;
   if (showsHistory()) {
     if (clock) void checkHistory();
     else refreshHistory();
@@ -638,6 +642,17 @@ async function remove(here: FilesContext, entries: OrcaDeleteEntry[]) {
   if (mine === generation && pending.length > 0) void markChanges(here, mine, pending);
 }
 
+// A git write of A-44 (stage, unstage or put back) on a file or folder, and then the files are read again, whatever the answer was: a call that failed after another went through leaves what the first did, and the marks and the entries of the tree change with the write (a new file that is put back is gone). Orca's refusal is the message shown. An answer that comes after the tree became another worktree's says nothing and reads nothing.
+async function gitWrite(write: () => Promise<null>) {
+  const mine = generation;
+  try {
+    await write();
+  } catch (e) {
+    if (mine === generation) showFailure("orca-files", e);
+  }
+  if (mine === generation) void reload();
+}
+
 // The rows drawn now, in the order of the tree.
 const drawnRows = () => [...$("orca-files-tree").querySelectorAll<HTMLElement>(".orca-file")].map((e) => ({ path: e.dataset.path ?? "", folder: e.dataset.kind === "dir" }));
 
@@ -690,7 +705,20 @@ const menuItem = (label: string, icon: string, pick: () => unknown) => ({ label,
 // The two items that make a new file or folder in the folder `dir` (the empty one is the worktree's root).
 const createItems = (dir: string) => [menuItem("新規ファイル", FILE_SVG, () => startCreate(dir, false)), menuItem("新規フォルダー", FOLDER_SVG, () => startCreate(dir, true))];
 
-// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download, the difference from HEAD (A-24) and, when its name ends with `.html` (whatever the case; Rust refuses any other name), 「ブラウザで開く」 (A-31); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+// The three git writes of A-44 for the row `relative`, with a line above them: only on a row that differs from HEAD (it has a mark, A-39), and none on a row with no difference. Putting back asks first, in the popup under `anchor`, because it cannot be undone and deletes what is new.
+function gitItems(here: FilesContext, anchor: Element, relative: string, folder: boolean) {
+  const mark = changes.get(relative);
+  if (mark === undefined) return [];
+  const args = { path: here.path, paths: [relative], environment: here.target };
+  const revert = () => confirmRevert(anchor, relative.slice(relative.lastIndexOf("/") + 1), folder, mark === "new", () => void gitWrite(() => invoke("orca_files_revert", args)));
+  return [
+    { ...menuItem("ステージ", PLUS_SVG, () => void gitWrite(() => invoke("orca_files_stage", args))), divider: true },
+    menuItem("ステージ解除", MINUS_CIRCLE_SVG, () => void gitWrite(() => invoke("orca_files_unstage", args))),
+    { ...menuItem("変更を元に戻す", RETURN_SVG, revert), danger: true },
+  ];
+}
+
+// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download, the difference from HEAD (A-24) and, when its name ends with `.html` (whatever the case; Rust refuses any other name), 「ブラウザで開く」 (A-31); on both, when the row differs from HEAD (A-39), after a line, 「ステージ」, 「ステージ解除」 and 「変更を元に戻す」 in red (A-44); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
@@ -700,8 +728,9 @@ function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   if (selected.size > 1) return openMenu(anchor, [del]);
   const rename = { ...menuItem("移動・名前の変更", MOVE_SVG, () => startRename(relative, isDirectory)), divider: true };
   const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
-  if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, rename, del]);
-  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), ...(/\.html$/i.test(relative) ? [menuItem("ブラウザで開く", OPEN_SVG, () => void openInBrowser(here, relative))] : []), rename, del]);
+  const git = gitItems(here, anchor, relative, isDirectory);
+  if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, ...git, rename, del]);
+  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), ...(/\.html$/i.test(relative) ? [menuItem("ブラウザで開く", OPEN_SVG, () => void openInBrowser(here, relative))] : []), ...git, rename, del]);
 }
 
 // The menu of the empty part of the tree (the right button): the new file and folder in the root of the worktree, where the pointer is.
@@ -923,4 +952,6 @@ export function initOrcaFiles(on: { open: (relative: string) => void; diff: (rel
   $("orca-files-mode-history").onclick = () => chooseMode("history");
   $("orca-files-mode-server").innerHTML = SERVER_SVG;
   $("orca-files-mode-server").onclick = () => chooseMode("server");
+  $("orca-files-mode-database").innerHTML = DATABASE_SVG;
+  $("orca-files-mode-database").onclick = () => chooseMode("database");
 }

@@ -126,7 +126,7 @@ pub struct OrcaFileEntry {
     pub icon: Option<&'static str>,
 }
 
-/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, deleted, renamed or copied, `New` for one that is untracked or added. A folder is what its files are, and `Changed` when they are both.
+/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, deleted, renamed or copied, `New` for one that is untracked or added. A file that has an entry that is untracked or added is `New` whatever else it has (HEAD has no such file), and a folder is what its files are, and `Changed` when they are both.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -570,10 +570,11 @@ fn mark_of_status(status: &str) -> OrcaGitMark {
     }
 }
 
-/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it: a file by its own entries, a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
+/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it: a file by its own entries (`New` as soon as one of them is untracked or added, so a file that was added and edited again, git's `AM`, is `New`), a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
 fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
     let mut marks: HashMap<&str, OrcaGitMark> = HashMap::new();
     let mut new_folders: HashSet<&str> = HashSet::new();
+    let mut new_own: HashSet<&str> = HashSet::new();
     for entry in status["entries"].as_array().into_iter().flatten() {
         let Some(path) = entry["path"].as_str() else {
             continue;
@@ -583,6 +584,9 @@ fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
         let path = path.trim_end_matches('/');
         if path.is_empty() {
             continue;
+        }
+        if mark == OrcaGitMark::New {
+            new_own.insert(path);
         }
         if status == "untracked" && entry["path"].as_str().is_some_and(|p| p.ends_with('/')) {
             new_folders.insert(path);
@@ -602,12 +606,15 @@ fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
     paths
         .iter()
         .filter_map(|path| {
-            let mark = marks.get(path.as_str()).copied().or_else(|| {
-                let inside_new = path
-                    .match_indices('/')
-                    .any(|(i, _)| new_folders.contains(&path[..i]));
-                inside_new.then_some(OrcaGitMark::New)
-            })?;
+            let own_new = new_own.contains(path.as_str()).then_some(OrcaGitMark::New);
+            let mark = own_new
+                .or_else(|| marks.get(path.as_str()).copied())
+                .or_else(|| {
+                    let inside_new = path
+                        .match_indices('/')
+                        .any(|(i, _)| new_folders.contains(&path[..i]));
+                    inside_new.then_some(OrcaGitMark::New)
+                })?;
             Some(OrcaGitChange {
                 path: path.clone(),
                 mark,
@@ -1771,6 +1778,180 @@ async fn switch_branch(
     parse_switched(&answer)
 }
 
+// ---- the git writes (A-44) ----
+
+const NOT_GIT_STATUS: &str = "変更の一覧を読めません";
+const NOT_GIT_WRITTEN: &str = "変更できませんでした";
+const UPDATE_ORCA_GIT: &str =
+    "この Orca は、変更を戻す操作とステージの操作に対応していません。Orca を更新してください";
+
+/// What a git write does to the files it is asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GitWrite {
+    /// Puts the changes of the paths in the index.
+    Stage,
+    /// Takes the changes of the paths out of the index.
+    Unstage,
+    /// Puts the paths back as HEAD has them: the index first, then the working tree.
+    Revert,
+}
+
+/// The paths a git write is asked for: at least one and at most `LIST_LIMIT`, each inside the worktree and not its root (`check_written`: no blank, no control character, nothing absolute, no `.` or `..` element, no `\\`).
+fn check_git_paths(paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() || paths.len() > LIST_LIMIT {
+        return Err(format!(
+            "一度に変更できるのは 1 件から {LIST_LIMIT} 件までです"
+        ));
+    }
+    paths.iter().try_for_each(|p| check_written(p, false))
+}
+
+/// Whether `path` is the folder `folder` or lies under it (`ab` is not under `a`).
+fn inside(path: &str, folder: &str) -> bool {
+    path == folder
+        || path
+            .strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// One change that `git.status` lists at or under an asked path: the file (or the untracked folder) it is, its old path when it was renamed, and whether it is the staged side of the file.
+#[derive(Debug, PartialEq)]
+struct Touched {
+    path: String,
+    old_path: Option<String>,
+    staged: bool,
+}
+
+impl Touched {
+    /// The path, and the old path of a rename, which a write of git must reach together.
+    fn names(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.path.as_str()).chain(self.old_path.as_deref())
+    }
+}
+
+/// The changes of `git.status` (its `entries`, each with a `path`, a `status`, an `area` and, for a rename, an `oldPath`) that are at or under one of `paths`, in the order of the answer. An entry that is an untracked folder (its path ends in `/`, which git does not list file by file) stands for the asked path inside it. A path of an entry that the checks of a path refuse is an error, so that a write never leaves a file out without saying so; an answer with no `entries` is one too, and never read as no change.
+fn touched(status: &Value, paths: &[String]) -> Result<Vec<Touched>, String> {
+    let entries = status["entries"].as_array().ok_or(NOT_GIT_STATUS)?;
+    let mut found = Vec::new();
+    for entry in entries {
+        let Some(raw) = entry["path"].as_str() else {
+            continue;
+        };
+        let at = raw.trim_end_matches('/');
+        let untracked_folder = at.len() < raw.len();
+        for asked in paths {
+            let path = if inside(at, asked) {
+                at
+            } else if untracked_folder && inside(asked, at) {
+                asked
+            } else {
+                continue;
+            };
+            check_written(path, false)?;
+            let old_path = entry["oldPath"]
+                .as_str()
+                .filter(|old| entry["status"] == "renamed" && !old.is_empty());
+            if let Some(old) = old_path {
+                check_written(old, false)?;
+            }
+            found.push(Touched {
+                path: path.to_owned(),
+                old_path: old_path.map(str::to_owned),
+                staged: entry["area"] == "staged",
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// The paths of `names` once each, in the order met.
+fn unique<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    names
+        .filter(|name| seen.insert(*name))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The message of a failed git write: Orca's own words (it refuses with the reason), or, for an Orca that lacks the method, the request to update it. A failure with no message of Orca's (the connection) keeps its own text.
+fn git_write_reason(error: CallError) -> String {
+    if error.shown.contains("method_not_found") {
+        UPDATE_ORCA_GIT.into()
+    } else if error.detail.trim().is_empty() {
+        error.shown
+    } else {
+        error.detail
+    }
+}
+
+/// Asks Orca's `method` (`git.bulkStage`, `git.bulkUnstage` or `git.bulkDiscard`) to write the `files` of the worktree at `path` (on `host_id`). Orca hands them to git as literal paths in a file it reads, with no shell.
+async fn git_files(
+    rpc: &mut impl Rpc,
+    method: &str,
+    path: &str,
+    host_id: &str,
+    files: &[String],
+) -> Result<(), String> {
+    let answer = rpc
+        .call(
+            method,
+            worktree_params(path, Some(host_id), json!({"filePaths": files})),
+        )
+        .await
+        .map_err(git_write_reason)?;
+    if answer["ok"] == false {
+        return Err(NOT_GIT_WRITTEN.into());
+    }
+    Ok(())
+}
+
+/// Runs `write` on `paths` (checked) of the worktree at `path`. A stage hands the paths to git as they are: a folder is its whole content. An unstage and a revert read `git.status` first, so that a folder is the changes under it (an untracked file too, which git's restore of a folder leaves) and a rename is both of its paths: an unstage takes the staged side out of the index, and a revert does that for every change and then has Orca discard them (`git.bulkDiscard`: a tracked path is restored, an untracked one is deleted, ignored files inside an untracked folder with it). With no change under the paths nothing is written.
+async fn git_write(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    write: GitWrite,
+    paths: &[String],
+) -> Result<(), String> {
+    if write == GitWrite::Stage {
+        return git_files(rpc, "git.bulkStage", path, host_id, paths).await;
+    }
+    let status = rpc
+        .call("git.status", worktree_params(path, None, json!({})))
+        .await
+        .map_err(reason)?;
+    let found = touched(&status, paths)?;
+    let staged = unique(found.iter().filter(|t| t.staged).flat_map(Touched::names));
+    if !staged.is_empty() {
+        git_files(rpc, "git.bulkUnstage", path, host_id, &staged).await?;
+    }
+    if write == GitWrite::Revert {
+        let all = unique(found.iter().flat_map(Touched::names));
+        if !all.is_empty() {
+            git_files(rpc, "git.bulkDiscard", path, host_id, &all).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The body of the three commands: checks the paths, reads the target's list each time (the worktree is written to, as a save does), writes, and throws away what was believed of the worktree, whatever the answer.
+async fn git_command(
+    write: GitWrite,
+    path: String,
+    paths: Vec<String>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    check_git_paths(&paths)?;
+    let host_id = host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        git_write(&mut connection, &path, &host_id, write, &paths).await
+    };
+    let done = asked.await;
+    forget_worktree_host(&path, environment.as_deref());
+    done
+}
+
 // ---- the history ----
 
 /// A full git object id (40 hex digits, or 64 for SHA-256), the form Orca takes and no other.
@@ -2264,6 +2445,36 @@ pub async fn orca_switch_branch(
         stream.reread_worktrees();
     }
     switched
+}
+
+/// Puts the changes of `paths` (files and folders of the worktree at `path`; a folder is its whole content) in the index (A-44). A path that is not inside the worktree, the root of the worktree and an empty list are refused before anything is asked.
+#[tauri::command]
+pub async fn orca_files_stage(
+    path: String,
+    paths: Vec<String>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    git_command(GitWrite::Stage, path, paths, environment).await
+}
+
+/// Takes the changes of `paths` out of the index and leaves the files as they are (A-44). The checks are those of `orca_files_stage`.
+#[tauri::command]
+pub async fn orca_files_unstage(
+    path: String,
+    paths: Vec<String>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    git_command(GitWrite::Unstage, path, paths, environment).await
+}
+
+/// Puts `paths` back as HEAD has them (A-44): the staged changes are taken out of the index, a changed file is restored, and an untracked or added file is deleted, for good. A folder is the changes under it. The checks are those of `orca_files_stage`.
+#[tauri::command]
+pub async fn orca_files_revert(
+    path: String,
+    paths: Vec<String>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    git_command(GitWrite::Revert, path, paths, environment).await
 }
 
 /// The commits of the worktree at `path` from HEAD, the newest first: `limit` (1 to 200) of them after the first `skip`, on the history `history_token` stands for when it is given (the history of the file pane). A worktree that is not one of the target's list is refused as for the list.
@@ -3311,13 +3522,37 @@ mod tests {
 
     #[test]
     fn a_file_with_a_staged_and_an_unstaged_entry_is_one_mark() {
+        // A file that HEAD has not got is new, edited after the add or not (git's `AM`).
+        for entries in [
+            json!([{"status": "added", "path": "a", "area": "staged"}, {"status": "modified", "path": "a", "area": "unstaged"}]),
+            json!([{"status": "modified", "path": "a", "area": "unstaged"}, {"status": "added", "path": "a", "area": "staged"}]),
+        ] {
+            assert_eq!(
+                changes_in(&status_of(entries), &["a".to_owned()]),
+                [change("a", OrcaGitMark::New)]
+            );
+        }
+        // A file that HEAD has, staged and then edited again, is changed.
         let status = status_of(json!([
-            {"status": "added", "path": "a", "area": "staged"},
-            {"status": "modified", "path": "a", "area": "unstaged"},
+            {"status": "modified", "path": "b", "area": "staged"},
+            {"status": "modified", "path": "b", "area": "unstaged"},
         ]));
         assert_eq!(
-            changes_in(&status, &["a".to_owned()]),
-            [change("a", OrcaGitMark::Changed)]
+            changes_in(&status, &["b".to_owned()]),
+            [change("b", OrcaGitMark::Changed)]
+        );
+        // The folder above an added and edited file is changed, as it is for any mix.
+        let status = status_of(json!([
+            {"status": "added", "path": "d/a", "area": "staged"},
+            {"status": "modified", "path": "d/a", "area": "unstaged"},
+        ]));
+        let asked: Vec<String> = ["d", "d/a"].map(String::from).into();
+        assert_eq!(
+            changes_in(&status, &asked),
+            [
+                change("d", OrcaGitMark::Changed),
+                change("d/a", OrcaGitMark::New)
+            ]
         );
     }
 
@@ -3398,6 +3633,364 @@ mod tests {
         )]);
         let asked = vec!["a".to_owned()];
         assert!(changes_of(&mut orca, "/work/a", &asked).await.is_empty());
+    }
+
+    // ---- the git writes (A-44) ----
+
+    fn touch(path: &str, old_path: Option<&str>, staged: bool) -> Touched {
+        Touched {
+            path: path.into(),
+            old_path: old_path.map(str::to_owned),
+            staged,
+        }
+    }
+
+    #[test]
+    fn a_git_write_takes_paths_inside_the_worktree_only() {
+        assert!(check_git_paths(&strings(&["a", "dir/b.rs", "dir"])).is_ok());
+        assert!(check_git_paths(&[]).is_err());
+        let too_many = vec!["a".to_owned(); LIST_LIMIT + 1];
+        assert!(check_git_paths(&too_many).is_err());
+        assert!(check_git_paths(&vec!["a".to_owned(); LIST_LIMIT]).is_ok());
+        for bad in [
+            "",
+            "/etc/passwd",
+            "..",
+            "../a",
+            "a/../b",
+            "a/..",
+            ".",
+            "./a",
+            "a//b",
+            "a/",
+            "a\\b",
+            "a\nb",
+            "a\0b",
+        ] {
+            assert!(check_git_paths(&strings(&["ok", bad])).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_path_is_inside_a_folder_by_whole_names() {
+        assert!(inside("a", "a"));
+        assert!(inside("a/b", "a"));
+        assert!(inside("a/b/c", "a/b"));
+        assert!(!inside("ab", "a"));
+        assert!(!inside("a", "a/b"));
+        assert!(!inside("b/a", "a"));
+    }
+
+    fn status_entries(entries: Value) -> Value {
+        json!({"entries": entries, "upstreamStatus": {}})
+    }
+
+    #[test]
+    fn the_changes_at_and_under_the_asked_paths_are_found() {
+        let status = status_entries(json!([
+            {"path": "src/a.rs", "status": "modified", "area": "unstaged"},
+            {"path": "src/a.rs", "status": "modified", "area": "staged"},
+            {"path": "src/b.rs", "status": "added", "area": "staged"},
+            {"path": "srcs/c.rs", "status": "modified", "area": "unstaged"},
+            {"path": "n.txt", "status": "untracked", "area": "untracked"},
+        ]));
+        assert_eq!(
+            touched(&status, &strings(&["src"])).unwrap(),
+            [
+                touch("src/a.rs", None, false),
+                touch("src/a.rs", None, true),
+                touch("src/b.rs", None, true),
+            ]
+        );
+        assert_eq!(
+            touched(&status, &strings(&["n.txt", "src/b.rs"])).unwrap(),
+            [touch("src/b.rs", None, true), touch("n.txt", None, false)]
+        );
+        assert!(touched(&status, &strings(&["other"])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_renamed_file_brings_its_old_path_and_only_a_rename_does() {
+        let status = status_entries(json!([
+            {"path": "new.rs", "status": "renamed", "area": "staged", "oldPath": "old.rs"},
+            {"path": "copy.rs", "status": "copied", "area": "staged", "oldPath": "orig.rs"},
+            {"path": "gone.rs", "status": "renamed", "area": "staged", "oldPath": ""},
+        ]));
+        assert_eq!(
+            touched(&status, &strings(&["new.rs", "copy.rs", "gone.rs"])).unwrap(),
+            [
+                touch("new.rs", Some("old.rs"), true),
+                touch("copy.rs", None, true),
+                touch("gone.rs", None, true),
+            ]
+        );
+        let found = touched(&status, &strings(&["new.rs"])).unwrap();
+        assert_eq!(
+            unique(found.iter().flat_map(Touched::names)),
+            ["new.rs", "old.rs"]
+        );
+    }
+
+    #[test]
+    fn an_untracked_folder_stands_for_the_paths_in_it_and_for_itself() {
+        let status = status_entries(json!([
+            {"path": "tmp/", "status": "untracked", "area": "untracked"},
+        ]));
+        assert_eq!(
+            touched(&status, &strings(&["tmp"])).unwrap(),
+            [touch("tmp", None, false)]
+        );
+        assert_eq!(
+            touched(&status, &strings(&["tmp/deep/x.rs"])).unwrap(),
+            [touch("tmp/deep/x.rs", None, false)]
+        );
+        // A folder above it holds it; a name that only starts the same does not.
+        assert!(touched(&status, &strings(&["tm"])).unwrap().is_empty());
+        // A tracked folder entry (a path with no slash at its end) is no stand-in.
+        let tracked = status_entries(json!([{"path": "tmp", "status": "modified"}]));
+        assert!(touched(&tracked, &strings(&["tmp/x"])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_answer_that_cannot_be_read_is_an_error_and_not_no_change() {
+        let asked = strings(&["a"]);
+        assert_eq!(touched(&json!({}), &asked).unwrap_err(), NOT_GIT_STATUS);
+        assert!(touched(&json!({"entries": "x"}), &asked).is_err());
+        // An entry under an asked path that the checks refuse stops the write.
+        let odd = status_entries(json!([{"path": "a/b\u{7}c", "status": "modified"}]));
+        assert!(touched(&odd, &asked).is_err());
+        let odd_old =
+            status_entries(json!([{"path": "a/n", "status": "renamed", "oldPath": "../o"}]));
+        assert!(touched(&odd_old, &asked).is_err());
+        // An entry of another path is not looked at, and an entry with no path is left out.
+        let other =
+            status_entries(json!([{"path": "z/b\u{7}c"}, {"status": "modified"}, {"path": 3}]));
+        assert!(touched(&other, &asked).unwrap().is_empty());
+    }
+
+    fn ok_answer() -> Answer {
+        Ok(json!({"ok": true}))
+    }
+
+    #[tokio::test]
+    async fn a_stage_hands_the_paths_to_git_as_they_are() {
+        let mut orca = fake(vec![("git.bulkStage", ok_answer())]);
+        git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Stage,
+            &strings(&["src", "n.txt"]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            orca.calls,
+            [(
+                "git.bulkStage".to_owned(),
+                json!({
+                    "worktree": "path:/work/a",
+                    "expectedExecutionHostId": "local",
+                    "filePaths": ["src", "n.txt"]
+                })
+            )]
+        );
+    }
+
+    fn mixed_status() -> Answer {
+        Ok(status_entries(json!([
+            {"path": "src/a.rs", "status": "modified", "area": "staged"},
+            {"path": "src/a.rs", "status": "modified", "area": "unstaged"},
+            {"path": "src/new.rs", "status": "renamed", "area": "staged", "oldPath": "src/old.rs"},
+            {"path": "src/u.rs", "status": "modified", "area": "unstaged"},
+            {"path": "src/n.rs", "status": "untracked", "area": "untracked"},
+            {"path": "other.rs", "status": "modified", "area": "staged"},
+        ])))
+    }
+
+    #[tokio::test]
+    async fn an_unstage_takes_out_only_the_staged_side_and_both_paths_of_a_rename() {
+        let mut orca = fake(vec![
+            ("git.status", mixed_status()),
+            ("git.bulkUnstage", ok_answer()),
+        ]);
+        git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Unstage,
+            &strings(&["src"]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            orca.calls,
+            [
+                ("git.status".to_owned(), json!({"worktree": "path:/work/a"})),
+                (
+                    "git.bulkUnstage".to_owned(),
+                    json!({
+                        "worktree": "path:/work/a",
+                        "expectedExecutionHostId": "local",
+                        "filePaths": ["src/a.rs", "src/new.rs", "src/old.rs"]
+                    })
+                )
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revert_unstages_and_then_discards_every_change_under_the_paths() {
+        let mut orca = fake(vec![
+            ("git.status", mixed_status()),
+            ("git.bulkUnstage", ok_answer()),
+            ("git.bulkDiscard", ok_answer()),
+        ]);
+        git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Revert,
+            &strings(&["src"]),
+        )
+        .await
+        .unwrap();
+        let methods: Vec<&str> = orca.calls.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            ["git.status", "git.bulkUnstage", "git.bulkDiscard"]
+        );
+        assert_eq!(
+            orca.calls[1].1["filePaths"],
+            json!(["src/a.rs", "src/new.rs", "src/old.rs"])
+        );
+        assert_eq!(
+            orca.calls[2].1,
+            json!({
+                "worktree": "path:/work/a",
+                "expectedExecutionHostId": "local",
+                "filePaths": ["src/a.rs", "src/new.rs", "src/old.rs", "src/u.rs", "src/n.rs"]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_to_change_writes_nothing() {
+        for write in [GitWrite::Unstage, GitWrite::Revert] {
+            let mut orca = fake(vec![("git.status", Ok(status_entries(json!([]))))]);
+            git_write(&mut orca, "/work/a", "local", write, &strings(&["a"]))
+                .await
+                .unwrap();
+            assert_eq!(orca.calls.len(), 1, "{write:?}");
+        }
+        // A revert of a file that is only unstaged does not unstage.
+        let status =
+            status_entries(json!([{"path": "a", "status": "modified", "area": "unstaged"}]));
+        let mut orca = fake(vec![
+            ("git.status", Ok(status)),
+            ("git.bulkDiscard", ok_answer()),
+        ]);
+        git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Revert,
+            &strings(&["a"]),
+        )
+        .await
+        .unwrap();
+        let methods: Vec<&str> = orca.calls.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["git.status", "git.bulkDiscard"]);
+    }
+
+    #[tokio::test]
+    async fn a_revert_stops_before_the_discard_when_the_unstage_fails() {
+        let mut orca = fake(vec![
+            ("git.status", mixed_status()),
+            (
+                "git.bulkUnstage",
+                Err(("Orca がエラーを返しました", "fatal: index locked")),
+            ),
+            ("git.bulkDiscard", ok_answer()),
+        ]);
+        let error = git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Revert,
+            &strings(&["src"]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "fatal: index locked");
+        assert_eq!(orca.calls.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_orcas_own_words_and_a_missing_method_asks_for_an_update() {
+        let mut orca = fake(vec![(
+            "git.bulkStage",
+            Err(("Orca がエラーを返しました", "index.lock exists")),
+        )]);
+        let error = git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Stage,
+            &strings(&["a"]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "index.lock exists");
+        let mut orca = fake(vec![("git.bulkStage", Err(("method_not_found", "")))]);
+        let error = git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Stage,
+            &strings(&["a"]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, UPDATE_ORCA_GIT);
+        let mut orca = fake(vec![("git.bulkStage", Err(("接続が切れました", " ")))]);
+        let error = git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Stage,
+            &strings(&["a"]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "接続が切れました");
+        let mut orca = fake(vec![("git.bulkStage", Ok(json!({"ok": false})))]);
+        let error = git_write(
+            &mut orca,
+            "/work/a",
+            "local",
+            GitWrite::Stage,
+            &strings(&["a"]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, NOT_GIT_WRITTEN);
+    }
+
+    #[tokio::test]
+    async fn a_failed_status_stops_an_unstage_and_a_revert() {
+        for write in [GitWrite::Unstage, GitWrite::Revert] {
+            let mut orca = fake(vec![(
+                "git.status",
+                Err(("Orca がエラーを返しました", "not a git repository")),
+            )]);
+            assert!(
+                git_write(&mut orca, "/work/a", "local", write, &strings(&["a"]))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(orca.calls.len(), 1);
+        }
     }
 
     #[test]

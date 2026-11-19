@@ -1,4 +1,4 @@
-:root { --shell-bg: #1b1b1b; --shell-fg: #fff; --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
@@ -1267,7 +1267,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-project[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
 .orca-project:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-n { margin-left: auto; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 /* A-8: the arrow at the left of a project with sessions, and its sessions under it (the status icon and the title). */
 .orca-proj { position: relative; }
 .orca-proj > .orca-project { padding-left: 32px; }
@@ -1281,14 +1280,26 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-session[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
 .orca-session:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-session-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-session-subagents { flex: none; display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 0 7px; border-radius: 9px; background: var(--effort-high-bg); color: var(--effort-high); font-size: calc(11px * var(--fs)); font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
-.orca-session-subagents svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-/* The badge of a session that runs a shell (A-8): white `>_` on black, left of the subagents' badge, which keeps the right end. */
-.orca-session-shell { flex: none; display: inline-flex; align-items: center; height: 18px; margin-left: auto; padding: 0 7px; border-radius: 9px; background: var(--shell-bg); color: var(--shell-fg); line-height: 18px; }
-.orca-session-shell svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.orca-session-shell + .orca-session-subagents { margin-left: 0; }
-/* A-33: the name of the saved environment a project of the list is in (not a session). */
-.orca-env { flex: none; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 400; line-height: 16px; }
+/* A-8: the right end of a session row, an icon and a number for each kind of work (the AI, then the commands); no chip. */
+.orca-session-counts { flex: none; display: inline-flex; align-items: center; gap: 10px; margin-left: auto; font-size: calc(12px * var(--fs)); font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
+.orca-session-subagents, .orca-session-shell { display: inline-flex; align-items: center; gap: 3px; }
+.orca-session-subagents { color: var(--effort-high); }
+.orca-session-shell { color: var(--muted); }
+.orca-session-counts svg, .orca-work svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* A-8: the arrow at the left of a session that has work in it, and its breakdown under the row: a line for each subagent (its name and its task) and for the command, each with the icon of its kind. */
+.orca-sess { position: relative; }
+.orca-session-arrow { position: absolute; left: 4px; top: 4px; width: 24px; height: 24px; padding: 0; border-radius: 8px; }
+.orca-session-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.orca-session-arrow[aria-expanded="true"] svg { transform: rotate(90deg); }
+.orca-session-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-works { margin: 0 0 1px 32px; }
+.orca-work { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 10px; font-size: calc(12px * var(--fs)); line-height: 18px; }
+.orca-work-agent svg { color: var(--effort-high); }
+.orca-work-shell svg { color: var(--muted); }
+.orca-work-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.orca-work-task { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+/* A-33: the name of the saved environment a project of the list is in (not a session), at the right end of its row. */
+.orca-env { flex: none; margin-left: auto; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 400; line-height: 16px; }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of a pane (the height of every header) has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
 #orca-panes { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
@@ -1442,6 +1453,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-hfile-del { color: var(--del); }
 /* The language server of the file pane (A-34), and the definition tab of the work pane (A-34): the heading with the name and the count, and a row for each place with the lines around its definition, all open. */
 #orca-server { flex: 1; min-height: 0; overflow: auto; }
+#orca-database { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 4px; }
 .orca-definition { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .orca-definition-head { gap: 6px; font-size: calc(13px * var(--fs)); }
 .orca-def-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-weight: 600; }
@@ -2078,6 +2090,11 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-open-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .database-open-item .database-open-close { flex: none; width: 22px; height: 22px; margin: 0 4px 0 -6px; color: inherit; }
 .database-open-item .database-open-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* D-9: the plus at the right end of the strip, which opens a query. */
+.database-open-add { flex: none; align-self: center; width: 28px; height: 28px; margin: 0 0 2px 4px; color: var(--ink-soft); }
+.database-open-add:hover:not(:disabled) { background: var(--hover); }
+.database-open-add:disabled { opacity: .4; cursor: default; }
+.database-open-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 #database-work { flex: 1; min-height: 0; overflow: auto; }
 .database-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 10px 0 calc(6px + var(--depth, 0) * 16px); border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .database-btn:hover { background: var(--hover); }
@@ -2095,9 +2112,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-dot[data-state="connecting"] { background: var(--agent-working); }
 .database-note { margin: 0; padding: 2px 8px 2px calc(26px + var(--depth, 0) * 16px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .database-note.danger { color: var(--danger); }
-#database-work { padding: 16px 24px; font-size: calc(13px * var(--fs)); }
+#database-work, .orca-database-tab { padding: 16px 24px; font-size: calc(13px * var(--fs)); }
 .database-work-title { margin: 0 0 12px; font-size: calc(15px * var(--fs)); overflow-wrap: anywhere; }
-#database-work .database-note { padding: 0; }
+#database-work .database-note, .orca-database-tab .database-note { padding: 0; }
 .database-tables { width: 100%; border-collapse: collapse; }
 .database-tables th, .database-tables td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .database-tables th { color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; border-top: 1px solid var(--line); }
@@ -2106,7 +2123,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-tables tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .database-tables .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* D-4: the tabs of a table, the grid of its records and, under it, the range and the pager. */
-#database-work.database-fill { display: flex; flex-direction: column; }
+#database-work.database-fill, .orca-database-tab.database-fill { display: flex; flex-direction: column; }
+/* A-43: a table or the SQL of a database as a tab of the work pane of the Orca screen, in the host of the editor, which draws the same body as the database screen's work pane. */
+.orca-database-tab { flex: 1; min-height: 0; overflow: auto; }
 .database-tabs { flex: none; display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
 .database-tab { height: 32px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: var(--muted); cursor: pointer; }
 .database-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: inherit; font-weight: 600; }
@@ -2114,6 +2133,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-records-scroll { flex: 1; min-height: 0; overflow: auto; }
 .database-pager { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 12px; }
 .database-range { margin-right: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* D-10: the number of changes that the records tab has gathered, after the range. */
+.database-range:has(+ .database-changes) { margin-right: 0; }
+.database-changes { margin-right: auto; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .database-pager .text-btn:disabled { opacity: .4; cursor: default; }
 .database-pager .text-btn:disabled:hover { background: var(--surface); }
 .database-pager .icon-btn { flex: none; width: 28px; height: 28px; color: var(--ink-soft); }
@@ -2129,6 +2151,15 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-grid th { position: sticky; overflow: hidden; text-overflow: ellipsis; top: 0; background: var(--surface); border-top: 1px solid var(--line); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; }
 .database-sql-text { flex: none; box-sizing: border-box; width: 100%; min-height: 96px; resize: vertical; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); line-height: 1.5; }
 .database-sql-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
+/* D-9: a query tab: the selects of the connection and the database above the field, and between the field and the result a line that is dragged to change the height of the field (D-6). */
+.database-query-bar { flex: none; display: flex; gap: 8px; margin-bottom: 12px; }
+.database-query-select { min-width: 0; max-width: 50%; height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); font: inherit; color: inherit; }
+.database-query-select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.database-query .database-sql-text { resize: none; }
+.database-query-split { flex: none; position: relative; height: 9px; margin-bottom: 4px; cursor: row-resize; user-select: none; -webkit-user-select: none; }
+.database-query-split::before { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--line); }
+.database-query-split:hover::before, .database-query-split:focus-visible::before { top: 3px; height: 3px; border-radius: 2px; background: var(--accent); }
+.database-query-split:focus-visible { outline: none; }
 .database-sql-bar { flex: none; display: flex; justify-content: flex-end; padding: 8px 0 12px; }
 .database-sql-bar .text-btn:disabled { opacity: .4; cursor: default; }
 .database-sql-bar .text-btn:disabled:hover { background: var(--surface); }
@@ -2136,6 +2167,14 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .database-cell[data-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .database-cell[data-kind="null"], .database-cell[data-kind="binary"] { color: var(--muted); font-style: italic; }
+/* D-10: a pressed row, a row that was added (the insert color), a cell that was rewritten (the accent on the soft color), a row marked to be deleted (struck through, in the danger color), and the field of a cell that is being rewritten. */
+.database-grid tr.selected td { background: var(--hover); }
+.database-grid td.changed { background: var(--soft); color: var(--accent); }
+.database-grid tr.added td { background: var(--diff-ins-bg); }
+.database-grid tr.added.selected td { background: color-mix(in srgb, var(--diff-ins-bg), var(--accent) 18%); }
+.database-grid tr.deleted td { color: var(--danger); text-decoration: line-through; }
+.database-cell-input { box-sizing: border-box; width: 100%; min-width: 8em; margin: -3px 0; padding: 2px 6px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; }
+.database-cell-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* D-1: the edit pane of a connection takes the place of the work pane: its header has the title and the buttons, and under it are the fields. */
 #database-edit { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 #database-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }

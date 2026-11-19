@@ -17,7 +17,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { callsOf, copiedTexts, count, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
+import { callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
 import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -2041,6 +2041,183 @@ describe("orca: files and editor (A-18)", () => {
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
   });
 
+  // A-44: the git writes of the right button. Rust runs them (unit tests); here the screen is checked: the items on a row that differs from HEAD, the commands and their arguments, the confirmation of putting back, and the read again.
+  const menuButtons = () => textsOf('.menu[role="menu"] button');
+  const markedRoot = () => [change("src", "changed"), change("target", "new"), change("a.rs", "changed"), change("b.log", "new")];
+  const git = (extra: Record<string, unknown> = {}) => openFiles({ orca_files_changes: markedRoot(), ...extra });
+  const rootArgs = (paths: string[], environment: string | null = null) => ({ path: "/work/example-app", paths, environment });
+  const pressedOnce = (label: string) => $(`.pop[role="alertdialog"] .text-btn${label === "元に戻す" ? ".danger" : ":not(.danger)"}`).click();
+
+  it("adds 「ステージ」, 「ステージ解除」 and a red 「変更を元に戻す」 after a line to the menu of a file and of a folder that differ from HEAD (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ステージ", "ステージ解除", "変更を元に戻す", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "ステージ", "ステージ解除", "変更を元に戻す", "", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(9);
+    expect(await count('.menu[role="menu"] button.danger')).toBe(2);
+    expect(await textsOf('.menu[role="menu"] button.danger')).toEqual(["変更を元に戻す", "削除"]);
+    expect(await deleteItemIsRed()).toBe(true);
+    await browser.keys("Escape");
+    expect(await rightClickRow("src")).toBe(true);
+    expect(await menuButtons()).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "ステージ", "ステージ解除", "変更を元に戻す", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー", "", "ステージ", "ステージ解除", "変更を元に戻す", "", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(9);
+    expect(await deleteItemIsRed()).toBe(true);
+  });
+
+  it("keeps the menu as it was on a row that does not differ from HEAD, and while git has not answered (A-44)", async () => {
+    await openFiles({ orca_files_changes: [change("a.rs", "changed")] });
+    await waitForCount(".orca-file[data-change]", 1);
+    expect(await rightClickRow("b.log")).toBe(true);
+    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    await browser.keys("Escape");
+    expect(await rightClickRow("target")).toBe(true);
+    expect(await menuButtons()).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
+  });
+
+  it("keeps several selected rows to the 「n 件を削除」 alone, whatever they differ in (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    await row("a.rs").click();
+    await press("b.log", { metaKey: true });
+    expect(await rightClickRow("b.log")).toBe(true);
+    expect(await menuButtons()).toEqual(["2 件を削除"]);
+  });
+
+  it("stages a file on 「ステージ」 with no question, and reads the files and their marks again (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const stage = await mock("orca_files_stage", null);
+    const list = await mock("orca_files_list", root());
+    const marks = await mock("orca_files_changes", [change("src", "changed"), change("target", "new"), change("b.log", "new")]);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ステージ");
+    await expect($(".menu")).not.toExist();
+    expect(await waitForCalls(stage)).toEqual([rootArgs(["a.rs"])]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    expect(await waitForCalls(marks)).toEqual([rootArgs(["src", "target", "a.rs", "b.log"])]);
+    await waitForCount(".orca-file[data-change]", 3);
+    expect((await gitLook("a.rs")).change).toBeNull();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("unstages a folder on 「ステージ解除」 with its path, calls neither of the other two, and reads again (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const unstage = await mock("orca_files_unstage", null);
+    const stage = await mock("orca_files_stage", null);
+    const revert = await mock("orca_files_revert", null);
+    const list = await mock("orca_files_list", root());
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem("ステージ解除");
+    expect(await waitForCalls(unstage)).toEqual([rootArgs(["src"])]);
+    await waitForCalls(list);
+    await browser.pause(200);
+    expect(await callsOf(stage)).toEqual([]);
+    expect(await callsOf(revert)).toEqual([]);
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+  });
+
+  it("sends the path from the worktree of a file in an open folder, and the name of a saved environment (A-44)", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, orca_files_changes: [change("src", "changed")] });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["main.rs", false]]));
+    await mock("orca_files_changes", [change("src", "changed"), change("src/main.rs", "changed")]);
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    await waitForCount(".orca-file[data-change]", 2);
+    const stage = await mock("orca_files_stage", null);
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("ステージ");
+    expect(await waitForCalls(stage)).toEqual([rootArgs(["src/main.rs"], "Studio")]);
+  });
+
+  it("asks before putting back, with the words of what is lost, 「キャンセル」 that has the keys, and calls nothing until 「元に戻す」 is pressed (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const revert = await mock("orca_files_revert", null);
+    const asked = async (path: string, words: string) => {
+      expect(await rightClickRow(path)).toBe(true);
+      await pickItem("変更を元に戻す");
+      await expect($(".menu")).not.toExist();
+      await expect($('.pop[role="alertdialog"]')).toBeDisplayed();
+      await expect($('.pop[role="alertdialog"] p')).toHaveText(words);
+      expect(await textsOf('.pop[role="alertdialog"] button')).toEqual(["元に戻す", "キャンセル"]);
+      expect(await browser.execute(() => document.activeElement?.textContent)).toBe("キャンセル");
+      expect(await textsOf('.pop[role="alertdialog"] h3')).toEqual(["変更を元に戻しますか？"]);
+    };
+    // A file that is changed is put back, a new one is deleted, and the words of a folder say that it may hold new files unless all of them are.
+    await asked("a.rs", "a.rs の変更を捨てて、HEAD の状態に戻します。元に戻せません。");
+    await pressedOnce("キャンセル");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await asked("b.log", "b.log は新しいファイルです。元に戻すと完全に削除します。元に戻せません。");
+    await browser.keys("Escape");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await asked("src", "src の中の変更をすべて捨てて、HEAD の状態に戻します。新しいファイルは完全に削除します。元に戻せません。");
+    await pressedOnce("キャンセル");
+    await asked("target", "target の中の変更は、すべて新しいファイルです。元に戻すと完全に削除します。元に戻せません。");
+    // A press elsewhere (the page's own, as WebDriver's click sends none).
+    await browser.execute(
+      (once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.getElementById("orca-files-bar")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+      },
+      onceId(),
+    );
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(revert)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
+  it("puts back on 「元に戻す」 with the worktree and the path, then reads the files and their marks again: a new file that was put back is gone (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const revert = await mock("orca_files_revert", null);
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["a.rs", false]]));
+    const marks = await mock("orca_files_changes", [change("src", "changed"), change("target", "new"), change("a.rs", "changed")]);
+    expect(await rightClickRow("b.log")).toBe(true);
+    await pickItem("変更を元に戻す");
+    await pressedOnce("元に戻す");
+    expect(await waitForCalls(revert)).toEqual([rootArgs(["b.log"])]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    expect(await waitForCalls(marks)).toEqual([rootArgs(["src", "target", "a.rs"])]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    expect(await names()).toEqual(["src", "target", "a.rs"]);
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await expect($(CARDS)).not.toExist();
+    // A folder goes in one call with its own path.
+    const second = await mock("orca_files_revert", null);
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem("変更を元に戻す");
+    await pressedOnce("元に戻す");
+    expect(await waitForCalls(second)).toEqual([rootArgs(["src"])]);
+  });
+
+  it("shows Orca's message when a write is refused, and reads the files again all the same (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const stage = await mock("orca_files_stage", rejects("Orca がエラーを返しました（locked）"));
+    const list = await mock("orca_files_list", root());
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ステージ");
+    await waitForCalls(stage);
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（locked）");
+    await waitForCalls(list);
+    const revert = await mock("orca_files_revert", rejects("Orca がエラーを返しました（merge）"));
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("変更を元に戻す");
+    await pressedOnce("元に戻す");
+    await waitForCalls(revert);
+    // A card stays until it is closed (A-28), so the card of the first refusal is still under the new one.
+    expect(await textsOf(CARD)).toEqual(["Orca がエラーを返しました（merge）", "Orca がエラーを返しました（locked）"]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
   // A-18: the selection. A press on a row selects it (⌘ adds it or takes it off, Shift selects from the row pressed before), the selected rows are drawn in the accent color, and the delete takes all of them.
   // A press as the page gets it, with ⌘ or Shift held (the WebDriver click holds none).
   const press = (path: string, keys: { metaKey?: boolean; shiftKey?: boolean } = {}) =>
@@ -3572,10 +3749,331 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles(historyFixtures());
     await waitForCount("#orca-files-tree .orca-file", 4);
     const bar = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-bar > button")].map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-pressed"), b.querySelector("svg") !== null]));
-    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["言語サーバー", "false", true], ["ファイル欄", "true", true]]);
+    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["言語サーバー", "false", true], ["データベース", "false", true], ["ファイル欄", "true", true]]);
     await expect($("#orca-files-tree")).toBeDisplayed();
     await expect($("#orca-history")).not.toBeDisplayed();
+    await expect($("#orca-database")).not.toBeDisplayed();
     expect(await callsOf("orca_git_history")).toEqual([]);
+  });
+
+  // A-43: the database part of the file pane. It draws the tree of the database screen (D-3) with the same commands, and reads nothing until it is shown.
+  const direct = databaseProfile("p1", "Example direct");
+  const tunnel = databaseProfile("p2", "Example tunnel", { script: "exec forward-port", dbHost: "db.internal.example.com" });
+  const dbFixtures = (extra: Record<string, unknown> = {}) => ({ database_profiles: [direct, tunnel], database_connections: [], ...extra });
+  const dbRow = (key: string) => $(`#orca-database [data-key="${key}"]`);
+  const dbDot = (id: string) => $(`#orca-database [data-key="${id}"] .database-dot`);
+  const dbNames = () => textsOf("#orca-database .database-btn");
+  async function openDatabasePart(extra: Record<string, unknown> = {}) {
+    await openFiles(dbFixtures(extra));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("データベース").click();
+    await waitForCount("#orca-database .database-item", 2);
+  }
+  // The page's own right button on the row of `key` of the database part.
+  const dbRightPress = (key: string) =>
+    browser.execute(
+      (k, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const row = document.querySelector(`#orca-database [data-key="${k}"]`)!;
+        const r = row.getBoundingClientRect();
+        row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.left + 40, clientY: r.top + r.height / 2 }));
+      },
+      key,
+      onceId(),
+    );
+
+  it("shows the connections of the database screen in the fourth part, reads them when the part is shown, and hides the heading (A-43)", async () => {
+    await openFiles(dbFixtures());
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await callsOf("database_profiles")).toEqual([]);
+    expect(await callsOf("database_connections")).toEqual([]);
+    await paneMode("データベース").click();
+    await waitForCount("#orca-database .database-item", 2);
+    expect(await dbNames()).toEqual(["Example direct", "Example tunnel"]);
+    await expect(paneMode("データベース")).toHaveAttribute("aria-pressed", "true");
+    await expect(paneMode("ファイル")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#orca-database")).toBeDisplayed();
+    await expect($("#orca-files-tree")).not.toBeDisplayed();
+    await expect($("#orca-history")).not.toBeDisplayed();
+    await expect($("#orca-files-head")).not.toBeDisplayed();
+    expect(await callsOf("database_profiles")).toEqual([null]);
+    expect(await callsOf("database_connections")).toEqual([null]);
+    expect(await textsOf("#orca-database")).toEqual(["Example directExample tunnel"]);
+    expect(await count("#orca-database [placeholder]")).toBe(0);
+    await paneMode("ファイル").click();
+    await expect($("#orca-database")).not.toBeDisplayed();
+    await expect($("#orca-files-head")).toBeDisplayed();
+    await expect($("#orca-files-tree")).toBeDisplayed();
+    expect(await callsOf("database_profiles")).toHaveLength(1);
+    await paneMode("データベース").click();
+    await waitForCalls("database_profiles", 2);
+    await expect($("#orca-database")).toBeDisplayed();
+  });
+
+  it("marks a connection that Rust holds open with a green dot and a closed row, and opens it with the press (A-43)", async () => {
+    await openDatabasePart({ database_connections: ["p2"], database_connect: ["shop"] });
+    await expect(dbDot("p2")).toHaveAttribute("data-state", "connected");
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    await expect(dbRow("p2")).toHaveAttribute("aria-expanded", "false");
+    expect(await count("#orca-database .database-children")).toBe(0);
+    await dbRow("p2").click();
+    expect(await waitForCalls("database_connect")).toEqual([{ id: "p2" }]);
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+  });
+
+  it("opens a connection and a database with the commands of D-3, and closes the rows with the next press (A-43)", async () => {
+    await openDatabasePart({ database_connect: ["information_schema", "shop"], database_tables: [databaseTable("orders"), databaseTable("users")] });
+    await dbRow("p1").click();
+    expect(await waitForCalls("database_connect")).toEqual([{ id: "p1" }]);
+    await waitForCount("#orca-database .database-children .database-btn", 2);
+    expect(await dbNames()).toEqual(["Example direct", "information_schema", "shop", "Example tunnel"]);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
+    await expect(dbRow("p1")).toHaveAttribute("aria-expanded", "true");
+    await expect(dbRow("p1")).toHaveAttribute("aria-pressed", "true");
+    await dbRow("p1/d/shop").click();
+    expect(await waitForCalls("database_tables")).toEqual([{ id: "p1", database: "shop" }]);
+    await waitForCount("#orca-database [data-key^='p1/d/shop/t/']", 2);
+    expect(await dbNames()).toEqual(["Example direct", "information_schema", "shop", "orders", "users", "Example tunnel"]);
+    await dbRow("p1/d/shop").click();
+    await expect(dbRow("p1/d/shop")).toHaveAttribute("aria-expanded", "false");
+    expect(await count("#orca-database [data-key^='p1/d/shop/t/']")).toBe(0);
+    await dbRow("p1").click();
+    await expect(dbRow("p1")).toHaveAttribute("aria-expanded", "false");
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
+    expect(await count("#orca-database .database-children")).toBe(0);
+    await browser.pause(200);
+    expect(await callsOf("database_connect")).toHaveLength(1);
+    expect(await callsOf("database_tables")).toHaveLength(1);
+  });
+
+  it("shows the error of a connection that cannot be opened and opens it again at the next press (A-43)", async () => {
+    await openDatabasePart({ database_connect: { __e2e_reject__: "接続できません" } });
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-note.danger", 1);
+    expect(await textsOf("#orca-database .database-note.danger")).toEqual(["接続できません"]);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    await mock("database_connect", ["shop"]);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    expect(await count("#orca-database .database-note.danger")).toBe(0);
+  });
+
+  it("draws the last line of the script while a connection opens, and drops the line of a connection that is not opening (A-43)", async () => {
+    await openDatabasePart({ database_connect: holds });
+    await dbRow("p1").click();
+    await waitForCalls("database_connect");
+    await expect($("#orca-database .database-note")).toHaveText("接続中…");
+    await emitEvent("database-script-output", { id: "p2", line: "of another connection" });
+    await emitEvent("database-script-output", { id: "p1", line: "<b>forwarding</b> port 3307" });
+    await expect($("#orca-database .database-note")).toHaveText("<b>forwarding</b> port 3307");
+    expect(await count("#orca-database .database-note b")).toBe(0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connecting");
+    await release("database_connect", ["shop"]);
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    expect(await count("#orca-database .database-note")).toBe(0);
+    await emitEvent("database-script-output", { id: "p1", line: "late" });
+    await browser.pause(200);
+    expect(await count("#orca-database .database-note")).toBe(0);
+  });
+
+  it("draws the last line of the script when a connection that this part holds open is opened again, in place of 読み込み中… (A-43)", async () => {
+    await openDatabasePart({ database_connect: ["shop"] });
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children", 0);
+    await mock("database_connect", holds);
+    await dbRow("p1").click();
+    await waitForCalls("database_connect");
+    await expect($("#orca-database .database-note")).toHaveText("読み込み中…");
+    await emitEvent("database-script-output", { id: "p1", line: "forwarding port 3307" });
+    await expect($("#orca-database .database-note")).toHaveText("forwarding port 3307");
+    // The line is put into the note in place: the tree is not made again for each line.
+    await browser.execute(() => {
+      (document.querySelector("#orca-database .database-note") as HTMLElement & { kept?: boolean }).kept = true;
+    });
+    await emitEvent("database-script-output", { id: "p1", line: "second" });
+    await expect($("#orca-database .database-note")).toHaveText("second");
+    expect(await browser.execute(() => (document.querySelector("#orca-database .database-note") as HTMLElement & { kept?: boolean }).kept === true)).toBe(true);
+    await release("database_connect", ["shop"]);
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    expect(await count("#orca-database .database-note")).toBe(0);
+  });
+
+  it("has a menu on a connection with the disconnect only while it is open, and on a database with the new query and the close (A-43)", async () => {
+    await openDatabasePart({ database_connect: ["shop"], database_tables: [databaseTable("orders")], database_disconnect: null });
+    await dbRightPress("p1");
+    await browser.pause(200);
+    expect(await count(".menu")).toBe(0);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await dbRow("p1/d/shop").click();
+    await waitForCount("#orca-database [data-key='p1/d/shop/t/orders']", 1);
+    await dbRightPress("p1/d/shop/t/orders");
+    await browser.pause(200);
+    expect(await count(".menu")).toBe(0);
+    await dbRightPress("p1/d/shop");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["新規クエリ", "データベースを閉じる"]);
+    await $('.menu button[role="menuitem"]:last-child').click();
+    expect(await count("#orca-database [data-key^='p1/d/shop/t/']")).toBe(0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
+    expect(await callsOf("database_disconnect")).toEqual([]);
+    await dbRightPress("p1");
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["切断"]);
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_disconnect")).toEqual([{ id: "p1" }]);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await count("#orca-database .database-children")).toBe(0);
+    await expect(dbRow("p1")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // A-43: a table, and the SQL of a database, as tabs of the work pane. The tab draws the body of the database screen (D-4 to D-6) and calls its commands.
+  const shopRecords = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目", tsv: "id\tname\n1\tAlice" });
+  const dbTabs = () => textsOf('.orca-tab[data-database="true"] .orca-tab-title');
+  const dbTabId = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>('.orca-tab[data-database="true"]')].map((t) => t.dataset.tab));
+  const dbCells = () => browser.execute(() => [...document.querySelectorAll(".orca-database-tab .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+  // The tree of the part open on the connection p1, its database shop and its two tables.
+  async function openShop(extra: Record<string, unknown> = {}) {
+    await openDatabasePart({ database_connect: ["shop"], database_tables: [databaseTable("orders"), databaseTable("users")], database_records: shopRecords, ...extra });
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await dbRow("p1/d/shop").click();
+    await waitForCount("#orca-database [data-key^='p1/d/shop/t/']", 2);
+  }
+  const typeSql = (add: string) =>
+    browser.execute(
+      (t, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const area = document.querySelector<HTMLTextAreaElement>(".orca-database-tab [data-key='sql-input']")!;
+        area.value = t;
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      add,
+      onceId(),
+    );
+
+  it("opens a table of the database part as a tab named after the table and the connection, selected, with its records read (A-43)", async () => {
+    await openShop();
+    expect(await callsOf("database_records")).toEqual([]);
+    await dbRow("p1/d/shop/t/orders").click();
+    expect(await waitForCalls("database_records")).toEqual([{ id: "p1", database: "shop", table: "orders", page: 0, estimate: null }]);
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    expect(await dbTabs()).toEqual(["orders · Example direct"]);
+    await expect(selectedTab()).toHaveText("orders · Example direct");
+    await expect($(".orca-database-tab .database-work-title")).toHaveText("shop.orders");
+    expect(await textsOf(".orca-database-tab .database-tab")).toEqual(["レコード", "構造", "SQL"]);
+    expect(await dbCells()).toEqual([["1", "Alice"]]);
+    await expect($(".orca-database-tab .database-range")).toHaveText("1–1 行目");
+    await expect(dbRow("p1/d/shop/t/orders")).toHaveAttribute("aria-pressed", "true");
+    expect(await count("#orca-database [placeholder]")).toBe(0);
+    // The records of this tab are read only: none of the buttons that write (D-10), and no field in a cell.
+    expect(await count('.orca-database-tab [data-key="remove"], .orca-database-tab [data-key="apply"], .orca-database-tab [data-key="revert"]')).toBe(0);
+    await $(".orca-database-tab .database-grid tbody tr:first-child td:nth-child(2)").doubleClick();
+    expect(await count(".orca-database-tab .database-cell input")).toBe(0);
+  });
+
+  it("opens a table that is open already by selecting its tab and reading its first page again, and another table as another tab (A-43)", async () => {
+    await openShop();
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCalls("database_records");
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await dbRow("p1/d/shop/t/users").click();
+    await waitForCalls("database_records", 2);
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    expect(await dbTabs()).toEqual(["orders · Example direct", "users · Example direct"]);
+    await expect($(".orca-database-tab .database-work-title")).toHaveText("shop.users");
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCalls("database_records", 3);
+    expect(await dbTabs()).toEqual(["orders · Example direct", "users · Example direct"]);
+    await expect($(".orca-database-tab .database-work-title")).toHaveText("shop.orders");
+    expect((await callsOf("database_records")).map((c) => (c as { table: string }).table)).toEqual(["orders", "users", "orders"]);
+  });
+
+  it("reads the structure at every press of 構造 and runs the SQL of the tab with the connection and database of the table, with no other call (A-43)", async () => {
+    await openShop({ database_structure: databaseStructure([databaseColumn("id", "int")]), database_sql: databaseSqlResult(["n"], [[databaseCell("1", "number")]]) });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await $('.orca-database-tab [data-tab="structure"]').click();
+    expect(await waitForCalls("database_structure")).toEqual([{ id: "p1", database: "shop", table: "orders" }]);
+    await waitForCount(".orca-database-tab .database-structure", 1);
+    await $('.orca-database-tab [data-tab="records"]').click();
+    await $('.orca-database-tab [data-tab="structure"]').click();
+    await waitForCalls("database_structure", 2);
+    await $('.orca-database-tab [data-tab="sql"]').click();
+    await typeSql("select 1");
+    await $('.orca-database-tab [data-key="run"]').click();
+    expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    expect(await callsOf("database_records")).toHaveLength(1);
+  });
+
+  it("closes the tab with its close button, calls nothing, and drops a read that ends after the tab was closed (A-43)", async () => {
+    await openShop({ database_records: holds });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCalls("database_records");
+    await expect($(".orca-database-tab")).toExist();
+    await $('.orca-tab[data-database="true"] .orca-tab-close').click();
+    await expect($('.orca-tab[data-database="true"]')).not.toExist();
+    await expect($(".orca-database-tab")).not.toExist();
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    await release("database_records", shopRecords);
+    await browser.pause(300);
+    await expect($(".orca-database-tab")).not.toExist();
+    expect(await count(CARDS)).toBe(0);
+    expect(await callsOf("database_disconnect")).toEqual([]);
+    expect(await callsOf("database_connect")).toHaveLength(1);
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCalls("database_records", 2);
+    expect(await dbTabs()).toEqual(["orders · Example direct"]);
+  });
+
+  it("closes the tabs of a connection that is disconnected, and keeps the connection's row (A-43)", async () => {
+    await openShop({ database_disconnect: null });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await dbRightPress("p1");
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_disconnect")).toEqual([{ id: "p1" }]);
+    await expect($('.orca-tab[data-database="true"]')).not.toExist();
+    await expect($(".orca-database-tab")).not.toExist();
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+  });
+
+  it("opens the SQL of a database from its menu as a tab of its own, with no call and the field focused, and runs it (A-43)", async () => {
+    await openShop({ database_sql: databaseSqlResult(["n"], [[databaseCell("1", "number")]]) });
+    await dbRightPress("p1/d/shop");
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["新規クエリ", "データベースを閉じる"]);
+    await $('.menu button[role="menuitem"]:first-child').click();
+    await waitForCount(".orca-database-tab [data-key='sql-input']", 1);
+    expect(await dbTabs()).toEqual(["SQL · shop · Example direct"]);
+    await expect($(".orca-database-tab .database-work-title")).toHaveText("shop");
+    expect(await count(".orca-database-tab .database-tab")).toBe(0);
+    expect(await browser.execute(() => (document.activeElement as HTMLElement | null)?.dataset.key)).toBe("sql-input");
+    expect(await callsOf("database_sql")).toEqual([]);
+    expect(await callsOf("database_records")).toEqual([]);
+    await typeSql("select 1");
+    await $('.orca-database-tab [data-key="run"]').click();
+    expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    // A second new query is a second tab, with its own empty field.
+    await dbRightPress("p1/d/shop");
+    await $('.menu button[role="menuitem"]:first-child').click();
+    await browser.waitUntil(async () => (await dbTabs()).length === 2, { timeoutMsg: "the second tab never opened" });
+    expect(await count(".orca-database-tab .database-grid")).toBe(0);
+    expect(await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-database-tab [data-key='sql-input']")!.value)).toBe("");
+  });
+
+  it("splits a database tab from the work pane like any tab (A-43, A-17)", async () => {
+    await openShop();
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    const [id] = (await dbTabId()) as string[];
+    await rightClickTab(id);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    await pickItem("右に分割");
+    const asked = (await callsOf("orca_panes")).map((c) => (c as { op: { kind?: string; tab?: string; edge?: string } | null }).op);
+    expect(asked).toContainEqual({ kind: "move", tab: id, pane: "p1", edge: "right" });
   });
 
   it("reads the history and the files of a commit in the environment of the worktree's row, whatever target the screen holds (A-27)", async () => {

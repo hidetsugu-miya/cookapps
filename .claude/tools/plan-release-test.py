@@ -403,7 +403,7 @@ class Next(unittest.TestCase):
         out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual([i["number"] for i in out["start"]], [4, 5, 1, 2, 3])
 
-    def test_needs_owner_blocked_and_held_issues_are_reported_not_started(self):
+    def test_blocked_and_held_issues_are_reported_not_started(self):
         issues = [
             mk(1, ["point:2"]),
             mk(2, ["point:2", "needs:owner"]),
@@ -411,8 +411,8 @@ class Next(unittest.TestCase):
             mk(4, ["point:2"]),
         ]
         out = pr.build_next(issues, {4}, frozenset(), None)
-        self.assertEqual([i["number"] for i in out["start"]], [1])
-        self.assertEqual([i["number"] for i in out["needs_owner"]], [2])
+        self.assertEqual([i["number"] for i in out["start"]], [1, 2])
+        self.assertNotIn("needs_owner", out)
         self.assertEqual(out["blocked"], [{"number": 3, "title": "issue 3", "blocked_by": [1]}])
         self.assertEqual([(i["number"], i["reason"]) for i in out["held"]], [(4, "pull request open")])
 
@@ -522,11 +522,10 @@ class Next(unittest.TestCase):
         self.assertEqual([i["number"] for i in out["start"]], [2, 1, 3])
         self.assertEqual(out["waits_for_session"], [])
 
-    def test_a_session_issue_in_hand_needs_owner_or_held_keeps_its_own_list(self):
-        issues = [mk(1, ["point:3", "session"]), mk(2, ["point:3", "session", "needs:owner"]), mk(3, ["point:3", "session"])]
+    def test_a_session_issue_in_hand_or_held_keeps_its_own_list(self):
+        issues = [mk(1, ["point:3", "session"]), mk(3, ["point:3", "session"])]
         out = pr.build_next(issues, {3}, frozenset({1}), None)
         self.assertEqual([i["number"] for i in out["in_progress"]], [1])
-        self.assertEqual([i["number"] for i in out["needs_owner"]], [2])
         self.assertEqual([i["number"] for i in out["held"]], [3])
         self.assertEqual(out["waits_for_session"], [])
 
@@ -547,10 +546,10 @@ class Next(unittest.TestCase):
         self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1])
 
     def test_a_parent_is_in_no_list_and_its_parts_start(self):
-        issues = [mk(1, ["point:5"], sub=2), mk(2, ["point:3"], parent=1), mk(3, ["point:3", "needs:owner"], sub=1), mk(4, ["point:2"])]
+        issues = [mk(1, ["point:5"], sub=2), mk(2, ["point:3"], parent=1), mk(3, ["point:3"], sub=1), mk(4, ["point:2"])]
         out = pr.build_next(issues, {1}, frozenset({3}), {"order": [1, 2, 4]})
         self.assertEqual([i["number"] for i in out["start"]], [2, 4])
-        self.assertEqual((out["in_progress"], out["held"], out["needs_owner"], out["blocked"]), ([], [], [], []))
+        self.assertEqual((out["in_progress"], out["held"], out["blocked"]), ([], [], []))
 
     def test_a_closed_parent_is_no_change_and_does_not_stop_the_night_run(self):
         issues = [mk(1, ["point:8"], sub=2, state="closed", closed="2026-11-06T10:00:00Z"), mk(2, ["point:2"])]
@@ -570,25 +569,25 @@ class Next(unittest.TestCase):
 
 
 class Unsplit(unittest.TestCase):
-    def test_a_big_issue_with_no_sub_issue_no_parent_no_whole_and_no_needs_owner_is_unsplit(self):
+    def test_a_big_issue_with_no_sub_issue_no_parent_and_no_whole_is_unsplit(self):
         issues = [
             mk(1, ["point:5"]),
             mk(2, ["point:8", "bug"]),
             mk(3, ["point:3"]),
-            mk(4, ["point:5", "needs:owner"]),
             mk(5, ["point:8"], sub=3),
             mk(6, ["point:5"], state="closed"),
             mk(7, ["point:5", "whole"]),
             mk(8, ["point:5"], parent=5),  # a part: split refuses an issue that has a parent
         ]
         self.assertEqual(numbers(pr.unsplit(issues)), [1, 2])
+        self.assertEqual(numbers(pr.unsplit([mk(9, ["point:5", "needs:owner"])])), [9])
 
     def test_an_issue_in_hand_is_not_unsplit(self):
         issues = [mk(1, ["point:5"]), mk(2, ["point:8"]), mk(3, ["point:5"]), mk(4, ["point:5"])]
         self.assertEqual(numbers(pr.unsplit(issues, pr_closing={2}, mine={3})), [1, 4])
 
-    def test_nothing_is_unsplit_once_every_big_issue_is_split_or_waits_for_the_owner(self):
-        self.assertEqual(pr.unsplit([mk(1, ["point:2"]), mk(2, ["point:5", "needs:owner"])]), [])
+    def test_nothing_is_unsplit_once_every_big_issue_is_split(self):
+        self.assertEqual(pr.unsplit([mk(1, ["point:2"]), mk(2, ["point:5", "whole"])]), [])
 
 
 class Prune(unittest.TestCase):
@@ -1666,11 +1665,9 @@ class Hook(unittest.TestCase):
             with open(stub, "w") as f:
                 f.write("#!/bin/sh\necho STUB\n")
 
-    def test_issue_create_and_needs_owner_removal_point_to_issue_plan(self):
+    def test_issue_create_points_to_issue_plan(self):
         for cmd in [
             "gh issue create --title x",
-            "gh issue edit 5 --remove-label needs:owner",
-            'gh issue edit 5 --remove-label "bug,needs:owner"',
             "cd x && gh issue create",
         ]:
             self.assertIn("issue-plan", self.run_hook(cmd), cmd)
@@ -1679,6 +1676,8 @@ class Hook(unittest.TestCase):
         for cmd in [
             "ls -la",
             "gh issue edit 5 --add-label bug",
+            "gh issue edit 5 --remove-label needs:owner",
+            'gh issue edit 5 --remove-label "bug,needs:owner"',
             'echo "gh pr merge"',
             "echo 'gh issue create'",
             "printf '%s' 'gh pr merge --merge' | jq -Rs .",

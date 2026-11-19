@@ -38,7 +38,7 @@ Use `graphify affected` when it is available (the steps of `graphify-conventions
 
 - Do not return a candidate with the same point as one in the list "of existing issues, closed proposals and Discussions" that the launch prompt gives.
 - Do not return a candidate that is out of range: one that becomes a new feature or requirement, `docs/` and the README, versions and releases, and the settings of launchd.
-- Divide the candidates into 3 kinds. The caller uses it to separate what the AI may decide from what goes to the owner (an issue with `needs:owner`).
+- Divide the candidates into 3 kinds. The caller uses it to separate what the AI may decide from what goes to the owner (put to the owner in a session).
   - A fix of a definition that has drifted from the current code or requirements, a clean-up that does not change behavior, and a change that makes a gate stronger
   - A change that meets any of these: it changes behavior into a form that the requirements do not have, it changes a rule that is written with `at the owner's instruction`, or it loosens a mechanism that stops things (a hook, `pre-git.sh`, `run-ci.sh`, a guard, the severities of the review, the rule of who merges the Release PR). Write the condition that it meets in 「分類」
   - A change for which two or more directions remain and that cannot be settled. Write up to 2 options

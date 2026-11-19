@@ -87,6 +87,23 @@ export function confirmDelete(button: Element, name: string, onConfirm: () => vo
   confirmPop(button, `${name} を削除`, "削除しますか？", `${name} を完全に削除します。元に戻せません。`, "削除", onConfirm, " pop-confirm");
 }
 
+// The confirmation before the changes of a file or folder are put back as HEAD has them (A-44). `fresh` is whether the row's mark is `new`: a file that is new (untracked or added) is deleted for good, and so is every file of a folder that is new. A folder that is `changed` may hold new files too, so the words say that they go.
+export function confirmRevert(button: Element, name: string, folder: boolean, fresh: boolean, onConfirm: () => void) {
+  const body = folder
+    ? fresh
+      ? `${name} の中の変更は、すべて新しいファイルです。元に戻すと完全に削除します。元に戻せません。`
+      : `${name} の中の変更をすべて捨てて、HEAD の状態に戻します。新しいファイルは完全に削除します。元に戻せません。`
+    : fresh
+      ? `${name} は新しいファイルです。元に戻すと完全に削除します。元に戻せません。`
+      : `${name} の変更を捨てて、HEAD の状態に戻します。元に戻せません。`;
+  confirmPop(button, `${name} の変更を元に戻す`, "変更を元に戻しますか？", body, "元に戻す", onConfirm, " pop-confirm");
+}
+
+// The confirmation before the changes of a table that were not confirmed with ✓ are dropped, when the screen leaves the table (D-10): `count` is how many changes there are.
+export function confirmDiscardChanges(button: Element, count: number, onConfirm: () => void) {
+  confirmPop(button, "変更を捨てる", "変更を捨てますか？", `確定していない ${count} 件の変更は、データベースに送られていません。移ると、すべて消えます。`, "捨てる", onConfirm, " pop-confirm");
+}
+
 // The confirmation before several files and folders are deleted for good at once (A-18): `count` is how many rows are selected.
 export function confirmDeleteMany(button: Element, count: number, onConfirm: () => void) {
   confirmPop(button, `${count} 件を削除`, "削除しますか？", `${count} 件を完全に削除します。元に戻せません。`, "削除", onConfirm, " pop-confirm");

@@ -83,6 +83,19 @@ pub enum OrcaStatus {
     Idle,
 }
 
+/// A subagent at work, as the list names it (A-8): both texts are from outside, so the screen draws them as text.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaSubagent {
+    /// Its `agentType`, the first line that has text; empty when Orca gave none.
+    pub name: String,
+    /// Its `description`, the first line that has text; `None` when Orca gave none.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub task: Option<String>,
+}
+
 /// One top-level agent of a live terminal.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -98,6 +111,9 @@ pub struct OrcaRow {
     pub latest: Option<String>,
     /// How many of the agent's subagents are at work (A-8); 0 when it has none.
     pub subagents: u32,
+    /// The subagents at work, each with its name and what it does (A-8), in the order Orca lists them; `None` when none works (`subagents` is their number).
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub subagent_list: Option<Vec<OrcaSubagent>>,
     /// The command of the shell the agent is running (A-8): `Some` while its last tool is `Bash` and its main agent works (the command's first line, empty when Orca gave none); `None` otherwise.
     #[cfg_attr(test, ts(optional = nullable))]
     pub shell: Option<String>,
@@ -637,15 +653,32 @@ fn project_key_of(worktree: &Value) -> Option<String> {
     }
 }
 
-/// How many of an agent's `subagents` are at work: the items whose `state` is `working`. Orca lists them only while they run; an absent or malformed list counts none.
-fn working_subagents(agent: &Value) -> u32 {
-    let count = agent["subagents"]
+/// The first line of a text from outside that has text, its control characters replaced by spaces, its hidden characters (zero-width, bidirectional formatting and tag ones, `orca_handoff::without_hidden`) taken out and cut to `LINE_LIMIT` characters: it is shown as text, never as markup.
+fn plain_line(text: &str) -> String {
+    let spaced: String = first_line(text)
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    crate::orca_handoff::without_hidden(&spaced)
+        .trim()
+        .to_owned()
+}
+
+/// The subagents of an agent that are at work: the items of its `subagents` whose `state` is `working`, with the name (`agentType`) and the task (`description`) Orca gave (A-8). Orca lists them only while they run; an absent or malformed list gives none.
+fn working_subagents(agent: &Value) -> Vec<OrcaSubagent> {
+    agent["subagents"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|s| s["state"] == "working")
-        .count();
-    u32::try_from(count).unwrap_or(u32::MAX)
+        .map(|s| OrcaSubagent {
+            name: text_of(s, "agentType").map(plain_line).unwrap_or_default(),
+            task: text_of(s, "description")
+                .map(plain_line)
+                .filter(|t| !t.is_empty()),
+        })
+        .collect()
 }
 
 /// The command of the shell an agent is running, for the badge of its row (A-8): `Some` only when its last tool (`toolName`) is `Bash` and its `mainAgent.state` is `working`.
@@ -657,16 +690,7 @@ fn running_shell(agent: &Value) -> Option<String> {
     }
     let input = &agent["toolInput"];
     let command = input.as_str().or_else(|| input["command"].as_str());
-    Some(
-        command
-            .and_then(first_line)
-            .unwrap_or_default()
-            .chars()
-            .map(|c| if c.is_control() { ' ' } else { c })
-            .collect::<String>()
-            .trim()
-            .to_owned(),
-    )
+    Some(command.map(plain_line).unwrap_or_default())
 }
 
 /// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first. The worktrees of an SSH host have no row (A-6 counts none of their sessions).
@@ -719,6 +743,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                 continue;
             }
             let group = group_of(agent["state"].as_str().unwrap_or_default());
+            let subagents = working_subagents(agent);
             let updated = ms_of(agent, "updatedAt");
             let pane_key = text_of(agent, "paneKey");
             let terminal = pane_key.and_then(|pane| handles.iter().find(|(key, ..)| key == pane));
@@ -733,7 +758,8 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                         .to_owned(),
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
                     latest: latest_of(agent),
-                    subagents: working_subagents(agent),
+                    subagents: u32::try_from(subagents.len()).unwrap_or(u32::MAX),
+                    subagent_list: (!subagents.is_empty()).then_some(subagents),
                     shell: running_shell(agent),
                     at_ms: if group == OrcaGroup::Done {
                         updated
@@ -2526,6 +2552,7 @@ mod tests {
                 line: "Write the docs".into(),
                 latest: Some("Write the docs".into()),
                 subagents: 0,
+                subagent_list: None,
                 shell: None,
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
@@ -2821,6 +2848,75 @@ mod tests {
     }
 
     #[test]
+    fn a_row_names_the_subagents_that_work_and_what_they_do() {
+        let list = |subagents: Value| {
+            let mut a = agent("tabA:leaf1", "working");
+            a["subagents"] = subagents;
+            let row = rows_of(&ps(&[a]), &terminals()).remove(0);
+            (row.subagents, row.subagent_list)
+        };
+        let sub = |name: &str, task: Option<&str>| OrcaSubagent {
+            name: name.into(),
+            task: task.map(Into::into),
+        };
+        // The name is `agentType` and the task is `description`, in the order Orca lists them; one that is not at work is left out.
+        assert_eq!(
+            list(json!([
+                {"id": "a", "state": "working", "agentType": "code-implementer", "description": "Run aggregate CI on cleanup branch"},
+                {"id": "b", "state": "done", "agentType": "ci-verifier", "description": "finished"},
+                {"id": "c", "state": "working", "agentType": "code-verifier"},
+            ])),
+            (
+                2,
+                Some(vec![
+                    sub(
+                        "code-implementer",
+                        Some("Run aggregate CI on cleanup branch")
+                    ),
+                    sub("code-verifier", None),
+                ])
+            )
+        );
+        // A name or a task Orca did not give (or gave blank, or of another type): the name is empty, the task is none, and the subagent still counts.
+        for given in [
+            json!({"state": "working"}),
+            json!({"state": "working", "agentType": "", "description": "  "}),
+            json!({"state": "working", "agentType": 3, "description": ["x"]}),
+            json!({"state": "working", "agentType": null, "description": null}),
+        ] {
+            assert_eq!(
+                list(json!([given.clone()])),
+                (1, Some(vec![sub("", None)])),
+                "{given}"
+            );
+        }
+        // The first line that has text, its control characters replaced by spaces, cut to LINE_LIMIT characters: it is text from outside, shown as text.
+        let (_, named) = list(json!([{
+            "state": "working",
+            "agentType": "\n  code\treviewer\u{1b}[0m \n second",
+            "description": "\n<b>Fix</b> the \"parser\"\u{7}\nsecond line",
+        }]));
+        let named = named.unwrap();
+        assert_eq!(named[0].name, "code reviewer [0m");
+        assert_eq!(named[0].task.as_deref(), Some("<b>Fix</b> the \"parser\""));
+        let long = list(json!([{"state": "working", "agentType": "あ".repeat(LINE_LIMIT + 50), "description": "い".repeat(LINE_LIMIT + 50)}])).1.unwrap();
+        assert_eq!(long[0].name.chars().count(), LINE_LIMIT);
+        assert_eq!(long[0].task.as_ref().unwrap().chars().count(), LINE_LIMIT);
+        // None at work, none listed.
+        for none in [
+            json!([]),
+            json!([{"state": "done", "agentType": "x"}]),
+            json!([null, 3, "working", ["working"]]),
+            json!("working"),
+            Value::Null,
+        ] {
+            assert_eq!(list(none.clone()), (0, None), "{none}");
+        }
+        let bare = agent("tabA:leaf1", "working");
+        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].subagent_list, None);
+    }
+
+    #[test]
     fn a_row_runs_a_shell_only_while_its_last_tool_is_bash_and_the_main_agent_works() {
         let shell = |tool: Value, input: Value, main: Value| {
             let mut a = agent("tabA:leaf1", "working");
@@ -2901,6 +2997,15 @@ mod tests {
         // An agent with no tool at all has none.
         let bare = agent("tabA:leaf1", "working");
         assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].shell, None);
+    }
+
+    #[test]
+    fn a_line_from_outside_loses_its_hidden_characters() {
+        assert_eq!(
+            plain_line("a\u{200b}b\u{202e}c\u{2066}d\u{2069}e\u{2060}f\u{feff}g\u{e0041}h\u{7}i"),
+            "abcdefgh i"
+        );
+        assert_eq!(plain_line("\u{200b}\u{202e}"), "");
     }
 
     #[test]
@@ -3287,6 +3392,7 @@ mod tests {
                 line: String::new(),
                 latest: None,
                 subagents: 0,
+                subagent_list: None,
                 shell: None,
                 at_ms: 0,
                 handle: None,

@@ -988,13 +988,15 @@ describe("orca: projects", () => {
   const projectNames = () => textsOf("#orca-feed .orca-project-name");
   const projectStatuses = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project .orca-ic")].map((i) => i.dataset.status));
 
-  it("starts with the projects: a status icon, the name and the number of sessions", async () => {
+  it("starts with the projects: a status icon and the name, and no number of sessions", async () => {
     await openOrca(withTerminals());
     // The working projects come first (example-app, example-web), then the rest as the read lists them.
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
     // example-app has a running agent and a shell, example-api a waiting agent, example-lib a done one, example-idle nothing.
     expect(await projectStatuses()).toEqual(["working", "working", "question", "done", "idle"]);
-    expect(await textsOf("#orca-feed .orca-n")).toEqual(["2", "1", "1", "1"]);
+    // The number of sessions is not drawn on the row (the counts are on the session rows).
+    expect(await count("#orca-feed .orca-n")).toBe(0);
+    expect(await textsOf("#orca-feed .orca-project")).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
   });
 
   it("puts the stopped projects (a session, not working) under the working ones and above those with no session, each group in the order of the read", async () => {
@@ -1202,7 +1204,7 @@ describe("orca: projects", () => {
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
     });
 
-    it("draws a badge with a robot and the number of subagents at work at the right end of a session row, none for a row with no subagent, and none on the tab", async () => {
+    it("draws a robot icon and the number of subagents at work at the right end of a session row, with no chip, none for a row with no subagent, and none on the tab", async () => {
       const long = "長い題名".repeat(30);
       const read = (subagents: number) => orcaOverview([orcaRow("example-app", "feat/a", long, { subagents }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
       const badges = () =>
@@ -1229,6 +1231,9 @@ describe("orca: projects", () => {
       });
       expect(box.badge.right).toBeLessThanOrEqual(box.row.right);
       expect(box.badge.left).toBeGreaterThanOrEqual(box.title.right);
+      // An icon and a number, not a chip: no background, and no command count while the row has no command.
+      expect(await browser.execute(() => getComputedStyle(document.querySelector("#orca-feed .orca-session-subagents")!).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+      expect(await count("#orca-feed .orca-session-shell")).toBe(0);
       // A session with subagents at work shows none on its tab.
       await sessionOf(claudeTab("example-app")).click();
       expect(await tabTitles()).toEqual([long]);
@@ -1241,61 +1246,132 @@ describe("orca: projects", () => {
       await mock("orca_overview", read(0));
       await showAgain();
       await browser.waitUntil(async () => (await count("#orca-feed .orca-session-subagents")) === 0, { timeoutMsg: "the row did not drop the badge" });
+      // A row with no kind has no counts at all.
+      expect(await count("#orca-feed .orca-session-counts")).toBe(0);
     });
 
-    it("draws a black badge with `>_` for the shell a session runs, left of the subagents' badge, with the command as its title and label, none for a row with no shell, and none on the tab", async () => {
+    it("draws a play icon and the number 1 for the command a session runs, right of the robot's count, with the command as its title and label, none for a row with no command, and none on the tab", async () => {
       const command = "<b>cargo</b> test --all & echo \"x\"";
       const read = (shell: string | null, subagents = 2) => orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { shell, subagents }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
-      const badges = () =>
+      const counts = () =>
         browser.execute(() =>
           [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].map((row) => {
-            const badge = row.querySelector<HTMLElement>(".orca-session-shell");
-            return [row.dataset.session, badge?.title ?? null, badge?.getAttribute("aria-label") ?? null, badge?.textContent ?? null, badge?.querySelector("svg") != null, badge?.children.length ?? null];
+            const count = row.querySelector<HTMLElement>(".orca-session-shell");
+            return [row.dataset.session, count?.title ?? null, count?.getAttribute("aria-label") ?? null, count?.textContent ?? null, count?.querySelector("svg") != null, count?.querySelectorAll("*").length ?? null];
           }),
         );
       await openOrca(read(command));
       await project("example-api").click();
-      // The command is text of the title and the label: no markup of it is drawn.
-      expect(await badges()).toEqual([
-        [claudeTab("example-app"), `シェルを実行中: ${command}`, `シェルを実行中: ${command}`, "", true, 1],
+      // The command is text of the title and the label: no markup of it is drawn. The number is the commands that run: one.
+      expect(await counts()).toEqual([
+        [claudeTab("example-app"), `シェルを実行中: ${command}`, `シェルを実行中: ${command}`, "1", true, 2],
         [claudeTab("example-api"), null, null, null, false, null],
       ]);
-      // It is black, and stands left of the subagents' badge, which keeps the right end of the row.
+      // It is no chip, and stands right of the robot's count, at the right end of the row.
       const look = await browser.execute(() => {
         const row = document.querySelector("#orca-feed .orca-session")!;
         const shell = row.querySelector<HTMLElement>(".orca-session-shell")!;
         const robot = row.querySelector<HTMLElement>(".orca-session-subagents")!;
         const title = row.querySelector<HTMLElement>(".orca-session-title")!;
-        return { background: getComputedStyle(shell).backgroundColor, shellRight: shell.getBoundingClientRect().right, robotLeft: robot.getBoundingClientRect().left, robotRight: robot.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right, titleRight: title.getBoundingClientRect().right, shellLeft: shell.getBoundingClientRect().left };
+        return { background: getComputedStyle(shell).backgroundColor, shellLeft: shell.getBoundingClientRect().left, shellRight: shell.getBoundingClientRect().right, robotRight: robot.getBoundingClientRect().right, robotLeft: robot.getBoundingClientRect().left, rowRight: row.getBoundingClientRect().right, titleRight: title.getBoundingClientRect().right };
       });
-      expect(look.background).toBe("rgb(27, 27, 27)");
-      expect(look.shellRight).toBeLessThanOrEqual(look.robotLeft);
-      expect(look.robotRight).toBeLessThanOrEqual(look.rowRight);
-      expect(look.shellLeft).toBeGreaterThanOrEqual(look.titleRight);
-      // A session that runs a shell shows none on its tab.
+      expect(look.background).toBe("rgba(0, 0, 0, 0)");
+      expect(look.robotRight).toBeLessThanOrEqual(look.shellLeft);
+      expect(look.shellRight).toBeLessThanOrEqual(look.rowRight);
+      expect(look.robotLeft).toBeGreaterThanOrEqual(look.titleRight);
+      // A session that runs a command shows none on its tab.
       await sessionOf(claudeTab("example-app")).click();
       expect(await count("#orca-work .orca-session-shell")).toBe(0);
-      // With no subagent, the badge is at the right end by itself.
+      // With no subagent, the count is at the right end by itself, and the robot's is not drawn.
       await mock("orca_overview", read(command, 0));
       await showAgain();
-      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-subagents")) === 0, { timeoutMsg: "the row did not drop the subagents' badge" });
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-subagents")) === 0, { timeoutMsg: "the row did not drop the robot's count" });
       expect(await count("#orca-feed .orca-session-shell")).toBe(1);
-      // A shell that Orca gave no command for has the badge with no command; a read with no shell takes it away.
+      const alone = await browser.execute(() => {
+        const row = document.querySelector("#orca-feed .orca-session")!;
+        const { left, right } = row.querySelector(".orca-session-shell")!.getBoundingClientRect();
+        return { left, right, titleRight: row.querySelector(".orca-session-title")!.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right };
+      });
+      expect(alone.right).toBeLessThanOrEqual(alone.rowRight);
+      expect(alone.left).toBeGreaterThanOrEqual(alone.titleRight);
+      // A command that Orca gave no text for has the count with no command; a read with no command takes it away, and the row has no counts left.
       await mock("orca_overview", read(""));
       await showAgain();
-      await browser.waitUntil(async () => (await badges())[0][1] === "シェルを実行中", { timeoutMsg: "the row did not draw the shell with no command" });
-      expect((await badges())[0][2]).toBe("シェルを実行中");
-      await mock("orca_overview", read(null));
+      await browser.waitUntil(async () => (await counts())[0][1] === "シェルを実行中", { timeoutMsg: "the row did not draw the command with no text" });
+      expect((await counts())[0][2]).toBe("シェルを実行中");
+      await mock("orca_overview", read(null, 0));
       await showAgain();
-      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-shell")) === 0, { timeoutMsg: "the row did not drop the shell badge" });
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-shell")) === 0, { timeoutMsg: "the row did not drop the command's count" });
+      expect(await count("#orca-feed .orca-session-counts")).toBe(0);
     });
 
-    it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
+    it("opens the breakdown of a session with the arrow at the left of its row: a line for each subagent (its name and its task) and for the command with the icon of its kind, closed at first, as text, kept across a read, and none for a session with no work", async () => {
+      const task = "Run <b>aggregate</b> CI & \"x\"";
+      const command = "<i>cargo</i> test";
+      const agents = [{ name: "code-implementer", task }, { name: "ci-verifier" }, { name: "" }];
+      const read = (extra: Partial<Row>) => orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", extra), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      const toggle = (repo: string) => $(`#orca-feed .orca-session-arrow[data-key="works:${claudeTab(repo)}"]`);
+      const lines = () =>
+        browser.execute(() =>
+          [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-work")].map((l) => [l.classList.contains("orca-work-agent") ? "agent" : "shell", l.querySelector(".orca-work-name")!.textContent, l.querySelector(".orca-work-task")?.textContent ?? null, l.querySelector("svg") != null, l.querySelector(".orca-work-name")!.getAttribute("title"), l.querySelectorAll("b, i").length]),
+        );
+      await openOrca(read({ subagents: 3, subagentList: agents, shell: command }));
+      await project("example-api").click();
+      // Closed at first; a session with no work has no arrow.
+      await expect(toggle("example-app")).toHaveAttribute("aria-expanded", "false");
+      await expect(toggle("example-app")).toHaveAttribute("aria-label", "作業の内訳を開く");
+      expect(await count("#orca-feed .orca-session-arrow")).toBe(1);
+      expect(await count("#orca-feed .orca-work")).toBe(0);
+      // The arrow is at the left of the row, before the status icon.
+      const left = await browser.execute(() => [document.querySelector(".orca-session-arrow")!.getBoundingClientRect().right, document.querySelector('.orca-session[data-session] .orca-ic')!.getBoundingClientRect().left]);
+      expect(left[0]).toBeLessThanOrEqual(left[1]);
+      await toggle("example-app").click();
+      await expect(toggle("example-app")).toHaveAttribute("aria-expanded", "true");
+      await expect(toggle("example-app")).toHaveAttribute("aria-label", "作業の内訳を閉じる");
+      // The subagents in Orca's order, then the command; each has its icon; the texts are text, not markup; a subagent with no name has the plain word; a task is not drawn for one with none.
+      expect(await lines()).toEqual([
+        ["agent", "code-implementer", task, true, `code-implementer: ${task}`, 0],
+        ["agent", "ci-verifier", null, true, "ci-verifier", 0],
+        ["agent", "サブエージェント", null, true, "サブエージェント", 0],
+        ["shell", command, null, true, command, 0],
+      ]);
+      // The arrow selects nothing, and the tab of the work pane has no breakdown.
+      await expect(sessionOf(claudeTab("example-app"))).toHaveAttribute("aria-pressed", "false");
+      expect(await count("#orca-work .orca-work")).toBe(0);
+      // A read that changes a line draws the breakdown again, still open.
+      await mock("orca_overview", read({ subagents: 1, subagentList: [{ name: "ci-verifier", task: "Check it" }], shell: null }));
+      await showAgain();
+      await browser.waitUntil(async () => (await lines()).length === 1, { timeoutMsg: "the breakdown did not follow the read" });
+      expect(await lines()).toEqual([["agent", "ci-verifier", "Check it", true, "ci-verifier: Check it", 0]]);
+      await expect(toggle("example-app")).toHaveAttribute("aria-expanded", "true");
+      // A command alone is a breakdown too, and one Orca gave no text for has the plain word.
+      await mock("orca_overview", read({ subagents: 0, shell: "" }));
+      await showAgain();
+      await browser.waitUntil(async () => (await lines())[0]?.[0] === "shell", { timeoutMsg: "the breakdown did not draw the command" });
+      expect(await lines()).toEqual([["shell", "シェルを実行中", null, true, "シェルを実行中", 0]]);
+      // The arrow closes it.
+      await toggle("example-app").click();
+      await expect(toggle("example-app")).toHaveAttribute("aria-expanded", "false");
+      expect(await count("#orca-feed .orca-work")).toBe(0);
+      // With no work left the arrow goes; the session that left the list and came back starts closed.
+      await toggle("example-app").click();
+      await mock("orca_overview", read({ subagents: 0, shell: null }));
+      await showAgain();
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session-arrow")) === 0, { timeoutMsg: "the session kept its arrow" });
+      expect(await count("#orca-feed .orca-work")).toBe(0);
+      await mock("orca_overview", orcaOverview([orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees()));
+      await showAgain();
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-session")) === 1, { timeoutMsg: "the session did not leave" });
+      await mock("orca_overview", read({ subagents: 1, subagentList: [{ name: "ci-verifier" }] }));
+      await showAgain();
+      await expect(toggle("example-app")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("closes with the arrow of the selected project and opens again with it, keeping the tabs and the work pane", async () => {
       await openOrca(withTerminals());
       await mock("orca_terminal_read", ["$ ls"]);
       await project("example-app").click();
       await expect($(".orca-term")).toBeDisplayed();
-      const numbers = await textsOf("#orca-feed .orca-n");
       await arrow("example-app").click();
       await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "false");
       await expect($("#orca-feed .orca-session")).not.toExist();
@@ -1303,8 +1379,6 @@ describe("orca: projects", () => {
       expect(await tabTitles()).toEqual(["Write the docs", "zsh"]);
       await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
       await expect($(".orca-term")).toBeDisplayed();
-      // The number stays a number.
-      expect(await textsOf("#orca-feed .orca-n")).toEqual(numbers);
       await arrow("example-app").click();
       await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
       expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
@@ -3588,6 +3662,22 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       ["studio-2", "Studio"],
       ["mac-2", null],
     ]);
+  });
+
+  it("puts the chip at the right end of the project row, after the name, and draws no number of sessions on any row", async () => {
+    await openOrca(mixed());
+    await waitForCount("#orca-feed .orca-project", 4);
+    const box = await browser.execute(() => {
+      const row = document.querySelector<HTMLElement>('#orca-feed .orca-project[data-key="proj_studio-1"]') ?? [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].find((r) => r.querySelector(".orca-env"))!;
+      const r = (e: Element) => e.getBoundingClientRect();
+      const chip = row.querySelector(".orca-env")!;
+      return { chipLeft: r(chip).left, chipRight: r(chip).right, nameRight: r(row.querySelector(".orca-project-name")!).right, rowRight: r(row).right, padding: parseFloat(getComputedStyle(row).paddingRight) };
+    });
+    expect(box.chipLeft).toBeGreaterThanOrEqual(box.nameRight);
+    expect(box.chipRight).toBeLessThanOrEqual(box.rowRight);
+    // It is the last thing on the row: the free room of the row is left of it.
+    expect(box.rowRight - box.padding - box.chipRight).toBeLessThan(2);
+    expect(await count("#orca-feed .orca-n")).toBe(0);
   });
 
   it("puts no chip on the session rows of Studio or of this machine, and on no tab", async () => {

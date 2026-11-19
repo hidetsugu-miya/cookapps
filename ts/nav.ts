@@ -3,10 +3,10 @@ import { closePopup, renderGoogleCard } from "./accounts.js";
 import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
 import { closeDetail } from "./calendar-detail.js";
-import { showDatabase } from "./database.js";
+import { databaseChanges, discardDatabaseChanges, showDatabase } from "./database.js";
 import { closeDatabaseForm } from "./database-form.js";
 import { hideFormation, showFormation } from "./formation.js";
-import { closeHint } from "./hint.js";
+import { closeHint, confirmDiscardChanges } from "./hint.js";
 import { pauseLsp } from "./orca-lsp.js";
 import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
@@ -75,6 +75,15 @@ export function showThreadScreen() {
 
 // `tab` is the settings tab to open on (Google when none is named).
 export function setScreen(name: Screen, tab?: SettingsTab) {
+  // The changes that the records tab gathered and did not send go when the database screen is left, so it asks first (D-10).
+  const gathered = screen === "database" && name !== "database" ? databaseChanges() : 0;
+  if (gathered > 0) {
+    confirmDiscardChanges($(`nav-${name}`), gathered, () => {
+      discardDatabaseChanges();
+      setScreen(name, tab);
+    });
+    return;
+  }
   screen = name;
   closeHint();
   closeDetail();

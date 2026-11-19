@@ -668,6 +668,7 @@ mod tests {
             up_port,
             &format!("touch '{}'\nsleep 30", up_marker.display()),
             timing,
+            None,
         )
         .await
         .unwrap();
@@ -682,6 +683,7 @@ mod tests {
                 down_marker.display()
             ),
             timing,
+            None,
         )
         .await
         .unwrap();
