@@ -66,6 +66,9 @@ jobs:
           mkdir -p e2e-logs
           npm run e2e:build 2>&1 | tee e2e-logs/build.log
       - name: Run E2E
+        # The hosted runner has 3 vCPUs and 7 GB, and the six apps of wdio at once (`maxInstances` of `wdio.conf.ts`) stopped the WebView from answering: 9 of 21 specs started in 10 minutes, with 104 script timeouts (run 44434378578). Two apps at once is the next measurement.
+        env:
+          E2E_MAX_INSTANCES: 2
         run: npm run e2e 2>&1 | tee e2e-logs/wdio.log
       # `logs/` is where @wdio/tauri-service writes its log files (the default of `outputDir`), so a failure can be followed to the app's own output.
       - name: Keep the logs

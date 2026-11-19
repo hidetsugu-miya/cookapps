@@ -57,10 +57,15 @@ if (only !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(only)) throw new Error(`E
 const onlySpec = only === undefined ? undefined : `./e2e/specs/${only}.e2e.ts`;
 if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec} does not exist`);
 
+// `E2E_MAX_INSTANCES` sets how many of the six apps run at once, for a machine with fewer cores than this one (`.github/workflows/e2e.yml` sets 2); unset, all six run.
+const maxInstancesEnv = process.env.E2E_MAX_INSTANCES;
+if (maxInstancesEnv !== undefined && !/^[1-9][0-9]*$/.test(maxInstancesEnv)) throw new Error(`E2E_MAX_INSTANCES must be an integer of 1 or more, got "${maxInstancesEnv}"`);
+const maxInstances = maxInstancesEnv === undefined ? 6 : Number(maxInstancesEnv);
+
 export const config = {
   runner: "local",
   specs: ["./e2e/specs/**/*.e2e.ts"],
-  maxInstances: 6,
+  maxInstances,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   capabilities:
     onlySpec !== undefined

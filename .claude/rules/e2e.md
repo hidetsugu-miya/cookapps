@@ -111,6 +111,7 @@ After `e2e:build`, `run-e2e.sh` starts `run-ci.sh` of its own checkout in the ba
 One run starts six apps, one per capability, and `onPrepare` in `wdio.conf.ts` gives each app a free WebDriver port.
 Each checkout has its own E2E binary and `e2e/dist`.
 So runs from the main checkout and from any worktree can overlap, and there is no need to wait for the other.
+The six apps run at once by default; `E2E_MAX_INSTANCES` (an integer of 1 or more, read by `wdio.conf.ts`) lowers that for a machine with fewer cores, and `e2e.yml` sets 2 for the hosted runner.
 Do not set a fixed port: the service waits for any WebDriver server on its port, so a second run on the same port drives the first run's app and reports on the wrong code.
 
 ```text
