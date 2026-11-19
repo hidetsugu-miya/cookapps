@@ -14,7 +14,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import unittest.mock
 
 here = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("plan_release", os.path.join(here, "plan-release.py"))
@@ -418,6 +420,26 @@ class Next(unittest.TestCase):
         self.assertEqual([i["number"] for i in out["in_progress"]], [1])
         self.assertEqual(out["held"], [])
         self.assertEqual([i["number"] for i in out["start"]], [2])
+
+    def test_an_issue_another_worktree_holds_is_claimed_and_does_not_start(self):
+        issues = [mk(1, ["point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
+        claimed = {2: "/m/.claude/worktrees/feat-two"}
+        out = pr.build_next(issues, set(), frozenset(), None, claimed=claimed)
+        self.assertEqual([i["number"] for i in out["start"]], [1, 3])
+        self.assertEqual([(i["number"], i["owner"]) for i in out["claimed"]], [(2, "/m/.claude/worktrees/feat-two")])
+        self.assertEqual(pr.build_next(issues, set(), frozenset(), None)["claimed"], [])
+
+    def test_mine_comes_before_a_claim(self):
+        issues = [mk(1, ["point:2"]), mk(2, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset({1}), None, claimed={1: "/w/a", 2: "/w/b"})
+        self.assertEqual([i["number"] for i in out["in_progress"]], [1])
+        self.assertEqual([i["number"] for i in out["claimed"]], [2])
+        self.assertEqual(out["start"], [])
+
+    def test_a_claim_of_a_closed_issue_is_no_entry(self):
+        out = pr.build_next([mk(1, ["point:2"])], set(), frozenset(), None, claimed={9: "/w/a"})
+        self.assertEqual(out["claimed"], [])
+        self.assertEqual([i["number"] for i in out["start"]], [1])
 
     def test_a_point_8_issue_does_not_start_while_a_change_waits(self):
         issues = [mk(1, ["point:8"]), mk(2, ["point:2"]), waiting(3, ["point:2"])]
@@ -1020,6 +1042,51 @@ class SavedPlan(unittest.TestCase):
             pr.save_plan(path, {"order": [3]})
             self.assertEqual(pr.read_plan(path), {"order": [3]})
 
+    def test_two_saves_at_once_do_not_share_a_temporary_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "plan.json")
+            plans = [{"order": [n]} for n in range(8)]
+            barrier = threading.Barrier(len(plans))
+            errors = []
+
+            def save(plan):
+                barrier.wait()
+                try:
+                    pr.save_plan(path, plan)
+                except Exception as e:  # noqa: BLE001 - the test reports every failure
+                    errors.append(e)
+
+            threads = [threading.Thread(target=save, args=(p,)) for p in plans]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            self.assertIn(pr.read_plan(path), plans)
+            self.assertEqual(os.listdir(d), ["plan.json"])
+
+    def test_the_temporary_file_is_not_the_fixed_name_and_goes_when_the_write_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "plan.json")
+            seen = []
+            real = os.replace
+
+            def spy(src, dst):
+                seen.append(src)
+                real(src, dst)
+
+            with unittest.mock.patch.object(pr.os, "replace", spy):
+                pr.save_plan(path, {"order": [1]})
+                pr.save_plan(path, {"order": [2]})
+            self.assertEqual(len(seen), 2)
+            self.assertNotIn(path + ".tmp", seen)
+            self.assertNotEqual(seen[0], seen[1])
+            self.assertEqual(os.path.dirname(seen[0]), d)
+            with unittest.mock.patch.object(pr.os, "replace", side_effect=OSError("no")):
+                with self.assertRaises(OSError):
+                    pr.save_plan(path, {"order": [3]})
+            self.assertEqual(os.listdir(d), ["plan.json"])
+
     def test_a_broken_plan_is_ignored_with_one_line(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "plan.json")
@@ -1031,6 +1098,180 @@ class SavedPlan(unittest.TestCase):
                     self.assertIsNone(pr.read_plan(path), text)
                 self.assertEqual(len(err.getvalue().strip().splitlines()), 1, text)
                 self.assertIn("ignored", err.getvalue())
+
+
+class Claims(unittest.TestCase):
+    def test_the_claims_live_in_the_main_checkout(self):
+        self.assertEqual(pr.claims_dir("/w/tsunagiai/.git"), "/w/tsunagiai/.claude/claims")
+        self.assertEqual(pr.claims_dir("/w/tsunagiai/.git/"), "/w/tsunagiai/.claude/claims")
+
+    def test_the_live_worktrees_are_read_from_the_porcelain_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = os.path.realpath(d)
+            text = f"worktree {d}/m\nHEAD abc\nbranch refs/heads/main\n\nworktree {d}/w\nHEAD def\ndetached\n"
+            self.assertEqual(pr.live_worktrees(text), {f"{d}/m", f"{d}/w"})
+        self.assertEqual(pr.live_worktrees(""), set())
+
+    def test_a_worktree_whose_directory_is_gone_is_not_live(self):
+        text = (
+            "worktree /w/m\nHEAD abc\nbranch refs/heads/main\n\n"
+            "worktree /w/gone\nHEAD def\nbranch refs/heads/gone\nprunable gitdir file points to non-existent location\n\n"
+            "worktree /w/bare\nHEAD 111\ndetached\nprunable\n"
+        )
+        self.assertEqual(pr.live_worktrees(text), {os.path.realpath("/w/m")})
+
+    def test_a_free_issue_is_claimed_with_the_path_of_the_owner(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/a", {"/w/a"}))
+            with open(os.path.join(root, "7", "owner"), encoding="utf-8") as f:
+                self.assertEqual(f.read().strip(), "/w/a")
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_a_claim_of_a_live_worktree_holds_and_the_same_owner_may_claim_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            live = {"/w/a", "/w/b"}
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/a", live))
+            self.assertEqual(pr.claim_issue(root, 7, "/w/b", live), "/w/a")
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/a", live))
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_a_claim_whose_worktree_is_gone_is_taken_over(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/a", {"/w/a"}))
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/b", {"/w/b"}))
+            with open(os.path.join(root, "7", "owner"), encoding="utf-8") as f:
+                self.assertEqual(f.read().strip(), "/w/b")
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_a_claim_with_no_owner_is_taken_over(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            os.makedirs(os.path.join(root, "7"))
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/a", {"/w/a"}))
+            self.assertEqual(pr.read_claims(root, {"/w/a"}), {7: "/w/a"})
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_of_many_claimants_at_once_exactly_one_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            owners = [f"/w/{n}" for n in range(8)]
+            live = set(owners)
+            barrier = threading.Barrier(len(owners))
+            results = {}
+
+            def claim(owner):
+                barrier.wait()
+                results[owner] = pr.claim_issue(root, 7, owner, live)
+
+            threads = [threading.Thread(target=claim, args=(o,)) for o in owners]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            winners = [o for o, held in results.items() if held is None]
+            self.assertEqual(len(winners), 1)
+            self.assertTrue(all(held == winners[0] for o, held in results.items() if o != winners[0]))
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_of_many_claimants_at_a_stale_claim_exactly_one_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            self.assertIsNone(pr.claim_issue(root, 7, "/w/old", {"/w/old"}))
+            owners = [f"/w/{n}" for n in range(8)]
+            live = set(owners)
+            barrier = threading.Barrier(len(owners))
+            results = {}
+
+            def claim(owner):
+                barrier.wait()
+                results[owner] = pr.claim_issue(root, 7, owner, live)
+
+            threads = [threading.Thread(target=claim, args=(o,)) for o in owners]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(len([o for o, held in results.items() if held is None]), 1)
+            self.assertEqual(os.listdir(root), ["7"])
+
+    def test_only_the_claims_of_live_worktrees_are_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "claims")
+            pr.claim_issue(root, 1, "/w/a", {"/w/a"})
+            pr.claim_issue(root, 2, "/w/gone", {"/w/gone"})
+            os.makedirs(os.path.join(root, "x"))
+            os.makedirs(os.path.join(root, "3"))
+            self.assertEqual(pr.read_claims(root, {"/w/a"}), {1: "/w/a"})
+            self.assertEqual(pr.read_claims(os.path.join(d, "none"), {"/w/a"}), {})
+
+
+class ClaimCommand(unittest.TestCase):
+    """`plan-release.py claim` in a throwaway repository with two worktrees."""
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", "-C", cwd or self.main, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = os.path.realpath(self.tmp.name)
+        self.main = os.path.join(t, "main")
+        subprocess.run(["git", "init", "-q", "-b", "main", self.main], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            self.git("config", k, v)
+        self.git("commit", "-q", "--allow-empty", "-m", "first")
+        self.a = os.path.join(self.main, ".claude", "worktrees", "a")
+        self.b = os.path.join(self.main, ".claude", "worktrees", "b")
+        self.git("worktree", "add", "-q", "-b", "a", self.a)
+        self.git("worktree", "add", "-q", "-b", "b", self.b)
+        self.cwd = os.getcwd()
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def run_claim(self, cwd, *argv):
+        os.chdir(cwd)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pr.main(["claim", *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_claim_is_made_in_the_main_checkout_from_any_worktree(self):
+        code, out, err = self.run_claim(self.a, "--worktree", self.a, "5", "6")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines(), ["claimed #5", "claimed #6"])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.main, ".claude", "claims"))), ["5", "6"])
+        self.assertFalse(os.path.exists(os.path.join(self.a, ".claude", "claims")))
+
+    def test_an_issue_that_another_worktree_holds_is_refused_with_exit_3_and_the_rest_is_claimed(self):
+        self.run_claim(self.a, "--worktree", self.a, "5")
+        code, out, err = self.run_claim(self.b, "--worktree", self.b, "5", "6")
+        self.assertEqual(code, 3)
+        self.assertEqual(out.splitlines(), ["claimed #6"])
+        self.assertEqual(err.splitlines(), [f"#5 claimed by {self.a}"])
+
+    def test_the_claim_of_a_removed_worktree_is_taken_over(self):
+        self.run_claim(self.a, "--worktree", self.a, "5")
+        self.git("worktree", "remove", self.a)
+        code, out, err = self.run_claim(self.b, "--worktree", self.b, "5")
+        self.assertEqual((code, out.splitlines(), err), (0, ["claimed #5"], ""))
+
+    def test_the_claim_of_a_worktree_whose_directory_alone_is_gone_is_taken_over(self):
+        self.run_claim(self.a, "--worktree", self.a, "5")
+        shutil.rmtree(self.a)  # `git worktree list` still names it, as prunable
+        self.assertIn(self.a, self.git("worktree", "list", "--porcelain"))
+        code, out, err = self.run_claim(self.b, "--worktree", self.b, "5")
+        self.assertEqual((code, out.splitlines(), err), (0, ["claimed #5"], ""))
+
+    def test_a_path_that_is_no_worktree_of_the_repository_is_refused(self):
+        code, out, err = self.run_claim(self.a, "--worktree", os.path.join(self.main, "nowhere"), "5")
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("not a worktree", err)
+        self.assertFalse(os.path.exists(os.path.join(self.main, ".claude", "claims")))
 
 
 class Refuse(unittest.TestCase):
@@ -1770,14 +2011,14 @@ class NightlyLimit(unittest.TestCase):
 
 
 class UseWorktree(unittest.TestCase):
-    """use-worktree.sh in a throwaway repository with a bare origin."""
+    """use-worktree.sh in a throwaway repository with a bare origin: one worktree for each branch."""
 
     def git(self, cwd, *args):
         return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, check=True).stdout.strip()
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        t = self.tmp.name
+        t = os.path.realpath(self.tmp.name)
         self.origin = os.path.join(t, "origin.git")
         self.main = os.path.join(t, "main")
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", self.origin], check=True)
@@ -1785,22 +2026,45 @@ class UseWorktree(unittest.TestCase):
         for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
             self.git(self.main, "config", k, v)
         os.makedirs(os.path.join(self.main, ".claude", "tools"))
-        for name in ("use-worktree.sh",):
-            with open(os.path.join(TOOLS, name), encoding="utf-8") as f, open(os.path.join(self.main, ".claude", "tools", name), "w") as g:
-                g.write(f.read())
+        self.script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
+        with open(os.path.join(TOOLS, "use-worktree.sh"), encoding="utf-8") as f, open(self.script, "w") as g:
+            g.write(f.read())
         with open(os.path.join(self.main, ".worktreeinclude"), "w") as f:
             f.write("# private\nsecret.txt\n")
         with open(os.path.join(self.main, "secret.txt"), "w") as f:
             f.write("one\n")
         with open(os.path.join(self.main, ".gitignore"), "w") as f:
-            f.write("secret.txt\n")
+            f.write("secret.txt\ntarget/\nnode_modules/\n.claude/claims/\n")
         self.git(self.main, "add", ".gitignore")
         self.commit(self.main, "a.txt", "a\n", "first")
         self.git(self.main, "push", "-q", "origin", "main")
-        self.work = os.path.join(self.main, ".claude", "worktrees", "work")
+        # a `mise` that only records where `mise exec -- npm ci` was run
+        self.fake_bin = os.path.join(t, "bin")
+        self.mise_log = os.path.join(t, "mise.log")
+        os.makedirs(self.fake_bin)
+        with open(os.path.join(self.fake_bin, "mise"), "w") as f:
+            f.write('#!/bin/sh\necho "$PWD $*" >> "$FAKE_MISE_LOG"\nmkdir -p node_modules/from-npm-ci\n')
+        os.chmod(os.path.join(self.fake_bin, "mise"), 0o755)
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def npm_ci_runs(self):
+        try:
+            with open(self.mise_log) as f:
+                return f.read().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def main_with_node_modules(self, lock="lock\n"):
+        self.commit(self.main, "package-lock.json", lock, "lock")
+        self.git(self.main, "push", "-q", "origin", "main")
+        os.makedirs(os.path.join(self.main, "node_modules", "p"))
+        with open(os.path.join(self.main, "node_modules", "p", "y"), "w") as f:
+            f.write("m\n")
+
+    def wt(self, branch):
+        return os.path.join(self.main, ".claude", "worktrees", branch.replace("/", "-"))
 
     def commit(self, cwd, name, text, message):
         with open(os.path.join(cwd, name), "w") as f:
@@ -1808,93 +2072,224 @@ class UseWorktree(unittest.TestCase):
         self.git(cwd, "add", name)
         self.git(cwd, "commit", "-q", "-m", message)
 
-    def use(self, arg):
-        script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
-        r = subprocess.run(["bash", script, arg], capture_output=True, text=True, cwd=self.main)
+    def run_script(self, arg, cwd=None):
+        env = {**os.environ, "PATH": f"{self.fake_bin}{os.pathsep}{os.environ['PATH']}", "FAKE_MISE_LOG": self.mise_log}
+        r = subprocess.run(["bash", self.script, arg], capture_output=True, text=True, cwd=cwd or self.main, env=env)
         return r.returncode, r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "", r.stderr
 
+    def use(self, branch):
+        return self.run_script(branch)
+
+    def park(self, cwd):
+        return self.run_script("--park", cwd)
+
     def merge_to_main(self, branch):
-        self.git(self.work, "push", "-q", "origin", f"{branch}:main")
+        self.git(self.wt(branch), "push", "-q", "origin", f"{branch}:main")
 
-    def test_the_first_use_makes_the_worktree_on_the_branch_with_the_private_files(self):
+    def branches(self):
+        return self.git(self.main, "branch", "--format=%(refname:short)").split()
+
+    def claim(self, n, owner):
+        os.makedirs(os.path.join(self.main, ".claude", "claims", str(n)))
+        with open(os.path.join(self.main, ".claude", "claims", str(n), "owner"), "w") as f:
+            f.write(owner + "\n")
+
+    def test_the_first_use_makes_a_worktree_named_after_the_branch_with_the_private_files(self):
         code, path, err = self.use("feat/one")
-        self.assertEqual((code, path), (0, os.path.realpath(self.work)), err)
-        self.assertEqual(self.git(self.work, "branch", "--show-current"), "feat/one")
-        with open(os.path.join(self.work, "secret.txt")) as f:
+        self.assertEqual((code, path), (0, self.wt("feat/one")), err)
+        self.assertEqual(os.path.basename(path), "feat-one")
+        self.assertEqual(self.git(path, "branch", "--show-current"), "feat/one")
+        with open(os.path.join(path, "secret.txt")) as f:
             self.assertEqual(f.read(), "one\n")
+        self.assertFalse(os.path.exists(self.wt("work")))
 
-    def test_the_same_branch_is_a_continuation_and_another_branch_finds_it_in_use(self):
-        self.use("feat/one")
-        self.commit(self.work, "b.txt", "b\n", "work")
-        self.assertEqual(self.use("feat/one")[0], 0)
-        code, _, err = self.use("feat/two")
-        self.assertEqual(code, 3)
-        self.assertIn("push していないコミット", err)
-        self.assertEqual(self.git(self.work, "branch", "--show-current"), "feat/one")
+    def test_a_new_branch_is_cut_from_origin_main_with_no_upstream(self):
+        self.commit(self.main, "local.txt", "x\n", "local only")  # main moves ahead of origin/main
+        _, path, _ = self.use("feat/one")
+        self.assertEqual(self.git(path, "rev-parse", "HEAD"), self.git(self.main, "rev-parse", "origin/main"))
+        r = subprocess.run(["git", "-C", path, "rev-parse", "--abbrev-ref", "feat/one@{u}"], capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
 
-    def test_uncommitted_changes_mean_in_use(self):
-        self.use("feat/one")
-        with open(os.path.join(self.work, "a.txt"), "w") as f:
-            f.write("changed\n")
-        code, _, err = self.use("feat/two")
-        self.assertEqual(code, 3)
-        self.assertIn("未コミット", err)
+    def test_two_branches_have_two_worktrees_at_once(self):
+        _, one, _ = self.use("feat/one")
+        self.commit(one, "b.txt", "b\n", "work")  # in use, and it does not matter to the other
+        code, two, err = self.use("feat/two")
+        self.assertEqual((code, two), (0, self.wt("feat/two")), err)
+        self.assertNotEqual(one, two)
+        self.assertEqual(self.git(one, "branch", "--show-current"), "feat/one")
+        self.assertEqual(self.git(two, "branch", "--show-current"), "feat/two")
+        self.assertFalse(os.path.exists(os.path.join(two, "b.txt")))
 
-    def test_after_the_merge_the_worktree_is_reused_from_the_new_origin_main(self):
-        self.use("feat/one")
-        self.commit(self.work, "b.txt", "b\n", "work")
-        self.merge_to_main("feat/one")
-        code, path, err = self.use("feat/two")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.git(self.work, "branch", "--show-current"), "feat/two")
-        self.assertTrue(os.path.exists(os.path.join(self.work, "b.txt")))
-        branches = self.git(self.main, "branch", "--format=%(refname:short)").split()
-        self.assertNotIn("feat/one", branches)
-
-    def test_the_private_files_are_copied_again_at_each_use(self):
-        self.use("feat/one")
+    def test_the_same_branch_is_a_continuation_and_the_private_files_are_copied_again(self):
+        _, path, _ = self.use("feat/one")
+        self.commit(path, "b.txt", "b\n", "work")
         with open(os.path.join(self.main, "secret.txt"), "w") as f:
             f.write("two\n")
-        self.use("feat/one")
-        with open(os.path.join(self.work, "secret.txt")) as f:
+        code, again, err = self.use("feat/one")
+        self.assertEqual((code, again), (0, path), err)
+        with open(os.path.join(path, "secret.txt")) as f:
             self.assertEqual(f.read(), "two\n")
+        self.assertTrue(os.path.exists(os.path.join(path, "b.txt")))
 
-    def test_park_returns_the_worktree_to_idle_only_when_nothing_is_lost(self):
-        self.use("feat/one")
-        self.commit(self.work, "b.txt", "b\n", "work")
-        script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
-        r = subprocess.run(["bash", script, "--park"], capture_output=True, text=True, cwd=self.main)
-        self.assertEqual(r.returncode, 3)
-        self.merge_to_main("feat/one")
-        r = subprocess.run(["bash", script, "--park"], capture_output=True, text=True, cwd=self.main)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.git(self.work, "branch", "--show-current"), "")
-        self.assertEqual(self.use("feat/two")[0], 0)
+    def test_the_path_of_another_branch_is_in_use(self):
+        self.use("feat/a-b")
+        code, _, err = self.use("feat-a/b")  # the same name once the slash is a dash
+        self.assertEqual(code, 3)
+        self.assertIn("feat/a-b", err)
+        self.assertEqual(self.git(self.wt("feat/a-b"), "branch", "--show-current"), "feat/a-b")
 
-    def test_a_pushed_branch_that_is_not_merged_does_not_keep_the_worktree(self):
-        self.use("release/next")
-        self.commit(self.work, "b.txt", "b\n", "release work")
-        self.assertEqual(self.use("feat/two")[0], 3)
-        self.git(self.work, "push", "-q", "origin", "release/next")
-        code, _, err = self.use("feat/two")
-        self.assertEqual(code, 0, err)
-        branches = self.git(self.main, "branch", "--format=%(refname:short)").split()
-        self.assertIn("release/next", branches)  # the branch of an open pull request is kept
+    def test_a_detached_worktree_at_the_path_is_in_use(self):
+        self.git(self.main, "worktree", "add", "-q", "--detach", self.wt("feat/one"), "origin/main")
+        code, _, err = self.use("feat/one")
+        self.assertEqual(code, 3)
+        self.assertIn("detached", err)
+
+    def test_a_branch_checked_out_in_another_worktree_is_in_use_and_nothing_is_made(self):
+        other = os.path.join(os.path.dirname(self.main), "elsewhere")
+        self.git(self.main, "worktree", "add", "-q", "-b", "release/next", other, "origin/main")
         code, _, err = self.use("release/next")
+        self.assertEqual(code, 3)
+        self.assertIn(other, err)
+        self.assertFalse(os.path.exists(self.wt("release/next")))
+        self.assertEqual(self.use("main")[0], 3)  # the main checkout holds main
+
+    def test_a_worktree_whose_directory_is_gone_does_not_hold_its_branch(self):
+        other = os.path.join(os.path.dirname(self.main), "elsewhere")
+        self.git(self.main, "worktree", "add", "-q", "-b", "release/next", other, "origin/main")
+        shutil.rmtree(other)
+        code, path, err = self.use("release/next")
+        self.assertEqual((code, path), (0, self.wt("release/next")), err)
+
+    def test_a_branch_that_exists_is_used_with_its_commits(self):
+        self.git(self.main, "switch", "-q", "-c", "feat/old")
+        self.commit(self.main, "old.txt", "o\n", "old work")
+        self.git(self.main, "switch", "-q", "main")
+        code, path, err = self.use("feat/old")
         self.assertEqual(code, 0, err)
-        self.assertTrue(os.path.exists(os.path.join(self.work, "b.txt")))
+        self.assertTrue(os.path.exists(os.path.join(path, "old.txt")))
 
     def test_a_branch_that_exists_and_is_merged_is_moved_up_to_origin_main(self):
-        self.use("release/next")
-        self.git(self.work, "push", "-q", "origin", "release/next")
-        script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
-        subprocess.run(["bash", script, "--park"], capture_output=True, text=True, cwd=self.main, check=True)
-        self.git(self.main, "branch", "-f", "release/next", "origin/main")
+        self.git(self.main, "branch", "release/next", "origin/main")
         self.commit(self.main, "c.txt", "c\n", "later")
         self.git(self.main, "push", "-q", "origin", "main")
-        code, _, err = self.use("release/next")
+        code, path, err = self.use("release/next")
         self.assertEqual(code, 0, err)
-        self.assertTrue(os.path.exists(os.path.join(self.work, "c.txt")))
+        self.assertTrue(os.path.exists(os.path.join(path, "c.txt")))
+
+    def test_a_branch_only_on_origin_is_tracked(self):
+        self.git(self.main, "switch", "-q", "-c", "feat/remote")
+        self.commit(self.main, "r.txt", "r\n", "remote work")
+        self.git(self.main, "push", "-q", "origin", "feat/remote")
+        self.git(self.main, "switch", "-q", "main")
+        self.git(self.main, "branch", "-D", "feat/remote")
+        code, path, err = self.use("feat/remote")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(os.path.join(path, "r.txt")))
+        self.assertEqual(self.git(path, "rev-parse", "--abbrev-ref", "feat/remote@{u}"), "origin/feat/remote")
+
+    def test_the_target_is_cloned_without_the_incremental_directory(self):
+        os.makedirs(os.path.join(self.main, "src-tauri"))
+        self.commit(self.main, "src-tauri/Cargo.toml", "x\n", "src-tauri")
+        self.git(self.main, "push", "-q", "origin", "main")
+        target = os.path.join(self.main, "src-tauri", "target")
+        os.makedirs(os.path.join(target, "debug", "incremental"))
+        os.makedirs(os.path.join(target, "debug", "deps"))
+        for rel in ("debug/incremental/x", "debug/deps/y"):
+            with open(os.path.join(target, rel), "w") as f:
+                f.write("t\n")
+        _, path, _ = self.use("feat/one")
+        copy = os.path.join(path, "src-tauri", "target", "debug")
+        self.assertTrue(os.path.exists(os.path.join(copy, "deps", "y")))
+        self.assertFalse(os.path.exists(os.path.join(copy, "incremental")))
+
+    def test_npm_ci_is_run_when_the_worktree_is_made_and_node_modules_is_not_copied(self):
+        self.main_with_node_modules()
+        code, path, err = self.use("feat/one")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.npm_ci_runs(), [f"{path} exec -- npm ci --silent"])
+        self.assertFalse(os.path.exists(os.path.join(path, "node_modules", "p")))  # the main checkout's node_modules may be old
+
+    def test_no_lock_file_means_no_node_modules_and_no_npm_ci(self):
+        _, path, _ = self.use("feat/one")
+        self.assertEqual(self.npm_ci_runs(), [])
+        self.assertFalse(os.path.exists(os.path.join(path, "node_modules")))
+
+    def test_park_removes_the_worktree_and_the_merged_branch_and_prints_the_main_checkout(self):
+        _, path, _ = self.use("feat/one")
+        self.commit(path, "b.txt", "b\n", "work")
+        self.merge_to_main("feat/one")
+        code, out, err = self.park(path)
+        self.assertEqual((code, out), (0, self.main), err)
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn("feat/one", self.branches())
+        self.assertNotIn(path, self.git(self.main, "worktree", "list", "--porcelain"))
+        self.assertEqual(self.use("feat/one")[0], 0)  # the name is free again
+
+    def test_park_removes_the_ignored_files_without_force(self):
+        _, path, _ = self.use("feat/one")
+        os.makedirs(os.path.join(path, "src-tauri", "target", "debug"))
+        os.makedirs(os.path.join(path, "node_modules", "p"))
+        for rel in ("src-tauri/target/debug/x", "node_modules/p/y"):
+            with open(os.path.join(path, rel), "w") as f:
+                f.write("i\n")
+        self.assertEqual(self.git(path, "status", "--porcelain"), "")
+        self.assertEqual(self.park(path)[0], 0)
+        self.assertFalse(os.path.exists(path))
+
+    def test_park_keeps_a_pushed_branch_that_is_not_merged(self):
+        _, path, _ = self.use("release/next")
+        self.commit(path, "b.txt", "b\n", "release work")
+        self.git(path, "push", "-q", "origin", "release/next")
+        code, _, err = self.park(path)
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.exists(path))
+        self.assertIn("release/next", self.branches())
+        code, path, err = self.use("release/next")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(os.path.join(path, "b.txt")))
+
+    def test_park_refuses_when_something_would_be_lost_and_removes_nothing(self):
+        _, path, _ = self.use("feat/one")
+        self.commit(path, "b.txt", "b\n", "work")
+        code, _, err = self.park(path)
+        self.assertEqual(code, 3)
+        self.assertIn("push していないコミット", err)
+        self.git(path, "push", "-q", "origin", "feat/one")
+        with open(os.path.join(path, "a.txt"), "w") as f:
+            f.write("changed\n")
+        code, _, err = self.park(path)
+        self.assertEqual(code, 3)
+        self.assertIn("未コミット", err)
+        self.assertTrue(os.path.exists(path))
+        self.assertIn("feat/one", self.branches())
+
+    def test_park_is_for_a_linked_worktree_under_claude_worktrees_only(self):
+        self.assertEqual(self.park(self.main)[0], 3)
+        outside = os.path.join(os.path.dirname(self.main), "elsewhere")
+        self.git(self.main, "worktree", "add", "-q", "-b", "feat/else", outside, "origin/main")
+        code, _, err = self.park(outside)
+        self.assertEqual(code, 3)
+        self.assertTrue(os.path.exists(outside))
+        self.assertIn("feat/else", self.branches())
+
+    def test_park_deletes_the_claims_of_this_worktree_only(self):
+        _, one, _ = self.use("feat/one")
+        _, two, _ = self.use("feat/two")
+        for n, owner in ((5, one), (6, two), (7, one)):
+            self.claim(n, owner)
+        self.assertEqual(self.park(one)[0], 0)
+        self.assertEqual(os.listdir(os.path.join(self.main, ".claude", "claims")), ["6"])
+
+    def test_park_keeps_the_claims_when_it_refuses(self):
+        _, one, _ = self.use("feat/one")
+        self.commit(one, "b.txt", "b\n", "work")
+        self.claim(5, one)
+        self.assertEqual(self.park(one)[0], 3)
+        self.assertEqual(os.listdir(os.path.join(self.main, ".claude", "claims")), ["5"])
+
+    def test_park_with_no_claims_directory_works(self):
+        _, one, _ = self.use("feat/one")
+        self.assertEqual(self.park(one)[0], 0)
 
 
 if __name__ == "__main__":
