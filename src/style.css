@@ -944,39 +944,26 @@ button.status:hover { filter: brightness(.95); }
 .chat-clear:disabled, .chat-send:disabled { opacity: .4; cursor: default; }
 .chat-clear:disabled:hover { background: var(--surface); }
 .chat-send:disabled:hover { background: var(--accent); filter: none; }
-/* T-7: the Claude pane of the Todo screen. It takes the place of the Orca pane (the same divider and width); its reply keeps line breaks, the proposed tasks are cards under the reply. */
-#todo-claude .chat-ai { white-space: pre-wrap; }
-.chat-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.chat-task { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.chat-task-name { font-weight: bold; }
-.chat-task-done { color: var(--accent); }
-.chat-task .review-chip:disabled, .chat-task .review-name:disabled, .chat-task .text-btn:disabled { opacity: .5; cursor: default; }
 .chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: calc(12px * var(--fs)); font-weight: normal; }
 
-/* The Slack compose screen has two modes (`data-mode` of `#slack-compose`, S-27). Claude mode: the conversation with Claude, wide, a divider the user drags, and the things to do ("行うこと") in a narrow column on the right
-   (a fifth to a half as wide as `.split-main`; `--brief-w` of ts/split.ts is where the divider put it, and the clamp holds it to that range). Manual mode: the original message and the things to do, over the whole width.
+/* The Slack compose screen has two modes (`data-mode` of `#slack-compose`, S-27). Claude mode: the terminal of Claude Code in a column on the left (A-36; 45% of the screen body at first, 35% to 60% by the divider, `--term-w` of ts/split.ts is where the divider put it, and the clamp holds it to that range),
+   and the original message with the things to do and "投稿" in the part on the right. Manual mode: the same part over the whole width, with no column and no divider.
    The Slack thread has the three parts of `.split-main` too, with the Claude pane a third to a half as wide (`--chat-w`). */
 #slack-main { flex: 1; min-height: 0; display: flex; }
 .split-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
-/* Both panes have the same three parts: a head, a part that scrolls, and a foot fixed at the bottom. The two feet are one height, `--slack-foot`: the request field's frame is 3 lines high (the field never grows), its row 36px, and the paddings and borders around them. */
+/* The two heads (the terminal's and the edit part's) are one height, `--slack-head`. The edit part has three parts: a head, a part that scrolls, and a foot fixed at the bottom (`--slack-foot`). */
 #slack-compose { --slack-foot: calc(89px + 60px * var(--fs)); --slack-head: 48px; }
 #slack-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#slack-chat { flex: 1; }
-#slack-brief { flex: none; width: clamp(20%, var(--brief-w, 33.3333%), 50%); box-sizing: border-box; display: flex; flex-direction: column; min-width: 0; }
-#slack-compose[data-mode="claude"] #slack-edit, #slack-compose[data-mode="manual"] #slack-chat, #slack-compose[data-mode="manual"] #slack-split, #slack-compose[data-mode="manual"] #slack-brief { display: none; }
+#slack-compose-claude { flex: none; width: clamp(35%, var(--term-w, 45%), 60%); box-sizing: border-box; min-height: 0; }
+#slack-compose[data-mode="manual"] #slack-compose-claude, #slack-compose[data-mode="manual"] #slack-split { display: none; }
 #slack-mode { flex: none; display: flex; gap: 4px; margin-left: auto; }
 #slack-mode .text-btn { height: 28px; padding: 0 14px; }
-#slack-edit-head, #slack-brief-head, #slack-chat .chat-head { flex: none; box-sizing: border-box; height: var(--slack-head); }
+#slack-edit-head, #slack-compose-claude .chat-head { flex: none; box-sizing: border-box; height: var(--slack-head); }
 #slack-edit-head { display: flex; align-items: center; gap: 10px; padding: 0 16px 0 24px; border-bottom: 1px solid var(--line); }
 #slack-edit-head .prompt-label { margin-bottom: 0; }
-#slack-brief-head { display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--line); }
-#slack-brief-head .prompt-label { margin-bottom: 0; }
-#slack-brief-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 12px 16px; list-style: none; }
-.slack-brief-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.slack-brief-item.posted { background: var(--bar); }
-.slack-brief-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.slack-brief-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--ink-soft); }
-.slack-brief-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.5; overflow-wrap: anywhere; }
+/* The row above the fields with "元に戻す", which takes back what Claude Code wrote (S-4). */
+#slack-undo-bar { flex: none; display: flex; align-items: center; padding: 8px 24px 0; }
+#slack-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #slack-reset { margin-left: auto; height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #slack-reset:disabled { opacity: .4; cursor: default; }
 #slack-reset:disabled:hover { background: var(--surface); }
@@ -1010,10 +997,6 @@ button.status:hover { filter: brightness(.95); }
 #slack-edit-foot { flex: none; box-sizing: border-box; height: var(--slack-foot); display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; border-top: 1px solid var(--line); background: var(--bar); }
 #slack-edit-foot .text-btn { height: 36px; padding: 0 20px; border-radius: 18px; font: inherit; font-weight: bold; }
 #slack-edit-foot .text-btn:disabled { opacity: .4; cursor: default; }
-#slack-chat .chat-form { box-sizing: border-box; height: var(--slack-foot); }
-#slack-chat .chat-note:not([hidden]) + .chat-form { border-top: 0; padding-top: 12px; }
-#slack-input { height: calc(60px * var(--fs)); max-height: none; }
-#slack-form .composer-foot { height: 36px; }
 .split-bar { flex: none; width: 7px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-left: 1px solid var(--line); background: var(--bar); cursor: col-resize; touch-action: none; }
 .split-bar span { width: 3px; height: 32px; border-radius: 2px; background: var(--chip-line); }
 .split-bar:hover span, .split-bar:focus-visible span, .dragging .split-bar span { background: var(--accent-dim); }
@@ -1383,14 +1366,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .slack-ask-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .slack-ask-buttons .text-btn { justify-content: center; height: 28px; padding: 0 16px; border-radius: 14px; }
 .slack-ask-buttons .text-btn:disabled { opacity: .4; cursor: default; }
-.slack-confirm { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.slack-confirm-first { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.slack-confirm-where { font-weight: 700; overflow-wrap: anywhere; }
-.slack-confirm-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
-.slack-confirm-ask { font-weight: 700; }
-.slack-confirm-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
-.slack-confirm .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
-.slack-confirm .diff-foot { padding: 0; background: none; justify-content: flex-start; }
 .orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }

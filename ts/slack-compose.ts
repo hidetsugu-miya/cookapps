@@ -1,23 +1,23 @@
 // The Slack compose screen, opened by "Slack に貼る" in the thread's header. It has two modes, switched at the right of the header (S-27); it always opens in Claude mode.
-// Manual mode: at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it) with "元の内容に戻す" above it, under it the things to do
+// Both modes hold the same part: at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it) with "元の内容に戻す" above it, under it the things to do
 // ("行うこと": numbered cards, each one post, with where it goes and what it posts, and a plus that adds one), and "投稿" at the bottom, which sends them from the top down.
-// Claude mode: a conversation with Claude that proofreads the original message and can write the things to do, and a narrow column of the things to do (number, destination and the head of the text).
-// Both show one draft, so a switch keeps it. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
+// Claude mode puts the terminal of Claude Code (S-4, ts/slack-compose-claude.ts) in a column at its left; Claude Code reads and writes the original message and the cards through the target "slack-compose" of ts/screen-bridge.ts
+// and asks for "投稿" with `slack_compose_post` (the screen does what its button does). What it wrote can be taken back with "元に戻す" above the fields. Manual mode hides the column. Both show one draft, so a switch keeps it.
+// Nothing leaves the app until "投稿" is pressed, by the owner or by the tool (which the owner allows each time in the terminal).
 import type { Channel } from "./bindings/Channel";
 import type { Recent } from "./bindings/Recent";
 import type { SlackAction } from "./bindings/SlackAction";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import type { Workspace } from "./bindings/Workspace";
-import { showModelSlot } from "./claude.js";
-import { type ChatAnswer, createChat } from "./claude-chat.js";
-import { createComposer } from "./composer.js";
 import { $, composing, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
 import { CLOSE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen, showComposeScreen, showThreadScreen } from "./nav.js";
+import { type Fields, registerDraftTarget } from "./screen-bridge.js";
+import { endSlackComposeClaude, hideSlackComposeClaude, initSlackComposeClaude, syncSlackComposeClaude } from "./slack-compose-claude.js";
 import { initSplit } from "./split.js";
 import { type OpenThread, opened } from "./thread.js";
 import { toast } from "./toast.js";
@@ -36,7 +36,7 @@ interface Draft {
 }
 // One thing to do: one post, where it goes and what it holds, as Rust reads and answers it (`SlackAction`).
 // Where: `target`, a channel or a thread chosen in the picker (`after` null), or the thread of the post of an earlier action (`after` is its index, and `target` is not used).
-// `byClaude`: the destination is one that Claude's answer put there, not one the owner chose; a post by a request then needs it named in the request (S-23).
+// `byClaude`: the destination is one that Claude Code put there with a write of the fields, not one the owner chose.
 // What: the original message as it is (`paste`), or the text written in the card.
 // `posted` is set once it was posted, and it is never sent again: its `thread` is the thread a later action continues, the thread it replied in or else the time of its own message (empty when Slack answered none).
 type Action = SlackAction;
@@ -51,6 +51,17 @@ let recent: Recent[] = [];
 const ACTIONS_MAX = 10;
 // The post is on its way.
 let posting = false;
+// The dialog that asks where the later posts go is open (#905).
+let dialogOpen = false;
+// What the original message and the cards held before each write of Claude Code (S-4), the oldest first, and what they were after it (as `keyOf` writes them).
+// "元に戻す" puts the newest back. An entry works only while the fields are as it left them, so a change after a write forgets every one (`refreshSlackCompose`).
+interface Undo {
+  before: { text: string; actions: Action[] };
+  after: string;
+}
+const undos: Undo[] = [];
+const keyOf = (d: Draft) => JSON.stringify([d.text, d.actions]);
+const copyOf = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 // Where the thread was scrolled to when the screen opened (#main is hidden meanwhile, which forgets it).
 let threadScroll = 0;
 let resetTimer = 0;
@@ -69,81 +80,6 @@ const slackDate = (ms: number) => {
   const d = new Date(ms);
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
-
-// The things to do as they were when the request that is on its way was sent: what Claude's answer makes of them is put in only if they are still that.
-let askedActions = "";
-// The original message as it was when that request was sent.
-let askedText = "";
-// A request to Claude of this screen is on its way, and may post: "投稿" waits for it, so nothing is posted twice.
-let asking = false;
-
-// Puts `next` in the place of the actions of `d` that were not posted when the request was sent (the first `kept` are the posted ones, which never change).
-function putActions(d: Draft, kept: number, next: Action[]) {
-  d.actions.splice(kept, d.actions.length - kept, ...next);
-  if (draft !== d) return;
-  $("slack-error").hidden = true;
-  drawActions();
-}
-
-const chat = createChat({
-  prefix: "slack",
-  loginNote: "設定の Claude タブで接続すると、校正できます",
-  // Null while the post of "投稿" is on its way: a request to Claude could post the same text again.
-  text: () => (draft && !posting ? draft.text : null),
-  apply: (text) => {
-    draft!.text = text;
-    $<HTMLTextAreaElement>("slack-body").value = text;
-    $("slack-preview").textContent = text;
-  },
-  // The things to do go with the request. A request that asks to post is posted by Rust (S-23), which sends the ones that are not posted from the top down, as the answer made them.
-  // What it posted is marked here, before the chat sees the answer and whatever changed meanwhile, so that nothing is sent twice; the screen stays, and the answer is drawn as any other.
-  ask: async (text, history, instruction) => {
-    const d = draft;
-    const actions = d?.actions.map((a) => ({ ...a })) ?? [];
-    askedActions = JSON.stringify(actions);
-    askedText = text;
-    asking = true;
-    refreshSlackCompose();
-    try {
-      const answer = await invoke("claude_proofread_slack", { text, history, instruction, actions });
-      const sent = answer.actions?.filter((a) => a.posted) ?? [];
-      if (d && sent.length) {
-        putActions(d, actions.filter((a) => a.posted).length, answer.actions!);
-        const [first, at] = [sent[0], sent[0].posted!];
-        // One post is named by where it went: its own destination, or the thread it continued.
-        const to = { name: at.name, threadTs: first.after === null && first.target ? first.target.threadTs : at.thread };
-        toast(sent.length > 1 ? `${sent.length} 件を投稿しました` : `${wsName(at.teamId)} の ${label(to)} に貼りました`);
-      }
-      // A post that failed after another was sent: the ones sent are marked above, and the rest stays to do.
-      if (answer.postError) {
-        if (currentScreen() === "compose" && draft === d) showComposeError(answer.postError);
-        else toast(answer.postError);
-      }
-      return answer;
-    } finally {
-      asking = false;
-    }
-  },
-  // What Claude's answer made of the things to do (a destination it chose, kept by Rust to the list it was given, or the cards it wrote) is put in, unless the user changed them meanwhile or the post is on its way.
-  // What Rust posted is in already (`ask`). A post that Claude asked for and Rust refused (S-23) is said not to have been made.
-  answered: (answer) => {
-    const d = draft;
-    if (!d) return;
-    if (answer.actions && !answer.actions.some((a) => a.posted) && !posting && JSON.stringify(d.actions) === askedActions)
-      putActions(d, d.actions.filter((a) => a.posted).length, answer.actions);
-    if (answer.postRefused) {
-      if (currentScreen() === "compose") showComposeError("投稿されませんでした");
-      else toast("投稿されませんでした");
-    }
-  },
-  // An answer for which Rust posted nothing because two things to do or more were allowed: the question of where each one after the first goes, under the reply (S-23).
-  confirm: (answer) => (answer.postConfirm ? confirmFrame(answer) : null),
-  changed: refreshSlackCompose,
-  locked: () => posting,
-  keyHint: false,
-  fixedInput: true,
-  autoApply: true,
-});
 
 function disarmReset() {
   clearTimeout(resetTimer);
@@ -255,27 +191,14 @@ function drawActions() {
     }),
   );
   $<HTMLButtonElement>("slack-add").disabled = !d || posting || pendingOf(d).pending.length >= ACTIONS_MAX;
-  drawBrief();
-}
-
-// The things to do as the narrow column of Claude mode draws them: the number, where it goes, and the head of what it posts (the CSS cuts it to two lines).
-function drawBrief() {
-  const d = draft;
-  $("slack-brief-list").replaceChildren(
-    ...(d?.actions ?? []).map((a, index) => {
-      const item = tag("li", a.posted ? "slack-brief-item posted" : "slack-brief-item");
-      const main = tag("div", "slack-brief-main");
-      main.append(tag("span", "slack-brief-where", whereLabel(a)), tag("span", "slack-brief-text", a.paste ? d!.text : a.text));
-      item.append(tag("span", "slack-no", String(index + 1)), main);
-      return item;
-    }),
-  );
 }
 
 // Shows one of the two parts of the screen; nothing of the draft changes.
 function setMode(mode: Mode) {
   $("slack-compose").dataset.mode = mode;
   for (const m of ["claude", "manual"] as const) $(`slack-mode-${m}`).setAttribute("aria-pressed", String(m === mode));
+  // The terminal is shown in Claude mode and hidden (its process goes on) in manual mode.
+  syncSlackComposeClaude();
 }
 
 // The preview is shown, or the field it opens (pressing the preview opens it, leaving the field closes it).
@@ -284,19 +207,21 @@ function setEditing(on: boolean) {
   $<HTMLTextAreaElement>("slack-body").hidden = !on;
 }
 
-// Draws what follows from the state: the preview, the buttons, and whether Claude can be asked.
-export function refreshSlackCompose() {
+// Draws what follows from the state: the preview, the buttons, and "元に戻す" of what Claude Code wrote.
+function refreshSlackCompose() {
   const d = draft;
   $("slack-preview").textContent = d?.text ?? "";
-  drawBrief();
   $<HTMLTextAreaElement>("slack-body").disabled = posting;
   const { pending, ready } = pendingOf(d);
   $("slack-post").textContent = pending.length > 1 ? `${pending.length} 件を投稿` : "投稿";
-  $<HTMLButtonElement>("slack-post").disabled = !ready || posting || asking;
+  $<HTMLButtonElement>("slack-post").disabled = !ready || posting;
   const same = !d || d.text === d.original;
   $<HTMLButtonElement>("slack-reset").disabled = same;
   if (same) disarmReset();
-  chat.refresh();
+  // A write is taken back only while the fields are as the newest write left them: a change of the owner's (or a post) makes every one unusable, and they are forgotten.
+  if (undos.length && (!d || undos[undos.length - 1].after !== keyOf(d))) undos.length = 0;
+  $("slack-undo-bar").hidden = undos.length === 0;
+  $<HTMLButtonElement>("slack-undo").disabled = posting;
 }
 
 // The picker under the chip `anchor` of the action `a` (the one at `index`): for an action after the first, the threads of the posts before it; then the workspace, recent destinations, a channel search, and a link. A pick closes it.
@@ -414,7 +339,7 @@ function openPicker(anchor: HTMLElement, a: Action, index: number) {
   search.focus();
 }
 
-// Starts a new draft from `current`'s latest message, and forgets the conversation and the request being typed.
+// Starts a new draft from `current`'s latest message, and ends the talk with Claude Code.
 // `stale` says the user moved on while the text was asked for; then nothing is touched.
 async function newDraft(key: string, current: OpenThread, stale: () => boolean) {
   const latest = current.messages.at(-1)!;
@@ -427,8 +352,9 @@ async function newDraft(key: string, current: OpenThread, stale: () => boolean) 
   if (stale()) return;
   // One thing to do at first: paste the original message, to a destination that is not chosen yet.
   draft = { key, original, text: original, actions: [{ target: null, after: null, paste: true, text: "", posted: null, byClaude: false }] };
-  chat.reset();
-  chat.clearInput();
+  // The talk with Claude Code was about the mail before: it ends, and the next show starts a new one. What it wrote cannot be taken back in the new draft.
+  undos.length = 0;
+  endSlackComposeClaude();
   $<HTMLTextAreaElement>("slack-body").value = original;
   $("slack-preview").textContent = original;
 }
@@ -470,18 +396,16 @@ async function openCompose() {
   drawActions();
   setEditing(false);
   setMode("claude");
-  // The selects in the frame of the request field need the model settings.
-  showModelSlot("slack-model");
   showComposeScreen();
-  // The log is drawn already (by the answers, or by the new draft's reset); only its scroll position was lost while the screen was hidden.
+  // The terminal is shown now that its column is: the first show starts Claude Code.
+  syncSlackComposeClaude();
   refreshSlackCompose();
-  const log = $("slack-log");
-  log.scrollTop = log.scrollHeight;
 }
 
 // Back to the mail; the draft stays.
 function back() {
   closeMenu();
+  hideSlackComposeClaude();
   showThreadScreen();
   // The frames of the messages fit again after they are shown, which can shorten the page for a moment: restore the position once more after that.
   $("main").scrollTop = threadScroll;
@@ -561,7 +485,9 @@ function askDestinations(d: Draft): Promise<boolean> {
 
   return new Promise((resolve) => {
     const behind = [...document.querySelectorAll<HTMLElement>("#sidebar, #content")];
+    dialogOpen = true;
     const close = (answer: boolean) => {
+      dialogOpen = false;
       scrim.remove();
       for (const el of behind) el.inert = false;
       document.removeEventListener("keydown", onKey);
@@ -590,74 +516,10 @@ function askDestinations(d: Draft): Promise<boolean> {
   });
 }
 
-// The things to do not posted, as text: what a frame below was made for. It differs once the owner changed a card, a destination or the draft's text.
-const pendingKey = (d: Draft) => JSON.stringify([d.text, d.actions.filter((a) => !a.posted)]);
-
-// The frame under the answer of Claude that did not post two things to do or more (#906, S-23): the first one's destination and text, and for each one after it "N をどこに送りますか" with the two choices of the dialog of "投稿".
-// Once every one after the first has a choice, the choices are fixed in the cards and the things to do are posted by `post` (`slack_post`), from the top down. The rules of S-23 were passed by Rust on the answer's list, so the frame works only while the cards are still that list:
-// after a change of the cards, the text or the draft it is closed, and the owner posts with "投稿" as usual.
-function confirmFrame(answer: ChatAnswer): (() => HTMLElement) | null {
-  const d = draft;
-  // The cards are the answer's list: put in by `answered` (or left as the screen sent them), and not changed while the request was on its way.
-  const wrote = answer.actions ? JSON.stringify(d?.actions.filter((a) => !a.posted)) === JSON.stringify(answer.actions) : JSON.stringify(d?.actions) === askedActions;
-  // The text Rust checked is the one the cards paste: the answer's new text, put in, or the one the request was sent with.
-  const checked = d?.text === (answer.body ?? askedText);
-  if (!d || posting || !wrote || !checked) return null;
-  const indexes = laterIndexes(d);
-  if (indexes.length === 0 || !pendingOf(d).ready) return null;
-  const first = d.actions.findIndex((a) => !a.posted);
-  const [where, text] = [`${first + 1}. ${whereLabel(d.actions[first])}`, d.actions[first].paste ? d.text : d.actions[first].text];
-  const key = pendingKey(d);
-  const choices = new Map<number, string>();
-  const labels = new Map(indexes.map((i) => [i, destinationChoices(d, i)]));
-  let state: "open" | "done" | "stale" = "open";
-  const choose = async (i: number, value: string) => {
-    if (state !== "open" || posting || asking) return;
-    if (draft !== d || pendingKey(d) !== key) {
-      state = "stale";
-      chat.draw();
-      return;
-    }
-    choices.set(i, value);
-    if (choices.size < indexes.length) return chat.draw();
-    state = "done";
-    fixDestinations(d, choices);
-    chat.draw();
-    await post();
-  };
-  return () => {
-    const frame = tag("div", "slack-confirm");
-    const head = tag("div", "slack-confirm-first");
-    head.append(tag("div", "slack-confirm-where", where), tag("div", "slack-confirm-text", text));
-    frame.append(head);
-    if (state !== "open") {
-      const foot = tag("div", "diff-foot");
-      foot.append(tag("span", "diff-state", state === "done" ? "送り先を選びました" : "行うことが変わったため投稿できません"));
-      frame.append(foot);
-      return frame;
-    }
-    for (const i of indexes) {
-      const group = tag("div", "slack-ask-item");
-      group.append(tag("div", "slack-confirm-ask", `${i + 1} をどこに送りますか`));
-      const buttons = tag("div", "slack-confirm-buttons");
-      for (const [value, label] of labels.get(i)!) {
-        const button = tag("button", "text-btn", label);
-        button.type = "button";
-        button.setAttribute("aria-pressed", String(choices.get(i) === value));
-        button.onclick = () => choose(i, value);
-        buttons.append(button);
-      }
-      group.append(buttons);
-      frame.append(group);
-    }
-    return frame;
-  };
-}
-
 // "投稿": with one thing to do not posted it posts at once, and with more the dialog above asks first (#905), then `post`.
 async function startPost() {
   const d = draft;
-  if (!d || posting || asking) return;
+  if (!d || posting || dialogOpen) return;
   const { pending, ready } = pendingOf(d);
   if (!ready) return;
   if (pending.length > 1 && !(await askDestinations(d))) return;
@@ -666,9 +528,10 @@ async function startPost() {
 
 // `post` sends the actions that are not posted yet, from the top down. One that continues a thread is sent to the thread of the post it follows, by the time (`ts`) that post answered.
 // A failure stops there: what was sent is marked posted and is never sent again, and the rest stays as it is. The screen stays open after the last one, so more can be added.
-async function post() {
+// It answers how many it sent and the failure that stopped it, if any (the tool `slack_compose_post` tells them to Claude Code); the screen shows the failure itself.
+async function post(): Promise<{ sent: number; error: string | null }> {
   const d = draft;
-  if (!d || posting || !pendingOf(d).ready) return;
+  if (!d || posting || !pendingOf(d).ready) return { sent: 0, error: "投稿できる行うことがありません" };
   $("slack-error").hidden = true;
   posting = true;
   drawActions();
@@ -693,10 +556,62 @@ async function post() {
   if (draft === d) drawActions();
   refreshSlackCompose();
   if (sent.length) toast(sent.length > 1 ? `${sent.length} 件を投稿しました` : `${wsName(sent[0].teamId)} の ${label(sent[0])} に貼りました`);
-  if (!failed) return;
+  if (!failed) return { sent: sent.length, error: null };
   // The error line is on the compose screen: when the screen was left, or another mail's draft took its place, a toast tells instead.
-  if (currentScreen() === "compose" && draft === d) return showComposeError(failed.error);
-  toast(failed.to ? `${wsName(failed.to.teamId)} の ${label(failed.to)} に貼れませんでした: ${failed.error}` : String(failed.error));
+  if (currentScreen() === "compose" && draft === d) showComposeError(failed.error);
+  else toast(failed.to ? `${wsName(failed.to.teamId)} の ${label(failed.to)} に貼れませんでした: ${failed.error}` : String(failed.error));
+  return { sent: sent.length, error: String(failed.error) };
+}
+
+// What Claude Code reads and writes of the screen (`screen_read`, `screen_write`) and asks for (`slack_compose_post`), as the fields of the target "slack-compose" (S-4):
+// `text` the original message, `actions` the cards as the text of a JSON array, and `destinations` the numbered destinations to choose from, which is read only. Rust makes the texts and checks a write (`slack_compose_read`, `slack_compose_write`); nothing is posted or saved by a write.
+const composeNames = ["text", "actions", "destinations"];
+const refusal = (e: string): never => {
+  throw new Error(e);
+};
+
+async function readFields(): Promise<Fields> {
+  const d = draft!;
+  const read = await invoke("slack_compose_read", { actions: d.actions });
+  return { text: d.text, actions: read.actions, destinations: read.destinations };
+}
+
+// Puts what Claude Code wrote into the original message and the cards, and keeps what they held before it for "元に戻す".
+async function writeFields(fields: Fields) {
+  const d = draft!;
+  if (posting) refusal("投稿の最中のため、書けません");
+  if (dialogOpen) refusal("送り先を確かめるダイアログが開いているため、書けません");
+  if ("destinations" in fields) refusal("欄 destinations は読むだけです");
+  const [before, was] = [copyOf({ text: d.text, actions: d.actions }), keyOf(d)];
+  const actions = "actions" in fields ? await invoke("slack_compose_write", { text: fields.actions, actions: d.actions }) : d.actions;
+  // The owner may have changed the fields while Rust checked the write: what was checked is not what is there now.
+  if (draft !== d || posting || dialogOpen || keyOf(d) !== was) refusal("書いている間に画面が変わりました。もう一度 screen_read で読んでください");
+  if ("text" in fields) {
+    d.text = fields.text;
+    $<HTMLTextAreaElement>("slack-body").value = d.text;
+  }
+  d.actions = actions;
+  if (keyOf(d) !== was) undos.push({ before, after: keyOf(d) });
+  $("slack-error").hidden = true;
+  drawActions();
+  refreshSlackCompose();
+}
+
+// "投稿" as the tool asks for it: one thing to do is posted at once and the answer says so; two or more open the dialog of the destinations, and the owner chooses there.
+async function postFields(): Promise<Fields> {
+  const d = draft!;
+  if (posting) refusal("投稿の最中です");
+  if (dialogOpen) refusal("送り先を確かめるダイアログがもう開いています");
+  const { pending, ready } = pendingOf(d);
+  if (pending.length === 0) refusal("投稿していない行うことがありません");
+  if (!ready) refusal("送り先か文のない行うことがあるため、投稿できません。screen_read で確かめてください");
+  if (pending.length > 1) {
+    void startPost();
+    return { state: "asking" };
+  }
+  const done = await post();
+  if (done.error !== null) refusal(done.sent ? `${done.sent} 件を投稿したあと、失敗しました: ${done.error}` : `投稿できませんでした: ${done.error}`);
+  return { state: "posted", count: String(done.sent) };
 }
 
 export function initSlackCompose() {
@@ -748,11 +663,28 @@ export function initSlackCompose() {
     refreshSlackCompose();
   };
   $("slack-reset").onblur = disarmReset;
-  // The form is the shared composer's; the field is three lines high and scrolls inside.
-  $("slack-chat-note").after(createComposer({ prefix: "slack", label: "Claude への依頼" }));
-  chat.init();
-  // The divider sets the width of the column of the things to do, a fifth to a half of the screen body.
-  initSplit($("slack-main"), $("slack-split"), { min: 1 / 5, max: 1 / 2, initial: 1 / 3, property: "--brief-w" });
+  // Puts back what the newest write of Claude Code replaced, the original message and the cards together.
+  $("slack-undo").onclick = () => {
+    const [d, last] = [draft, undos[undos.length - 1]];
+    if (!d || posting || !last) return;
+    undos.pop();
+    d.text = last.before.text;
+    d.actions = copyOf(last.before.actions);
+    $<HTMLTextAreaElement>("slack-body").value = d.text;
+    $("slack-error").hidden = true;
+    drawActions();
+    refreshSlackCompose();
+  };
+  registerDraftTarget("slack-compose", {
+    names: composeNames,
+    isOpen: () => currentScreen() === "compose" && draft !== null,
+    read: readFields,
+    write: writeFields,
+    post: postFields,
+  });
+  initSlackComposeClaude();
+  // The divider sets the width of the column of the terminal, 35% to 60% of the screen body, 45% at first.
+  initSplit($("slack-main"), $("slack-split"), { side: "left", min: 0.35, max: 0.6, initial: 0.45, property: "--term-w" });
   drawActions();
   refreshSlackCompose();
 }

@@ -1,6 +1,6 @@
-// The divider between a screen's parts: the Slack thread (on the right, a third to a half of `main`), the column of the actions in Claude mode of the Slack compose screen (on the right, a fifth to a half),
+// The divider between a screen's parts: the Slack thread (on the right, a third to a half of `main`), the terminal column in Claude mode of the Slack compose screen (on the left, 35% to 60%),
 // the list of the Orca screen (on the left, 15% to 50%), and the right side of the Todo screen (on the right, 30% to 45%). It sets that pane's width as a ratio of `main`, so a resized window keeps it.
-// Each divider keeps its own ratio in memory. The CSS (`.split-chat`, `#slack-brief`, `#orca-list`, `#todo-side`) holds the range too.
+// Each divider keeps its own ratio in memory. The CSS (`.split-chat`, `#slack-compose-claude`, `#orca-list`, `#todo-side`) holds the range too.
 const KEY_STEP = 0.02;
 
 export interface SplitOptions {

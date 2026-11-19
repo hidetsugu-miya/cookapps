@@ -41,6 +41,7 @@ import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
+import type { ScreenAnswer } from "../ts/bindings/ScreenAnswer";
 import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { Skill } from "../ts/bindings/Skill";
@@ -483,6 +484,22 @@ export const emitEvent = (name: string, payload: unknown = null) =>
     payload,
   );
 
+// A-36: what `tsunagiai-mcp` does through the app's socket: the event `screen-bridge-ask`, which the screen answers with `screen_bridge_answer` (e2e/fixtures.js records it). Returns the screen's answer (`ok`, and `fields` or `error`).
+let screenAsks = 0;
+export async function askScreen(op: "read" | "write" | "post", target: string, fields: Record<string, string> = {}) {
+  const id = ++screenAsks;
+  await emitEvent("screen-bridge-ask", { id, op, target, fields });
+  let found: { id: number; answer: ScreenAnswer } | undefined;
+  await browser.waitUntil(
+    async () => {
+      found = ((await callsOf("screen_bridge_answer")) as { id: number; answer: ScreenAnswer }[]).find((c) => c.id === id);
+      return found !== undefined;
+    },
+    { timeoutMsg: `screen_bridge_answer was not called for the ask ${id}` },
+  );
+  return found!.answer;
+}
+
 export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABCD/p1700000000123456";
 
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
@@ -533,16 +550,6 @@ export const promptEdit: PromptEdit = {
 
 // What `slack_preview` answers for the thread of `threadDetail("First unread", "Hello from Alice", …)`: the post as it starts out in the compose screen.
 export const slackPreview = "*First unread*\nAlice <alice@example.com> ・ 2026/11/3 9:00\n\nHello from Alice";
-
-// What `claude_proofread_slack` answers when Claude proposes adding a full stop to the last line of `slackPreview`.
-export const proofreadEdit: PromptEdit = {
-  reply: "文末に句点を付けました",
-  body: `${slackPreview}。`,
-  diff: [
-    { kind: "del", text: "Hello from Alice" },
-    { kind: "ins", text: "Hello from Alice。" },
-  ],
-};
 
 // What `slack_channels` answers: the channels of the workspace `workspace`.
 export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general", private: false }];

@@ -13,6 +13,8 @@ import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js
 import { showSlackList } from "./slack-list.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { fetchOpenComments } from "./todo-comments.js";
+import { hideSlackComposeClaude } from "./slack-compose-claude.js";
+import { hideTodoClaude, syncTodoClaude } from "./todo-claude.js";
 import { todoState } from "./todo-data.js";
 import { show } from "./view.js";
 
@@ -88,6 +90,10 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   closeHint();
   closeDetail();
   closeDatabaseForm();
+  // The terminal of the Todo screen's Claude pane is hidden while another screen is shown (its process goes on).
+  if (name !== "todo") hideTodoClaude();
+  // The same for the Claude pane of the Slack compose screen, which is left by every screen the sidebar shows.
+  hideSlackComposeClaude();
   if (name !== "orca") {
     hideFormation();
     // The language server's settings are read by the clock only while the Orca screen is shown (A-34).
@@ -99,6 +105,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
     showCalendar();
   } else if (name === "todo") {
     show("todo");
+    syncTodoClaude();
     if (todoState.kept) renderTodo();
     fetchOpenComments();
     // The backend keeps the completed tasks of the last load; they are fetched again only while `doneStale` is set (until a load has fetched from Todoist).
