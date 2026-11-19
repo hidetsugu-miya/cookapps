@@ -464,6 +464,10 @@ export interface Commands {
   orca_branch_used: { args: { repo: string; name: string; environment: string | null }; result: null };
   // A-25: switches the worktree at `path` to the local branch `name`, or to the remote one (`kind` "remote", `name` like `origin/feature/a`). Orca's refusal is the error's message; a `warning` comes with a switch that worked.
   orca_switch_branch: { args: { path: string; kind: "local" | "remote"; name: string; environment: string | null }; result: OrcaBranchSwitched };
+  // A-44: stages (`orca_files_stage`), unstages (`orca_files_unstage`) or puts back as HEAD has them (`orca_files_revert`, which deletes a file that HEAD lacks, for good) the changes of `paths` (files and folders from the worktree; a folder is the changes under it). A path outside the worktree and the root are refused; Orca's refusal is the error's message.
+  orca_files_stage: { args: { path: string; paths: string[]; environment: string | null }; result: null };
+  orca_files_unstage: { args: { path: string; paths: string[]; environment: string | null }; result: null };
+  orca_files_revert: { args: { path: string; paths: string[]; environment: string | null }; result: null };
   // A-22: copies the file `relative` of the worktree to this PC, to the place picked in the save dialog that Rust opens (the page gives none). The name of the file saved, or null when the dialog was cancelled.
   orca_file_download: { args: { path: string; relative: string; environment: string | null }; result: string | null };
   // A-31: opens the HTML file `relative` of the worktree in the default browser of this PC, from the server of the app. It answers nothing: the address is never given to the page.
