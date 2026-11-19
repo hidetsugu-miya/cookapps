@@ -64,10 +64,10 @@ export function syncDatabaseForm(profiles: DatabaseProfileView[]) {
   opened?.sync?.(profiles);
 }
 
-// `initial` is the connection to edit, or null for a new one. `save` answers when it is saved and throws what the user is told when it is not. `test` answers the version of the server, and throws what the user is told when it cannot log in.
+// `initial` is the connection to edit, or null for a new one. `save` answers true when it is saved, false when nothing was saved and the pane stays (the owner has not agreed to a confirmation that it opened yet), and throws what the user is told when it cannot save. `test` answers the version of the server, and throws what the user is told when it cannot log in.
 export function openDatabaseForm(
   initial: DatabaseProfileView | null,
-  save: (profile: DatabaseProfile, password: string) => Promise<void>,
+  save: (profile: DatabaseProfile, password: string) => Promise<boolean>,
   test: (profile: DatabaseProfile, password: string) => Promise<string>,
 ) {
   closeDatabaseForm();
@@ -159,9 +159,10 @@ export function openDatabaseForm(
     err.hidden = true;
     submit.disabled = true;
     try {
-      await save(typed(), password.value);
+      const saved = await save(typed(), password.value);
+      if (!saved) submit.disabled = false;
       // Another edit may have taken the pane while the save was on its way.
-      if (form.isConnected) closeDatabaseForm();
+      else if (form.isConnected) closeDatabaseForm();
     } catch (x) {
       err.textContent = String(x);
       err.hidden = false;

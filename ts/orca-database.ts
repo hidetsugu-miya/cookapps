@@ -4,7 +4,7 @@
 // A press on a table, and 「新規クエリ」 of a database, open a tab of the work pane (A-43, orca-database-tabs.ts), which the screen makes (`hooks`); a connection that is disconnected, deleted from the list or closed by Rust takes its tabs with it (`gone`).
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
-import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
+import { drawDatabaseSide, showScriptOutput, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { $ } from "./dom.js";
 import { logError, showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
@@ -261,8 +261,8 @@ export function initOrcaDatabase(handlers: Handlers) {
   // Rust tells each line that the script of a connection writes while the connection opens (D-3). A line for a connection that is not opening here is dropped.
   window.__TAURI__.event.listen<DatabaseScriptOutput>("database-script-output", ({ payload }) => {
     const c = connections.get(payload.id);
-    if (c === undefined || !c.loading || c.connected) return;
+    if (c === undefined || !c.loading) return;
     c.output = payload.line;
-    draw();
+    if (!showScriptOutput($("orca-database"), payload.id, payload.line)) draw();
   });
 }

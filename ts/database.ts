@@ -7,7 +7,7 @@ import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { changesOf, cellKey, emptyEdit, type EditState, markable, originalText } from "./database-edit.js";
-import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
+import { drawDatabaseSide, showScriptOutput, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
 import { drawDatabaseWork, type EditActions, focusSqlField, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
@@ -245,7 +245,25 @@ async function dropClosed(): Promise<string[]> {
   return dropped;
 }
 
-async function save(profile: DatabaseProfile, password: string) {
+// The save of the edit pane. Rust closes an edited connection, and the tabs of its tables go with it, so a save of a connection whose selected table has gathered changes asks first (D-10), under 保存, and answers false: nothing is saved and the edit pane stays with 保存 on again. When the owner agrees, the changes are dropped and the form is submitted again, and that save finds nothing to ask about.
+function saveAsking(profile: DatabaseProfile, password: string): Promise<boolean> {
+  if (profile.id === "") return save(profile, password);
+  const submit = document.querySelector<HTMLButtonElement>('#database-form [type="submit"]');
+  let asking = true;
+  let direct = false;
+  leaving(
+    () => {
+      if (asking) direct = true;
+      else if (submit?.isConnected) submit.form?.requestSubmit();
+    },
+    (t) => t.id === profile.id,
+    submit,
+  );
+  asking = false;
+  return direct ? save(profile, password) : Promise.resolve(false);
+}
+
+async function save(profile: DatabaseProfile, password: string): Promise<boolean> {
   const known = new Set(profiles.map((p) => p.id));
   let failure: unknown = null;
   try {
@@ -256,9 +274,12 @@ async function save(profile: DatabaseProfile, password: string) {
   // Rust closes an edited connection that was open.
   if (profile.id !== "") await dropClosed();
   await load();
-  if (failure === null) return;
+  if (failure === null) return true;
   // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the edit pane would save it again as a new one. It closes, and a failure card shows the error.
-  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showFailure("database", failure);
+  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) {
+    showFailure("database", failure);
+    return true;
+  }
   throw failure;
 }
 
@@ -420,11 +441,11 @@ function gathered(t: TableTab | null): number {
 }
 
 // Runs `go` at once, or, when it leaves a table that has gathered changes (`affects`), after the owner agrees to drop them (D-10). The confirmation opens under the tab of that table.
-function leaving(go: () => void, affects: (t: TableTab) => boolean = () => true) {
+function leaving(go: () => void, affects: (t: TableTab) => boolean = () => true, under?: Element | null) {
   const t = activeTable();
   const n = gathered(t);
   if (t === null || n === 0 || !affects(t)) return go();
-  const anchor = document.querySelector(`#database-work-tabs [data-key="open-${CSS.escape(t.key)}"]`) ?? $("database-work");
+  const anchor = under ?? document.querySelector(`#database-work-tabs [data-key="open-${CSS.escape(t.key)}"]`) ?? $("database-work");
   confirmDiscardChanges(anchor, n, () => {
     t.edit = emptyEdit();
     go();
@@ -657,7 +678,7 @@ const treeActions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
-  edit: (profile) => openDatabaseForm(profile, save, test),
+  edit: (profile) => openDatabaseForm(profile, saveAsking, test),
   disconnect: async (profile) => {
     connections.delete(profile.id);
     dropTabs((t) => t.id === profile.id);
@@ -721,8 +742,8 @@ export function initDatabase() {
   // Rust tells each line that the script of a connection writes while the connection opens. A line that comes after the opening ended, or for a connection that is not opening, is dropped.
   window.__TAURI__.event.listen<DatabaseScriptOutput>("database-script-output", ({ payload }) => {
     const c = connections.get(payload.id);
-    if (c === undefined || !c.loading || c.connected) return;
+    if (c === undefined || !c.loading) return;
     c.output = payload.line;
-    draw();
+    if (!showScriptOutput($("database-side-feed"), payload.id, payload.line)) draw();
   });
 }

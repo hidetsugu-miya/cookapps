@@ -2153,7 +2153,7 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-sql-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* D-9: a query tab: the selects of the connection and the database above the field, and between the field and the result a line that is dragged to change the height of the field (D-6). */
 .database-query-bar { flex: none; display: flex; gap: 8px; margin-bottom: 12px; }
-.database-query-select { min-width: 0; max-width: 50%; height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); font: inherit; color: #333; }
+.database-query-select { min-width: 0; max-width: 50%; height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); font: inherit; color: inherit; }
 .database-query-select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .database-query .database-sql-text { resize: none; }
 .database-query-split { flex: none; position: relative; height: 9px; margin-bottom: 4px; cursor: row-resize; user-select: none; -webkit-user-select: none; }

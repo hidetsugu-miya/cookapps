@@ -3876,6 +3876,30 @@ describe("orca: files and editor (A-18)", () => {
     expect(await count("#orca-database .database-note")).toBe(0);
   });
 
+  it("draws the last line of the script when a connection that this part holds open is opened again, in place of 読み込み中… (A-43)", async () => {
+    await openDatabasePart({ database_connect: ["shop"] });
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children", 0);
+    await mock("database_connect", holds);
+    await dbRow("p1").click();
+    await waitForCalls("database_connect");
+    await expect($("#orca-database .database-note")).toHaveText("読み込み中…");
+    await emitEvent("database-script-output", { id: "p1", line: "forwarding port 3307" });
+    await expect($("#orca-database .database-note")).toHaveText("forwarding port 3307");
+    // The line is put into the note in place: the tree is not made again for each line.
+    await browser.execute(() => {
+      (document.querySelector("#orca-database .database-note") as HTMLElement & { kept?: boolean }).kept = true;
+    });
+    await emitEvent("database-script-output", { id: "p1", line: "second" });
+    await expect($("#orca-database .database-note")).toHaveText("second");
+    expect(await browser.execute(() => (document.querySelector("#orca-database .database-note") as HTMLElement & { kept?: boolean }).kept === true)).toBe(true);
+    await release("database_connect", ["shop"]);
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    expect(await count("#orca-database .database-note")).toBe(0);
+  });
+
   it("has a menu on a connection with the disconnect only while it is open, and on a database with the new query and the close (A-43)", async () => {
     await openDatabasePart({ database_connect: ["shop"], database_tables: [databaseTable("orders")], database_disconnect: null });
     await dbRightPress("p1");

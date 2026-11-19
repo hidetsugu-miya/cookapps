@@ -137,12 +137,24 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
   item.append(button);
   if (node.expanded) {
     const children = tag("div", "database-children");
-    if (node.loading) children.append(note(node.connected ? "読み込み中…" : (node.output ?? "接続中…"), 1, false));
+    if (node.loading) {
+      const line = note(node.output ?? (node.connected ? "読み込み中…" : "接続中…"), 1, false);
+      line.dataset.scriptNote = "";
+      children.append(line);
+    }
     if (node.error !== null) children.append(note(node.error, 1, true));
     children.append(...databaseNodes(node, selected, actions));
     item.append(children);
   }
   return item;
+}
+
+// Puts the last line of a script's output into the note under the row of its connection, in place: a script may write many lines in a second, and the box is not made again for each. Answers false when that note is not on the screen (the caller draws the box then). The box is drawn again at the next change of what it shows, which also makes it again from the state.
+export function showScriptOutput(box: HTMLElement, id: string, line: string): boolean {
+  const note = box.querySelector(`[data-key="${CSS.escape(id)}"]`)?.closest(".database-item")?.querySelector<HTMLElement>("[data-script-note]");
+  if (!note) return false;
+  note.textContent = line;
+  return true;
 }
 
 export function drawDatabaseSide(box: HTMLElement, state: SideState, actions: SideActions) {

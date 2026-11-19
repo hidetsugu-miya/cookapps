@@ -244,7 +244,13 @@ function iconButton(key: string, label: string, svg: string, disabled: boolean, 
   button.setAttribute("aria-label", label);
   button.innerHTML = svg;
   button.disabled = disabled;
-  button.onclick = onclick;
+  // A press leaves the field of a cell that is open where it is: the blur of a press would keep the text and draw the pane again between the press and the release, and the button the pointer is released on would not be the one it was pressed on, so the click would be lost. The click keeps the text first, then does its work (D-10).
+  button.onmousedown = (e) => e.preventDefault();
+  button.onclick = () => {
+    const open = document.activeElement;
+    if (open instanceof HTMLInputElement && open.classList.contains("database-cell-input")) open.blur();
+    onclick();
+  };
   return button;
 }
 

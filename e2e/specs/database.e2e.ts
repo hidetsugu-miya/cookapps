@@ -897,17 +897,44 @@ describe("database: tree", () => {
     expect(await notes()).toEqual(["<b>Port 3307</b> opened"]);
     expect(await count("#database-side-feed .database-note b")).toBe(0);
     await expect(dot("p1")).toHaveAttribute("data-state", "connecting");
+    // A line is put into the note in place: the tree is not made again for each line.
+    await browser.execute(() => {
+      (document.querySelector("#database-side-feed .database-note") as HTMLElement & { kept?: boolean }).kept = true;
+    });
     // A line of a connection that is not opening shows nowhere.
     await emitEvent("database-script-output", { id: "p2", line: "of another connection" });
     await emitEvent("database-script-output", { id: "p1", line: "second" });
     await browser.waitUntil(async () => (await notes())[0] === "second");
     expect(await notes()).toEqual(["second"]);
+    expect(await browser.execute(() => (document.querySelector("#database-side-feed .database-note") as HTMLElement & { kept?: boolean }).kept === true)).toBe(true);
     await release("database_connect", ["shop"]);
     await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
     expect(await notes()).toEqual([]);
     // A line that comes after the opening ended is dropped.
     await emitEvent("database-script-output", { id: "p1", line: "late" });
     await emitEvent("database-script-output", { id: "p2", line: "late" });
+    expect(await notes()).toEqual([]);
+  });
+
+  it("shows the output of the script when a connection that the screen holds open is opened again, in place of 読み込み中…", async () => {
+    await openDatabase();
+    await mock("database_connect", ["shop"]);
+    await row("p1").click();
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
+    // The tree closes and the screen still holds the connection open (Rust may have closed it meanwhile).
+    await row("p1").click();
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
+    const again = await mock("database_connect", holds);
+    await row("p1").click();
+    await waitForCalls(again);
+    expect(await notes()).toEqual(["読み込み中…"]);
+    await emitEvent("database-script-output", { id: "p1", line: "Starting session" });
+    await browser.waitUntil(async () => (await notes())[0] === "Starting session");
+    expect(await notes()).toEqual(["Starting session"]);
+    await release("database_connect", ["shop"]);
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
+    expect(await notes()).toEqual([]);
+    await emitEvent("database-script-output", { id: "p1", line: "late" });
     expect(await notes()).toEqual([]);
   });
 
@@ -2026,6 +2053,55 @@ describe("database: tree", () => {
         await $('#database-work-tabs [data-key="open-p1/d/shop/t/users"]').click();
         await expect(cell(1, 2)).toHaveText("Alice");
         await expect(changes()).not.toExist();
+      });
+
+      it("keeps the text of a field that is open when ✓ is pressed, and sends it with the other changes", async () => {
+        const { apply } = await openEdits();
+        await rewrite(1, 2, "Alicia");
+        await startEdit(2, 2);
+        await field().setValue("Robert");
+        // The press does not blur the field: the footer is not drawn again between the press and the release.
+        const prevented = await browser.execute(() => {
+          const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+          document.querySelector('#database-work [data-key="apply"]')!.dispatchEvent(e);
+          return e.defaultPrevented;
+        });
+        expect(prevented).toBe(true);
+        expect(await count("#database-work .database-cell input")).toBe(1);
+        await button("apply").click();
+        expect(await waitForCalls(apply)).toEqual([
+          {
+            id: "p1",
+            database: "shop",
+            table: "users",
+            changes: [
+              { kind: "update", key: [{ column: "id", value: "1" }], values: [{ column: "name", value: "Alicia" }] },
+              { kind: "update", key: [{ column: "id", value: "2" }], values: [{ column: "name", value: "Robert" }] },
+            ],
+          },
+        ]);
+      });
+
+      it("asks before the edit pane of the connection saves, under 保存, saves nothing and keeps the edit pane on キャンセル, and saves on 捨てる", async () => {
+        await openEdits();
+        await rewrite(1, 2, "Alicia");
+        const save = await mock("database_profile_save", databaseProfile("p1", "Example direct"));
+        await mock("database_connections", []);
+        await pickFromMenu("p1", 1);
+        await $("#database-form button[type=submit]").click();
+        await expect(popup()).toBeDisplayed();
+        await expect($('.pop[role="alertdialog"] p')).toHaveText("確定していない 1 件の変更は、データベースに送られていません。移ると、すべて消えます。");
+        expect(await callsOf(save)).toEqual([]);
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        await expect(popup()).not.toExist();
+        await expect($("#database-form")).toExist();
+        await expect($("#database-form button[type=submit]")).toBeEnabled();
+        expect(await callsOf(save)).toEqual([]);
+        await $("#database-form button[type=submit]").click();
+        await $('.pop[role="alertdialog"] .text-btn.danger').click();
+        expect(await waitForCalls(save)).toHaveLength(1);
+        await expect($("#database-form")).not.toExist();
+        await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
       });
 
       it("asks before a query is opened with the plus, keeps the table and the changes on キャンセル, and opens the query on 捨てる", async () => {
