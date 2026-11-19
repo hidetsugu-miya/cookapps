@@ -14,6 +14,7 @@ import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
 import { logError, setRelogin } from "./error-card.js";
+import { onScreenChanged } from "./screen-bridge.js";
 import { show } from "./view.js";
 
 const HOUR_PX = 64;
@@ -321,7 +322,14 @@ function choiceChanged() {
   dropWeeks();
   keptWeeks = Promise.resolve([]);
   clearTimeout(choiceTimer);
-  choiceTimer = setTimeout(() => loadCalendar(), CHOICE_FETCH_MS);
+  // Off the screen the week is read when the screen is shown.
+  choiceTimer = setTimeout(() => currentScreen() === "calendar" && loadCalendar(), CHOICE_FETCH_MS);
+}
+
+// Claude Code changed the calendar (C-6): an event, or the calendars shown. The weeks drawn, fetched and kept, and the panel of C-4, hold the old state.
+function changedByClaude() {
+  forgetCalendarChoices();
+  choiceChanged();
 }
 
 const moveWeek = (date: string) => {
@@ -335,6 +343,7 @@ export function initCalendar() {
   initCalendarSide(choiceChanged);
   initCalendarMonth(moveWeek);
   initCalendarClaude();
+  onScreenChanged("calendar", changedByClaude);
   // A saved event: the week is read again, which draws it.
   initCalendarCreate(() => loadCalendar());
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));

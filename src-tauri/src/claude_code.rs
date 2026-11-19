@@ -2,7 +2,7 @@
 //! Claude Code runs in a folder of its own, `claude-code/` in the app config directory, which holds a launch script and the `--mcp-config` file. The script is written by the app in a fixed form
 //! (only paths the app decided are in it: nothing that comes from a mail, a message or a Todo), and it starts `claude --tools '' --permission-mode manual --setting-sources user --strict-mcp-config --mcp-config {the file}` (the built-in tools stay on when the screen asks, as the database screen does).
 //! `manual` asks for every tool that writes, whatever `defaultMode` the owner's settings hold, and `--setting-sources user` leaves out the project and local settings of the shared folder, so an "always allow" chosen in one pane does not reach the others.
-//! The calendar pane (C-6) alone starts in `auto` (#1074, `start-auto.sh`): it runs with no built-in tools and with an MCP config (`mcp-calendar.json`) that starts `tsunagiai-mcp --calendar`, which offers only `list_events` and `calendar_show_slots`, so that nothing that writes runs unasked.
+//! The calendar pane (C-6) alone starts in `auto` (#1074, `start-auto.sh`): it runs with no built-in tools and with an MCP config (`mcp-calendar.json`) that starts `tsunagiai-mcp --calendar`, which offers only the tools of the calendar screen (`CALENDAR_TOOLS`), so that no other tool that writes runs unasked.
 //! The MCP config names `tsunagiai-mcp` next to the app's own executable (`Contents/MacOS/` in the bundle) and nothing else; the child is started as an argument array, with no shell of ours in between except `/bin/sh` running the script.
 //! A session is a process group of its own (the pseudo terminal makes the child a session leader): closing a pane, the end of the app, and a screen that no longer takes the output stop the whole group.
 //! What the terminal prints and the keys typed are only in the channel of the pane: no log line, no error text.
@@ -38,7 +38,7 @@ const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
 /// #1074: the script and the MCP config of a pane in the `auto` permission mode.
 const SCRIPT_AUTO_FILE: &str = "start-auto.sh";
 const MCP_CALENDAR_FILE: &str = "mcp-calendar.json";
-/// The argument that makes `tsunagiai-mcp` offer the tools of the calendar pane only (`list_events` and `calendar_show_slots`, C-6).
+/// The argument that makes `tsunagiai-mcp` offer the tools of the calendar pane only (`CALENDAR_TOOLS`, C-6).
 const CALENDAR_MCP_ARG: &str = "--calendar";
 /// A-37: the orchestrator of a formation is the pane whose id is this prefix and the formation's name (the screen names its pane so), and it runs in `formations/{name}/` of the config directory, not in `claude-code/`.
 const FORMATION_ID_PREFIX: &str = "formation:";

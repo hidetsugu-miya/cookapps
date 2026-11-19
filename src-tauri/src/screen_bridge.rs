@@ -50,7 +50,7 @@ pub struct Rules {
 
 pub const RULES: Rules = Rules {
     targets: &["slack-compose", "calendar-slots"],
-    changes: &["todo"],
+    changes: &["todo", "calendar"],
     wait: Duration::from_secs(5),
     post_wait: Duration::from_secs(40),
 };
@@ -81,7 +81,7 @@ pub enum Request {
     Write { target: String, fields: Fields },
     /// Does what the screen's own "投稿" does with what it holds now (#734); the answer's `fields` say what happened (`state`).
     Post { target: String },
-    /// Something changed (a name of `RULES.changes`, such as `todo`): the screens that registered for it read again.
+    /// Something changed (a name of `RULES.changes`, such as `todo` and `calendar`): the screens that registered for it read again.
     Changed { what: String },
 }
 
@@ -677,6 +677,8 @@ mod tests {
         assert!(check(&changed("todo"), &LISTED).is_ok());
         assert!(check(&changed("mail"), &LISTED).is_err());
         assert!(check(&changed("todo"), &RULES).is_ok());
+        assert!(check(&changed("calendar"), &RULES).is_ok());
+        assert!(check(&changed("calendar"), &LISTED).is_err());
     }
 
     #[test]

@@ -28,9 +28,7 @@ use crate::{
 };
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
-/// The `fields` of an event list: what `list_events` needs, and what the detail of the week adds.
-const EVENT_FIELDS: &str =
-    "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))";
+/// The `fields` of an event list: what the detail of the week and `list_events` (C-6) draw.
 const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(id,summary,iCalUID,start,end,description,location,hangoutLink,organizer(self),attendees(self,responseStatus,resource,email))";
 const CALENDARS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 // shortcut: past this many pages (2500 events of one calendar) the rest is dropped, upgrade if a week ever needs more.
@@ -449,19 +447,31 @@ pub struct Week {
     calendar_failed: Vec<String>,
 }
 
-/// An event as `list_events` returns it.
+/// An event as `list_events` returns it: what the detail of C-2 shows, and what `calendar_update_event` and `calendar_delete_event` need (C-6).
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EventItem {
     account: String,
     calendar: String,
+    calendar_id: String,
+    event_id: String,
     summary: String,
     declined: bool,
+    response: ResponseStatus,
     all_day: bool,
     /// A local date for an all-day event, else an RFC 3339 time.
     start: String,
     /// Same form as `start`; the last day for an all-day event.
     end: String,
+    location: Option<String>,
+    /// As Google sends it: plain text or a little HTML.
+    description: Option<String>,
+    meet_url: Option<String>,
+    /// Invited people (rooms left out), and how many of them accepted.
+    attendees: u32,
+    accepted: u32,
+    /// Whether the event can be changed or deleted (C-7).
+    editable: bool,
 }
 
 /// Whether the event is all day, and its start and end as the screen and `list_events` give them: a date for an all-day event (`end` the last day, included), else an RFC 3339 time.
@@ -483,11 +493,20 @@ impl From<&RawEvent> for EventItem {
         Self {
             account: e.account.clone(),
             calendar: e.calendar.clone(),
+            calendar_id: e.calendar_id.clone(),
+            event_id: e.event_id.clone(),
             summary: e.summary.clone(),
             declined: e.response == ResponseStatus::Declined,
+            response: e.response,
             all_day,
             start,
             end,
+            location: e.location.clone(),
+            description: e.description.clone(),
+            meet_url: e.meet_url.clone(),
+            attendees: e.attendees,
+            accepted: e.accepted,
+            editable: e.editable,
         }
     }
 }
@@ -775,7 +794,8 @@ fn check_choice(accounts: &[String], account: &str, calendar_id: &str) -> Result
     Ok(())
 }
 
-fn save_shown(dir: &Path, account: &str, calendar_id: &str, shown: bool) -> Result<(), String> {
+/// Keeps whether one calendar of one account is shown (C-4). The command of the screen and `calendar_set_shown` of `tsunagiai-mcp` (C-6) both call it.
+pub fn save_shown(dir: &Path, account: &str, calendar_id: &str, shown: bool) -> Result<(), String> {
     let listed = accounts::load(dir)?.unwrap_or_default();
     check_choice(&listed, account, calendar_id)?;
     // The kept weeks hold the events of the calendar just hidden, so a changed choice drops them under the same lock.
@@ -1287,7 +1307,7 @@ pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Resul
         "list_events",
         &min,
         &max,
-        EVENT_FIELDS,
+        EVENT_DETAIL_FIELDS,
         true,
     )
     .await?;
@@ -1317,6 +1337,17 @@ async fn load_choices(
     command: &str,
 ) -> Result<CalendarChoices, String> {
     let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
+    list_choices(&dir, auth, cache, command).await
+}
+
+/// The calendars of every account with whether each is shown, from the config directory: what `calendar_choices` reads, and `list_calendars` of `tsunagiai-mcp` (C-6) with a list of its own.
+pub async fn list_choices(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    command: &str,
+) -> Result<CalendarChoices, String> {
+    let dir = dir.to_owned();
     let selection = load_selection(&dir);
     let accounts = auth
         .accounts(&dir)
@@ -1505,17 +1536,17 @@ const INSERT_FIELDS: &str = "id,hangoutLink";
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct NewEvent {
-    account: String,
-    calendar_id: String,
-    title: String,
-    all_day: bool,
-    start: String,
-    end: String,
+    pub account: String,
+    pub calendar_id: String,
+    pub title: String,
+    pub all_day: bool,
+    pub start: String,
+    pub end: String,
     /// Email addresses; each one is invited.
-    guests: Vec<String>,
+    pub guests: Vec<String>,
     /// Whether to add a Google Meet conference.
-    meet: bool,
-    description: String,
+    pub meet: bool,
+    pub description: String,
 }
 
 /// The part of the answer of `events.insert` that is read.
@@ -1778,21 +1809,31 @@ pub async fn calendar_create_event(
     cache: State<'_, CalendarCache>,
     event: NewEvent,
 ) -> Result<Option<CreatedEvent>, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_create_event", "-", e))?;
+    create_event(&dir, &auth, &cache, &event).await
+}
+
+/// `calendar_create_event` on the config directory, for `tsunagiai-mcp` as well (C-6).
+pub async fn create_event(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    event: &NewEvent,
+) -> Result<Option<CreatedEvent>, String> {
     const COMMAND: &str = "calendar_create_event";
     let account = event.account.as_str();
-    let dir = config_dir(&app).map_err(|e| log_failure(COMMAND, "-", e))?;
     let listed = auth
-        .accounts(&dir)
+        .accounts(dir)
         .map_err(|e| log_failure(COMMAND, "-", e))?;
     check_choice(&listed, account, &event.calendar_id)?;
     let request_id = random_string().map_err(|e| log_failure(COMMAND, account, e))?;
-    let (query, body) = build_insert(&event, &request_id)?;
+    let (query, body) = build_insert(event, &request_id)?;
     let url = events_url(&event.calendar_id)?;
     // The role is read from Google, not taken from the screen.
     match check_owned(
-        &dir,
-        &auth,
-        &cache,
+        dir,
+        auth,
+        cache,
         account,
         &event.calendar_id,
         CREATE_REFUSAL,
@@ -1804,8 +1845,8 @@ pub async fn calendar_create_event(
         Err(e) => return Err(log_failure(COMMAND, account, e)),
     }
     match send_json_refreshing::<ApiCreated>(
-        &dir,
-        &auth,
+        dir,
+        auth,
         account,
         Method::POST,
         &url,
@@ -1848,9 +1889,9 @@ const CURRENT_FIELDS: &str = "organizer(self),hangoutLink,attendees(self)";
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct EditedEvent {
-    event_id: String,
+    pub event_id: String,
     #[serde(flatten)]
-    event: NewEvent,
+    pub event: NewEvent,
 }
 
 /// What `events.get` answers with before a change (`CURRENT_FIELDS`).
@@ -2024,7 +2065,7 @@ async fn changeable(
 
 /// Rewrites an event that the user organized, on a calendar the user owns (C-7), with the invitations and the Google Meet that `edit` asks for.
 /// `None` means the account must log in again (it has not granted the permission to change events yet).
-pub(crate) async fn update_event(
+pub async fn update_event(
     dir: &Path,
     auth: &Auth,
     cache: &CalendarCache,
@@ -2071,7 +2112,7 @@ pub(crate) async fn update_event(
 
 /// Deletes an event that the user organized, on a calendar the user owns (C-7). A repeating event's `event_id` is that of one occurrence, and only it goes.
 /// `None` means the account must log in again (it has not granted the permission to change events yet).
-pub(crate) async fn delete_event(
+pub async fn delete_event(
     dir: &Path,
     auth: &Auth,
     cache: &CalendarCache,
@@ -2766,6 +2807,64 @@ mod tests {
         let r = RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap();
         assert_eq!(r.response, ResponseStatus::Accepted);
         assert!(!EventItem::from(&r).declined);
+    }
+
+    #[test]
+    fn an_event_of_list_events_carries_its_detail_and_what_it_takes_to_change_it() {
+        let item = |organizer: &str, role: &str| {
+            let ev: ApiEvent = serde_json::from_str(&format!(
+                r#"{{"id":"e1","summary":"s","iCalUID":"u","organizer":{organizer},
+                    "start":{{"dateTime":"2026-10-29T10:00:00+09:00"}},"end":{{"dateTime":"2026-10-29T11:00:00+09:00"}},
+                    "location":"会議室","description":"メモ","hangoutLink":"https://meet.google.com/abc-defg-hij",
+                    "attendees":[{{"self":true,"responseStatus":"tentative","email":"me@example.com"}},
+                        {{"responseStatus":"accepted","email":"b@example.com"}},
+                        {{"responseStatus":"accepted","email":"room@example.com","resource":true}}]}}"#
+            ))
+            .unwrap();
+            let mut entry = cal(None);
+            entry.access_role = Some(role.into());
+            serde_json::to_value(EventItem::from(
+                &RawEvent::from_api(ev, "a@example.com", &entry).unwrap(),
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            item(r#"{"self":true}"#, "owner"),
+            serde_json::json!({
+                "account": "a@example.com",
+                "calendar": "仕事",
+                "calendarId": "id@example.com",
+                "eventId": "e1",
+                "summary": "s",
+                "declined": false,
+                "response": "tentative",
+                "allDay": false,
+                "start": "2026-10-29T10:00:00+09:00",
+                "end": "2026-10-29T11:00:00+09:00",
+                "location": "会議室",
+                "description": "メモ",
+                "meetUrl": "https://meet.google.com/abc-defg-hij",
+                "attendees": 2,
+                "accepted": 1,
+                "editable": true,
+            })
+        );
+        // An invitation, and an event of a calendar someone else owns, are not editable.
+        assert_eq!(item(r#"{}"#, "owner")["editable"], false);
+        assert_eq!(item(r#"{"self":true}"#, "reader")["editable"], false);
+        // A text that is blank is none, as the screen has it.
+        let ev: ApiEvent = serde_json::from_str(
+            r#"{"start":{"date":"2026-10-29"},"end":{"date":"2026-10-30"},"location":" ","description":""}"#,
+        )
+        .unwrap();
+        let blank = serde_json::to_value(EventItem::from(
+            &RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(blank["location"], serde_json::Value::Null);
+        assert_eq!(blank["description"], serde_json::Value::Null);
+        assert_eq!(blank["meetUrl"], serde_json::Value::Null);
+        assert_eq!(blank["response"], "unknown");
     }
 
     #[test]
