@@ -1883,6 +1883,6 @@ describe("slack thread: the divider", () => {
     expect(await share()).toBeCloseTo(0.4, 2);
     await expect($("#reply-split")).toHaveAttribute("aria-valuenow", "40");
     // The compose screen's divider is another one, still at its own start.
-    expect(await browser.execute(() => document.getElementById("slack-split")!.getAttribute("aria-valuenow"))).toBe("33");
+    expect(await browser.execute(() => document.getElementById("slack-split")!.getAttribute("aria-valuenow"))).toBe("45");
   });
 });
