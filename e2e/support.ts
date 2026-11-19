@@ -305,6 +305,9 @@ export function weekOfToday(firstDay = 0): Week {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
   const info = (summary: string, whenText: string, response: ResponseStatus = "unknown", detail: Partial<Info> = {}): Info => ({
     summary,
+    eventId: "",
+    calendarId: "",
+    editable: false,
     color: null,
     account,
     response,

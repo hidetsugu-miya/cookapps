@@ -283,6 +283,8 @@ pub fn run() {
             calendar::calendar_choices,
             calendar::calendar_owned,
             calendar::calendar_create_event,
+            calendar::calendar_update_event,
+            calendar::calendar_delete_event,
             calendar::set_calendar_shown,
             gmail::inbox,
             gmail::thread,
