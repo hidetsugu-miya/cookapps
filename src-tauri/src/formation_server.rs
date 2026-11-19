@@ -4,7 +4,7 @@
 //! The pieces, from the bottom up.
 //! - The frame: XSalsa20-Poly1305 under a key for each direction, with a nonce that is the direction and a counter, so that a replayed, reordered or reused frame does not open.
 //! - The handshake: each side sends an ephemeral public key, and the keys are derived from the DH of the ephemeral keys and the DH of the two pinned (static) keys together with the transcript, so that one who does not know its static key cannot derive them.
-//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `page.read`, `page.answer`, `subscribe`, `stop`).
+//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `messages.read`, `page.read`, `page.answer`, `subscribe`, `stop`).
 //! - The pushes (#983): `subscribe` turns the connection into one that the daemon pushes requests through, so the PC can ask something of the app without a port on the app's PC. `Hub` is the daemon's end (`Hub::push`, fed by `push.sock` of `remote/`, which a `tsunagiai-mcp` of that PC reaches with `push_to_daemon`), `Pushes` is the app's end.
 //! - The server (`serve`, the daemon of `--serve`) and the client (`Client`), which the app uses.
 //!
@@ -45,6 +45,7 @@ use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
 
 use crate::{
     formation::{self, Child, CHILDREN_FILE},
+    formation_message,
     formation_page::{self, DecisionPage, PageRecord},
 };
 
@@ -516,6 +517,15 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
                 return Reply::error(&e);
             }
             Reply::ok(json!({"pages": formation_page::read_pages(config, &params.formation)}))
+        }
+        "messages.read" => {
+            let Ok(params) = serde_json::from_value::<PagesParams>(request.params) else {
+                return bad_params();
+            };
+            if let Err(e) = formation::check_name(&params.formation) {
+                return Reply::error(&e);
+            }
+            Reply::ok(json!({"messages": formation_message::read(config, &params.formation)}))
         }
         "page.read" => {
             let Ok(params) = serde_json::from_value::<PageParams>(request.params) else {
@@ -1037,6 +1047,18 @@ impl Client {
             .call("pages.read", json!({"formation": formation}))
             .await?;
         serde_json::from_value(result["pages"].clone())
+            .map_err(|_| "サーバーの答えの形式が正しくありません".to_owned())
+    }
+
+    /// The messages that the leader and the children of `formation` sent each other, as the PC records them (#1084, `messages.jsonl`).
+    pub async fn messages_read(
+        &mut self,
+        formation: &str,
+    ) -> Result<Vec<formation_message::FormationMessage>, String> {
+        let result = self
+            .call("messages.read", json!({"formation": formation}))
+            .await?;
+        serde_json::from_value(result["messages"].clone())
             .map_err(|_| "サーバーの答えの形式が正しくありません".to_owned())
     }
 
@@ -2036,6 +2058,29 @@ mod tests {
     }
 
     #[test]
+    fn the_messages_of_a_formation_are_read_by_name() {
+        let config = temp_dir("api-messages");
+        let none = call(&config, "messages.read", json!({"formation": "api-work"}));
+        assert_eq!(none.body, json!({"ok": true, "result": {"messages": []}}));
+        let message = json!({"from": "api-work", "to": "one", "atMs": 5, "line": "ANSWER x"});
+        std::fs::create_dir_all(formation::dir(&config, "api-work")).unwrap();
+        std::fs::write(
+            formation::dir(&config, "api-work").join(formation_message::FILE),
+            format!("{message}\n"),
+        )
+        .unwrap();
+        let read = call(&config, "messages.read", json!({"formation": "api-work"}));
+        assert_eq!(read.body["result"]["messages"], json!([message]));
+        // A name that leaves the folder, and arguments that do not fit, are refused.
+        assert_eq!(
+            call(&config, "messages.read", json!({"formation": "../x"})).body["ok"],
+            false
+        );
+        assert_eq!(call(&config, "messages.read", json!({})).body["ok"], false);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn the_pages_of_a_formation_are_read_by_name_and_a_page_that_is_not_there_is_refused() {
         let config = temp_dir("api-pages");
         write_record(&config, "api-work", &["one"]);
@@ -2298,6 +2343,24 @@ mod tests {
             .await
             .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn the_messages_of_a_formation_are_read_over_the_socket() {
+        let served = served("net-messages").await;
+        let mut client = served.client().await;
+        assert_eq!(client.messages_read("api-work").await.unwrap(), []);
+        let message = formation_message::FormationMessage {
+            from: "one".to_owned(),
+            to: "api-work".to_owned(),
+            at_ms: 7,
+            line: "DONE x: y".to_owned(),
+        };
+        formation_message::append(&served.config, "api-work", &message).unwrap();
+        assert_eq!(client.messages_read("api-work").await.unwrap(), [message]);
+        assert!(client.messages_read("../x").await.is_err());
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
     }
 
     #[tokio::test]

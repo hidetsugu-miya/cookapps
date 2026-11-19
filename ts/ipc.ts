@@ -27,6 +27,7 @@ import type { EnvironmentsView } from "./bindings/EnvironmentsView";
 import type { FontArea } from "./bindings/FontArea";
 import type { FontSettings } from "./bindings/FontSettings";
 import type { FormationChild } from "./bindings/FormationChild";
+import type { FormationMessage } from "./bindings/FormationMessage";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import type { FormationConsent } from "./bindings/FormationConsent";
 import type { FormationDeleteAnswer } from "./bindings/FormationDeleteAnswer";
@@ -381,6 +382,8 @@ export interface Commands {
   screen_bridge_answer: { args: { id: number; answer: ScreenAnswer }; result: null };
   // A-37: the children of the formation `name`, in the order of `formations/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
+  // A-37 (#1084): the messages that the leader of the formation `name` and its children sent each other by SendMessage, oldest first, the last 500 at most: who sent it (`from`), to whom (`to`), when (`atMs`, epoch milliseconds) and the first line of the text (`line`, data from the sender, at most 200 characters). A formation of a saved environment is read from its PC. One that has none yet answers an empty list.
+  formation_messages: { args: { name: string }; result: FormationMessage[] };
   // A-41: the decision page that waits on the child `child` of the formation `name` (the child's `pendingPage` is set), checked again and with its evidence resolved now: a formation of a saved environment has its PC's server do it. A failure carries the message: the violations of the page, one on each line, or why it could not be read.
   formation_page_read: { args: { name: string; child: string }; result: DecisionPage };
   // A-41 (#923): sends the owner's answers to the page that waits on `child` as the reply to the leader's terminal (the pane of this Mac, or the terminal of the formation's PC in its Orca) and takes the page off the waiting. `atMs` is the time of the mark the page was drawn for: a page that was replaced meanwhile is refused. The page is read again and the reply is made in Rust; a required card with no answer, a key the card does not offer and a leader that is not running are failures with the message, and the page stays waiting.

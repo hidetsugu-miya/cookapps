@@ -26,6 +26,7 @@ use ts_rs::TS;
 
 use crate::{
     claude_auth::{self, EnvChange},
+    formation_message,
     orca_stream::OrcaViewport,
     skills::{self, CallPlugin, SkillScreen},
 };
@@ -164,16 +165,17 @@ fn check_permission_mode(
     Ok(())
 }
 
-/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, at the effort `high` (#911), and reading the project settings of its folder too.
+/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, at the effort `high` (#911), and reading the project settings of its folder too. `--settings {hook}` is the hook that records its SendMessage calls (`formation_message`, #1084).
 /// Only the two paths and the name that the app decided (`name` has passed `check_name`) and the fixed flags are in it.
-fn formation_script(claude: &Path, mcp_config: &Path, name: &str) -> String {
+fn formation_script(claude: &Path, mcp_config: &Path, hook: &Path, name: &str) -> String {
     format!(
         "#!/bin/sh\n\
          # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-         exec {claude} -n {name} --permission-mode auto --effort high --setting-sources user,project --strict-mcp-config --mcp-config {config} \"$@\"\n",
+         exec {claude} -n {name} --permission-mode auto --effort high --setting-sources user,project --settings {hook} --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
         name = sh_quote(name),
+        hook = sh_quote(&hook.to_string_lossy()),
         config = sh_quote(&mcp_config.to_string_lossy()),
     )
 }
@@ -300,7 +302,7 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json`, the launch script, an empty `.claude/settings.json` and the leader's skill `.claude/skills/feature-dev/` (A-41, replaced as a whole) in `formations/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script, the hook of its SendMessage calls `message-hook.json` (#1084), an empty `.claude/settings.json` and the leader's skill `.claude/skills/feature-dev/` (A-41, replaced as a whole) in `formations/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
 /// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
 fn write_formation_files(
     config: &Path,
@@ -317,7 +319,17 @@ fn write_formation_files(
     crate::accounts::write_atomic(
         &dir,
         SCRIPT_FILE,
-        &formation_script(claude, &dir.join(MCP_FILE), name),
+        &formation_script(
+            claude,
+            &dir.join(MCP_FILE),
+            &dir.join(formation_message::LEADER_HOOK_FILE),
+            name,
+        ),
+    )?;
+    crate::accounts::write_atomic(
+        &dir,
+        formation_message::LEADER_HOOK_FILE,
+        &formation_message::hook_settings(mcp, name, None),
     )?;
     write_empty_settings(&dir.join(".claude"))?;
     write_leader_skill(&dir.join(".claude"))?;
@@ -1250,6 +1262,7 @@ mod tests {
         let script = formation_script(
             Path::new("/Users/x/.local/bin/claude"),
             Path::new("/c/app/formations/formation/mcp.json"),
+            Path::new("/c/app/formations/formation/message-hook.json"),
             "formation",
         );
         assert_eq!(
@@ -1257,7 +1270,7 @@ mod tests {
             "#!/bin/sh\n\
              # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
              PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --effort high --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
+             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --effort high --setting-sources user,project --settings '/c/app/formations/formation/message-hook.json' --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
         );
         assert!(!script.contains("--tools"));
     }
@@ -1267,6 +1280,7 @@ mod tests {
         let script = formation_script(
             Path::new("/Users/o'neil/claude"),
             Path::new("/c/o'neil/mcp.json"),
+            Path::new("/c/o'neil/message-hook.json"),
             "formation",
         );
         assert!(script.contains(r"exec '/Users/o'\''neil/claude' -n 'formation'"));
@@ -1657,11 +1671,21 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(dir.join("start.sh")).unwrap(),
-            formation_script("/bin/claude".as_ref(), &dir.join("mcp.json"), "api-work")
+            formation_script(
+                "/bin/claude".as_ref(),
+                &dir.join("mcp.json"),
+                &dir.join("message-hook.json"),
+                "api-work"
+            )
         );
-        for file in ["CLAUDE.md", ".claude/settings.json"] {
+        for file in ["CLAUDE.md", ".claude/settings.json", "message-hook.json"] {
             assert!(dir.join(file).is_file(), "{file}");
         }
+        // The hook runs the same `tsunagiai-mcp` for this formation's leader.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("message-hook.json")).unwrap(),
+            formation_message::hook_settings(Path::new("/app/tsunagiai-mcp"), "api-work", None)
+        );
         // A name that is not a formation's writes nothing.
         assert!(formation_start_with(
             &config,

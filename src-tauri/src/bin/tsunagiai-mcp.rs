@@ -16,7 +16,7 @@ use tsunagiai_lib::{
     claude_code,
     database::{self, script::Scripts, DatabaseProfile, Keychain},
     formation::{self, FormationAgent, PlannedChild},
-    formation_page, formation_server, gmail, identity,
+    formation_message, formation_page, formation_server, gmail, identity,
     lsp::{self, LspServerSettings},
     screen_bridge::{self, Request as ScreenRequest},
     skills::{self, Skill, SkillScreen},
@@ -1437,6 +1437,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(None) => {}
         Err(e) => {
             println!("{}", formation_server::error_line(&e));
+            std::process::exit(1);
+        }
+    }
+    // The hook of Claude Code after each SendMessage (#1084): it records the message and serves no MCP.
+    match formation_message::hook_args(std::env::args().skip(1)) {
+        Ok(Some(hook)) => std::process::exit(formation_message::run_hook(&hook)),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }
