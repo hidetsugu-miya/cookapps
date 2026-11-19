@@ -1512,8 +1512,19 @@ describe("database: tree", () => {
       const changes = () => $("#database-work .database-changes");
       const popup = () => $('.pop[role="alertdialog"]');
       const colorOf = (r: number, c: number) => browser.execute((rr, cc) => getComputedStyle(document.querySelector(`#database-work .database-grid tbody tr:nth-child(${rr}) td:nth-child(${cc})`)!).color, r, c);
+      // The page's own double press on a cell, as the other specs press twice (the driver's double click is checked once, below).
+      const doublePress = (r: number, c: number) =>
+        browser.execute(
+          (rr, cc, once) => {
+            if (!window.__e2e_once__(once)) return;
+            document.querySelector(`#database-work .database-grid tbody tr:nth-child(${rr}) td:nth-child(${cc})`)!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+          },
+          r,
+          c,
+          onceId(),
+        );
       async function startEdit(r: number, c: number) {
-        await cell(r, c).doubleClick();
+        await doublePress(r, c);
         await field().waitForExist();
       }
       async function rewrite(r: number, c: number, text: string) {
@@ -1527,6 +1538,34 @@ describe("database: tree", () => {
         const apply = await mock("database_apply", { inserted: 0, updated: 1, deleted: 1 });
         return { calls, apply };
       }
+
+      it("keeps the rows and the cells in place when a row is pressed, so that a real double press reaches the cell and opens its field", async () => {
+        await openEdits();
+        await browser.execute(() => {
+          for (const td of document.querySelectorAll("#database-work .database-grid td")) (td as HTMLElement & { kept?: boolean }).kept = true;
+        });
+        await cell(1, 2).click();
+        await expect($("#database-work tbody tr:nth-child(1)")).toHaveElementClass("selected");
+        expect(await browser.execute(() => [...document.querySelectorAll("#database-work .database-grid td")].every((td) => (td as HTMLElement & { kept?: boolean }).kept === true))).toBe(true);
+        await cell(1, 2).doubleClick();
+        await field().waitForExist();
+        expect(await field().getValue()).toBe("Alice");
+        await expect($("#database-work tbody tr:nth-child(1)")).toHaveElementClass("selected");
+      });
+
+      it("keeps the field that is open, with the focus, when something else draws the pane", async () => {
+        await openEdits();
+        await startEdit(1, 2);
+        await field().setValue("Alicia");
+        await browser.execute(() => document.querySelector<HTMLElement>("#database-work tbody tr:nth-child(2) td:first-child")!.click());
+        await expect($("#database-work tbody tr:nth-child(2)")).toHaveElementClass("selected");
+        expect(await count("#database-work .database-cell input")).toBe(1);
+        expect(await browser.execute(() => document.activeElement === document.querySelector("#database-work .database-cell input"))).toBe(true);
+        expect(await field().getValue()).toBe("Alicia");
+        await browser.keys("Enter");
+        await expect(cell(1, 2)).toHaveText("Alicia");
+        await expect(changes()).toHaveText("変更 1 件");
+      });
 
       it("has − ✓ ✗ after the copy and the number of changes after the range, with the three off before anything is gathered", async () => {
         await openEdits();
@@ -1598,13 +1637,13 @@ describe("database: tree", () => {
       it("opens no field on a cell that cannot be written: a cut text, binary, a row that cannot be changed, and any cell of a table with no key", async () => {
         await openEdits();
         for (const [r, c] of [[1, 3], [1, 4], [3, 1], [3, 2], [3, 3]]) {
-          await cell(r, c).doubleClick();
+          await doublePress(r, c);
           expect(await count("#database-work .database-cell input")).toBe(0);
         }
         await expect(changes()).not.toExist();
         await openTable();
         for (const c of [1, 2, 3]) {
-          await cell(1, c).doubleClick();
+          await doublePress(1, c);
           expect(await count("#database-work .database-cell input")).toBe(0);
         }
       });
@@ -1623,7 +1662,7 @@ describe("database: tree", () => {
         await expect(changes()).toHaveText("変更 2 件");
         await expect(button("remove")).toBeDisabled();
         expect(await callsOf(apply)).toEqual([]);
-        await cell(2, 2).doubleClick();
+        await doublePress(2, 2);
         expect(await count("#database-work .database-cell input")).toBe(0);
       });
 
@@ -1678,7 +1717,7 @@ describe("database: tree", () => {
         await button("apply").click();
         await waitForCalls(apply);
         for (const key of ["remove", "apply", "revert"]) await expect(button(key)).toBeDisabled();
-        await cell(2, 2).doubleClick();
+        await doublePress(2, 2);
         expect(await count("#database-work .database-cell input")).toBe(0);
         await mock("database_records", fresh);
         await release("database_apply", { inserted: 0, updated: 1, deleted: 0 });

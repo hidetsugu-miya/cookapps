@@ -6,7 +6,7 @@ import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { canEditCell, cellKey, changesOf, type EditState, markable, originalText } from "./database-edit.js";
-import { gridNode } from "./database-grid.js";
+import { type GridEdit, gridNode, syncEdit } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
 import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
 import { copyText } from "./view.js";
@@ -130,7 +130,7 @@ const DATABASE_TABS = [
 const STRUCTURE_COLUMNS = ["名前", "型", "NULL", "キー", "既定値", "注釈"];
 
 let drawn = "";
-// Which grid the pane drew last: the same one drawn again (a rewrite makes the grid again, D-10) keeps its scroll position.
+// Which grid the pane drew last: the same one drawn again (a rewrite or a press of a row, D-10) keeps its scroll position, as the box that scrolls is made again.
 let drawnGrid = "";
 
 function tableNode(state: WorkState, actions: WorkActions) {
@@ -241,9 +241,9 @@ function copyButton(data: { columns: unknown[]; tsv: string } | null, loading: b
   });
 }
 
-// The grid of the records tab with what it gathers (D-10): its cells, the marked rows and the pressed ones are drawn from `edit`, and it is made again for each draw, as a rewrite changes it.
+// The grid of the records tab with what it gathers (D-10): its cells, the marked rows and the pressed ones are drawn from `edit`. The grid is made once for an answer of Rust, as every grid is (`gridOf`), and each draw brings it up to date in place (`syncEdit`).
 function editGridNode(data: DatabaseRecords, edit: EditState, actions: EditActions, sizes: string) {
-  return gridNode(data.columns, data.rows, sizes, {
+  const current: GridEdit = {
     editable: (row, i) => !edit.applying && canEditCell(data, row, i),
     rewritten: (row, i) => edit.cells[cellKey(row, i)],
     startText: (row, i) => edit.cells[cellKey(row, i)] ?? originalText(data, row, i),
@@ -251,7 +251,10 @@ function editGridNode(data: DatabaseRecords, edit: EditState, actions: EditActio
     selected: (row) => edit.selected.includes(row),
     select: actions.select,
     commit: actions.cell,
-  });
+  };
+  const grid = gridOf(data, () => gridNode(data.columns, data.rows, sizes, current));
+  syncEdit(grid, current);
+  return grid;
 }
 
 // The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page. A screen that writes (D-10) has − ✓ ✗ after the copy and the number of changes after the range; while something is gathered the page cannot be changed or read again.
@@ -411,6 +414,8 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   const active = document.activeElement as HTMLElement | null;
   const focused = active?.dataset?.key;
   const inStrip = active !== null && strip.contains(active);
+  // The field of a cell that is open (D-10): the grid is put back into the new box with it, and it takes the focus back.
+  const openField = active instanceof HTMLInputElement && active.classList.contains("database-cell-input") ? active : null;
   strip.hidden = state === null;
   strip.replaceChildren(...(state === null ? [] : openTabsNode(state, actions)));
   // A body that fills the pane (the tabs of a table, or the SQL tab of a database) scrolls inside it, with its footer kept.
@@ -437,6 +442,7 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   box.replaceChildren(...nodes);
   const kept = box.querySelector<HTMLElement>(".database-records-scroll");
   if (scrolled !== null && kept !== null) [kept.scrollTop, kept.scrollLeft] = scrolled;
+  if (openField?.isConnected) openField.focus({ preventScroll: true });
   if (focused) {
     const again = (inStrip ? strip : box).querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`);
     again?.focus({ preventScroll: true });
