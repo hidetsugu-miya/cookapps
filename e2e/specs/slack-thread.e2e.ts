@@ -1682,6 +1682,7 @@ describe("slack thread: Claude Code", () => {
   it("writes the reply field as it is, posts nothing, shows 元に戻す, and puts the text back", async () => {
     await openDetail();
     const post = await mock("slack_reply", true);
+    await mock("claude_thread_data", threadData);
     await expect($("#st-undo")).not.toBeDisplayed();
     await write("確認おねがいします");
     expect(await askScreen("write", "slack-thread", { reply: "ご確認をお願いします\n\n- 1\n- 2" })).toEqual({ ok: true });
@@ -1731,6 +1732,7 @@ describe("slack thread: Claude Code", () => {
 
   it("has no way back for a write that changes nothing, and none once the field was changed by hand", async () => {
     await openDetail();
+    await mock("claude_thread_data", threadData);
     await write("Same");
     const now = (await read()).fields!.reply;
     await askScreen("write", "slack-thread", { reply: now });
