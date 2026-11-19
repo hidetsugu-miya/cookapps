@@ -1453,6 +1453,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-hfile-del { color: var(--del); }
 /* The language server of the file pane (A-34), and the definition tab of the work pane (A-34): the heading with the name and the count, and a row for each place with the lines around its definition, all open. */
 #orca-server { flex: 1; min-height: 0; overflow: auto; }
+#orca-database { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 4px; }
 .orca-definition { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .orca-definition-head { gap: 6px; font-size: calc(13px * var(--fs)); }
 .orca-def-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-weight: 600; }

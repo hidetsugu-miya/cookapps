@@ -1,7 +1,7 @@
-// The side menu of the database screen (D-1, D-3): the connections by name, each with a menu that a right press opens (edit, disconnect, delete), and under an open connection its databases, each with a menu of its own (new query, close the database), and under an open database its tables.
-// Drawing only: what is held and what each press does belong to database.ts. It is drawn again only when what it shows changes, and the focus stays.
+// The tree of the connections (D-1, D-3), which the side menu of the database screen (database.ts) and the database part of the file pane of the Orca screen (A-43, orca-database.ts) draw into a box each: the connections by name, each with a menu that a right press opens (edit, disconnect, delete), and under an open connection its databases, each with a menu of its own (new query, close the database), and under an open database its tables. An item of a menu whose action the screen does not give is not in the menu, and a menu with no item does not open.
+// Drawing only: what is held and what each press does belong to the screen. A box is drawn again only when what it shows changes, and the focus stays.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
-import { $, tag } from "./dom.js";
+import { tag } from "./dom.js";
 import { CHEVRON_SVG, CLOSE_SVG, CODE_SVG, DATABASE_SVG, DELETE_SVG, EDIT_SVG } from "./icons.js";
 import { openMenu } from "./menu.js";
 
@@ -43,16 +43,17 @@ export interface SideActions {
   pressDatabase: (profile: DatabaseProfileView, database: string) => void;
   pressTable: (profile: DatabaseProfileView, database: string, table: string) => void;
   // Selects the database and opens its SQL tab with an empty field.
-  newQuery: (profile: DatabaseProfileView, database: string) => void;
+  newQuery?: (profile: DatabaseProfileView, database: string) => void;
   // Closes the tree of the database; the connection stays open.
   closeDatabase: (profile: DatabaseProfileView, database: string) => void;
-  edit: (profile: DatabaseProfileView) => void;
+  edit?: (profile: DatabaseProfileView) => void;
   disconnect: (profile: DatabaseProfileView) => void;
   // `anchor` is the name of the row, which the confirmation opens under.
-  remove: (profile: DatabaseProfileView, anchor: Element) => void;
+  remove?: (profile: DatabaseProfileView, anchor: Element) => void;
 }
 
-let drawn = "";
+// What each box shows now.
+const drawn = new WeakMap<HTMLElement, string>();
 
 function row(key: string, depth: number, pressed: boolean, expanded: boolean | null, icon: string | null, name: string, onclick: () => void) {
   const button = tag("button", "database-btn");
@@ -94,12 +95,13 @@ function databaseNodes(node: ConnectionNode, selected: Selected | null, actions:
     const button = row(`${id}/d/${db.name}`, 1, here && selected?.table === null, db.expanded, null, db.name, () => actions.pressDatabase(node.profile, db.name));
     // The menu is anchored on the name, as the connection's is.
     const name = button.querySelector(".database-name")!;
+    const { newQuery } = actions;
     button.oncontextmenu = (e) => {
       e.preventDefault();
       openMenu(
         name,
         [
-          { label: "新規クエリ", color: "", icon: CODE_SVG, current: false, pick: () => actions.newQuery(node.profile, db.name) },
+          ...(newQuery ? [{ label: "新規クエリ", color: "", icon: CODE_SVG, current: false, pick: () => newQuery(node.profile, db.name) }] : []),
           { label: "データベースを閉じる", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.closeDatabase(node.profile, db.name) },
         ],
         { at: { x: e.clientX, y: e.clientY } },
@@ -122,17 +124,15 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
   button.append(dotNode(node));
   // The menu is anchored on the name, not on the button, which carries the aria-expanded of its tree.
   const name = button.querySelector(".database-name")!;
+  const { edit, remove } = actions;
   button.oncontextmenu = (e) => {
     e.preventDefault();
-    openMenu(
-      name,
-      [
-        { label: "編集", color: "", icon: EDIT_SVG, current: false, pick: () => actions.edit(profile) },
-        ...(node.connected ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
-        { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => actions.remove(profile, name) },
-      ],
-      { at: { x: e.clientX, y: e.clientY } },
-    );
+    const items = [
+      ...(edit ? [{ label: "編集", color: "", icon: EDIT_SVG, current: false, pick: () => edit(profile) }] : []),
+      ...(node.connected ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
+      ...(remove ? [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => remove(profile, name) }] : []),
+    ];
+    if (items.length > 0) openMenu(name, items, { at: { x: e.clientX, y: e.clientY } });
   };
   item.append(button);
   if (node.expanded) {
@@ -145,11 +145,10 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
   return item;
 }
 
-export function drawDatabaseSide(state: SideState, actions: SideActions) {
+export function drawDatabaseSide(box: HTMLElement, state: SideState, actions: SideActions) {
   const key = JSON.stringify(state);
-  if (key === drawn) return;
-  drawn = key;
-  const box = $("database-side-feed");
+  if (key === drawn.get(box)) return;
+  drawn.set(box, key);
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
   box.replaceChildren(...state.connections.map((c) => itemNode(c, state.selected, actions)));

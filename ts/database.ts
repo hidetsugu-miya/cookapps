@@ -155,7 +155,7 @@ function workState(): WorkState | null {
 }
 
 const draw = () => {
-  drawDatabaseSide(sideState(), actions);
+  drawDatabaseSide($("database-side-feed"), sideState(), actions);
   drawDatabaseWork(workState(), workActions);
 };
 
