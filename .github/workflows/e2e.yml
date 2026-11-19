@@ -28,8 +28,8 @@ jobs:
     # A pull request from a fork runs no job here: it would spend a macOS runner on code that nobody trusted (`.claude/rules/issues.md`).
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-latest
-    # A hung wdio run would hold the runner for the six hours of the default.
-    timeout-minutes: 40
+    # A hung wdio run would hold the runner for the six hours of the default. Two apps at once take about three times as long as six (933 seconds of specs in all, `wdio.conf.ts`), and a build with no cache comes before them.
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -66,7 +66,7 @@ jobs:
           mkdir -p e2e-logs
           npm run e2e:build 2>&1 | tee e2e-logs/build.log
       - name: Run E2E
-        # The hosted runner has 3 vCPUs and 7 GB, and the six apps of wdio at once (`maxInstances` of `wdio.conf.ts`) stopped the WebView from answering: 9 of 21 specs started in 10 minutes, with 104 script timeouts (run 44434378578). Two apps at once is the next measurement.
+        # The hosted runner has 3 vCPUs and 7 GB, and the six apps of wdio at once stopped the WebView from answering: 9 of 21 specs started in 10 minutes, with 104 script timeouts (run 44434378578). Two apps at once is the next measurement: `E2E_MAX_INSTANCES` makes `wdio.conf.ts` start two apps, not six with two driven.
         env:
           E2E_MAX_INSTANCES: 2
         run: npm run e2e 2>&1 | tee e2e-logs/wdio.log

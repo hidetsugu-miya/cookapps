@@ -57,10 +57,41 @@ if (only !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(only)) throw new Error(`E
 const onlySpec = only === undefined ? undefined : `./e2e/specs/${only}.e2e.ts`;
 if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec} does not exist`);
 
-// `E2E_MAX_INSTANCES` sets how many of the six apps run at once, for a machine with fewer cores than this one (`.github/workflows/e2e.yml` sets 2); unset, all six run.
+// `E2E_MAX_INSTANCES` sets how many apps start and run at once, for a machine with fewer cores than this one (`.github/workflows/e2e.yml` sets 2); unset, six start. The service starts one app for each capability, so a number under six makes that many capabilities, not fewer workers over six apps.
+// The first N - 1 capabilities name their specs, and the last one excludes them, as in the six. The named specs are spread by their seconds in the list above (the 16 specs of the table, largest first, each into the app with the least seconds so far; the last app starts with the 101 seconds of settings, sidebar, orca-peek and claude-code, which are not in the table and always run in the last app, as does a new spec). With 1 every spec runs in one app.
+// A number of six or more changes nothing but `maxInstances`.
 const maxInstancesEnv = process.env.E2E_MAX_INSTANCES;
 if (maxInstancesEnv !== undefined && !/^[1-9][0-9]*$/.test(maxInstancesEnv)) throw new Error(`E2E_MAX_INSTANCES must be an integer of 1 or more, got "${maxInstancesEnv}"`);
-const maxInstances = maxInstancesEnv === undefined ? 6 : Number(maxInstancesEnv);
+const maxInstances = maxInstancesEnv === undefined ? namedSpecs.length + 1 : Number(maxInstancesEnv);
+const specSeconds: Record<string, number> = {
+  orca: 125,
+  "orca-files": 122,
+  formation: 117,
+  "slack-list": 107,
+  todo: 83,
+  database: 62,
+  "orca-handoff": 45,
+  "slack-thread": 45,
+  "orca-definition": 25,
+  inbox: 25,
+  "slack-compose": 24,
+  thread: 19,
+  footer: 12,
+  calendar: 10,
+  "todo-prompt": 10,
+  "todo-claude": 6,
+};
+const unnamedSeconds = 101;
+const spreadSpecs = (apps: number) => {
+  const bins = Array.from({ length: apps }, (_, i) => ({ specs: [] as string[], seconds: i === apps - 1 ? unnamedSeconds : 0 }));
+  for (const [name, seconds] of Object.entries(specSeconds).sort((a, b) => b[1] - a[1])) {
+    const bin = bins.reduce((least, bin) => (bin.seconds < least.seconds ? bin : least));
+    bin.specs.push(`./e2e/specs/${name}.e2e.ts`);
+    bin.seconds += seconds;
+  }
+  return bins.slice(0, -1).map((bin) => bin.specs);
+};
+const groups = maxInstances < namedSpecs.length + 1 ? spreadSpecs(maxInstances) : namedSpecs;
 
 export const config = {
   runner: "local",
@@ -71,8 +102,8 @@ export const config = {
     onlySpec !== undefined
       ? [appCapability({ "wdio:specs": [onlySpec] })]
       : [
-          ...namedSpecs.map((specs) => appCapability({ "wdio:specs": specs })),
-          appCapability({ "wdio:exclude": namedSpecs.flat() }),
+          ...groups.map((specs) => appCapability({ "wdio:specs": specs })),
+          appCapability({ "wdio:exclude": groups.flat() }),
         ],
   framework: "mocha",
   reporters: ["spec"],
