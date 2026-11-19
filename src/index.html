@@ -225,16 +225,20 @@
       <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="30" aria-valuemax="45" aria-valuenow="30" tabindex="0" hidden><span></span></div>
       <div id="todo-side" hidden>
         <div id="todo-tools" data-tauri-drag-region="deep">
-          <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談">
+          <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
           </button>
         </div>
         <aside id="todo-claude" class="chat-pane" aria-label="Claude">
-          <div class="chat-head">
+          <div id="todo-claude-ask">
+            <p>Claude に相談しますか？</p>
+            <button id="todo-claude-open" type="button" class="text-btn">相談する</button>
+          </div>
+          <div class="chat-head" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
             <button id="todo-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
           </div>
-          <div id="todo-claude-term"></div>
+          <div id="todo-claude-term" hidden></div>
         </aside>
       </div>
     </section>

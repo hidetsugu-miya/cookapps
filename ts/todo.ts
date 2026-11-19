@@ -12,7 +12,7 @@ import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { initSplit } from "./split.js";
-import { focusTodoClaude, initTodoClaude, syncTodoClaude } from "./todo-claude.js";
+import { initTodoClaude, syncTodoClaude, toggleTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
 import { loadedComments } from "./todo-comments.js";
@@ -348,7 +348,7 @@ export function initTodo() {
     $("todo-handoff").scrollIntoView({ block: "start" });
   };
   initTodoClaude();
-  $("todo-tool-claude").onclick = focusTodoClaude;
+  $("todo-tool-claude").onclick = toggleTodoClaude;
   // 30% of the screen at first, its least; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range).
   initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45 });
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.

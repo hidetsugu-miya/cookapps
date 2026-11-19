@@ -5,25 +5,27 @@ const pane = "#todo-claude";
 const term = "#todo-claude-term";
 // A press with the pointer actions. The driver's element click calls `el.click()` and then `el.focus()` on the element itself, which would take the focus back from the field that the press gave it.
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
-// The terminal's area is empty until the process is asked for; pressing it asks.
-const startByPress = () => press($(term));
+// The pane is closed at first and shows the question; 相談する opens it and starts the process.
+const startByPress = () => press($("#todo-claude-open"));
 // The commands of the old conversation, which the pane calls no more, and the commands that make a Todoist task: the pane starts a terminal and calls none of them.
 const notCalled = ["claude_chat_todo", "todoist_add", "todoist_add_task", "todoist_add_subtask", "todoist_update", "todoist_set_done", "todoist_add_from_slack", "todoist_delete", "todoist_move", "orca_stream_terminal", "orca_terminal_read"];
 
 describe("todo Claude pane", () => {
-  it("is open from the start in a right side with the ✳ alone in its first row, and its head has the mark, Claude and やり直す only", async () => {
+  it("is closed at first with the question and 相談する, in a right side with the ✳ alone in its first row, and its head, once open, has the mark, Claude and やり直す only", async () => {
     await openTodo();
     await expect($(pane)).toBeDisplayed();
+    // Closed: the question and the button, and nothing of the open pane.
+    await expect($("#todo-claude-ask p")).toHaveText("Claude に相談しますか？");
+    await expect($("#todo-claude-open")).toHaveText("相談する");
+    await expect($("#todo-claude-open")).toHaveElementClass("text-btn");
+    await expect($(`${pane} .chat-head`)).not.toBeDisplayed();
+    await expect($("#todo-claude-restart")).not.toBeDisplayed();
+    await expect($(term)).not.toBeDisplayed();
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "false");
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
     await expect($("#todo-tool-claude")).toHaveAttribute("aria-label", "Claude に相談");
-    // Nothing is chosen on the right side, so the ✳ has no pressed state, and the Orca icon is not in the row.
-    await expect($("#todo-tool-claude")).not.toHaveAttribute("aria-pressed");
     expect(await count("#todo-tool-orca, #todo-tools #todo-orca-open")).toBe(0);
-    await expect($(`${pane} .chat-head`)).toHaveText(expect.stringContaining("Claude"));
-    expect(await count(`${pane} .chat-head > svg`)).toBe(1);
-    await expect($("#todo-claude-restart")).toHaveText("やり直す");
-    await expect($("#todo-claude-restart")).toBeEnabled();
     // The conversation of the old pane is gone: no log, no request field, no model select, no clear button, no note.
     expect(await count("#todo-claude-log, #todo-claude-input, #todo-claude-send, #todo-claude-model, #todo-claude-clear, #todo-claude-chat-note, #todo-claude-form")).toBe(0);
     // The buttons that were in the header of the tasks, and the close icon of the pane, are gone.
@@ -43,6 +45,15 @@ describe("todo Claude pane", () => {
       };
     });
     expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [44, 44, 28] });
+    // Open: the heading and the terminal, and the ✳ pressed.
+    await press($("#todo-tool-claude"));
+    await waitForCalls("claude_code_start");
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#todo-claude-ask")).not.toBeDisplayed();
+    await expect($(`${pane} .chat-head`)).toHaveText(expect.stringContaining("Claude"));
+    expect(await count(`${pane} .chat-head > svg`)).toBe(1);
+    await expect($("#todo-claude-restart")).toHaveText("やり直す");
+    await expect($("#todo-claude-restart")).toBeEnabled();
     // The second row is the heading of the pane, 48px high, with やり直す at its right end.
     const heading = await browser.execute(() => {
       const head = document.querySelector("#todo-claude .chat-head")!.getBoundingClientRect();
@@ -52,16 +63,17 @@ describe("todo Claude pane", () => {
     expect(heading).toEqual({ height: 48, right: true });
   });
 
-  it("starts no process when the screen is shown, hidden and shown again, or the window changes its visibility, and its empty area has a size and no text", async () => {
+  it("starts no process when the screen is shown, hidden and shown again, or the window changes its visibility, and the question is in the middle of the pane", async () => {
     await openTodo();
     await expect($(pane)).toBeDisplayed();
-    const area = await browser.execute(() => {
-      const host = document.querySelector("#todo-claude-term")!;
-      return { height: host.getBoundingClientRect().height, text: host.textContent, children: host.children.length };
+    const middle = await browser.execute(() => {
+      const box = document.querySelector("#todo-claude")!.getBoundingClientRect();
+      const ask = document.querySelector("#todo-claude-ask")!.getBoundingClientRect();
+      const button = document.querySelector("#todo-claude-open")!.getBoundingClientRect();
+      return { height: ask.height > 100, centered: Math.abs(button.left + button.width / 2 - (box.left + box.width / 2)) < 2 };
     });
-    expect(area.height).toBeGreaterThan(100);
-    expect(area.text).toBe("");
-    expect(area.children).toBe(0);
+    expect(middle).toEqual({ height: true, centered: true });
+    expect(await count(`${term} *`)).toBe(0);
     await $("#nav-mail").click();
     await expect($(pane)).not.toBeDisplayed();
     await $("#nav-todo").click();
@@ -71,11 +83,13 @@ describe("todo Claude pane", () => {
     expect(await callsOf("claude_code_start")).toEqual([]);
   });
 
-  it("starts the process once when its empty area is pressed, and puts the focus in the terminal", async () => {
+  it("starts the process once when 相談する is pressed, opens the pane and puts the focus in the terminal", async () => {
     await openTodo();
     await startByPress();
     await waitForCalls("claude_code_start");
     await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#todo-claude-ask")).not.toBeDisplayed();
     // A press in the terminal afterwards starts nothing more.
     await press($(term));
     await browser.pause(500);
@@ -134,16 +148,6 @@ describe("todo Claude pane", () => {
     expect(await callsOf("claude_code_start")).toEqual([]);
   });
 
-  it("starts the first process with やり直す when none has been started, and closes nothing", async () => {
-    await openTodo();
-    expect(await callsOf("claude_code_start")).toEqual([]);
-    const close = await mock("claude_code_close", null);
-    await $("#todo-claude-restart").click();
-    await waitForCalls("claude_code_start");
-    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
-    await expect($("#todo-claude-restart")).toBeEnabled();
-    expect(await callsOf(close)).toEqual([]);
-  });
 
   it("ends the process and starts a new one with やり直す", async () => {
     await openTodo();
@@ -159,19 +163,35 @@ describe("todo Claude pane", () => {
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
   });
 
-  it("starts the process with the ✳ of the right side when it has not been started, and puts the focus in the terminal then and after", async () => {
+  it("opens the pane with the ✳ and starts the process, and closes it with the ✳ and ends the process, and the next open starts a new one", async () => {
     await openTodo();
     expect(await callsOf("claude_code_start")).toEqual([]);
+    const close = await mock("claude_code_close", null);
     await press($("#todo-tool-claude"));
     await waitForCalls("claude_code_start");
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
     await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
-    await $("#todo-add-input").click();
-    await expect($("#todo-add-input")).toBeFocused();
+    await expect($("#todo-claude-restart")).toBeEnabled();
+    expect(await callsOf(close)).toEqual([]);
+    // Pressed again, the pane goes back to the question and the process ends.
     await press($("#todo-tool-claude"));
-    await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
+    expect(await waitForCalls(close)).toEqual([{ id: "todo-claude", launch: 1 }]);
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#todo-claude-ask p")).toHaveText("Claude に相談しますか？");
+    await expect($(term)).not.toBeDisplayed();
+    await expect($(`${pane} .chat-head`)).not.toBeDisplayed();
     await expect($(pane)).toBeDisplayed();
+    // A window that changes its visibility starts nothing while the pane is closed.
+    await browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
     await browser.pause(500);
     expect((await callsOf("claude_code_start")).length).toBe(1);
+    // Opened again with 相談する: a new process, with the same first instruction.
+    await startByPress();
+    const starts = await waitForCalls("claude_code_start", 2);
+    expect(starts[1]).toMatchObject({ id: "todo-claude", builtinTools: false, skill: null, prompt: (starts[0] as { prompt: string }).prompt });
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
   });
 
   it("reads the list again when the app tells that the Todo changed, and for no other change", async () => {
@@ -230,9 +250,11 @@ describe("todo Claude pane", () => {
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
-    // The ✳ only puts the focus in the terminal: the Orca pane stays open.
+    // The ✳ closes Claude's pane and changes nothing of the Orca pane.
+    const close = await mock("claude_code_close", null);
     await press($("#todo-tool-claude"));
-    await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
+    await waitForCalls(close);
+    await expect($("#todo-claude-ask")).toBeDisplayed();
     await expect($("#todo-handoff")).toBeDisplayed();
     // Leaving the task takes the pane under it away, and Claude's stays.
     await $("#todo-back").click();
