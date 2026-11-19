@@ -50,6 +50,11 @@ export function bindEvent(node: HTMLElement, info: Info, color: string, day: num
   node.onclick = () => (open?.target.node === node ? closeDetail(true) : show(target));
 }
 
+// The event with the IDs of the week as it is drawn now (the first day's item, for a multi-day event), or undefined when the week has none: where the form of C-7 that Claude fills in goes.
+export function eventTarget(account: string, calendarId: string, eventId: string) {
+  return targets.find((t) => t.info.eventId === eventId && t.info.calendarId === calendarId && t.info.account === account);
+}
+
 // The node of the event `info` in the week as it is drawn now (the first day's, for a multi-day event), or undefined when the week has none.
 export function eventNode(info: Info) {
   return targets.find((t) => t.info.eventId === info.eventId && t.info.calendarId === info.calendarId && t.info.account === info.account)?.node;
@@ -142,6 +147,8 @@ function descriptionBlock(description: string) {
 // The confirmation of the delete (C-7), in the popover in place of the rows: the title, a line for the guests who are told, and "キャンセル" and "削除".
 // "キャンセル" puts the rows back. A failure is written in it, and "削除" can be pressed again.
 function confirmDelete(pop: HTMLElement, i: Info) {
+  // The trash is still in the head while the confirmation is shown: pressing it again changes nothing.
+  if (pop.querySelector(".cal-pop-confirm")) return;
   const rows = [...pop.children].slice(1);
   const box = tag("div", "cal-pop-confirm");
   box.append(tag("p", "", `「${i.summary || "(件名なし)"}」を削除します。元に戻せません。`));
@@ -162,14 +169,18 @@ function confirmDelete(pop: HTMLElement, i: Info) {
     try {
       const gone = await invoke("calendar_delete_event", { account: i.account, calendarId: i.calendarId, eventId: i.eventId });
       if (gone === null) {
-        // The account has not granted the permission to change events yet: log in again.
-        error.replaceChildren(reloginLine(i.account, `${i.account} は予定を削除するため再ログインが必要です`));
+        // The account has not granted the permission to change events yet: log in again. A detail closed meanwhile has no place for it, so it goes to a card.
+        const text = `${i.account} は予定を削除するため再ログインが必要です`;
+        if (pop.isConnected) error.replaceChildren(reloginLine(i.account, text));
+        else showFailure("calendar-delete", text);
         return;
       }
-      closeDetail();
+      // Another event's detail may be open by now: only this one is closed.
+      if (pop.isConnected) closeDetail();
       eventChanged();
     } catch (e) {
-      error.replaceChildren(String(e));
+      if (pop.isConnected) error.replaceChildren(String(e));
+      else showFailure("calendar-delete", e);
     } finally {
       yes.disabled = no.disabled = false;
     }
@@ -205,8 +216,10 @@ function build({ info: i, color, node }: Target) {
     edit.innerHTML = EDIT_SVG;
     edit.setAttribute("aria-label", "編集");
     edit.onclick = () => {
+      // The week may have been drawn again since this popover was built: the event's node is the one of the draw now.
+      const current = open?.target.node ?? node;
       closeDetail();
-      openEdit(i, color, node);
+      openEdit(i, color, current);
     };
     const del = tag("button", "icon-btn");
     del.type = "button";

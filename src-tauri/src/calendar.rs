@@ -104,6 +104,22 @@ fn clip_description(text: String) -> String {
     }
 }
 
+/// The longest description that `list_events` gives Claude, in characters (C-6). The detail of the week (C-2) keeps `DESCRIPTION_MAX`.
+const CLAUDE_DESCRIPTION_MAX: usize = 1_000;
+
+/// `text` cut to `CLAUDE_DESCRIPTION_MAX` characters, with a mark that says how many were left out; a text that fits is as it is.
+fn clip_for_claude(text: &str) -> String {
+    let total = text.chars().count();
+    if total <= CLAUDE_DESCRIPTION_MAX {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(CLAUDE_DESCRIPTION_MAX).collect();
+    format!(
+        "{head}…（長いため、残り {} 文字を省きました）",
+        total - CLAUDE_DESCRIPTION_MAX
+    )
+}
+
 /// Who organized an event; only whether that is the user is read.
 #[derive(Deserialize, Default)]
 struct ApiOrganizer {
@@ -464,12 +480,14 @@ pub struct EventItem {
     /// Same form as `start`; the last day for an all-day event.
     end: String,
     location: Option<String>,
-    /// As Google sends it: plain text or a little HTML.
+    /// As Google sends it: plain text or a little HTML, cut to `CLAUDE_DESCRIPTION_MAX` characters.
     description: Option<String>,
     meet_url: Option<String>,
     /// Invited people (rooms left out), and how many of them accepted.
     attendees: u32,
     accepted: u32,
+    /// The addresses of the invited besides the user (a room is among them), as the week's `Info.guests`.
+    guests: Vec<String>,
     /// Whether the event can be changed or deleted (C-7).
     editable: bool,
 }
@@ -502,10 +520,11 @@ impl From<&RawEvent> for EventItem {
             start,
             end,
             location: e.location.clone(),
-            description: e.description.clone(),
+            description: e.description.as_deref().map(clip_for_claude),
             meet_url: e.meet_url.clone(),
             attendees: e.attendees,
             accepted: e.accepted,
+            guests: e.guests.clone(),
             editable: e.editable,
         }
     }
@@ -1697,6 +1716,29 @@ pub fn slot_fields(slots: &[(&str, &str)]) -> Result<Fields, String> {
     Ok(fields)
 }
 
+/// The target of the form of C-5 and C-7 that a tool of Claude fills in (`calendar_create_event` and `calendar_update_event` with a new guest, C-6): the app's screen bridge writes it, and the owner saves.
+pub const FORM_TARGET: &str = "calendar-form";
+
+/// The fields of the target `calendar-form` for `event`: `form` is JSON with `eventId` (empty for a new event), `account`, `calendarId`, `title`, `allDay`, `start`, `end`, `guests` and `meet`, and `description` is the text.
+/// The screen bridge takes 8 fields of 10,000 characters at most, so the description has a field of its own.
+pub fn form_fields(event_id: Option<&str>, event: &NewEvent) -> Fields {
+    let form = json!({
+        "eventId": event_id.unwrap_or_default(),
+        "account": event.account,
+        "calendarId": event.calendar_id,
+        "title": event.title,
+        "allDay": event.all_day,
+        "start": event.start,
+        "end": event.end,
+        "guests": event.guests,
+        "meet": event.meet,
+    });
+    Fields::from([
+        ("form".to_owned(), form.to_string()),
+        ("description".to_owned(), event.description.clone()),
+    ])
+}
+
 /// The query parameters of a request.
 type Query = Vec<(&'static str, &'static str)>;
 
@@ -1799,6 +1841,15 @@ async fn check_owned(
     unreachable!("the second round returns")
 }
 
+/// What a tool of Claude does with an event (C-6): sends it to Google, or, when it would invite someone who is not on the event yet,
+/// sends nothing and leaves the owner to save it in the form of the calendar screen.
+#[derive(Debug)]
+pub enum Outcome {
+    Done(CreatedEvent),
+    /// Nothing was sent: the event passed every check, and a guest in it is new.
+    AskOwner,
+}
+
 /// Creates an event in a calendar the user owns, with the invitations and the Google Meet that `event` asks for.
 /// `None` means the account must log in again (it has not granted the permission to create events yet).
 /// The screen reads the week again to draw the event.
@@ -1813,13 +1864,20 @@ pub async fn calendar_create_event(
     create_event(&dir, &auth, &cache, &event).await
 }
 
-/// `calendar_create_event` on the config directory, for `tsunagiai-mcp` as well (C-6).
-pub async fn create_event(
+/// The request of `events.insert` or `events.patch`, checked and ready to send.
+struct Prepared {
+    url: String,
+    query: Query,
+    body: Value,
+}
+
+/// Checks an event to create (the input, the account and the calendar, which the user must own) and builds its request. `None` means `account` must log in again.
+async fn prepare_create(
     dir: &Path,
     auth: &Auth,
     cache: &CalendarCache,
     event: &NewEvent,
-) -> Result<Option<CreatedEvent>, String> {
+) -> Result<Option<Prepared>, String> {
     const COMMAND: &str = "calendar_create_event";
     let account = event.account.as_str();
     let listed = auth
@@ -1840,18 +1898,28 @@ pub async fn create_event(
     )
     .await
     {
-        Ok(Some(())) => {}
-        Ok(None) => return Ok(None),
-        Err(e) => return Err(log_failure(COMMAND, account, e)),
+        Ok(Some(())) => Ok(Some(Prepared { url, query, body })),
+        Ok(None) => Ok(None),
+        Err(e) => Err(log_failure(COMMAND, account, e)),
     }
+}
+
+async fn send_create(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    sending: &Prepared,
+) -> Result<Option<CreatedEvent>, String> {
+    const COMMAND: &str = "calendar_create_event";
     match send_json_refreshing::<ApiCreated>(
         dir,
         auth,
         account,
         Method::POST,
-        &url,
-        &query,
-        Some(&body),
+        &sending.url,
+        &sending.query,
+        Some(&sending.body),
     )
     .await
     {
@@ -1860,26 +1928,47 @@ pub async fn create_event(
             cache.forget(account);
             Ok(None)
         }
-        Err(e) => {
-            let status = e.status;
-            let message = log_failure(COMMAND, account, e);
-            match classify(status, &message) {
-                Failure::NeedsLogin => {
-                    cache.forget(account);
-                    Ok(None)
-                }
-                Failure::Message(m) => Err(m),
-            }
-        }
+        Err(e) => change_failure(cache, COMMAND, account, e),
     }
+}
+
+/// `calendar_create_event` on the config directory, for `tsunagiai-mcp` as well (C-6).
+pub async fn create_event(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    event: &NewEvent,
+) -> Result<Option<CreatedEvent>, String> {
+    let Some(sending) = prepare_create(dir, auth, cache, event).await? else {
+        return Ok(None);
+    };
+    send_create(dir, auth, cache, &event.account, &sending).await
+}
+
+/// `create_event` for a tool of Claude (C-6): an event with guests is checked and not sent (`Outcome::AskOwner`), because a guest is invited by the save and every guest of a new event is new.
+pub async fn create_event_for_claude(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    event: &NewEvent,
+) -> Result<Option<Outcome>, String> {
+    let Some(sending) = prepare_create(dir, auth, cache, event).await? else {
+        return Ok(None);
+    };
+    if has_new_guest(&[], &check_guests(&event.guests)?) {
+        return Ok(Some(Outcome::AskOwner));
+    }
+    Ok(send_create(dir, auth, cache, &event.account, &sending)
+        .await?
+        .map(Outcome::Done))
 }
 
 /// What the user is told when the calendar of an event to change or delete is not theirs.
 const CHANGE_REFUSAL: &str =
     "このカレンダーの予定は変更できません。自分が持つカレンダーの予定だけです";
 
-/// What `events.get` is asked for before a change: who organized the event, its Meet link and whether it has guests.
-const CURRENT_FIELDS: &str = "organizer(self),hangoutLink,attendees(self)";
+/// What `events.get` is asked for before a change: who organized the event, its Meet link, whether it repeats, and its guests as Google holds them (a guest who stays is sent back as it is).
+const CURRENT_FIELDS: &str = "organizer(self),hangoutLink,recurrence,attendees";
 
 /// An event to rewrite (C-7): `event` as the form of C-5 holds it, and the ID of the event to put it on.
 /// For a repeating event the ID is that of one occurrence (`Info.event_id`), and only that occurrence is rewritten.
@@ -1900,11 +1989,31 @@ pub struct EditedEvent {
 struct ApiCurrent {
     organizer: Option<ApiOrganizer>,
     hangout_link: Option<String>,
+    /// The rules of a repeating event; only the series itself has them, not one occurrence.
     #[serde(default)]
-    attendees: Vec<Attendee>,
+    recurrence: Vec<String>,
+    /// The entries of the guests as Google sent them (the user's own among them).
+    #[serde(default)]
+    attendees: Vec<Value>,
+}
+
+/// The address of an entry of `ApiCurrent::attendees`, empty when it has none.
+fn entry_address(entry: &Value) -> &str {
+    entry
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 impl ApiCurrent {
+    /// The addresses of every entry, the user's own included.
+    fn addresses(&self) -> Vec<String> {
+        self.attendees
+            .iter()
+            .map(|a| entry_address(a).to_owned())
+            .collect()
+    }
+
     fn has_meet(&self) -> bool {
         meet_url(self.hangout_link.as_deref()).is_some()
     }
@@ -1935,6 +2044,46 @@ fn check_organizer(organizer_is_self: bool) -> Result<(), String> {
     }
 }
 
+/// Refuses the series of a repeating event itself (it has `recurrence`): a change or a delete would reach every occurrence, and the tools and the screen take one occurrence.
+fn check_not_series(now: &ApiCurrent) -> Result<(), String> {
+    if now.recurrence.is_empty() {
+        Ok(())
+    } else {
+        Err(
+            "繰り返しの予定そのものは変更も削除もできません。その回の予定の ID を指定してください"
+                .into(),
+        )
+    }
+}
+
+/// Whether the event `now` can be changed or deleted: the user organized it, and it is one event or one occurrence.
+fn check_current(now: &ApiCurrent) -> Result<(), String> {
+    check_organizer(organizer_is_self(&now.organizer))?;
+    check_not_series(now)
+}
+
+/// Whether `wanted` (the guests after a change, checked) holds an address that `known` (the addresses the event has now, none for a new event) does not,
+/// the case of the address not counting. Such a guest is a new person, who is sent an invitation.
+fn has_new_guest(known: &[String], wanted: &[String]) -> bool {
+    wanted
+        .iter()
+        .any(|w| !known.iter().any(|k| k.eq_ignore_ascii_case(w)))
+}
+
+/// The guests as the patch sends them: one who is in the event stays as Google sent the entry (`optional`, `displayName` and so on), a new address is `{"email"}`.
+fn patch_attendees(now: &ApiCurrent, guests: &[String]) -> Vec<Value> {
+    guests
+        .iter()
+        .map(|g| {
+            now.attendees
+                .iter()
+                .find(|a| entry_address(a).eq_ignore_ascii_case(g))
+                .cloned()
+                .unwrap_or_else(|| json!({"email": g}))
+        })
+        .collect()
+}
+
 /// The guests are told when there are any after the change, or were any before it (those taken off are told that it is cancelled).
 fn send_updates(guests: bool) -> &'static str {
     if guests {
@@ -1948,10 +2097,12 @@ fn send_updates(guests: bool) -> &'static str {
 /// A patch leaves out what the body does not name, so each field of the form is named, an empty one too (so it clears), and the form of the
 /// time that is not used is `null` (so an all-day event can become a timed one and back).
 /// The Meet is added when it is wanted and the event has none, taken off when it is not wanted and the event has one, and left alone otherwise.
+/// With `keep_guests` the body names no `attendees`, so the guests the event has stay (`event.guests` is not read).
 fn build_patch(
     event: &NewEvent,
     request_id: &str,
     now: &ApiCurrent,
+    keep_guests: bool,
 ) -> Result<(Query, Value), String> {
     let Checked {
         title,
@@ -1972,8 +2123,11 @@ fn build_patch(
         "description": description,
         "start": start,
         "end": end,
-        "attendees": guests.iter().map(|g| json!({"email": g})).collect::<Vec<_>>(),
     });
+    let guests = if keep_guests { Vec::new() } else { guests };
+    if !keep_guests {
+        body["attendees"] = json!(patch_attendees(now, &guests));
+    }
     let mut query = vec![("fields", INSERT_FIELDS)];
     match (event.meet, now.has_meet()) {
         (true, false) => {
@@ -2059,18 +2213,19 @@ async fn changeable(
         }
         Err(e) => return change_failure(cache, command, account, e),
     };
-    check_organizer(organizer_is_self(&now.organizer))?;
+    check_current(&now)?;
     Ok(Some((url, now)))
 }
 
-/// Rewrites an event that the user organized, on a calendar the user owns (C-7), with the invitations and the Google Meet that `edit` asks for.
-/// `None` means the account must log in again (it has not granted the permission to change events yet).
-pub async fn update_event(
+/// Checks an event to rewrite (the input, and in Google the calendar, the organizer and that it is not a series) and builds its request, with the event as Google holds it now.
+/// `None` means the account must log in again. With `keep_guests` the request leaves the guests as they are.
+async fn prepare_update(
     dir: &Path,
     auth: &Auth,
     cache: &CalendarCache,
     edit: &EditedEvent,
-) -> Result<Option<CreatedEvent>, String> {
+    keep_guests: bool,
+) -> Result<Option<(Prepared, ApiCurrent)>, String> {
     const COMMAND: &str = "calendar_update_event";
     let event = &edit.event;
     let account = event.account.as_str();
@@ -2089,15 +2244,26 @@ pub async fn update_event(
     else {
         return Ok(None);
     };
-    let (query, body) = build_patch(event, &request_id, &now)?;
+    let (query, body) = build_patch(event, &request_id, &now, keep_guests)?;
+    Ok(Some((Prepared { url, query, body }, now)))
+}
+
+async fn send_update(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    sending: &Prepared,
+) -> Result<Option<CreatedEvent>, String> {
+    const COMMAND: &str = "calendar_update_event";
     match send_json_refreshing::<ApiCreated>(
         dir,
         auth,
         account,
         Method::PATCH,
-        &url,
-        &query,
-        Some(&body),
+        &sending.url,
+        &sending.query,
+        Some(&sending.body),
     )
     .await
     {
@@ -2108,6 +2274,40 @@ pub async fn update_event(
         }
         Err(e) => change_failure(cache, COMMAND, account, e),
     }
+}
+
+/// Rewrites an event that the user organized, on a calendar the user owns (C-7), with the invitations and the Google Meet that `edit` asks for.
+/// `None` means the account must log in again (it has not granted the permission to change events yet).
+pub async fn update_event(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    edit: &EditedEvent,
+) -> Result<Option<CreatedEvent>, String> {
+    let Some((sending, _)) = prepare_update(dir, auth, cache, edit, false).await? else {
+        return Ok(None);
+    };
+    send_update(dir, auth, cache, &edit.event.account, &sending).await
+}
+
+/// `update_event` for a tool of Claude (C-6). With `keep_guests` the guests stay as the event has them. Otherwise, when `edit` has a guest that the event does not have now,
+/// nothing is sent (`Outcome::AskOwner`): the new guest is invited by the save. The guests who are on the event already are changed and told with no question.
+pub async fn update_event_for_claude(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    edit: &EditedEvent,
+    keep_guests: bool,
+) -> Result<Option<Outcome>, String> {
+    let Some((sending, now)) = prepare_update(dir, auth, cache, edit, keep_guests).await? else {
+        return Ok(None);
+    };
+    if !keep_guests && has_new_guest(&now.addresses(), &check_guests(&edit.event.guests)?) {
+        return Ok(Some(Outcome::AskOwner));
+    }
+    Ok(send_update(dir, auth, cache, &edit.event.account, &sending)
+        .await?
+        .map(Outcome::Done))
 }
 
 /// Deletes an event that the user organized, on a calendar the user owns (C-7). A repeating event's `event_id` is that of one occurrence, and only it goes.
@@ -2846,6 +3046,7 @@ mod tests {
                 "meetUrl": "https://meet.google.com/abc-defg-hij",
                 "attendees": 2,
                 "accepted": 1,
+                "guests": ["b@example.com", "room@example.com"],
                 "editable": true,
             })
         );
@@ -3979,7 +4180,7 @@ mod tests {
     }
 
     fn patch_body(event: &NewEvent, now: &str) -> (Query, Value) {
-        build_patch(event, "req-1", &current(now)).unwrap()
+        build_patch(event, "req-1", &current(now), false).unwrap()
     }
 
     #[test]
@@ -4108,7 +4309,7 @@ mod tests {
                 ..new_event()
             },
         ] {
-            let e = build_patch(&bad, "r", &ApiCurrent::default()).unwrap_err();
+            let e = build_patch(&bad, "r", &ApiCurrent::default(), false).unwrap_err();
             assert!(!e.is_ascii(), "not Japanese: {e}");
         }
     }
@@ -4152,7 +4353,7 @@ mod tests {
             meet: true,
             ..new_event()
         };
-        let (query, body) = build_patch(&event, "req-9", &ApiCurrent::default()).unwrap();
+        let (query, body) = build_patch(&event, "req-9", &ApiCurrent::default(), false).unwrap();
         let answer = request_to(
             Method::PATCH,
             &event_url_of(&url, "e1"),
@@ -4240,6 +4441,128 @@ mod tests {
             assert_eq!(e.status, Some(403));
             assert_eq!(classify(e.status, &e.message), Failure::NeedsLogin);
         }
+    }
+
+    #[test]
+    fn the_description_that_claude_reads_is_cut_with_a_mark_and_the_screens_is_not() {
+        assert_eq!(clip_for_claude("説明"), "説明");
+        let exact = "あ".repeat(CLAUDE_DESCRIPTION_MAX);
+        assert_eq!(clip_for_claude(&exact), exact);
+        let cut = clip_for_claude(&format!("{exact}いう"));
+        assert!(cut.starts_with(&exact), "{cut}");
+        assert!(cut.contains("2 文字"), "{cut}");
+        let long = "い".repeat(CLAUDE_DESCRIPTION_MAX + 5);
+        let ev: ApiEvent = serde_json::from_value(serde_json::json!({
+            "start": {"date": "2026-10-29"}, "end": {"date": "2026-10-30"}, "description": long
+        }))
+        .unwrap();
+        let raw = RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap();
+        let item = serde_json::to_value(EventItem::from(&raw)).unwrap();
+        assert!(item["description"].as_str().unwrap().contains("5 文字"));
+        // The week's detail keeps what C-2 shows.
+        assert_eq!(raw.description.as_deref(), Some(long.as_str()));
+    }
+
+    #[test]
+    fn the_series_of_a_repeating_event_is_refused_in_japanese_and_one_occurrence_is_not() {
+        let series = current(r#"{"organizer":{"self":true},"recurrence":["RRULE:FREQ=WEEKLY"]}"#);
+        let e = check_current(&series).unwrap_err();
+        assert!(!e.is_ascii(), "not Japanese: {e}");
+        assert!(check_current(&current(r#"{"organizer":{"self":true}}"#)).is_ok());
+        // Not the user's own: the organizer is named first.
+        let e = check_current(&current(r#"{"recurrence":["RRULE:FREQ=DAILY"]}"#)).unwrap_err();
+        assert_eq!(e, check_organizer(false).unwrap_err());
+        assert!(CURRENT_FIELDS.contains("recurrence"));
+    }
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_tool_of_claude_holds_an_event_that_invites_someone_new_and_sends_the_rest() {
+        // A new event: every guest is new, and none is none.
+        assert!(has_new_guest(&[], &words(&["b@example.com"])));
+        assert!(!has_new_guest(&[], &[]));
+        // A rewrite: the guests who are on the event are not new, whatever the case of the address.
+        let known = words(&["me@example.com", "B@Example.com", "room@example.com"]);
+        assert!(!has_new_guest(&known, &words(&["b@example.com"])));
+        assert!(!has_new_guest(
+            &known,
+            &words(&["room@example.com", "b@example.com"])
+        ));
+        assert!(!has_new_guest(&known, &[]));
+        assert!(has_new_guest(
+            &known,
+            &words(&["b@example.com", "c@example.com"])
+        ));
+        let now = current(
+            r#"{"attendees":[{"self":true,"email":"me@example.com"},{"email":"B@Example.com"},{}]}"#,
+        );
+        assert_eq!(now.addresses(), ["me@example.com", "B@Example.com", ""]);
+    }
+
+    #[test]
+    fn a_patch_sends_the_guests_who_stay_as_google_has_them_and_a_new_one_by_address() {
+        let now = current(
+            r#"{"attendees":[{"self":true,"email":"me@example.com"},
+                {"email":"B@Example.com","optional":true,"displayName":"B さん","responseStatus":"accepted"}]}"#,
+        );
+        let event = NewEvent {
+            guests: vec!["b@example.com".into(), "c@example.com".into()],
+            ..new_event()
+        };
+        let (_, body) = build_patch(&event, "r", &now, false).unwrap();
+        assert_eq!(
+            body["attendees"],
+            json!([
+                {"email":"B@Example.com","optional":true,"displayName":"B さん","responseStatus":"accepted"},
+                {"email": "c@example.com"},
+            ])
+        );
+    }
+
+    #[test]
+    fn a_patch_with_no_guests_given_leaves_the_guests_and_still_tells_them() {
+        let now = current(r#"{"attendees":[{"self":true},{"email":"b@example.com"}]}"#);
+        let event = NewEvent {
+            title: "新しい題".into(),
+            ..new_event()
+        };
+        let (query, body) = build_patch(&event, "r", &now, true).unwrap();
+        assert!(!body.as_object().unwrap().contains_key("attendees"));
+        assert_eq!(body["summary"], "新しい題");
+        assert!(query.contains(&("sendUpdates", "all")));
+        // No guest before: no one to tell.
+        let (query, body) = build_patch(&event, "r", &current("{}"), true).unwrap();
+        assert!(!body.as_object().unwrap().contains_key("attendees"));
+        assert!(query.contains(&("sendUpdates", "none")));
+    }
+
+    #[test]
+    fn the_form_of_the_screen_is_given_the_event_as_two_fields() {
+        let event = NewEvent {
+            guests: vec!["b@example.com".into()],
+            meet: true,
+            description: "議題\n二行目".into(),
+            ..new_event()
+        };
+        let fields = form_fields(Some("ev1"), &event);
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["description", "form"]
+        );
+        assert_eq!(fields["description"], "議題\n二行目");
+        let form: Value = serde_json::from_str(&fields["form"]).unwrap();
+        assert_eq!(form["eventId"], "ev1");
+        assert_eq!(form["calendarId"], event.calendar_id);
+        assert_eq!(form["allDay"], false);
+        assert_eq!(form["guests"], json!(["b@example.com"]));
+        assert_eq!(form["meet"], true);
+        assert_eq!(form["start"], "2026-11-20T10:00:00+09:00");
+        // A new event has no ID.
+        let form: Value = serde_json::from_str(&form_fields(None, &event)["form"]).unwrap();
+        assert_eq!(form["eventId"], "");
     }
 
     /// `serve_once` answers for any path; this puts the event after its `.../events`.

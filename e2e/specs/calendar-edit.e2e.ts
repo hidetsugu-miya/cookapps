@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, callsOf, count, holds, inbox, isoDate, mock, ownedCalendars, rejects, release, rfc, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { account, askScreen, boot, callsOf, CARD, count, holds, inbox, isoDate, mock, ownedCalendars, rejects, release, rfc, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
 
 // Edit and delete an event from its detail (C-7).
 const today = isoDate(new Date());
@@ -198,6 +198,31 @@ describe("calendar: edit an event", () => {
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
   });
 
+  it("opens the form beside the event of the week drawn now when the week was drawn again behind the detail", async () => {
+    await openCalendar();
+    await eventButton("Team sync").click();
+    await expect($(".cal-pop h2")).toHaveText("Team sync");
+    // Another event changed, so the week is drawn again with new nodes while the detail of Team sync stays.
+    const changed = editableWeek();
+    changed.timed[1].summary = "Maybe lunch 2";
+    await mock("calendar_week", changed);
+    await browser.execute(async () => {
+      const path = "/js/calendar.js";
+      const calendar = (await import(path)) as { loadCalendar(refresh: boolean): Promise<void> };
+      await calendar.loadCalendar(true);
+    });
+    await waitForText("#cal-body .cal-name", "Maybe lunch 2");
+    await $('.cal-pop [aria-label="編集"]').click();
+    await expect($(".cal-create")).toBeDisplayed();
+    await expect(eventButton("Team sync")).toHaveElementClass("selected");
+    const look = await browser.execute(() => {
+      const frame = document.querySelector(".cal-create")!.getBoundingClientRect();
+      const box = document.querySelector(".cal-event.selected")!.getBoundingClientRect();
+      return { beside: frame.left >= box.right || frame.right <= box.left, there: box.height > 0 };
+    });
+    expect(look).toEqual({ beside: true, there: true });
+  });
+
   it("closes on ✕ and on Escape without calling anything, and takes the mark off the event", async () => {
     await openCalendar();
     const update = await mock("calendar_update_event", { id: "ev1", meetUrl: null });
@@ -278,6 +303,29 @@ describe("calendar: delete an event", () => {
     expect(await callsOf(week)).toEqual([]);
   });
 
+  it("does nothing when the trash is pressed again while it asks", async () => {
+    await openCalendar();
+    await openDelete();
+    await $('.cal-pop-head [aria-label="削除"]').click();
+    expect(await count(".cal-pop-confirm")).toBe(1);
+    await $(".cal-pop-confirm .text-btn:not(.danger)").click();
+    await waitForCount(".cal-pop-confirm", 0);
+    await expect($(".cal-pop h2")).toHaveText("Team sync");
+    await expect($(".cal-pop .meet-join")).toBeDisplayed();
+  });
+
+  it("shows the failure in a card when the popover was closed before the delete answered", async () => {
+    await openCalendar();
+    const del = await mock("calendar_delete_event", holds);
+    await openDelete();
+    await $(".cal-pop-confirm .text-btn.danger").click();
+    await waitForCalls(del);
+    await $('.cal-pop-head [aria-label="閉じる"]').click();
+    await waitForCount(".cal-pop", 0);
+    await release(del, rejects("予定を削除できませんでした"));
+    await expect($(CARD)).toHaveText("予定を削除できませんでした");
+  });
+
   it("asks to log in again in the popover when the account has not granted the permission", async () => {
     await openCalendar();
     const del = await mock("calendar_delete_event", null);
@@ -288,5 +336,138 @@ describe("calendar: delete an event", () => {
     const login = await mock("login", account);
     await $(".cal-pop-confirm .cal-create-error .text-btn").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+  });
+});
+
+// The form that Claude Code fills in instead of sending an event that invites someone new (C-6, C-7): the target "calendar-form" of the screen bridge. Nothing is saved until the owner presses 保存.
+const star = "#cal-bar-claude";
+const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
+
+async function openPane() {
+  await press($(star));
+  await waitForCalls("claude_code_start");
+}
+
+const wanted = (over: Record<string, unknown> = {}) => ({
+  eventId: "",
+  account,
+  calendarId: "work",
+  title: "Planning",
+  allDay: false,
+  start: rfc(today, "14:00"),
+  end: rfc(today, "15:00"),
+  guests: ["new@example.com"],
+  meet: true,
+  ...over,
+});
+const fillForm = (form: Record<string, unknown>, description = "議題\n二行目") => askScreen("write", "calendar-form", { form: JSON.stringify(form), description });
+
+describe("calendar: the form that Claude Code fills in", () => {
+  it("opens the form of a new event with the values, beside its draft, with the named calendar, and saves nothing", async () => {
+    await openCalendar();
+    await openPane();
+    const create = await mock("calendar_create_event", { id: "new1", meetUrl: null });
+    expect(await fillForm(wanted())).toEqual({ ok: true });
+    await expect($(".cal-create")).toHaveAttribute("aria-label", "新しい予定");
+    await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Planning");
+    await expect($('.cal-create [aria-label="開始日"]')).toHaveValue(today);
+    await expect($('.cal-create [aria-label="開始時刻"]')).toHaveValue("14:00");
+    await expect($('.cal-create [aria-label="終了時刻"]')).toHaveValue("15:00");
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["new@example.com"]);
+    await expect($(".cal-create-card")).toBeDisplayed();
+    await expect($('.cal-create [aria-label="説明"]')).toHaveValue("議題\n二行目");
+    await expect(saveButton()).toBeEnabled();
+    expect(await browser.execute(() => (document.querySelector(".cal-create-calendar") as HTMLSelectElement).selectedOptions[0].text)).toBe("Work");
+    await expect($(".cal-draft")).toBeDisplayed();
+    const beside = await browser.execute(() => {
+      const frame = document.querySelector(".cal-create")!.getBoundingClientRect();
+      const box = document.querySelector(".cal-draft")!.getBoundingClientRect();
+      return frame.left >= box.right || frame.right <= box.left;
+    });
+    expect(beside).toBe(true);
+    expect(await callsOf(create)).toEqual([]);
+    // The owner's 保存 is what sends it, as the form of the screen does.
+    await saveButton().click();
+    expect(await waitForCalls(create)).toEqual([
+      {
+        event: {
+          account,
+          calendarId: "work",
+          title: "Planning",
+          allDay: false,
+          start: rfc(today, "14:00"),
+          end: rfc(today, "15:00"),
+          guests: ["new@example.com"],
+          meet: true,
+          description: "議題\n二行目",
+        },
+      },
+    ]);
+    await waitForCount(".cal-create", 0);
+  });
+
+  it("opens the form of an event of the week with the values beside the event, and 保存 calls calendar_update_event", async () => {
+    await openCalendar();
+    await openPane();
+    const update = await mock("calendar_update_event", { id: "ev1", meetUrl: null });
+    expect(await fillForm(wanted({ eventId: "ev1", title: "Team sync 2", start: rfc(today, "10:00"), end: rfc(today, "11:30"), guests: ["ann@example.com", "cy@example.com"], meet: false }), "新しい説明")).toEqual({ ok: true });
+    await expect($(".cal-create")).toHaveAttribute("aria-label", "予定を編集");
+    await expect(eventButton("Team sync")).toHaveElementClass("selected");
+    await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Team sync 2");
+    await expect($('.cal-create [aria-label="終了時刻"]')).toHaveValue("11:30");
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com", "cy@example.com"]);
+    await expect($(".cal-create-meet-add")).toBeDisplayed();
+    await expect($('.cal-create [aria-label="説明"]')).toHaveValue("新しい説明");
+    await expect($('.cal-create [aria-label="カレンダー"]')).toBeDisabled();
+    await expect($(".cal-draft")).not.toExist();
+    expect(await callsOf(update)).toEqual([]);
+    await saveButton().click();
+    expect(await waitForCalls(update)).toEqual([
+      {
+        event: {
+          eventId: "ev1",
+          account,
+          calendarId: "work",
+          title: "Team sync 2",
+          allDay: false,
+          start: rfc(today, "10:00"),
+          end: rfc(today, "11:30"),
+          guests: ["ann@example.com", "cy@example.com"],
+          meet: false,
+          description: "新しい説明",
+        },
+      },
+    ]);
+  });
+
+  it("refuses an event that is not in the week shown, and a form that is not made of its fields, and opens none", async () => {
+    await openCalendar();
+    await openPane();
+    const gone = await fillForm(wanted({ eventId: "nowhere" }));
+    expect(gone).toMatchObject({ ok: false, error: expect.stringContaining("今カレンダーに出ている週にありません") });
+    expect(await askScreen("write", "calendar-form", { form: "not json" })).toMatchObject({ ok: false });
+    expect(await askScreen("write", "calendar-form", { form: JSON.stringify({ title: "x" }) })).toMatchObject({ ok: false });
+    expect(await askScreen("write", "calendar-form", { description: "d" })).toMatchObject({ ok: false });
+    await expect($(".cal-create")).not.toExist();
+  });
+
+  it("opens no form that has no place to save: the named calendar is not one that an event can be created in", async () => {
+    await openCalendar();
+    await openPane();
+    expect(await fillForm(wanted({ calendarId: "other" }))).toEqual({ ok: true });
+    await expect($(".cal-create-error")).toHaveText("指定されたカレンダーには予定を作れません");
+    await expect(saveButton()).toBeDisabled();
+  });
+
+  it("answers that the screen is not open while the Claude pane is closed or another screen is shown, and opens no form", async () => {
+    await openCalendar();
+    const closed = await fillForm(wanted());
+    expect(closed).toMatchObject({ ok: false, error: expect.stringContaining("calendar-form") });
+    await openPane();
+    await $("#nav-mail").click();
+    expect(await fillForm(wanted())).toMatchObject({ ok: false, error: expect.stringContaining("calendar-form") });
+    await $("#nav-calendar").click();
+    await expect($(".cal-create")).not.toExist();
+    expect(await callsOf("calendar_create_event")).toEqual([]);
   });
 });

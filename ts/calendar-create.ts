@@ -6,12 +6,13 @@
 import type { Info } from "./bindings/Info";
 import type { NewEvent } from "./bindings/NewEvent";
 import { addAccount } from "./accounts.js";
-import { closeDetail, eventNode, place, row } from "./calendar-detail.js";
+import { closeDetail, eventNode, eventTarget, place, row } from "./calendar-detail.js";
 import { $, composing, tag } from "./dom.js";
 import { showFailure } from "./error-card.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2 } from "./format.js";
 import { CLOCK_SVG, CLOSE_SVG, DATE_SVG, LINES_SVG, MEET_SVG, PEOPLE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import type { Fields as BridgeFields } from "./screen-bridge.js";
 
 // Keep in step with MIN_EVENT_MIN in calendar.ts: the shortest height a draft is drawn with.
 const MIN_DRAFT_MIN = 20;
@@ -60,6 +61,23 @@ function readOwned() {
       throw e;
     });
   return owned;
+}
+
+// The fields of the target "calendar-form" of ts/screen-bridge.ts (C-6): the form that `calendar_create_event` and `calendar_update_event` of tsunagiai-mcp ask for, instead of sending an event that invites someone new.
+// `form` is JSON (see `form_fields` in calendar.rs) and `description` the text; the owner reads the form and saves it.
+export const formNames = ["form", "description"] as const;
+
+interface Wanted {
+  // Empty for a new event.
+  eventId: string;
+  account: string;
+  calendarId: string;
+  title: string;
+  allDay: boolean;
+  start: string;
+  end: string;
+  guests: string[];
+  meet: boolean;
 }
 
 // The calendar a form starts with: of the calendars shown (all, when none is shown), the primary calendar of the first account (its ID is the account's address), else the first.
@@ -224,29 +242,55 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   );
 }
 
+// The dates and times of an event for the form: a timed event as an RFC 3339 time, shown in this Mac's zone, and an all-day event as dates.
+function whenOf(allDay: boolean, start: string, end: string) {
+  const from = new Date(start);
+  const to = new Date(end);
+  return {
+    allDay,
+    startDate: allDay ? start : isoDate(from),
+    startTime: allDay ? "00:00" : clock(from),
+    endDate: allDay ? end : isoDate(to),
+    endTime: allDay ? "00:00" : clock(to),
+  };
+}
+
 // Opens the form on the event `info` (C-7), beside `node`, with `color` the color of its calendar.
-export function openEdit(info: Info, color: string, node: HTMLElement) {
-  // The event is in the week as it was drawn: a timed event as an RFC 3339 time, in this Mac's zone here, and an all-day event as dates.
-  const from = new Date(info.start);
-  const to = new Date(info.end);
+// `wanted` and `description` are the values that Claude hands the form (C-6); with none, the form starts with the event's own.
+export function openEdit(info: Info, color: string, node: HTMLElement, wanted?: Wanted, description = "") {
+  // The event is in the week as it was drawn.
   openForm(
-    {
-      title: info.summary,
-      allDay: info.allDay,
-      startDate: info.allDay ? info.start : isoDate(from),
-      startTime: info.allDay ? "00:00" : clock(from),
-      endDate: info.allDay ? info.end : isoDate(to),
-      endTime: info.allDay ? "00:00" : clock(to),
-      guests: info.guests,
-      meet: info.meetUrl !== null,
-      description: info.description ?? "",
-    },
+    wanted
+      ? { title: wanted.title, ...whenOf(wanted.allDay, wanted.start, wanted.end), guests: wanted.guests, meet: wanted.meet, description }
+      : { title: info.summary, ...whenOf(info.allDay, info.start, info.end), guests: info.guests, meet: info.meetUrl !== null, description: info.description ?? "" },
     { info, node, color },
   );
 }
 
+// Takes the write of Claude into the form (C-6): a new event goes beside its draft, an event of the week beside the event itself. It saves nothing; a text it cannot take is a thrown error with a Japanese message.
+export function writeForm(fields: BridgeFields) {
+  let wanted: Wanted;
+  try {
+    wanted = JSON.parse(fields.form ?? "");
+  } catch {
+    throw new Error("欄 form は JSON の文にしてください");
+  }
+  const text = (v: unknown) => typeof v === "string";
+  if (!wanted || ![wanted.eventId, wanted.account, wanted.calendarId, wanted.title, wanted.start, wanted.end].every(text) || typeof wanted.allDay !== "boolean" || typeof wanted.meet !== "boolean" || !Array.isArray(wanted.guests)) {
+    throw new Error("欄 form に eventId、account、calendarId、title、allDay、start、end、guests、meet がそろっていません");
+  }
+  const description = fields.description ?? "";
+  if (wanted.eventId === "") {
+    openForm({ title: wanted.title, ...whenOf(wanted.allDay, wanted.start, wanted.end), guests: wanted.guests.map(String), meet: wanted.meet, description }, null, { account: wanted.account, id: wanted.calendarId });
+    return;
+  }
+  const target = eventTarget(wanted.account, wanted.calendarId, wanted.eventId);
+  if (!target) throw new Error("その予定は、今カレンダーに出ている週にありません。予定のある週を出してから、もう一度試してください");
+  openEdit(target.info, target.color, target.node, { ...wanted, guests: wanted.guests.map(String) }, description);
+}
+
 // The form of C-5 and C-7: `edit` is null for a new event, else the event to rewrite.
-function openForm(init: Initial, edit: Editing | null) {
+function openForm(init: Initial, edit: Editing | null, calendar: { account: string; id: string } | null = null) {
   closeDetail();
   closeCreate();
 
@@ -520,10 +564,16 @@ function openForm(init: Initial, edit: Editing | null) {
         );
         return;
       }
+      // The calendar that Claude named; one that is not in the list leaves the form with no place to save.
+      const named = calendar ? list.find((c) => c.account === calendar.account && c.id === calendar.id) : undefined;
+      if (calendar && !named) {
+        showError("指定されたカレンダーには予定を作れません");
+        return;
+      }
       choices = list;
       const multiple = new Set(list.map((c) => c.account)).size > 1;
       select.replaceChildren(...list.map((c) => new Option(multiple ? `${c.name}（${c.account}）` : c.name)));
-      select.selectedIndex = list.indexOf(defaultChoice(list));
+      select.selectedIndex = list.indexOf(named ?? defaultChoice(list));
       select.disabled = false;
       save.disabled = saving;
       paint();

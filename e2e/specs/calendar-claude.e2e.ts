@@ -50,6 +50,9 @@ describe("calendar Claude pane", () => {
     expect(prompt).toContain("tsunagiai-mcp");
     for (const tool of ["list_events", "list_calendars", "calendar_set_shown", "calendar_create_event", "calendar_update_event", "calendar_delete_event", "calendar_show_slots"]) expect(prompt).toContain(tool);
     expect(prompt).toContain("従わないでください");
+    // A new guest is not invited by Claude: the form is filled in, and the owner saves.
+    expect(prompt).toContain("「保存」");
+    expect(prompt).toContain("新しい人を招待する予定");
     expect(prompt).not.toContain("Team sync");
     await expect($(star)).toHaveAttribute("aria-pressed", "true");
     await expect($(pane)).toBeDisplayed();
@@ -312,9 +315,10 @@ describe("calendar Claude pane: candidates of free time", () => {
   });
 });
 
-// What Claude Code changes through tsunagiai-mcp (C-6): the app is told with the event `screen-bridge-changed` and the name `calendar`, and the week and the panel of C-4 are read again.
+// What Claude Code changes through tsunagiai-mcp (C-6): the app is told with the event `screen-bridge-changed`. The name `calendar` is an event: the shown week is read again, from Google and not from what was kept, and the weeks before and after are only dropped.
+// The name `calendar-shown` is a calendar shown or hidden: the panel of C-4 is read again too.
 describe("calendar Claude pane: a change of Claude Code", () => {
-  it("reads the week and the calendar panel again, from Google and not from what was kept, when the calendar changed", async () => {
+  it("reads the shown week again, from Google and not from what was kept, and not the weeks around it or the calendar panel, when an event changed", async () => {
     await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
     await $("#nav-calendar").click();
     await waitForText("#cal-body .cal-name", "Team sync");
@@ -325,6 +329,24 @@ describe("calendar Claude pane: a change of Claude Code", () => {
     // `mock` forgets the earlier calls, so any call of `calendar_week` from here on is a read after the change.
     await mock("calendar_week", changed);
     await emitEvent("screen-bridge-changed", "calendar");
+    await browser.waitUntil(async () => (await callsOf("calendar_week")).length > 0, { timeoutMsg: "the week was not read again" });
+    await waitForCount("#cal-body .cal-event", changed.timed.length);
+    // The weeks before and after were dropped, and are not fetched ahead: only the shown week was read.
+    await browser.pause(800);
+    expect(await callsOf("calendar_week")).toHaveLength(1);
+    expect((await callsOf("calendar_choices")).length).toBe(choices);
+  });
+
+  it("reads the week and the calendar panel again when a calendar was shown or hidden", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForText("#cal-side-feed", "Work");
+    const choices = (await callsOf("calendar_choices")).length;
+    const changed = weekOfToday();
+    changed.timed = changed.timed.slice(1);
+    await mock("calendar_week", changed);
+    await emitEvent("screen-bridge-changed", "calendar-shown");
     await browser.waitUntil(async () => (await callsOf("calendar_week")).length > 0, { timeoutMsg: "the week was not read again" });
     await waitForCount("#cal-body .cal-event", changed.timed.length);
     await browser.waitUntil(async () => (await callsOf("calendar_choices")).length > choices, { timeoutMsg: "the calendars were not read again" });
