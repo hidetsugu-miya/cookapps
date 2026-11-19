@@ -28,10 +28,8 @@ use crate::{
 };
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
-/// The `fields` of an event list: what `list_events` needs, and what the detail of the week adds.
-const EVENT_FIELDS: &str =
-    "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))";
-const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(summary,iCalUID,start,end,description,location,hangoutLink,attendees(self,responseStatus,resource))";
+/// The `fields` of an event list: what the detail of the week and `list_events` (C-6) draw.
+const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(id,summary,iCalUID,start,end,description,location,hangoutLink,organizer(self),attendees(self,responseStatus,resource,email))";
 const CALENDARS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 // shortcut: past this many pages (2500 events of one calendar) the rest is dropped, upgrade if a week ever needs more.
 const MAX_PAGES: usize = 10;
@@ -71,6 +69,8 @@ struct Attendee {
     /// A room or other resource, not a person.
     #[serde(default)]
     resource: bool,
+    #[serde(default)]
+    email: String,
 }
 
 /// How many people are invited (rooms left out), and how many of them accepted.
@@ -104,8 +104,66 @@ fn clip_description(text: String) -> String {
     }
 }
 
+/// The longest description that `list_events` gives Claude, in characters (C-6). The detail of the week (C-2) keeps `DESCRIPTION_MAX`.
+const CLAUDE_DESCRIPTION_MAX: usize = 1_000;
+
+/// The mark that `clip_for_claude` ends a cut text with is `CLIP_MARK_HEAD`, the number of characters left out, and `CLIP_MARK_TAIL`.
+const CLIP_MARK_HEAD: &str = "…（長いため、残り ";
+const CLIP_MARK_TAIL: &str = " 文字を省きました）";
+
+/// `text` cut to `CLAUDE_DESCRIPTION_MAX` characters, with a mark that says how many were left out; a text that fits is as it is.
+fn clip_for_claude(text: &str) -> String {
+    let total = text.chars().count();
+    if total <= CLAUDE_DESCRIPTION_MAX {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(CLAUDE_DESCRIPTION_MAX).collect();
+    format!(
+        "{head}{CLIP_MARK_HEAD}{}{CLIP_MARK_TAIL}",
+        total - CLAUDE_DESCRIPTION_MAX
+    )
+}
+
+/// Refuses a description that ends with the mark of `clip_for_claude`: it is what `list_events` gave, cut, and sending it back would erase the rest of the event's description.
+fn check_not_clipped(description: &str) -> Result<(), String> {
+    let marked = description
+        .strip_suffix(CLIP_MARK_TAIL)
+        .is_some_and(|rest| {
+            rest.rsplit_once(CLIP_MARK_HEAD)
+                .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        });
+    if marked {
+        Err("説明の終わりに、list_events が長いため切った印が付いています。切られた説明を送り返すと、元の説明の後ろが消えます。説明を変えないときは description を省いてください".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Who organized an event; only whether that is the user is read.
+#[derive(Deserialize, Default)]
+struct ApiOrganizer {
+    #[serde(default, rename = "self")]
+    is_self: bool,
+}
+
+/// Whether the user organized the event. An event that names no organizer is not the user's.
+fn organizer_is_self(organizer: &Option<ApiOrganizer>) -> bool {
+    organizer.as_ref().is_some_and(|o| o.is_self)
+}
+
+/// Whether the user may change or delete an event (C-7): it is on a calendar the user owns, and the user organized it.
+/// An event the user was invited to, or one on someone else's calendar, is not.
+fn can_change(calendar_is_mine: bool, organizer_is_self: bool) -> bool {
+    calendar_is_mine && organizer_is_self
+}
+
 #[derive(Deserialize)]
 struct ApiEvent {
+    /// With `singleEvents`, the ID of one occurrence of a repeating event.
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    organizer: Option<ApiOrganizer>,
     #[serde(default)]
     summary: String,
     #[serde(default, rename = "iCalUID")]
@@ -196,6 +254,11 @@ fn when(start: &ApiTime, end: &ApiTime) -> Option<When> {
 #[derive(Debug, Clone)]
 struct RawEvent {
     account: String,
+    /// The ID of the event (of one occurrence of a repeating event), and of the calendar it is on.
+    event_id: String,
+    calendar_id: String,
+    /// Whether the user may change or delete it (`can_change`).
+    editable: bool,
     /// Background color of the calendar the event is on.
     color: Option<String>,
     /// Name of the calendar the event is on.
@@ -209,12 +272,20 @@ struct RawEvent {
     /// Invited people (rooms left out), and how many of them accepted.
     attendees: u32,
     accepted: u32,
+    /// The addresses of the invited besides the user (a room is among them), which the form of C-7 starts its guests with.
+    guests: Vec<String>,
     when: When,
 }
 
 impl RawEvent {
     fn from_api(e: ApiEvent, account: &str, cal: &CalendarEntry) -> Option<Self> {
         let (attendees, accepted) = attendee_counts(&e.attendees);
+        let guests = e
+            .attendees
+            .iter()
+            .filter(|a| !a.is_self && !a.email.is_empty())
+            .map(|a| a.email.clone())
+            .collect();
         Some(Self {
             when: when(&e.start, &e.end)?,
             response: e
@@ -224,6 +295,9 @@ impl RawEvent {
                 .map(|a| a.response_status)
                 .unwrap_or_default(),
             account: account.to_owned(),
+            event_id: e.id,
+            calendar_id: cal.id.clone(),
+            editable: can_change(cal.is_mine(), organizer_is_self(&e.organizer)),
             color: cal.background_color.clone(),
             calendar: cal.summary.clone().unwrap_or_else(|| cal.id.clone()),
             summary: e.summary,
@@ -233,6 +307,7 @@ impl RawEvent {
             description: non_empty(e.description).map(clip_description),
             attendees,
             accepted,
+            guests,
         })
     }
 }
@@ -287,6 +362,15 @@ fn when_text<Tz: TimeZone>(tz: &Tz, when: &When) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Info {
     summary: String,
+    /// The ID of the event (of one occurrence of a repeating event), and of the calendar it is on, for `calendar_update_event` and `calendar_delete_event` (C-7).
+    /// Absent in a cache an older version wrote (empty text).
+    #[serde(default)]
+    event_id: String,
+    #[serde(default)]
+    calendar_id: String,
+    /// Whether the user may change or delete the event: they organized it, on a calendar they own. Absent in a cache an older version wrote (`false`).
+    #[serde(default)]
+    editable: bool,
     /// `None` means the screen picks one from the account.
     color: Option<String>,
     account: String,
@@ -312,13 +396,30 @@ pub struct Info {
     attendees: u32,
     #[serde(default)]
     accepted: u32,
+    /// The whole event as the form of C-5 holds it (`NewEvent`: all day, the dates or the times, the guests), which the edit of C-7 starts from.
+    /// Absent in a cache an older version wrote (`false`, empty text, none); such an event is not `editable` either.
+    #[serde(default)]
+    all_day: bool,
+    /// A date for an all-day event, else an RFC 3339 time.
+    #[serde(default)]
+    start: String,
+    /// Same form as `start`; the last day for an all-day event.
+    #[serde(default)]
+    end: String,
+    /// The addresses of the invited besides the user.
+    #[serde(default)]
+    guests: Vec<String>,
 }
 
 impl Info {
     /// `tz` is the zone the times are shown in.
     fn new<Tz: TimeZone>(e: &RawEvent, tz: &Tz) -> Self {
+        let (all_day, start, end) = form_of(&e.when);
         Self {
             summary: e.summary.clone(),
+            event_id: e.event_id.clone(),
+            calendar_id: e.calendar_id.clone(),
+            editable: e.editable,
             color: e.color.clone(),
             account: e.account.clone(),
             response: e.response,
@@ -329,6 +430,10 @@ impl Info {
             description: e.description.clone(),
             attendees: e.attendees,
             accepted: e.accepted,
+            all_day,
+            start,
+            end,
+            guests: e.guests.clone(),
         }
     }
 }
@@ -377,40 +482,73 @@ pub struct Week {
     calendar_failed: Vec<String>,
 }
 
-/// An event as `list_events` returns it.
+/// An event as `list_events` returns it: what the detail of C-2 shows, and what `calendar_update_event` and `calendar_delete_event` need (C-6).
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EventItem {
     account: String,
     calendar: String,
+    calendar_id: String,
+    event_id: String,
     summary: String,
     declined: bool,
+    response: ResponseStatus,
     all_day: bool,
     /// A local date for an all-day event, else an RFC 3339 time.
     start: String,
     /// Same form as `start`; the last day for an all-day event.
     end: String,
+    location: Option<String>,
+    /// As Google sends it: plain text or a little HTML, cut to `CLAUDE_DESCRIPTION_MAX` characters.
+    description: Option<String>,
+    meet_url: Option<String>,
+    /// Invited people (rooms left out), and how many of them accepted.
+    attendees: u32,
+    accepted: u32,
+    /// The addresses of the invited besides the user (a room is among them), as the week's `Info.guests`; empty unless `editable`, because only a rewrite needs them.
+    guests: Vec<String>,
+    /// Whether the event can be changed or deleted (C-7).
+    editable: bool,
+}
+
+/// Whether the event is all day, and its start and end as the screen and `list_events` give them: a date for an all-day event (`end` the last day, included), else an RFC 3339 time.
+fn form_of(when: &When) -> (bool, String, String) {
+    match when {
+        // The API's end date is exclusive.
+        When::AllDay { start, end } => (
+            true,
+            start.to_string(),
+            (*end - Duration::days(1)).max(*start).to_string(),
+        ),
+        When::Timed { start, end } => (false, start.to_rfc3339(), end.to_rfc3339()),
+    }
 }
 
 impl From<&RawEvent> for EventItem {
     fn from(e: &RawEvent) -> Self {
-        let (all_day, start, end) = match &e.when {
-            // The API's end date is exclusive.
-            When::AllDay { start, end } => (
-                true,
-                start.to_string(),
-                (*end - Duration::days(1)).max(*start).to_string(),
-            ),
-            When::Timed { start, end } => (false, start.to_rfc3339(), end.to_rfc3339()),
-        };
+        let (all_day, start, end) = form_of(&e.when);
         Self {
             account: e.account.clone(),
             calendar: e.calendar.clone(),
+            calendar_id: e.calendar_id.clone(),
+            event_id: e.event_id.clone(),
             summary: e.summary.clone(),
             declined: e.response == ResponseStatus::Declined,
+            response: e.response,
             all_day,
             start,
             end,
+            location: e.location.clone(),
+            description: e.description.as_deref().map(clip_for_claude),
+            meet_url: e.meet_url.clone(),
+            attendees: e.attendees,
+            accepted: e.accepted,
+            guests: if e.editable {
+                e.guests.clone()
+            } else {
+                Vec::new()
+            },
+            editable: e.editable,
         }
     }
 }
@@ -698,7 +836,8 @@ fn check_choice(accounts: &[String], account: &str, calendar_id: &str) -> Result
     Ok(())
 }
 
-fn save_shown(dir: &Path, account: &str, calendar_id: &str, shown: bool) -> Result<(), String> {
+/// Keeps whether one calendar of one account is shown (C-4). The command of the screen and `calendar_set_shown` of `tsunagiai-mcp` (C-6) both call it.
+pub fn save_shown(dir: &Path, account: &str, calendar_id: &str, shown: bool) -> Result<(), String> {
     let listed = accounts::load(dir)?.unwrap_or_default();
     check_choice(&listed, account, calendar_id)?;
     // The kept weeks hold the events of the calendar just hidden, so a changed choice drops them under the same lock.
@@ -1210,7 +1349,7 @@ pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Resul
         "list_events",
         &min,
         &max,
-        EVENT_FIELDS,
+        EVENT_DETAIL_FIELDS,
         true,
     )
     .await?;
@@ -1240,6 +1379,17 @@ async fn load_choices(
     command: &str,
 ) -> Result<CalendarChoices, String> {
     let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
+    list_choices(&dir, auth, cache, command).await
+}
+
+/// The calendars of every account with whether each is shown, from the config directory: what `calendar_choices` reads, and `list_calendars` of `tsunagiai-mcp` (C-6) with a list of its own.
+pub async fn list_choices(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    command: &str,
+) -> Result<CalendarChoices, String> {
+    let dir = dir.to_owned();
     let selection = load_selection(&dir);
     let accounts = auth
         .accounts(&dir)
@@ -1428,17 +1578,17 @@ const INSERT_FIELDS: &str = "id,hangoutLink";
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct NewEvent {
-    account: String,
-    calendar_id: String,
-    title: String,
-    all_day: bool,
-    start: String,
-    end: String,
+    pub account: String,
+    pub calendar_id: String,
+    pub title: String,
+    pub all_day: bool,
+    pub start: String,
+    pub end: String,
     /// Email addresses; each one is invited.
-    guests: Vec<String>,
+    pub guests: Vec<String>,
     /// Whether to add a Google Meet conference.
-    meet: bool,
-    description: String,
+    pub meet: bool,
+    pub description: String,
 }
 
 /// The part of the answer of `events.insert` that is read.
@@ -1589,13 +1739,43 @@ pub fn slot_fields(slots: &[(&str, &str)]) -> Result<Fields, String> {
     Ok(fields)
 }
 
+/// The target of the form of C-5 and C-7 that a tool of Claude fills in (`calendar_create_event` and `calendar_update_event` with a new guest, C-6): the app's screen bridge writes it, and the owner saves.
+pub const FORM_TARGET: &str = "calendar-form";
+
+/// The fields of the target `calendar-form` for `event`: `form` is JSON with `eventId` (empty for a new event), `account`, `calendarId`, `title`, `allDay`, `start`, `end`, `guests` and `meet`, and `description` is the text.
+/// The screen bridge takes 8 fields of 10,000 characters at most, so the description has a field of its own.
+/// With `keep_description` there is no `description` field, and the screen starts the form of an event with the description the event has.
+pub fn form_fields(event_id: Option<&str>, event: &NewEvent, keep_description: bool) -> Fields {
+    let form = json!({
+        "eventId": event_id.unwrap_or_default(),
+        "account": event.account,
+        "calendarId": event.calendar_id,
+        "title": event.title,
+        "allDay": event.all_day,
+        "start": event.start,
+        "end": event.end,
+        "guests": event.guests,
+        "meet": event.meet,
+    });
+    let mut fields = Fields::from([("form".to_owned(), form.to_string())]);
+    if !keep_description {
+        fields.insert("description".to_owned(), event.description.clone());
+    }
+    fields
+}
+
 /// The query parameters of a request.
 type Query = Vec<(&'static str, &'static str)>;
 
-/// The query and the body of `events.insert` for `event`, after checking the input.
-/// `request_id` is new for each event: Google makes the Meet of a request ID once.
-/// The invitation goes out only when there are guests.
-fn build_insert(event: &NewEvent, request_id: &str) -> Result<(Query, Value), String> {
+/// The input of the form, checked: the title (trimmed), the `start` and `end` of the request body, and the guests.
+struct Checked<'a> {
+    title: &'a str,
+    start: Value,
+    end: Value,
+    guests: Vec<String>,
+}
+
+fn check_input(event: &NewEvent) -> Result<Checked<'_>, String> {
     let title = event.title.trim();
     if title.chars().count() > TITLE_MAX {
         return Err(format!("タイトルは {TITLE_MAX} 文字までです"));
@@ -1605,6 +1785,24 @@ fn build_insert(event: &NewEvent, request_id: &str) -> Result<(Query, Value), St
     }
     let (start, end) = check_times(event)?;
     let guests = check_guests(&event.guests)?;
+    Ok(Checked {
+        title,
+        start,
+        end,
+        guests,
+    })
+}
+
+/// The query and the body of `events.insert` for `event`, after checking the input.
+/// `request_id` is new for each event: Google makes the Meet of a request ID once.
+/// The invitation goes out only when there are guests.
+fn build_insert(event: &NewEvent, request_id: &str) -> Result<(Query, Value), String> {
+    let Checked {
+        title,
+        start,
+        end,
+        guests,
+    } = check_input(event)?;
     let mut body = json!({"start": start, "end": end});
     if !title.is_empty() {
         body["summary"] = json!(title);
@@ -1630,14 +1828,17 @@ fn build_insert(event: &NewEvent, request_id: &str) -> Result<(Query, Value), St
     Ok((query, body))
 }
 
+/// What the user is told when the calendar of an event to create is not theirs.
+const CREATE_REFUSAL: &str =
+    "このカレンダーには予定を作れません。自分が持つカレンダーだけに作れます";
+
 /// Whether `id` is a calendar of `calendars` that the user owns. Only those take an event.
-fn owned_calendar(calendars: &[CalendarEntry], id: &str) -> Result<(), String> {
+/// `refusal` is what the user is told when it is not theirs.
+fn owned_calendar(calendars: &[CalendarEntry], id: &str, refusal: &str) -> Result<(), String> {
     match calendars.iter().find(|c| c.id == id) {
         None => Err("カレンダーが見つかりません".into()),
         Some(c) if c.is_mine() => Ok(()),
-        Some(_) => {
-            Err("このカレンダーには予定を作れません。自分が持つカレンダーだけに作れます".into())
-        }
+        Some(_) => Err(refusal.into()),
     }
 }
 
@@ -1650,18 +1851,28 @@ async fn check_owned(
     cache: &CalendarCache,
     account: &str,
     id: &str,
+    refusal: &str,
 ) -> Result<Option<()>, ApiError> {
     for refresh in [false, true] {
         let Some(calendars) = account_calendars(dir, auth, cache, account, refresh).await? else {
             return Ok(None);
         };
-        match owned_calendar(&calendars, id) {
+        match owned_calendar(&calendars, id, refusal) {
             Ok(()) => return Ok(Some(())),
             Err(e) if refresh => return Err(e.into()),
             Err(_) => {}
         }
     }
     unreachable!("the second round returns")
+}
+
+/// What a tool of Claude does with an event (C-6): sends it to Google, or, when it would invite someone who is not on the event yet,
+/// sends nothing and leaves the owner to save it in the form of the calendar screen.
+#[derive(Debug)]
+pub enum Outcome {
+    Done(CreatedEvent),
+    /// Nothing was sent: the event passed every check, and a guest in it is new.
+    AskOwner,
 }
 
 /// Creates an event in a calendar the user owns, with the invitations and the Google Meet that `event` asks for.
@@ -1674,30 +1885,66 @@ pub async fn calendar_create_event(
     cache: State<'_, CalendarCache>,
     event: NewEvent,
 ) -> Result<Option<CreatedEvent>, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_create_event", "-", e))?;
+    create_event(&dir, &auth, &cache, &event).await
+}
+
+/// The request of `events.insert` or `events.patch`, checked and ready to send.
+struct Prepared {
+    url: String,
+    query: Query,
+    body: Value,
+}
+
+/// Checks an event to create (the input, the account and the calendar, which the user must own) and builds its request. `None` means `account` must log in again.
+async fn prepare_create(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    event: &NewEvent,
+) -> Result<Option<Prepared>, String> {
     const COMMAND: &str = "calendar_create_event";
     let account = event.account.as_str();
-    let dir = config_dir(&app).map_err(|e| log_failure(COMMAND, "-", e))?;
     let listed = auth
-        .accounts(&dir)
+        .accounts(dir)
         .map_err(|e| log_failure(COMMAND, "-", e))?;
     check_choice(&listed, account, &event.calendar_id)?;
     let request_id = random_string().map_err(|e| log_failure(COMMAND, account, e))?;
-    let (query, body) = build_insert(&event, &request_id)?;
+    let (query, body) = build_insert(event, &request_id)?;
     let url = events_url(&event.calendar_id)?;
     // The role is read from Google, not taken from the screen.
-    match check_owned(&dir, &auth, &cache, account, &event.calendar_id).await {
-        Ok(Some(())) => {}
-        Ok(None) => return Ok(None),
-        Err(e) => return Err(log_failure(COMMAND, account, e)),
+    match check_owned(
+        dir,
+        auth,
+        cache,
+        account,
+        &event.calendar_id,
+        CREATE_REFUSAL,
+    )
+    .await
+    {
+        Ok(Some(())) => Ok(Some(Prepared { url, query, body })),
+        Ok(None) => Ok(None),
+        Err(e) => Err(log_failure(COMMAND, account, e)),
     }
+}
+
+async fn send_create(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    sending: &Prepared,
+) -> Result<Option<CreatedEvent>, String> {
+    const COMMAND: &str = "calendar_create_event";
     match send_json_refreshing::<ApiCreated>(
-        &dir,
-        &auth,
+        dir,
+        auth,
         account,
         Method::POST,
-        &url,
-        &query,
-        Some(&body),
+        &sending.url,
+        &sending.query,
+        Some(&sending.body),
     )
     .await
     {
@@ -1706,18 +1953,460 @@ pub async fn calendar_create_event(
             cache.forget(account);
             Ok(None)
         }
-        Err(e) => {
-            let status = e.status;
-            let message = log_failure(COMMAND, account, e);
-            match classify(status, &message) {
-                Failure::NeedsLogin => {
-                    cache.forget(account);
-                    Ok(None)
-                }
-                Failure::Message(m) => Err(m),
-            }
-        }
+        Err(e) => change_failure(cache, COMMAND, account, e),
     }
+}
+
+/// `calendar_create_event` on the config directory, for `tsunagiai-mcp` as well (C-6).
+pub async fn create_event(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    event: &NewEvent,
+) -> Result<Option<CreatedEvent>, String> {
+    let Some(sending) = prepare_create(dir, auth, cache, event).await? else {
+        return Ok(None);
+    };
+    send_create(dir, auth, cache, &event.account, &sending).await
+}
+
+/// `create_event` for a tool of Claude (C-6): an event with guests is checked and not sent (`Outcome::AskOwner`), because a guest is invited by the save and every guest of a new event is new.
+pub async fn create_event_for_claude(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    event: &NewEvent,
+) -> Result<Option<Outcome>, String> {
+    let Some(sending) = prepare_create(dir, auth, cache, event).await? else {
+        return Ok(None);
+    };
+    if has_new_guest(&[], &check_guests(&event.guests)?) {
+        return Ok(Some(Outcome::AskOwner));
+    }
+    Ok(send_create(dir, auth, cache, &event.account, &sending)
+        .await?
+        .map(Outcome::Done))
+}
+
+/// What the user is told when the calendar of an event to change or delete is not theirs.
+const CHANGE_REFUSAL: &str =
+    "このカレンダーの予定は変更できません。自分が持つカレンダーの予定だけです";
+
+/// What `events.get` is asked for before a change: who organized the event, its Meet link, whether it repeats, and its guests as Google holds them (a guest who stays is sent back as it is).
+const CURRENT_FIELDS: &str = "organizer(self),hangoutLink,recurrence,attendees";
+
+/// An event to rewrite (C-7): `event` as the form of C-5 holds it, and the ID of the event to put it on.
+/// For a repeating event the ID is that of one occurrence (`Info.event_id`), and only that occurrence is rewritten.
+/// The guests are the whole list after the change, and `meet` says whether the event has a Meet after it.
+#[derive(Deserialize, Debug)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct EditedEvent {
+    pub event_id: String,
+    #[serde(flatten)]
+    pub event: NewEvent,
+}
+
+/// What `events.get` answers with before a change (`CURRENT_FIELDS`).
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ApiCurrent {
+    organizer: Option<ApiOrganizer>,
+    hangout_link: Option<String>,
+    /// The rules of a repeating event; only the series itself has them, not one occurrence.
+    #[serde(default)]
+    recurrence: Vec<String>,
+    /// The entries of the guests as Google sent them (the user's own among them).
+    #[serde(default)]
+    attendees: Vec<Value>,
+}
+
+/// The address of an entry of `ApiCurrent::attendees`, empty when it has none.
+fn entry_address(entry: &Value) -> &str {
+    entry
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+impl ApiCurrent {
+    /// The addresses of every entry, the user's own included.
+    fn addresses(&self) -> Vec<String> {
+        self.attendees
+            .iter()
+            .map(|a| entry_address(a).to_owned())
+            .collect()
+    }
+
+    fn has_meet(&self) -> bool {
+        meet_url(self.hangout_link.as_deref()).is_some()
+    }
+
+    fn has_guests(&self) -> bool {
+        !self.attendees.is_empty()
+    }
+}
+
+/// `events/{event_id}` of a calendar. The ID is one path segment, escaped as such.
+fn event_url(calendar_id: &str, event_id: &str) -> Result<String, String> {
+    if matches!(event_id, "" | "." | "..") || event_id.chars().count() > CALENDAR_ID_MAX {
+        return Err("予定 ID が不正です".into());
+    }
+    let mut url = Url::parse(&events_url(calendar_id)?).map_err(|e| e.to_string())?;
+    url.path_segments_mut()
+        .map_err(|_| "URL が不正です")?
+        .push(event_id);
+    Ok(url.into())
+}
+
+/// Refuses an event that the user did not organize (an invitation).
+fn check_organizer(organizer_is_self: bool) -> Result<(), String> {
+    if organizer_is_self {
+        Ok(())
+    } else {
+        Err("この予定は変更できません。自分が主催した予定だけです".into())
+    }
+}
+
+/// Refuses the series of a repeating event itself (it has `recurrence`): a change or a delete would reach every occurrence, and the tools and the screen take one occurrence.
+fn check_not_series(now: &ApiCurrent) -> Result<(), String> {
+    if now.recurrence.is_empty() {
+        Ok(())
+    } else {
+        Err(
+            "繰り返しの予定そのものは変更も削除もできません。その回の予定の ID を指定してください"
+                .into(),
+        )
+    }
+}
+
+/// Whether the event `now` can be changed or deleted: the user organized it, and it is one event or one occurrence.
+fn check_current(now: &ApiCurrent) -> Result<(), String> {
+    check_organizer(organizer_is_self(&now.organizer))?;
+    check_not_series(now)
+}
+
+/// Whether `wanted` (the guests after a change, checked) holds an address that `known` (the addresses the event has now, none for a new event) does not,
+/// the case of the address not counting. Such a guest is a new person, who is sent an invitation.
+fn has_new_guest(known: &[String], wanted: &[String]) -> bool {
+    wanted
+        .iter()
+        .any(|w| !known.iter().any(|k| k.eq_ignore_ascii_case(w)))
+}
+
+/// The guests as the patch sends them: one who is in the event stays as Google sent the entry (`optional`, `displayName` and so on), a new address is `{"email"}`.
+fn patch_attendees(now: &ApiCurrent, guests: &[String]) -> Vec<Value> {
+    guests
+        .iter()
+        .map(|g| {
+            now.attendees
+                .iter()
+                .find(|a| entry_address(a).eq_ignore_ascii_case(g))
+                .cloned()
+                .unwrap_or_else(|| json!({"email": g}))
+        })
+        .collect()
+}
+
+/// The guests are told when there are any after the change, or were any before it (those taken off are told that it is cancelled).
+fn send_updates(guests: bool) -> &'static str {
+    if guests {
+        "all"
+    } else {
+        "none"
+    }
+}
+
+/// The query and the body of `events.patch` for `event` on the event `now`, after checking the input.
+/// A patch leaves out what the body does not name, so each field of the form is named, an empty one too (so it clears), and the form of the
+/// time that is not used is `null` (so an all-day event can become a timed one and back).
+/// The Meet is added when it is wanted and the event has none, taken off when it is not wanted and the event has one, and left alone otherwise.
+/// With `keep_guests` the body names no `attendees`, so the guests the event has stay (`event.guests` is not read).
+/// With `keep_description` it names no `description`, so the description the event has stays (`event.description` is not read).
+fn build_patch(
+    event: &NewEvent,
+    request_id: &str,
+    now: &ApiCurrent,
+    keep_guests: bool,
+    keep_description: bool,
+) -> Result<(Query, Value), String> {
+    let Checked {
+        title,
+        mut start,
+        mut end,
+        guests,
+    } = check_input(event)?;
+    let unused = if event.all_day { "dateTime" } else { "date" };
+    start[unused] = Value::Null;
+    end[unused] = Value::Null;
+    let description = if event.description.trim().is_empty() {
+        ""
+    } else {
+        &event.description
+    };
+    let mut body = json!({
+        "summary": title,
+        "start": start,
+        "end": end,
+    });
+    if !keep_description {
+        body["description"] = json!(description);
+    }
+    let guests = if keep_guests { Vec::new() } else { guests };
+    if !keep_guests {
+        body["attendees"] = json!(patch_attendees(now, &guests));
+    }
+    let mut query = vec![("fields", INSERT_FIELDS)];
+    match (event.meet, now.has_meet()) {
+        (true, false) => {
+            body["conferenceData"] = json!({"createRequest": {
+                "requestId": request_id,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }});
+            query.push(("conferenceDataVersion", "1"));
+        }
+        (false, true) => {
+            body["conferenceData"] = Value::Null;
+            query.push(("conferenceDataVersion", "1"));
+        }
+        _ => {}
+    }
+    query.push((
+        "sendUpdates",
+        send_updates(!guests.is_empty() || now.has_guests()),
+    ));
+    Ok((query, body))
+}
+
+/// The query of `events.delete` of the event `now`: the guests are told when it has any.
+fn build_delete(now: &ApiCurrent) -> Query {
+    vec![("sendUpdates", send_updates(now.has_guests()))]
+}
+
+/// The answer to a failed call of a change: a login again when the grant lacks the permission, else the message.
+fn change_failure<T>(
+    cache: &CalendarCache,
+    command: &str,
+    account: &str,
+    e: ApiError,
+) -> Result<Option<T>, String> {
+    let status = e.status;
+    let message = log_failure(command, account, e);
+    match classify(status, &message) {
+        Failure::NeedsLogin => {
+            cache.forget(account);
+            Ok(None)
+        }
+        Failure::Message(m) => Err(m),
+    }
+}
+
+/// Checks that the event can be changed or deleted, reading it from Google, not from the screen: the calendar is the user's and the user organized the event.
+/// Gives the URL of the event and its state. `Ok(None)` means `account` must log in again.
+async fn changeable(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    command: &str,
+    account: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<Option<(String, ApiCurrent)>, String> {
+    let listed = auth
+        .accounts(dir)
+        .map_err(|e| log_failure(command, "-", e))?;
+    check_choice(&listed, account, calendar_id)?;
+    let url = event_url(calendar_id, event_id)?;
+    match check_owned(dir, auth, cache, account, calendar_id, CHANGE_REFUSAL).await {
+        Ok(Some(())) => {}
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(log_failure(command, account, e)),
+    }
+    let query = [("fields", CURRENT_FIELDS)];
+    let now = match send_json_refreshing::<ApiCurrent>(
+        dir,
+        auth,
+        account,
+        Method::GET,
+        &url,
+        &query,
+        None,
+    )
+    .await
+    {
+        Ok(Some(now)) => now,
+        Ok(None) => {
+            cache.forget(account);
+            return Ok(None);
+        }
+        Err(e) => return change_failure(cache, command, account, e),
+    };
+    check_current(&now)?;
+    Ok(Some((url, now)))
+}
+
+/// Checks an event to rewrite (the input, and in Google the calendar, the organizer and that it is not a series) and builds its request, with the event as Google holds it now.
+/// `None` means the account must log in again. With `keep_guests` the request leaves the guests as they are, and with `keep_description` the description.
+async fn prepare_update(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    edit: &EditedEvent,
+    keep_guests: bool,
+    keep_description: bool,
+) -> Result<Option<(Prepared, ApiCurrent)>, String> {
+    const COMMAND: &str = "calendar_update_event";
+    let event = &edit.event;
+    let account = event.account.as_str();
+    check_input(event)?;
+    let request_id = random_string().map_err(|e| log_failure(COMMAND, account, e))?;
+    let Some((url, now)) = changeable(
+        dir,
+        auth,
+        cache,
+        COMMAND,
+        account,
+        &event.calendar_id,
+        &edit.event_id,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let (query, body) = build_patch(event, &request_id, &now, keep_guests, keep_description)?;
+    Ok(Some((Prepared { url, query, body }, now)))
+}
+
+async fn send_update(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    sending: &Prepared,
+) -> Result<Option<CreatedEvent>, String> {
+    const COMMAND: &str = "calendar_update_event";
+    match send_json_refreshing::<ApiCreated>(
+        dir,
+        auth,
+        account,
+        Method::PATCH,
+        &sending.url,
+        &sending.query,
+        Some(&sending.body),
+    )
+    .await
+    {
+        Ok(Some(changed)) => Ok(Some(changed.into())),
+        Ok(None) => {
+            cache.forget(account);
+            Ok(None)
+        }
+        Err(e) => change_failure(cache, COMMAND, account, e),
+    }
+}
+
+/// Rewrites an event that the user organized, on a calendar the user owns (C-7), with the invitations and the Google Meet that `edit` asks for.
+/// `None` means the account must log in again (it has not granted the permission to change events yet).
+pub async fn update_event(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    edit: &EditedEvent,
+) -> Result<Option<CreatedEvent>, String> {
+    let Some((sending, _)) = prepare_update(dir, auth, cache, edit, false, false).await? else {
+        return Ok(None);
+    };
+    send_update(dir, auth, cache, &edit.event.account, &sending).await
+}
+
+/// `update_event` for a tool of Claude (C-6). With `keep_description` the description stays as the event has it, and a description that `list_events` cut is refused, not sent back.
+/// With `keep_guests` the guests stay as the event has them. Otherwise, when `edit` has a guest that the event does not have now,
+/// nothing is sent (`Outcome::AskOwner`): the new guest is invited by the save. The guests who are on the event already are changed and told with no question.
+pub async fn update_event_for_claude(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    edit: &EditedEvent,
+    keep_guests: bool,
+    keep_description: bool,
+) -> Result<Option<Outcome>, String> {
+    if !keep_description {
+        check_not_clipped(&edit.event.description)?;
+    }
+    let Some((sending, now)) =
+        prepare_update(dir, auth, cache, edit, keep_guests, keep_description).await?
+    else {
+        return Ok(None);
+    };
+    if !keep_guests && has_new_guest(&now.addresses(), &check_guests(&edit.event.guests)?) {
+        return Ok(Some(Outcome::AskOwner));
+    }
+    Ok(send_update(dir, auth, cache, &edit.event.account, &sending)
+        .await?
+        .map(Outcome::Done))
+}
+
+/// Deletes an event that the user organized, on a calendar the user owns (C-7). A repeating event's `event_id` is that of one occurrence, and only it goes.
+/// `None` means the account must log in again (it has not granted the permission to change events yet).
+pub async fn delete_event(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    calendar_id: &str,
+    event_id: &str,
+) -> Result<Option<bool>, String> {
+    const COMMAND: &str = "calendar_delete_event";
+    let Some((url, now)) =
+        changeable(dir, auth, cache, COMMAND, account, calendar_id, event_id).await?
+    else {
+        return Ok(None);
+    };
+    match send_json_refreshing::<Value>(
+        dir,
+        auth,
+        account,
+        Method::DELETE,
+        &url,
+        &build_delete(&now),
+        None,
+    )
+    .await
+    {
+        Ok(Some(_)) => Ok(Some(true)),
+        Ok(None) => {
+            cache.forget(account);
+            Ok(None)
+        }
+        Err(e) => change_failure(cache, COMMAND, account, e),
+    }
+}
+
+/// Rewrites an event (C-7, `update_event`). The screen reads the week again to draw it.
+#[tauri::command]
+pub async fn calendar_update_event(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    cache: State<'_, CalendarCache>,
+    event: EditedEvent,
+) -> Result<Option<CreatedEvent>, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_update_event", "-", e))?;
+    update_event(&dir, &auth, &cache, &event).await
+}
+
+/// Deletes an event (C-7, `delete_event`). `Some(true)` when it is gone. The screen reads the week again.
+#[tauri::command]
+pub async fn calendar_delete_event(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    cache: State<'_, CalendarCache>,
+    account: String,
+    calendar_id: String,
+    event_id: String,
+) -> Result<Option<bool>, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_delete_event", "-", e))?;
+    delete_event(&dir, &auth, &cache, &account, &calendar_id, &event_id).await
 }
 
 #[cfg(test)]
@@ -1736,6 +2425,9 @@ mod tests {
     fn raw(summary: &str) -> RawEvent {
         RawEvent {
             account: "a@example.com".into(),
+            event_id: "ev".into(),
+            calendar_id: "id@example.com".into(),
+            editable: false,
             color: None,
             calendar: "c".into(),
             summary: summary.into(),
@@ -1746,6 +2438,7 @@ mod tests {
             description: None,
             attendees: 0,
             accepted: 0,
+            guests: Vec::new(),
             when: When::AllDay {
                 start: date("2026-01-01"),
                 end: date("2026-01-02"),
@@ -1756,6 +2449,9 @@ mod tests {
     fn info(summary: &str, color: Option<&str>, response: ResponseStatus) -> Info {
         Info {
             summary: summary.into(),
+            event_id: "ev".into(),
+            calendar_id: "id@example.com".into(),
+            editable: false,
             color: color.map(Into::into),
             account: "a@example.com".into(),
             response,
@@ -1766,6 +2462,10 @@ mod tests {
             description: None,
             attendees: 0,
             accepted: 0,
+            all_day: false,
+            start: String::new(),
+            end: String::new(),
+            guests: Vec::new(),
         }
     }
 
@@ -2344,6 +3044,71 @@ mod tests {
         let r = RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap();
         assert_eq!(r.response, ResponseStatus::Accepted);
         assert!(!EventItem::from(&r).declined);
+    }
+
+    #[test]
+    fn an_event_of_list_events_carries_its_detail_and_what_it_takes_to_change_it() {
+        let item = |organizer: &str, role: &str| {
+            let ev: ApiEvent = serde_json::from_str(&format!(
+                r#"{{"id":"e1","summary":"s","iCalUID":"u","organizer":{organizer},
+                    "start":{{"dateTime":"2026-10-29T10:00:00+09:00"}},"end":{{"dateTime":"2026-10-29T11:00:00+09:00"}},
+                    "location":"会議室","description":"メモ","hangoutLink":"https://meet.google.com/abc-defg-hij",
+                    "attendees":[{{"self":true,"responseStatus":"tentative","email":"me@example.com"}},
+                        {{"responseStatus":"accepted","email":"b@example.com"}},
+                        {{"responseStatus":"accepted","email":"room@example.com","resource":true}}]}}"#
+            ))
+            .unwrap();
+            let mut entry = cal(None);
+            entry.access_role = Some(role.into());
+            serde_json::to_value(EventItem::from(
+                &RawEvent::from_api(ev, "a@example.com", &entry).unwrap(),
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            item(r#"{"self":true}"#, "owner"),
+            serde_json::json!({
+                "account": "a@example.com",
+                "calendar": "仕事",
+                "calendarId": "id@example.com",
+                "eventId": "e1",
+                "summary": "s",
+                "declined": false,
+                "response": "tentative",
+                "allDay": false,
+                "start": "2026-10-29T10:00:00+09:00",
+                "end": "2026-10-29T11:00:00+09:00",
+                "location": "会議室",
+                "description": "メモ",
+                "meetUrl": "https://meet.google.com/abc-defg-hij",
+                "attendees": 2,
+                "accepted": 1,
+                "guests": ["b@example.com", "room@example.com"],
+                "editable": true,
+            })
+        );
+        // An invitation, and an event of a calendar someone else owns, are not editable.
+        assert_eq!(item(r#"{}"#, "owner")["editable"], false);
+        assert_eq!(item(r#"{"self":true}"#, "reader")["editable"], false);
+        // The guests are for changing the event: an event that cannot be changed has none.
+        assert_eq!(item(r#"{}"#, "owner")["guests"], serde_json::json!([]));
+        assert_eq!(
+            item(r#"{"self":true}"#, "reader")["guests"],
+            serde_json::json!([])
+        );
+        // A text that is blank is none, as the screen has it.
+        let ev: ApiEvent = serde_json::from_str(
+            r#"{"start":{"date":"2026-10-29"},"end":{"date":"2026-10-30"},"location":" ","description":""}"#,
+        )
+        .unwrap();
+        let blank = serde_json::to_value(EventItem::from(
+            &RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(blank["location"], serde_json::Value::Null);
+        assert_eq!(blank["description"], serde_json::Value::Null);
+        assert_eq!(blank["meetUrl"], serde_json::Value::Null);
+        assert_eq!(blank["response"], "unknown");
     }
 
     #[test]
@@ -3041,9 +3806,9 @@ mod tests {
             entry("holiday", true, Some("reader")),
             entry("none", true, None),
         ];
-        assert!(owned_calendar(&calendars, "mine").is_ok());
+        assert!(owned_calendar(&calendars, "mine", CREATE_REFUSAL).is_ok());
         for id in ["shared", "holiday", "none", "missing"] {
-            let e = owned_calendar(&calendars, id).unwrap_err();
+            let e = owned_calendar(&calendars, id, CREATE_REFUSAL).unwrap_err();
             assert!(!e.is_ascii(), "not Japanese: {e}");
         }
     }
@@ -3310,5 +4075,577 @@ mod tests {
         server.join().unwrap();
         assert_eq!(e.status, Some(403));
         assert_eq!(classify(e.status, &e.message), Failure::NeedsLogin);
+    }
+
+    fn organizer(is_self: bool) -> Option<ApiOrganizer> {
+        Some(ApiOrganizer { is_self })
+    }
+
+    #[test]
+    fn only_an_event_the_user_organized_on_their_own_calendar_can_be_changed() {
+        assert!(can_change(true, true));
+        // Invited to it, or on a calendar that someone else owns.
+        assert!(!can_change(true, false));
+        assert!(!can_change(false, true));
+        assert!(!can_change(false, false));
+        assert!(organizer_is_self(&organizer(true)));
+        assert!(!organizer_is_self(&organizer(false)));
+        assert!(!organizer_is_self(&None));
+    }
+
+    #[test]
+    fn the_week_marks_the_events_that_can_be_changed() {
+        let api = |json: &str| serde_json::from_str::<ApiEvent>(json).unwrap();
+        let start = r#""start":{"date":"2026-11-20"},"end":{"date":"2026-11-21"}"#;
+        let mine = api(&format!(
+            r#"{{"id":"e1_20261120","organizer":{{"self":true}},{start}}}"#
+        ));
+        let invited = api(&format!(
+            r#"{{"id":"e2","organizer":{{"email":"x@example.com"}},{start}}}"#
+        ));
+        let unknown = api(&format!(r#"{{"id":"e3",{start}}}"#));
+        let mut other = cal(None);
+        other.access_role = Some("writer".into());
+        let marked =
+            |e: ApiEvent, c: &CalendarEntry| RawEvent::from_api(e, "a@example.com", c).unwrap();
+
+        let e = marked(mine, &cal(None));
+        assert!(e.editable);
+        assert_eq!(
+            (e.event_id.as_str(), e.calendar_id.as_str()),
+            ("e1_20261120", "id@example.com")
+        );
+        assert!(!marked(invited, &cal(None)).editable);
+        assert!(!marked(unknown, &cal(None)).editable);
+        let on_other = api(&format!(
+            r#"{{"id":"e4","organizer":{{"self":true}},{start}}}"#
+        ));
+        assert!(!marked(on_other, &other).editable);
+        // It reaches the screen with the event.
+        let info = Info::new(
+            &marked(
+                api(&format!(
+                    r#"{{"id":"e5","organizer":{{"self":true}},{start}}}"#
+                )),
+                &cal(None),
+            ),
+            &jst(),
+        );
+        assert_eq!((info.event_id.as_str(), info.editable), ("e5", true));
+    }
+
+    #[test]
+    fn the_week_carries_the_event_as_the_form_starts_from_it() {
+        let api = |json: &str| serde_json::from_str::<ApiEvent>(json).unwrap();
+        let info = |e: ApiEvent| {
+            Info::new(
+                &RawEvent::from_api(e, "a@example.com", &cal(None)).unwrap(),
+                &jst(),
+            )
+        };
+        // The guests are the invited besides the user, a room among them; the user's own entry and one with no address are left out.
+        let timed = info(api(
+            r#"{"id":"e","start":{"dateTime":"2026-11-20T13:00:00+09:00"},"end":{"dateTime":"2026-11-20T14:30:00+09:00"},
+                "attendees":[{"email":"me@example.com","self":true},{"email":"b@example.com"},
+                {"email":"room@resource.calendar.google.com","resource":true},{}]}"#,
+        ));
+        assert!(!timed.all_day);
+        assert_eq!(timed.start, "2026-11-20T13:00:00+09:00");
+        assert_eq!(timed.end, "2026-11-20T14:30:00+09:00");
+        assert_eq!(
+            timed.guests,
+            ["b@example.com", "room@resource.calendar.google.com"]
+        );
+        // An all-day event ends on its last day, not on the day after as the API says.
+        let all_day = info(api(
+            r#"{"id":"e","start":{"date":"2026-11-20"},"end":{"date":"2026-11-23"}}"#,
+        ));
+        assert!(all_day.all_day);
+        assert_eq!(
+            (all_day.start.as_str(), all_day.end.as_str()),
+            ("2026-11-20", "2026-11-22")
+        );
+        assert!(all_day.guests.is_empty());
+    }
+
+    #[test]
+    fn a_kept_week_of_an_older_version_has_no_mark_and_cannot_be_changed() {
+        let old = r##"{"summary":"a","color":null,"account":"a@example.com"}"##;
+        let info: Info = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            (
+                info.event_id.as_str(),
+                info.calendar_id.as_str(),
+                info.editable
+            ),
+            ("", "", false)
+        );
+        assert_eq!(
+            (
+                info.all_day,
+                info.start.as_str(),
+                info.end.as_str(),
+                info.guests.len()
+            ),
+            (false, "", "", 0)
+        );
+    }
+
+    #[test]
+    fn the_user_is_told_in_japanese_when_they_did_not_organize_the_event() {
+        assert!(check_organizer(true).is_ok());
+        let e = check_organizer(false).unwrap_err();
+        assert!(!e.is_ascii(), "not Japanese: {e}");
+        let calendars = vec![cal(None)];
+        let refusal = owned_calendar(&calendars, "missing", CHANGE_REFUSAL).unwrap_err();
+        assert!(!refusal.is_ascii(), "not Japanese: {refusal}");
+        let mut other = cal(None);
+        other.access_role = Some("reader".into());
+        let e = owned_calendar(&[other], "id@example.com", CHANGE_REFUSAL).unwrap_err();
+        assert_eq!(e, CHANGE_REFUSAL);
+    }
+
+    #[test]
+    fn the_url_of_an_event_is_the_calendar_and_the_event_as_two_segments() {
+        assert_eq!(
+            event_url("a@example.com", "abc_20261120T010000Z").unwrap(),
+            "https://www.googleapis.com/calendar/v3/calendars/a@example.com/events/abc_20261120T010000Z"
+        );
+        assert!(event_url("c", "a/b").unwrap().ends_with("/events/a%2Fb"));
+        for bad in ["", ".", "..", &"x".repeat(CALENDAR_ID_MAX + 1)] {
+            assert!(event_url("c", bad).is_err(), "{bad}");
+        }
+        assert!(event_url("", "e").is_err());
+    }
+
+    fn current(json: &str) -> ApiCurrent {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn patch_body(event: &NewEvent, now: &str) -> (Query, Value) {
+        build_patch(event, "req-1", &current(now), false, false).unwrap()
+    }
+
+    #[test]
+    fn a_patch_names_every_field_so_that_an_empty_one_clears_it() {
+        let (query, body) = patch_body(
+            &NewEvent {
+                title: "  ".into(),
+                ..new_event()
+            },
+            "{}",
+        );
+        assert_eq!(
+            body,
+            json!({
+                "summary": "",
+                "description": "",
+                "start": {"dateTime": "2026-11-20T10:00:00+09:00", "date": null},
+                "end": {"dateTime": "2026-11-20T11:00:00+09:00", "date": null},
+                "attendees": [],
+            })
+        );
+        assert!(query.contains(&("fields", "id,hangoutLink")));
+        assert!(query.contains(&("sendUpdates", "none")));
+        assert!(!query.iter().any(|(k, _)| *k == "conferenceDataVersion"));
+        let (_, body) = patch_body(
+            &NewEvent {
+                title: " 定例 ".into(),
+                description: "議題".into(),
+                ..new_event()
+            },
+            "{}",
+        );
+        assert_eq!(
+            (body["summary"].as_str(), body["description"].as_str()),
+            (Some("定例"), Some("議題"))
+        );
+    }
+
+    #[test]
+    fn a_patch_turns_an_all_day_event_into_a_timed_one_and_back() {
+        let (_, body) = patch_body(&all_day_event("2026-11-20", "2026-11-22"), "{}");
+        assert_eq!(
+            body["start"],
+            json!({"date": "2026-11-20", "dateTime": null})
+        );
+        // The last day is included: the API's end is the day after.
+        assert_eq!(body["end"], json!({"date": "2026-11-23", "dateTime": null}));
+        let (_, body) = patch_body(&new_event(), "{}");
+        assert_eq!(body["start"]["date"], Value::Null);
+        assert_eq!(
+            body["start"]["dateTime"],
+            json!("2026-11-20T10:00:00+09:00")
+        );
+    }
+
+    #[test]
+    fn a_patch_sets_the_guests_and_notifies_them() {
+        let event = NewEvent {
+            guests: vec!["b@example.com".into(), "c@example.com".into()],
+            ..new_event()
+        };
+        let (query, body) = patch_body(&event, "{}");
+        assert_eq!(
+            body["attendees"],
+            json!([{"email": "b@example.com"}, {"email": "c@example.com"}])
+        );
+        assert!(query.contains(&("sendUpdates", "all")));
+        // Guests taken off are told too, so the invitation does not stay in their calendars.
+        let (query, body) = patch_body(&new_event(), r#"{"attendees":[{"self":true},{}]}"#);
+        assert_eq!(body["attendees"], json!([]));
+        assert!(query.contains(&("sendUpdates", "all")));
+    }
+
+    #[test]
+    fn a_patch_adds_keeps_or_takes_off_the_meet_by_what_the_event_has() {
+        let has = r#"{"hangoutLink":"https://meet.google.com/abc-defg-hij"}"#;
+        let wants = NewEvent {
+            meet: true,
+            ..new_event()
+        };
+        let (query, body) = patch_body(&wants, "{}");
+        assert_eq!(
+            body["conferenceData"]["createRequest"]["requestId"],
+            "req-1"
+        );
+        assert_eq!(
+            body["conferenceData"]["createRequest"]["conferenceSolutionKey"]["type"],
+            "hangoutsMeet"
+        );
+        assert!(query.contains(&("conferenceDataVersion", "1")));
+        // Already there: it is left as it is, so no second conference is made.
+        let (query, body) = patch_body(&wants, has);
+        assert!(body.get("conferenceData").is_none());
+        assert!(!query.iter().any(|(k, _)| *k == "conferenceDataVersion"));
+        // Taken off.
+        let (query, body) = patch_body(&new_event(), has);
+        assert_eq!(body["conferenceData"], Value::Null);
+        assert!(body.as_object().unwrap().contains_key("conferenceData"));
+        assert!(query.contains(&("conferenceDataVersion", "1")));
+        // A link to anywhere else is not a Meet.
+        let (_, body) = patch_body(&new_event(), r#"{"hangoutLink":"https://example.com/x"}"#);
+        assert!(body.get("conferenceData").is_none());
+    }
+
+    #[test]
+    fn a_patch_checks_the_input_as_a_create_does() {
+        for bad in [
+            NewEvent {
+                title: "x".repeat(TITLE_MAX + 1),
+                ..new_event()
+            },
+            NewEvent {
+                description: "x".repeat(DESCRIPTION_INPUT_MAX + 1),
+                ..new_event()
+            },
+            NewEvent {
+                guests: vec!["not-an-address".into()],
+                ..new_event()
+            },
+            NewEvent {
+                start: "2026-11-20T12:00:00+09:00".into(),
+                ..new_event()
+            },
+            NewEvent {
+                start: "tomorrow".into(),
+                ..new_event()
+            },
+        ] {
+            let e = build_patch(&bad, "r", &ApiCurrent::default(), false, false).unwrap_err();
+            assert!(!e.is_ascii(), "not Japanese: {e}");
+        }
+    }
+
+    #[test]
+    fn a_delete_notifies_the_guests_only_when_there_are_some() {
+        assert_eq!(build_delete(&current("{}")), [("sendUpdates", "none")]);
+        assert_eq!(
+            build_delete(&current(r#"{"attendees":[{"self":true},{}]}"#)),
+            [("sendUpdates", "all")]
+        );
+    }
+
+    fn request_to(
+        method: Method,
+        url: &str,
+        query: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> Result<Option<Value>, crate::gmail::ApiError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(crate::gmail::send_json::<Value>(
+                &reqwest::Client::new(),
+                method,
+                "token",
+                url,
+                query,
+                body,
+                0,
+            ))
+    }
+
+    #[test]
+    fn the_patch_reaches_the_server_as_built_and_the_answer_is_read() {
+        let ok = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 30\r\nConnection: close\r\n\r\n{\"id\":\"e1\",\"hangoutLink\":null}";
+        let (url, server) = serve_once(ok);
+        let event = NewEvent {
+            guests: vec!["b@example.com".into()],
+            meet: true,
+            ..new_event()
+        };
+        let (query, body) =
+            build_patch(&event, "req-9", &ApiCurrent::default(), false, false).unwrap();
+        let answer = request_to(
+            Method::PATCH,
+            &event_url_of(&url, "e1"),
+            &query,
+            Some(&body),
+        )
+        .unwrap()
+        .unwrap();
+        let request = server.join().unwrap();
+        let (head, sent) = request.split_once("\r\n\r\n").unwrap();
+        let line = head.lines().next().unwrap();
+        assert!(line.starts_with("PATCH /calendars/c/events/e1?"), "{line}");
+        assert!(line.contains("sendUpdates=all"), "{line}");
+        assert!(line.contains("conferenceDataVersion=1"), "{line}");
+        assert_eq!(serde_json::from_str::<Value>(sent).unwrap(), body);
+        assert_eq!(answer["id"], "e1");
+    }
+
+    #[test]
+    fn the_delete_reaches_the_server_and_an_answer_with_no_body_is_read() {
+        let gone = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
+        let (url, server) = serve_once(gone);
+        let query = build_delete(&current(r#"{"attendees":[{}]}"#));
+        let answer = request_to(
+            Method::DELETE,
+            &event_url_of(&url, "e1_20261120"),
+            &query,
+            None,
+        )
+        .unwrap();
+        let request = server.join().unwrap();
+        let line = request.lines().next().unwrap();
+        assert!(
+            line.starts_with("DELETE /calendars/c/events/e1_20261120?"),
+            "{line}"
+        );
+        assert!(line.contains("sendUpdates=all"), "{line}");
+        assert_eq!(answer, Some(Value::Null));
+    }
+
+    #[test]
+    fn the_event_is_read_before_it_is_changed() {
+        let ok = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 120\r\nConnection: close\r\n\r\n{\"organizer\":{\"self\":true},\"hangoutLink\":\"https://meet.google.com/abc-defg-hij\",\"attendees\":[{\"email\":\"b@example.com\"}]}";
+        let (url, server) = serve_once(ok);
+        let got = request_to(
+            Method::GET,
+            &event_url_of(&url, "e1"),
+            &[("fields", CURRENT_FIELDS)],
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let request = server.join().unwrap();
+        let line = request.lines().next().unwrap();
+        assert!(
+            line.starts_with("GET /calendars/c/events/e1?fields="),
+            "{line}"
+        );
+        let now: ApiCurrent = serde_json::from_value(got).unwrap();
+        assert!(organizer_is_self(&now.organizer));
+        assert_eq!(now.attendees.len(), 1);
+        assert!(now.hangout_link.is_some());
+    }
+
+    #[test]
+    fn a_401_while_changing_means_the_token_is_refreshed_and_a_403_for_an_old_scope_means_login_again(
+    ) {
+        let rejected =
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        for method in [Method::PATCH, Method::DELETE] {
+            let (url, server) = serve_once(rejected);
+            let body = json!({});
+            let sent = (method == Method::PATCH).then_some(&body);
+            assert_eq!(
+                request_to(method, &event_url_of(&url, "e1"), &[], sent).unwrap(),
+                None
+            );
+            server.join().unwrap();
+        }
+        let denied = "HTTP/1.1 403 Forbidden\r\nContent-Length: 130\r\nConnection: close\r\n\r\n{\"error\":{\"code\":403,\"message\":\"Request had insufficient authentication scopes.\",\"errors\":[{\"reason\":\"insufficientPermissions\"}]}}";
+        for method in [Method::PATCH, Method::DELETE] {
+            let (url, server) = serve_once(denied);
+            let e = request_to(method, &event_url_of(&url, "e1"), &[], None).unwrap_err();
+            server.join().unwrap();
+            assert_eq!(e.status, Some(403));
+            assert_eq!(classify(e.status, &e.message), Failure::NeedsLogin);
+        }
+    }
+
+    #[test]
+    fn the_description_that_claude_reads_is_cut_with_a_mark_and_the_screens_is_not() {
+        assert_eq!(clip_for_claude("説明"), "説明");
+        let exact = "あ".repeat(CLAUDE_DESCRIPTION_MAX);
+        assert_eq!(clip_for_claude(&exact), exact);
+        let cut = clip_for_claude(&format!("{exact}いう"));
+        assert!(cut.starts_with(&exact), "{cut}");
+        assert!(cut.contains("2 文字"), "{cut}");
+        let long = "い".repeat(CLAUDE_DESCRIPTION_MAX + 5);
+        let ev: ApiEvent = serde_json::from_value(serde_json::json!({
+            "start": {"date": "2026-10-29"}, "end": {"date": "2026-10-30"}, "description": long
+        }))
+        .unwrap();
+        let raw = RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap();
+        let item = serde_json::to_value(EventItem::from(&raw)).unwrap();
+        assert!(item["description"].as_str().unwrap().contains("5 文字"));
+        // The week's detail keeps what C-2 shows.
+        assert_eq!(raw.description.as_deref(), Some(long.as_str()));
+    }
+
+    #[test]
+    fn the_series_of_a_repeating_event_is_refused_in_japanese_and_one_occurrence_is_not() {
+        let series = current(r#"{"organizer":{"self":true},"recurrence":["RRULE:FREQ=WEEKLY"]}"#);
+        let e = check_current(&series).unwrap_err();
+        assert!(!e.is_ascii(), "not Japanese: {e}");
+        assert!(check_current(&current(r#"{"organizer":{"self":true}}"#)).is_ok());
+        // Not the user's own: the organizer is named first.
+        let e = check_current(&current(r#"{"recurrence":["RRULE:FREQ=DAILY"]}"#)).unwrap_err();
+        assert_eq!(e, check_organizer(false).unwrap_err());
+        assert!(CURRENT_FIELDS.contains("recurrence"));
+    }
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_tool_of_claude_holds_an_event_that_invites_someone_new_and_sends_the_rest() {
+        // A new event: every guest is new, and none is none.
+        assert!(has_new_guest(&[], &words(&["b@example.com"])));
+        assert!(!has_new_guest(&[], &[]));
+        // A rewrite: the guests who are on the event are not new, whatever the case of the address.
+        let known = words(&["me@example.com", "B@Example.com", "room@example.com"]);
+        assert!(!has_new_guest(&known, &words(&["b@example.com"])));
+        assert!(!has_new_guest(
+            &known,
+            &words(&["room@example.com", "b@example.com"])
+        ));
+        assert!(!has_new_guest(&known, &[]));
+        assert!(has_new_guest(
+            &known,
+            &words(&["b@example.com", "c@example.com"])
+        ));
+        let now = current(
+            r#"{"attendees":[{"self":true,"email":"me@example.com"},{"email":"B@Example.com"},{}]}"#,
+        );
+        assert_eq!(now.addresses(), ["me@example.com", "B@Example.com", ""]);
+    }
+
+    #[test]
+    fn a_patch_sends_the_guests_who_stay_as_google_has_them_and_a_new_one_by_address() {
+        let now = current(
+            r#"{"attendees":[{"self":true,"email":"me@example.com"},
+                {"email":"B@Example.com","optional":true,"displayName":"B さん","responseStatus":"accepted"}]}"#,
+        );
+        let event = NewEvent {
+            guests: vec!["b@example.com".into(), "c@example.com".into()],
+            ..new_event()
+        };
+        let (_, body) = build_patch(&event, "r", &now, false, false).unwrap();
+        assert_eq!(
+            body["attendees"],
+            json!([
+                {"email":"B@Example.com","optional":true,"displayName":"B さん","responseStatus":"accepted"},
+                {"email": "c@example.com"},
+            ])
+        );
+    }
+
+    #[test]
+    fn a_patch_with_no_guests_given_leaves_the_guests_and_still_tells_them() {
+        let now = current(r#"{"attendees":[{"self":true},{"email":"b@example.com"}]}"#);
+        let event = NewEvent {
+            title: "新しい題".into(),
+            ..new_event()
+        };
+        let (query, body) = build_patch(&event, "r", &now, true, false).unwrap();
+        assert!(!body.as_object().unwrap().contains_key("attendees"));
+        assert_eq!(body["summary"], "新しい題");
+        assert!(query.contains(&("sendUpdates", "all")));
+        // No guest before: no one to tell.
+        let (query, body) = build_patch(&event, "r", &current("{}"), true, false).unwrap();
+        assert!(!body.as_object().unwrap().contains_key("attendees"));
+        assert!(query.contains(&("sendUpdates", "none")));
+    }
+
+    #[test]
+    fn the_form_of_the_screen_is_given_the_event_as_two_fields() {
+        let event = NewEvent {
+            guests: vec!["b@example.com".into()],
+            meet: true,
+            description: "議題\n二行目".into(),
+            ..new_event()
+        };
+        let fields = form_fields(Some("ev1"), &event, false);
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["description", "form"]
+        );
+        assert_eq!(fields["description"], "議題\n二行目");
+        let form: Value = serde_json::from_str(&fields["form"]).unwrap();
+        assert_eq!(form["eventId"], "ev1");
+        assert_eq!(form["calendarId"], event.calendar_id);
+        assert_eq!(form["allDay"], false);
+        assert_eq!(form["guests"], json!(["b@example.com"]));
+        assert_eq!(form["meet"], true);
+        assert_eq!(form["start"], "2026-11-20T10:00:00+09:00");
+        // A new event has no ID.
+        let form: Value = serde_json::from_str(&form_fields(None, &event, false)["form"]).unwrap();
+        assert_eq!(form["eventId"], "");
+        // Kept, the description is not a field: the screen then keeps the event's own.
+        let kept = form_fields(Some("ev1"), &event, true);
+        assert_eq!(
+            kept.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["form"]
+        );
+    }
+
+    #[test]
+    fn a_patch_leaves_the_description_out_when_it_is_kept() {
+        let event = NewEvent {
+            description: "ignored".into(),
+            ..new_event()
+        };
+        let (_, body) = build_patch(&event, "r", &current("{}"), false, true).unwrap();
+        let named = body.as_object().unwrap();
+        assert!(!named.contains_key("description"));
+        assert!(named.contains_key("summary") && named.contains_key("start"));
+        let (_, body) = build_patch(&event, "r", &current("{}"), false, false).unwrap();
+        assert_eq!(body["description"], "ignored");
+    }
+
+    #[test]
+    fn a_description_that_list_events_cut_is_refused_in_japanese_and_a_plain_one_is_not() {
+        let cut = clip_for_claude(&"あ".repeat(CLAUDE_DESCRIPTION_MAX + 7));
+        let e = check_not_clipped(&cut).unwrap_err();
+        assert!(!e.is_ascii(), "not Japanese: {e}");
+        for plain in [
+            "".to_owned(),
+            "説明".to_owned(),
+            "あ".repeat(CLAUDE_DESCRIPTION_MAX),
+            "…（長いため、残り 7 文字を省きました）の話".to_owned(),
+        ] {
+            assert!(check_not_clipped(&plain).is_ok(), "{plain}");
+        }
+    }
+
+    /// `serve_once` answers for any path; this puts the event after its `.../events`.
+    fn event_url_of(events_url: &str, id: &str) -> String {
+        format!("{events_url}/{id}")
     }
 }

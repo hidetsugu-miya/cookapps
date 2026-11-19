@@ -754,7 +754,14 @@ pub(crate) async fn send_json<T: DeserializeOwned>(
             return Ok(None);
         }
         if status.is_success() {
-            return Ok(res.json().await.map(Some).map_err(|e| e.to_string())?);
+            // A call with no answer (a 204, as `events.delete` gives) reads as `null`.
+            let bytes = res.bytes().await.map_err(|e| e.to_string())?;
+            let answer = if bytes.is_empty() {
+                serde_json::from_str("null")
+            } else {
+                serde_json::from_slice(&bytes)
+            };
+            return Ok(answer.map(Some).map_err(|e| e.to_string())?);
         }
         let retry_after = res
             .headers()

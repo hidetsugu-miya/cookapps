@@ -6,6 +6,15 @@ import type { ResponseStatus } from "./ResponseStatus";
  */
 export type TimedItem = { day: number, startMin: number, endMin: number, col: number, cols: number, summary: string, 
 /**
+ * The ID of the event (of one occurrence of a repeating event), and of the calendar it is on, for `calendar_update_event` and `calendar_delete_event` (C-7).
+ * Absent in a cache an older version wrote (empty text).
+ */
+eventId: string, calendarId: string, 
+/**
+ * Whether the user may change or delete the event: they organized it, on a calendar they own. Absent in a cache an older version wrote (`false`).
+ */
+editable: boolean, 
+/**
  * `None` means the screen picks one from the account.
  */
 color: string | null, account: string, 
@@ -32,4 +41,21 @@ description: string | null,
 /**
  * Invited people (rooms left out), and how many of them accepted.
  */
-attendees: number, accepted: number, };
+attendees: number, accepted: number, 
+/**
+ * The whole event as the form of C-5 holds it (`NewEvent`: all day, the dates or the times, the guests), which the edit of C-7 starts from.
+ * Absent in a cache an older version wrote (`false`, empty text, none); such an event is not `editable` either.
+ */
+allDay: boolean, 
+/**
+ * A date for an all-day event, else an RFC 3339 time.
+ */
+start: string, 
+/**
+ * Same form as `start`; the last day for an all-day event.
+ */
+end: string, 
+/**
+ * The addresses of the invited besides the user.
+ */
+guests: Array<string>, };

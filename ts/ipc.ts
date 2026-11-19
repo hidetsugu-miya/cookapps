@@ -6,6 +6,7 @@ import type { BrowsedDir } from "./bindings/BrowsedDir";
 import type { Channel } from "./bindings/Channel";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { CreatedEvent } from "./bindings/CreatedEvent";
+import type { EditedEvent } from "./bindings/EditedEvent";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
@@ -145,6 +146,10 @@ export interface Commands {
   calendar_owned: { args: undefined; result: CalendarChoices };
   // C-5: creates the event, with the invitations and the Google Meet it asks for. `null` means the account must log in again (it has not granted the permission to create events).
   calendar_create_event: { args: { event: NewEvent }; result: CreatedEvent | null };
+  // C-7: rewrites an event that the user organized, on a calendar the user owns (one occurrence of a repeating event). `null` means the account must log in again.
+  calendar_update_event: { args: { event: EditedEvent }; result: CreatedEvent | null };
+  // C-7: deletes such an event. `true` when it is gone, `null` when the account must log in again.
+  calendar_delete_event: { args: { account: string; calendarId: string; eventId: string }; result: boolean | null };
   inbox: { args: undefined; result: Inbox };
   sync: { args: Account & { startHistoryId: string }; result: Sync };
   thread: { args: Thread; result: ThreadDetail | null };

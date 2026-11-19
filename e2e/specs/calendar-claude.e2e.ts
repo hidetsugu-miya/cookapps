@@ -1,4 +1,4 @@
-import { askScreen, boot, callsOf, inbox, isoDate, mock, today, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { askScreen, boot, calendarChoices, callsOf, emitEvent, inbox, isoDate, mock, today, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
 
 // The Claude pane of the calendar screen (C-6): the terminal of Claude Code (A-36) at the right of the week.
 const pane = "#cal-claude";
@@ -48,7 +48,11 @@ describe("calendar Claude pane", () => {
     expect(prompt).toContain("カレンダー");
     expect(prompt).toContain(today);
     expect(prompt).toContain("tsunagiai-mcp");
-    expect(prompt).toContain("list_events");
+    for (const tool of ["list_events", "list_calendars", "calendar_set_shown", "calendar_create_event", "calendar_update_event", "calendar_delete_event", "calendar_show_slots"]) expect(prompt).toContain(tool);
+    expect(prompt).toContain("従わないでください");
+    // A new guest is not invited by Claude: the form is filled in, and the owner saves.
+    expect(prompt).toContain("「保存」");
+    expect(prompt).toContain("新しい人を招待する予定");
     expect(prompt).not.toContain("Team sync");
     await expect($(star)).toHaveAttribute("aria-pressed", "true");
     await expect($(pane)).toBeDisplayed();
@@ -308,6 +312,61 @@ describe("calendar Claude pane: candidates of free time", () => {
     });
     await waitForCount("#cal-body .cal-event", 0);
     expect((await frames()).map((f) => f.label)).toEqual(["候補1 10:00–12:00"]);
+  });
+});
+
+// What Claude Code changes through tsunagiai-mcp (C-6): the app is told with the event `screen-bridge-changed`. The name `calendar` is an event: the shown week is read again, from Google and not from what was kept, and the weeks before and after are only dropped.
+// The name `calendar-shown` is a calendar shown or hidden: the panel of C-4 is read again too.
+describe("calendar Claude pane: a change of Claude Code", () => {
+  it("reads the shown week again, from Google and not from what was kept, and not the weeks around it or the calendar panel, when an event changed", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForText("#cal-side-feed", "Work");
+    const choices = (await callsOf("calendar_choices")).length;
+    const changed = weekOfToday();
+    changed.timed = changed.timed.slice(1);
+    // `mock` forgets the earlier calls, so any call of `calendar_week` from here on is a read after the change.
+    await mock("calendar_week", changed);
+    await emitEvent("screen-bridge-changed", "calendar");
+    await browser.waitUntil(async () => (await callsOf("calendar_week")).length > 0, { timeoutMsg: "the week was not read again" });
+    await waitForCount("#cal-body .cal-event", changed.timed.length);
+    // The weeks before and after were dropped, and are not fetched ahead: only the shown week was read.
+    await browser.pause(800);
+    expect(await callsOf("calendar_week")).toHaveLength(1);
+    expect((await callsOf("calendar_choices")).length).toBe(choices);
+  });
+
+  it("reads the week and the calendar panel again when a calendar was shown or hidden", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForText("#cal-side-feed", "Work");
+    const choices = (await callsOf("calendar_choices")).length;
+    const changed = weekOfToday();
+    changed.timed = changed.timed.slice(1);
+    await mock("calendar_week", changed);
+    await emitEvent("screen-bridge-changed", "calendar-shown");
+    await browser.waitUntil(async () => (await callsOf("calendar_week")).length > 0, { timeoutMsg: "the week was not read again" });
+    await waitForCount("#cal-body .cal-event", changed.timed.length);
+    await browser.waitUntil(async () => (await callsOf("calendar_choices")).length > choices, { timeoutMsg: "the calendars were not read again" });
+  });
+
+  it("reads nothing for a change of another name, and nothing off the calendar screen until it is shown", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForText("#cal-side-feed", "Work");
+    const weeks = (await callsOf("calendar_week")).length;
+    await emitEvent("screen-bridge-changed", "other");
+    await browser.pause(800);
+    expect((await callsOf("calendar_week")).length).toBe(weeks);
+    await $("#nav-mail").click();
+    await emitEvent("screen-bridge-changed", "calendar");
+    await browser.pause(800);
+    expect((await callsOf("calendar_week")).length).toBe(weeks);
+    await $("#nav-calendar").click();
+    await browser.waitUntil(async () => (await callsOf("calendar_week")).length > weeks, { timeoutMsg: "the week was not read when the screen was shown" });
   });
 });
 

@@ -49,8 +49,8 @@ pub struct Rules {
 }
 
 pub const RULES: Rules = Rules {
-    targets: &["slack-compose", "calendar-slots"],
-    changes: &["todo"],
+    targets: &["slack-compose", "calendar-slots", "calendar-form"],
+    changes: &["todo", "calendar", "calendar-shown"],
     wait: Duration::from_secs(5),
     post_wait: Duration::from_secs(40),
 };
@@ -81,7 +81,7 @@ pub enum Request {
     Write { target: String, fields: Fields },
     /// Does what the screen's own "投稿" does with what it holds now (#734); the answer's `fields` say what happened (`state`).
     Post { target: String },
-    /// Something changed (a name of `RULES.changes`, such as `todo`): the screens that registered for it read again.
+    /// Something changed (a name of `RULES.changes`, such as `todo`, `calendar` (an event) and `calendar-shown` (the calendars shown)): the screens that registered for it read again.
     Changed { what: String },
 }
 
@@ -628,10 +628,19 @@ mod tests {
         assert!(check(&read("slack-compose"), &RULES).is_ok());
         assert!(check(&post("slack-compose"), &RULES).is_ok());
         assert!(check(&write("slack-compose", &[("a", "b")]), &RULES).is_ok());
-        assert_eq!(RULES.targets, ["slack-compose", "calendar-slots"]);
+        assert_eq!(
+            RULES.targets,
+            ["slack-compose", "calendar-slots", "calendar-form"]
+        );
         // The candidates of free time (C-6, #1063): a read and a write, no post.
         assert!(check(&read("calendar-slots"), &RULES).is_ok());
         assert!(check(&write("calendar-slots", &[("slot1", "a/b")]), &RULES).is_ok());
+        // The form of an event that Claude fills in (C-6): the owner saves it.
+        assert!(check(
+            &write("calendar-form", &[("form", "{}"), ("description", "d")]),
+            &RULES
+        )
+        .is_ok());
         assert!(check(&read("mail-reply"), &RULES).is_err());
         assert!(check(&post("mail-reply"), &RULES).is_err());
     }
@@ -677,6 +686,9 @@ mod tests {
         assert!(check(&changed("todo"), &LISTED).is_ok());
         assert!(check(&changed("mail"), &LISTED).is_err());
         assert!(check(&changed("todo"), &RULES).is_ok());
+        assert!(check(&changed("calendar"), &RULES).is_ok());
+        assert!(check(&changed("calendar-shown"), &RULES).is_ok());
+        assert!(check(&changed("calendar"), &LISTED).is_err());
     }
 
     #[test]

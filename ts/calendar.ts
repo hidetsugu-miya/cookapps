@@ -14,6 +14,7 @@ import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
 import { logError, setRelogin } from "./error-card.js";
+import { onScreenChanged } from "./screen-bridge.js";
 import { show } from "./view.js";
 
 const HOUR_PX = 64;
@@ -269,7 +270,8 @@ async function showKeptWeek(key: string, seq: number) {
 // Shows the week of `calDate`: the kept one at once, then the fetched one if it differs, so the scroll position stays.
 // With none kept, the old week stays (dimmed) until the new one arrives.
 // With `follow`, the month calendars go back to the month of the week when it is the one already shown.
-export async function loadCalendar(refresh = false, follow = false) {
+// With `ahead` false the weeks before and after are not fetched ahead.
+export async function loadCalendar(refresh = false, follow = false, ahead = true) {
   const seq = ++calSeq;
   let first: number;
   try {
@@ -292,7 +294,7 @@ export async function loadCalendar(refresh = false, follow = false) {
     const week = await fetchWeek(calDate, first, refresh);
     if (seq === calSeq) {
       if (JSON.stringify(week) !== JSON.stringify(calShown)) renderWeek(week);
-      prefetchAround(key, first);
+      if (ahead) prefetchAround(key, first);
     }
   } catch (e) {
     if (seq === calSeq) logError("calendar", e);
@@ -316,12 +318,25 @@ export function showCalendar() {
 const CHOICE_FETCH_MS = 300;
 let choiceTimer: ReturnType<typeof setTimeout> | undefined;
 
-// A calendar was shown or hidden (C-4): the weeks drawn, fetched and kept hold the old choice.
-function choiceChanged() {
+// The weeks drawn, fetched and kept hold the old state: they are dropped, and the shown week is read again (the weeks before and after only with `ahead`).
+function weeksChanged(ahead: boolean) {
   dropWeeks();
   keptWeeks = Promise.resolve([]);
   clearTimeout(choiceTimer);
-  choiceTimer = setTimeout(() => loadCalendar(), CHOICE_FETCH_MS);
+  // Off the screen the week is read when the screen is shown.
+  choiceTimer = setTimeout(() => currentScreen() === "calendar" && loadCalendar(false, false, ahead), CHOICE_FETCH_MS);
+}
+
+// A calendar was shown or hidden (C-4).
+const choiceChanged = () => weeksChanged(true);
+
+// Claude Code changed an event (C-6): the weeks hold the old state, but the calendars do not change, so the list of C-4 stays. Only the shown week is read again.
+const eventChangedByClaude = () => weeksChanged(false);
+
+// Claude Code showed or hid a calendar (C-6): the panel of C-4 holds the old state too.
+function shownChangedByClaude() {
+  forgetCalendarChoices();
+  choiceChanged();
 }
 
 const moveWeek = (date: string) => {
@@ -335,6 +350,8 @@ export function initCalendar() {
   initCalendarSide(choiceChanged);
   initCalendarMonth(moveWeek);
   initCalendarClaude();
+  onScreenChanged("calendar", eventChangedByClaude);
+  onScreenChanged("calendar-shown", shownChangedByClaude);
   // A saved event: the week is read again, which draws it.
   initCalendarCreate(() => loadCalendar());
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
