@@ -27,7 +27,7 @@ use crate::{
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
+const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events.owned";
 // The refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json. The old name is read by `keychain`.
 pub(crate) const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";

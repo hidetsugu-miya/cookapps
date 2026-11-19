@@ -37,7 +37,7 @@ A new requirement gets a section there and an entry here.
 ### Out of scope
 
 - Saving drafts of mail (a mail is written and sent in one go)
-- Creating, editing and deleting events
+- Editing and deleting events (creating one is C-5)
 - Any other feature of a full-featured mail client
 
 ## Technical constraints
@@ -46,7 +46,8 @@ A new requirement gets a section there and an entry here.
 - The Gmail scope is `gmail.modify`.
   - It is enough to trash and archive.
   - A permanent delete (one that skips the trash) needs `https://mail.google.com/`.
-- The Calendar scope is `calendar.readonly`.
+- The Calendar scopes are `calendar.readonly` (read) and `calendar.events.owned` (create an event on a calendar the account owns).
+  - `calendar.events` is not taken, because it also reaches the calendars that other people shared with the account.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
@@ -55,7 +56,7 @@ A new requirement gets a section there and an entry here.
 - If the OAuth consent screen is "External" and in "Testing", refresh tokens expire after 7 days.
   - Use an "Internal" consent screen, or publish an "External" one.
 
-The constraints of one integration or one requirement are in `requirements/constraints.md`, under a heading for each area: Mail, Slack, Settings files, Orca, Claude and skills, the app's log and fonts, Notion and Updates.
+The constraints of one integration or one requirement are in `requirements/constraints.md`, under a heading for each area: Mail, Calendar, Slack, Settings files, Orca, Claude and skills, the app's log and fonts, Notion and Updates.
 Read an area's section there before you change a behavior it covers, and when a change makes a constraint different, change the section in the same pull request.
 
 ## Stack and layout
