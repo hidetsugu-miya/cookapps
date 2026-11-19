@@ -303,8 +303,6 @@ export interface Commands {
   claude_todo_prompt: { args: undefined; result: TodoPrompt };
   claude_todo_prompt_save: { args: { body: string }; result: TodoPrompt };
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
-  // Claude's answer to a request about the instructions in the edit field; `history` is the conversation before this request. Nothing is saved.
-  claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
   // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
   claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };

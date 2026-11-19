@@ -49,7 +49,12 @@ pub struct Rules {
 }
 
 pub const RULES: Rules = Rules {
-    targets: &["slack-compose", "calendar-slots", "calendar-form"],
+    targets: &[
+        "slack-compose",
+        "calendar-slots",
+        "calendar-form",
+        "todo-prompt",
+    ],
     changes: &["todo", "calendar", "calendar-shown"],
     wait: Duration::from_secs(5),
     post_wait: Duration::from_secs(40),
@@ -630,7 +635,12 @@ mod tests {
         assert!(check(&write("slack-compose", &[("a", "b")]), &RULES).is_ok());
         assert_eq!(
             RULES.targets,
-            ["slack-compose", "calendar-slots", "calendar-form"]
+            [
+                "slack-compose",
+                "calendar-slots",
+                "calendar-form",
+                "todo-prompt"
+            ]
         );
         // The candidates of free time (C-6, #1063): a read and a write, no post.
         assert!(check(&read("calendar-slots"), &RULES).is_ok());

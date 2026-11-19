@@ -569,16 +569,6 @@ export const todoDraftEdit: TodoDraftEdit = {
   descriptionDiff: [],
 };
 
-// What `claude_edit_todo_prompt` answers when Claude proposes changing the line "Default body" to "Better body".
-export const promptEdit: PromptEdit = {
-  reply: "1行目を変えます",
-  body: "Better body",
-  diff: [
-    { kind: "del", text: "Default body" },
-    { kind: "ins", text: "Better body" },
-  ],
-};
-
 // What `slack_preview` answers for the thread of `threadDetail("First unread", "Hello from Alice", …)`: the post as it starts out in the compose screen.
 export const slackPreview = "*First unread*\nAlice <alice@example.com> ・ 2026/11/3 9:00\n\nHello from Alice";
 
