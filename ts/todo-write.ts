@@ -12,7 +12,7 @@ export function cancelTodoReload() {
   clearTimeout(todoReloadTimer);
 }
 
-function scheduleTodoReload(withDone: boolean) {
+export function scheduleTodoReload(withDone: boolean) {
   todoReloadDone ||= withDone;
   clearTimeout(todoReloadTimer);
   todoReloadTimer = setTimeout(() => {

@@ -12,7 +12,7 @@ import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { initSplit } from "./split.js";
-import { focusTodoClaude, initTodoClaude, showTodoClaudeModels } from "./todo-claude.js";
+import { focusTodoClaude, initTodoClaude, syncTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
 import { loadedComments } from "./todo-comments.js";
@@ -27,7 +27,7 @@ const TODO_REFRESH_MS = 10 * 1000;
 // The pane that hands the open task to Orca (A-9).
 let handoff: HandoffPane;
 
-// The right pane is always there while the list or a task is shown, and holds Claude's pane (T-7). The pane that hands the open task to Orca (A-9) is not in it: it follows the detail, under the comments, in the same scroll.
+// The right pane is always there while the list or a task is shown, and holds Claude's pane, a terminal of Claude Code (T-7). The pane that hands the open task to Orca (A-9) is not in it: it follows the detail, under the comments, in the same scroll.
 let sideUsable = false;
 
 // The list of projects (A-23): `listOpen` is what the owner chose, held in memory only, so the screen is open again when the app starts; `tokenForm` is whether the token form is up, which has no list.
@@ -54,7 +54,8 @@ function toggleList() {
 function layoutPanes() {
   $("todo-side").hidden = !sideUsable;
   $("todo-split").hidden = !sideUsable;
-  if (sideUsable) showTodoClaudeModels();
+  // The terminal is shown while the side is in view, and hidden when it is not.
+  syncTodoClaude();
 }
 
 // Follows the open task: another task, or none, changes what the pane under the detail shows, and the card takes the task as it is now.

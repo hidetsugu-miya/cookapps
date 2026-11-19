@@ -1150,6 +1150,30 @@ async fn fetch_all<T: DeserializeOwned>(
     Ok(items)
 }
 
+/// Sends one request with `token` and reads the answer as JSON, logging a failure. `Ok(None)` means Todoist rejected the token.
+async fn send_json(
+    http: &reqwest::Client,
+    token: &str,
+    command: &str,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<Option<Value>, String> {
+    let sent = send(http, method, token, path, &[], body.as_ref())
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let Some(text) = sent else {
+        return Ok(None);
+    };
+    // close / reopen / delete answer with null or nothing.
+    if text.trim().is_empty() {
+        return Ok(Some(Value::Null));
+    }
+    parse(&text)
+        .map(Some)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))
+}
+
 /// Sends one request with the stored token, logging a failure. `Ok(None)` means a token is needed: none is stored, or Todoist rejected it.
 async fn request(
     auth: &Auth,
@@ -1166,20 +1190,11 @@ async fn request(
     else {
         return Ok(None);
     };
-    let sent = send(auth.http(), method, &token, path, &[], body.as_ref())
-        .await
-        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let Some(text) = sent else {
+    let sent = send_json(auth.http(), &token, command, method, path, body).await?;
+    if sent.is_none() {
         state.forget_token().await;
-        return Ok(None);
-    };
-    // close / reopen / delete answer with null or nothing.
-    if text.trim().is_empty() {
-        return Ok(Some(Value::Null));
     }
-    parse(&text)
-        .map(Some)
-        .map_err(|e| log_failure(command, TOKEN_USER, e))
+    Ok(sent)
 }
 
 /// The active tasks and the projects (through the Sync API: all of them the first time, then only what changed), and the recently completed tasks. `None` means a token is needed.
@@ -1589,7 +1604,25 @@ pub async fn todoist_add_from_slack(
     Ok(created.map(|_| content.trim().to_owned()))
 }
 
-/// Adds one task from a proposal the user confirmed (the Todo pane): `content` is its name, `due` its date (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, none for no date)
+/// Creates one task from values that were confirmed, with `token`: `content` is its name, `due` its date (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, none for no date)
+/// and `project_id` the ID of one of `projects` (none for the inbox). Unlike `todoist_add`, nothing in the name is read as a date. The values are checked first (`proposal_task_body`), and a refusal is logged and returned.
+/// `Ok(None)` means Todoist rejected the token and nothing was created. The command `todoist_add_task` and the tool of `tsunagiai-mcp` (`add_now`) both create a task here.
+async fn add_task(
+    http: &reqwest::Client,
+    token: &str,
+    command: &str,
+    content: &str,
+    due: Option<&str>,
+    project_id: Option<&str>,
+    projects: &[(String, String)],
+) -> Result<Option<bool>, String> {
+    let body = proposal_task_body(content, due, project_id, projects)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let created = send_json(http, token, command, Method::POST, "/tasks", Some(body)).await?;
+    Ok(created.map(|_| true))
+}
+
+/// Adds one task from values that were confirmed: `content` is its name, `due` its date (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, none for no date)
 /// and `project_id` the ID of a project of the last load (none for the inbox). Unlike `todoist_add`, nothing in the name is read as a date.
 /// `None` means a token is needed and nothing was created; the screen reloads the list afterwards, as for any change.
 #[tauri::command]
@@ -1601,15 +1634,126 @@ pub async fn todoist_add_task(
     project_id: Option<String>,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_add_task";
-    let body = proposal_task_body(
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
+        return Ok(None);
+    };
+    let created = add_task(
+        auth.http(),
+        &token,
+        command,
         &content,
         due.as_deref(),
         project_id.as_deref(),
         &state.projects(),
     )
-    .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let created = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
-    Ok(created.map(|_| true))
+    .await?;
+    if created.is_none() {
+        state.forget_token().await;
+    }
+    Ok(created)
+}
+
+/// The token in the keychain, read off the async threads, for a caller that holds no `TodoistState` (`tsunagiai-mcp`): the entry the app writes. `None` means not connected.
+async fn stored_token(command: &str) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(read_token)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| log_failure(command, TOKEN_USER, e))
+}
+
+/// The projects and the tasks as Todoist has them now: one full sync with `token`, kept nowhere. `None` means Todoist rejected the token.
+async fn read_with(
+    http: &reqwest::Client,
+    token: &str,
+    command: &str,
+) -> Result<Option<Todo>, String> {
+    let res = match fetch_sync(http, token, None).await {
+        Ok(res) => res,
+        Err(e) if rejected(&e) => return Ok(None),
+        Err(e) => return Err(log_failure(command, TOKEN_USER, e)),
+    };
+    let mut sync = SyncData::default();
+    apply_sync(&mut sync, &mut Vec::new(), res);
+    Ok(Some(build_todo(
+        sync.projects,
+        sync.labels,
+        sync.tasks,
+        &[],
+        Local::now().date_naive(),
+        &Local,
+    )))
+}
+
+/// Reads the projects and the tasks for a caller that holds no `TodoistState` (`tsunagiai-mcp`), with the token of the keychain. `None` means a token is needed: none is stored, or Todoist rejected it.
+pub async fn read_now(http: &reqwest::Client) -> Result<Option<Todo>, String> {
+    let command = "todoist_read";
+    let Some(token) = stored_token(command).await? else {
+        return Ok(None);
+    };
+    read_with(http, &token, command).await
+}
+
+/// The projects (ID and name, in tree order) of `todo`: what the app's command checks a task's project against (the last load).
+fn listed_projects(todo: &Todo) -> Vec<(String, String)> {
+    todo.projects
+        .iter()
+        .map(|p| (p.id.clone(), p.name.clone()))
+        .collect()
+}
+
+/// Adds one task for a caller that holds no `TodoistState` (`tsunagiai-mcp`), with the token of the keychain, checking the values as `todoist_add_task` does.
+/// The projects are those Todoist has now, read only when a project is named. `None` means a token is needed and nothing was created.
+pub async fn add_now(
+    http: &reqwest::Client,
+    content: &str,
+    due: Option<&str>,
+    project_id: Option<&str>,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_add_task";
+    let Some(token) = stored_token(command).await? else {
+        return Ok(None);
+    };
+    let named = project_id.is_some_and(|p| !p.trim().is_empty());
+    let projects = if named {
+        match read_with(http, &token, command).await? {
+            Some(todo) => listed_projects(&todo),
+            None => return Ok(None),
+        }
+    } else {
+        Vec::new()
+    };
+    add_task(http, &token, command, content, due, project_id, &projects).await
+}
+
+/// The projects of `todo` as `todoist_projects` of `tsunagiai-mcp` answers them, in tree order: `id`, `name`, `color`, `inbox`, `parentId` and `depth`.
+pub fn projects_answer(todo: &Todo) -> Value {
+    json!(todo.projects)
+}
+
+/// The active tasks of `todo` as `todoist_tasks` of `tsunagiai-mcp` answers them, by due date with no date last: `id`, `content`, `description`, `projectId`, `parentId` (a subtask is a row of its own; `null` for a task),
+/// `priority` (as the Todoist apps number it: 1 is the most urgent, 4 the natural one), `due` (`date`, `time`, `string`, `recurring`, or `null`) and `labels`.
+pub fn tasks_answer(todo: &Todo) -> Value {
+    Value::Array(
+        todo.tasks
+            .iter()
+            .map(|t| {
+                json!({
+                    "id": t.id,
+                    "content": t.content,
+                    "description": t.description,
+                    "projectId": t.project_id,
+                    "parentId": t.parent.as_ref().map(|p| &p.id),
+                    "priority": t.priority,
+                    "due": t.due,
+                    "labels": t.labels,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Completes (`close`) or reopens a task.
@@ -4086,5 +4230,126 @@ mod tests {
         // An empty file is Todoist's to refuse.
         let empty = tauri::ipc::InvokeBody::Raw(vec![]);
         assert!(upload_parts(Some("a.txt"), &empty).unwrap().1.is_empty());
+    }
+
+    // The checks of `add_task` come before any request, so a client that reaches nothing shows that a refusal is made by the same check as the command's.
+    #[tokio::test]
+    async fn adding_a_task_refuses_the_values_before_any_request() {
+        let http = reqwest::Client::new();
+        let add = |content: &str, due: Option<&str>, project: Option<&str>| {
+            let http = http.clone();
+            let (content, due, project) = (
+                content.to_owned(),
+                due.map(str::to_owned),
+                project.map(str::to_owned),
+            );
+            async move {
+                add_task(
+                    &http,
+                    "t",
+                    "todoist_add_task",
+                    &content,
+                    due.as_deref(),
+                    project.as_deref(),
+                    &listed(),
+                )
+                .await
+            }
+        };
+        assert_eq!(
+            add("  ", None, None).await,
+            Err("タスクの名前を入力してください".into())
+        );
+        assert_eq!(
+            add(&"あ".repeat(CONTENT_LIMIT + 1), None, None).await,
+            Err(format!(
+                "タスクの名前が長すぎます（{CONTENT_LIMIT} 文字まで）"
+            ))
+        );
+        assert_eq!(
+            add("a", Some("tomorrow"), None).await,
+            Err("日付は YYYY-MM-DD か YYYY-MM-DD HH:MM の形で指定してください".into())
+        );
+        assert_eq!(
+            add("a", None, Some("P9")).await,
+            Err("プロジェクトが見つかりません".into())
+        );
+    }
+
+    fn two_projects_todo() -> Todo {
+        build_todo(
+            vec![
+                project("P1", "仕事", "berry_red", false, 2),
+                child("P1", "P3", 1),
+                project("P0", "Inbox", "charcoal", true, 0),
+            ],
+            vec![],
+            vec![
+                task(
+                    json!({"id": "k1", "project_id": "P1", "content": "請求書を送る", "description": "メモ", "priority": 4, "labels": ["a"], "due": {"date": "2026-10-30", "string": "明日"}}),
+                ),
+                task(
+                    json!({"id": "k2", "project_id": "P1", "parent_id": "k1", "content": "下書き"}),
+                ),
+            ],
+            &[],
+            date("2026-10-29"),
+            &jst(),
+        )
+    }
+
+    #[test]
+    fn the_projects_to_check_against_are_the_ids_and_names_in_tree_order() {
+        assert_eq!(
+            listed_projects(&two_projects_todo()),
+            [
+                ("P0".to_owned(), "Inbox".to_owned()),
+                ("P1".to_owned(), "仕事".to_owned()),
+                ("P3".to_owned(), "P3".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_projects_answer_has_the_tree_and_the_inbox() {
+        let answer = projects_answer(&two_projects_todo());
+        let names: Vec<_> = answer
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["id"].as_str().unwrap(),
+                    p["inbox"].as_bool().unwrap(),
+                    p["depth"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(names, [("P0", true, 0), ("P1", false, 0), ("P3", false, 1)]);
+        assert_eq!(answer[1]["name"], "仕事");
+        assert_eq!(answer[2]["parentId"], "P1");
+    }
+
+    #[test]
+    fn the_tasks_answer_has_the_fields_claude_needs_and_a_subtask_names_its_parent() {
+        let answer = tasks_answer(&two_projects_todo());
+        let tasks = answer.as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(
+            tasks[0],
+            json!({
+                "id": "k1",
+                "content": "請求書を送る",
+                "description": "メモ",
+                "projectId": "P1",
+                "parentId": null,
+                "priority": 1,
+                "due": {"date": "2026-10-30", "time": null, "string": "明日", "recurring": false},
+                "labels": ["a"],
+            })
+        );
+        assert_eq!(tasks[1]["id"], "k2");
+        assert_eq!(tasks[1]["parentId"], "k1");
+        assert_eq!(tasks[1]["due"], Value::Null);
     }
 }

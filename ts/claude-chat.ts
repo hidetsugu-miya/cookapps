@@ -1,16 +1,14 @@
-// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack compose screen (S-4), the Slack thread (S-7), the Todo draft page (S-18) and the Todo screen's Claude pane (T-7):
+// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack compose screen (S-4), the Slack thread (S-7), and the Todo draft page (S-18):
 // the log with its diff cards, the request field that grows with its text, and the clear button. A proposal is applied to the owner's text, and the owner decides what to do with it.
-// The Todo pane proposes tasks, not a change of a text: its answers carry `tasks`, which `cards` draws under the reply.
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { SlackAction } from "./bindings/SlackAction";
-import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, the things to do as it made them and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; actions?: SlackAction[] | null; postRefused?: boolean; postConfirm?: boolean; draft?: string | null };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), the things to do as it made them and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
+export type ChatAnswer = PromptEdit & { actions?: SlackAction[] | null; postRefused?: boolean; postConfirm?: boolean; draft?: string | null };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -29,14 +27,10 @@ export interface ChatConfig {
   ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<ChatAnswer>;
   // Called with an answer that is kept (not one that arrives after the conversation was forgotten, nor a failure), before the text is changed and the log is drawn.
   answered?: (answer: ChatAnswer) => void;
-  // Draws the tasks an answer proposes, under its reply; without it `tasks` is not drawn.
-  cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
   // Draws the draft of a post an answer carries, under its reply; without it `draft` is not drawn.
   draft?: (draft: string) => HTMLElement;
   // Called after `answered` and after a proposal was put in at once (`autoApply`), with an answer that is kept: the frame to draw under its reply, as a function that draws it again at every redraw (the frame keeps its own state), or null for none (the Slack compose screen's question of S-23 about where the posts go).
   confirm?: (answer: ChatAnswer) => (() => HTMLElement) | null;
-  // The lines (one per task) that tell Claude what an earlier answer proposed; they are added to that answer's text in the history it is sent, because the cards are not text. Without it only the text is sent.
-  tasksText?: (tasks: TodoTaskProposal[]) => string;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
   changed: () => void;
   // True while the owner's text must not be replaced (a proposal cannot be applied then).
@@ -67,7 +61,6 @@ export interface Turn {
   // An error shown in the conversation; it is not part of what Claude is sent.
   failed?: boolean;
   proposal?: Proposal;
-  tasks?: TodoTaskProposal[];
   draft?: string;
   confirm?: () => HTMLElement;
 }
@@ -172,7 +165,6 @@ export function createChat(cfg: ChatConfig) {
     if (t.role === "user") return tag("div", "chat-user", t.text);
     const node = tag("div", "chat-ai", t.text);
     if (t.proposal) node.append(diffCard(t.proposal));
-    if (t.tasks?.length && cfg.cards) node.append(cfg.cards(t.tasks));
     if (t.draft && cfg.draft) node.append(cfg.draft(t.draft));
     if (t.confirm) node.append(t.confirm());
     return node;
@@ -217,12 +209,7 @@ export function createChat(cfg: ChatConfig) {
     const instruction = (fixed ?? input.value).trim();
     const body = cfg.text();
     if (!instruction || sending || body === null) return;
-    const history = turns
-      .filter((t) => !t.failed)
-      .map(({ role, text, tasks }) => {
-        const lines = tasks?.length ? cfg.tasksText?.(tasks) : "";
-        return { role, text: lines ? `${text}\n${lines}` : text };
-      });
+    const history = turns.filter((t) => !t.failed).map(({ role, text }) => ({ role, text }));
     if (fixed === undefined) {
       input.value = "";
       growInput();
@@ -240,7 +227,6 @@ export function createChat(cfg: ChatConfig) {
         role: "assistant",
         text: answer.reply,
         proposal: answer.body === null ? undefined : { body: answer.body, diff: answer.diff, base: body, state: "open" },
-        tasks: answer.tasks,
         draft: answer.draft?.trim() ? answer.draft : undefined,
       };
     } catch (e) {
