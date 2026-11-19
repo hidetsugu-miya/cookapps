@@ -89,7 +89,6 @@ import type { PaneLayout } from "./bindings/PaneLayout";
 import type { PaneOp } from "./bindings/PaneOp";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
-import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackAction } from "./bindings/SlackAction";
@@ -308,9 +307,8 @@ export interface Commands {
   // `channel` is the channel the screen has open (null in the unread list and the watch, and then no Slack text is sent): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message),
   // and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first. The model and effort are those of `slackChat`. Nothing is saved.
   claude_chat_slack: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } | null; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackChatReply };
-  // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
-  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` (optional, none or null for no skill) is the name of a saved skill (S-7); a name that is not one is refused, and with one the request may be empty.
-  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string; skill?: string | null }; result: PromptEdit };
+  // S-7: the open Slack thread as Claude Code reads it (the field `thread` of the target "slack-thread"): its messages as the screen shows them (`text` of `ThreadMessage`), with `truncated` (the read stopped before the end of the thread), enclosed as data between boundary lines. Nothing is sent or saved.
+  claude_thread_data: { args: { thread: { name: string; ts: string; text: string }[]; truncated: boolean }; result: string };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, and the owner corrects the file),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.

@@ -40,7 +40,6 @@ import type { ClaudeCodeEvent } from "../ts/bindings/ClaudeCodeEvent";
 import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
-import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ScreenAnswer } from "../ts/bindings/ScreenAnswer";
 import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
@@ -739,16 +738,6 @@ export const ownIcon = (iconUrl: string | null): WorkspaceIcon[] => [{ teamId: w
 
 // A 1x1 transparent PNG as a data: URI, what `fetch_images` and `slack_file_images` answer for an image.
 export const pngUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-// What `claude_chat_thread` answers when Claude proposes changing the reply `before` to `after`.
-export const replyEdit = (before: string, after: string): PromptEdit => ({
-  reply: "言い回しを直しました",
-  body: after,
-  diff: [
-    { kind: "del", text: before },
-    { kind: "ins", text: after },
-  ],
-});
 
 export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0", method: "subscription" };
 export const claudeLoggedOut: Claude = { state: "loggedOut", version: "2.0.0" };

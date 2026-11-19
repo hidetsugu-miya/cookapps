@@ -1234,14 +1234,14 @@ describe("orca handoff", () => {
     expect(await textsOf("#reply-tabs [role=tab]")).toEqual(["Claude", "Orca"]);
     await expect($("#reply-tab-claude")).toHaveAttribute("aria-selected", "true");
     await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "false");
-    await expect($("#reply-log")).toBeDisplayed();
+    await expect($("#reply-term")).toBeDisplayed();
     await expect($("#st-orca")).not.toBeDisplayed();
     const handoff = await mock("orca_handoff", started);
     await $("#reply-tab-orca").click();
     await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "true");
     await expect($("#reply-tab-claude")).toHaveAttribute("aria-selected", "false");
-    await expect($("#reply-log")).not.toBeDisplayed();
-    await expect($("#reply-clear")).not.toBeDisplayed();
+    await expect($("#reply-term")).not.toBeDisplayed();
+    await expect($("#reply-restart")).not.toBeDisplayed();
     await listRead(SLACK);
     expect(await textsOf(`${SLACK.pane} .ho-card-title`)).toEqual(["#dev-billing のスレッド"]);
     expect(await textsOf(`${SLACK.pane} .ho-card-meta`)).toEqual(["Alice Example ほか ・ 2 件"]);
@@ -1260,7 +1260,7 @@ describe("orca handoff", () => {
     await expect($(`${SLACK.pane} .ho-term`)).toBeDisplayed();
     // Back to Claude: its pane is as it was.
     await $("#reply-tab-claude").click();
-    await expect($("#reply-log")).toBeDisplayed();
+    await expect($("#reply-term")).toBeDisplayed();
     await expect($("#st-orca")).not.toBeDisplayed();
     // The Orca tab again: the session is shown with its terminal.
     await $("#reply-tab-orca").click();

@@ -568,6 +568,9 @@
               <div id="st-card"></div>
             </div>
             <div id="st-reply">
+              <div id="st-undo-bar" hidden>
+                <button id="st-undo" class="text-btn" type="button">元に戻す</button>
+              </div>
               <p id="st-error" class="pending fail" role="alert" hidden></p>
             </div>
           </div>
@@ -582,13 +585,10 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Orca
                 </button>
               </div>
-              <button id="reply-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+              <button id="reply-restart" type="button" class="text-btn chat-clear">やり直す</button>
             </div>
-            <div id="reply-log" class="chat-log"></div>
+            <div id="reply-term"></div>
             <div id="st-orca" class="ho-pane ho-slack" hidden></div>
-            <div class="chat-foot">
-              <p id="reply-chat-note" class="chat-note" hidden></p>
-            </div>
           </aside>
         </section>
       </div>

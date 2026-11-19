@@ -26,7 +26,7 @@ export function mailCard(subject: string, messages: MessageDetail[]): HandoffCar
   return { kind: "mail", title: subject || "(件名なし)", meta: `${last ? last.fromName || last.fromAddress : "不明"} ・ 本文 ${chars(body)} 字`, body };
 }
 
-// The thread as the screen shows it (and as S-7 sends it to Claude): the sender's name, the time and the text of each message.
+// The thread as the screen shows it (and as S-7 gives it to Claude Code): the sender's name, the time and the text of each message.
 export function slackCard(channelName: string, messages: ThreadMessage[]): HandoffCard {
   const body = messages.map((m) => `${m.name}  ${formatDetailDate(slackMs(m.ts))}\n${m.text}`).join("\n\n");
   const names = [...new Set(messages.map((m) => m.name))];

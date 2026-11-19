@@ -1,4 +1,4 @@
-// The conversation with Claude that edits a text, shared by the Slack thread (S-7) and the Slack screen's Claude pane (S-24):
+// The conversation with Claude that edits a text, used by the Slack screen's Claude pane (S-24):
 // the log with its diff cards, the request field that grows with its text, and the clear button. A proposal is applied to the owner's text, and the owner decides what to do with it.
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
@@ -28,10 +28,6 @@ export interface ChatConfig {
   draft?: (draft: string) => HTMLElement;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
   changed: () => void;
-  // True while the owner's text must not be replaced (a proposal cannot be applied then).
-  locked?: () => boolean;
-  // Adds a "コピー" button to an open proposal, between "却下" and "適用"; it is called with the proposed text, straight from the click. Without it there is no such button.
-  copy?: (text: string) => void;
   // Whether the `-keys` element tells the keys of the request field (default true); the owner that says it elsewhere, or not at all, passes false and has no such element.
   keyHint?: boolean;
 }
@@ -57,8 +53,8 @@ const MAX_TURNS = 100;
 
 export function createChat(cfg: ChatConfig) {
   const id = (name: string) => `${cfg.prefix}-${name}`;
-  // The conversation shown now. `use` swaps it for another (the Slack reply keeps one per thread); every change is made in place.
-  let turns: Turn[] = [];
+  // The conversation shown now; every change is made in place.
+  const turns: Turn[] = [];
   let sending = false;
   // Bumped when the conversation is forgotten: an answer that was asked before it belongs to a conversation that is gone, and is dropped.
   let generation = 0;
@@ -87,7 +83,7 @@ export function createChat(cfg: ChatConfig) {
     if (noClear && $(id("clear")).classList.contains("confirm")) disarmClear();
     $(id("chat-note")).hidden = ready;
     for (const { proposal, apply, stale } of applyControls) {
-      apply.disabled = proposal.base !== text || (cfg.locked?.() ?? false);
+      apply.disabled = proposal.base !== text;
       // No text while the post of "投稿" is on its way is not a changed text.
       stale.hidden = proposal.base === text || text === null;
     }
@@ -104,7 +100,6 @@ export function createChat(cfg: ChatConfig) {
       const stale = tag("span", "diff-stale", "編集欄が変わったため適用できません");
       const reject = tag("button", "text-btn", "却下");
       const apply = tag("button", "text-btn primary", "適用");
-      const copy = cfg.copy ? tag("button", "text-btn", "コピー") : null;
       reject.onclick = () => {
         p.state = "rejected";
         draw();
@@ -114,9 +109,8 @@ export function createChat(cfg: ChatConfig) {
         p.state = "applied";
         draw();
       };
-      if (copy) copy.onclick = () => cfg.copy!(p.body);
       applyControls.push({ proposal: p, apply, stale });
-      foot.append(stale, reject, ...(copy ? [copy] : []), apply);
+      foot.append(stale, reject, apply);
     }
     card.append(foot);
     return card;
@@ -207,22 +201,6 @@ export function createChat(cfg: ChatConfig) {
     draw();
   }
 
-  // Shows another conversation (kept by the owner). An answer asked in the one shown before belongs to a conversation that is not shown any more, and is dropped.
-  function use(next: Turn[]) {
-    generation++;
-    turns = next;
-    disarmClear();
-    draw();
-  }
-
-  function clearInput() {
-    // Not `growInput`: the pane can be hidden, where `scrollHeight` reads 0 and would set the height to 0px.
-    const input = $<HTMLTextAreaElement>(id("input"));
-    input.value = "";
-    input.style.height = "";
-    typedLength = 0;
-  }
-
   function init() {
     // Clearing forgets the conversation only, so it takes two presses: the first arms, and leaving the button or 4 seconds disarms.
     $(id("clear")).onclick = () => {
@@ -252,5 +230,5 @@ export function createChat(cfg: ChatConfig) {
     };
   }
 
-  return { init, draw, refresh, send, reset, use, clearInput };
+  return { init, draw, refresh, send, reset };
 }

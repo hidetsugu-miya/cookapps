@@ -13,6 +13,7 @@ import { pauseLsp } from "./orca-lsp.js";
 import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { showSlackList } from "./slack-list.js";
+import { hideThreadClaude } from "./slack-thread.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { fetchOpenComments } from "./todo-comments.js";
 import { hideSlackComposeClaude } from "./slack-compose-claude.js";
@@ -105,6 +106,8 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   if (name !== "calendar") hideCalendarClaude();
   // The same for the Claude pane of the Slack compose screen, which is left by every screen the sidebar shows.
   hideSlackComposeClaude();
+  // The same for the Claude Code pane of the Slack thread (S-7).
+  hideThreadClaude();
   // The same for the Claude pane of the Todo prompt screen, which "戻る" and the sidebar leave through here.
   hidePromptClaude();
   if (name !== "orca") {

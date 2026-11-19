@@ -374,7 +374,7 @@ pub fn run() {
             claude::claude_model_settings_save,
             claude::claude_summarize_handoff,
             claude::claude_chat_slack,
-            claude::claude_chat_thread,
+            claude::claude_thread_data,
             orca::orca_overview,
             orca::orca_destination,
             orca::orca_send,

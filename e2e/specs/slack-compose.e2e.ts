@@ -755,7 +755,7 @@ describe("slack compose screen: Claude Code", () => {
     expect(prompt).not.toContain("First unread");
     expect(viewport.cols).toBeGreaterThan(20);
     expect(viewport.rows).toBeGreaterThan(5);
-    for (const command of ["claude_chat_thread", "claude_proofread_slack", "orca_stream_terminal", "orca_terminal_read"]) expect(await callsOf(command)).toEqual([]);
+    for (const command of ["claude_proofread_slack", "orca_stream_terminal", "orca_terminal_read"]) expect(await callsOf(command)).toEqual([]);
   });
 
   it("starts the process once, and keeps it while the mode is switched and while the screen is left and opened again for the same mail", async () => {
