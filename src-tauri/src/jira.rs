@@ -1,7 +1,7 @@
 //! The connection to Jira Cloud (J-1, #868): the site's URL and the email address in `jira-settings.json` of the app config directory, the API token in the keychain, and a test of the connection.
 //!
-//! Only Atlassian Cloud is spoken to: the site is `https://{name}.atlassian.net` and nothing else (`site_url`), so a token is never sent to another host.
-//! An email address makes the token a Basic credential (`email:token`, an API token of an account); with none it is sent as a Bearer token (a scoped token).
+//! Only Atlassian Cloud is spoken to: the site is `https://{name}.atlassian.net` and nothing else (`site_url`), and a token goes to that site or to `api.atlassian.com` only, never to another host.
+//! An email address makes the token a Basic credential (`email:token`, an API token of an account) sent to the site; with none it is a Bearer token (a scoped token) sent through the gateway `api.atlassian.com/ex/jira/{cloudId}`, which is the only place Atlassian takes it (`api_base` chooses).
 //! The token is never returned to the screen, logged or written to a file; a save with no token keeps the stored one.
 
 use std::{path::Path, time::Duration};
@@ -23,8 +23,14 @@ const TOKEN_USER: &str = "api-token";
 /// The `account=` of the logs.
 const LOG_ACCOUNT: &str = "jira";
 const HOST_SUFFIX: &str = ".atlassian.net";
-/// The call that tells who the credential belongs to.
+/// The call that tells who the credential belongs to, after `api_base`.
 const MYSELF_PATH: &str = "/rest/api/3/myself";
+/// Where a scoped token is used (Atlassian's platform API gateway): `{GATEWAY}/ex/jira/{cloudId}/rest/api/3/...`.
+const GATEWAY: &str = "https://api.atlassian.com";
+/// The site's own answer to who it is; it needs no credential, and holds the Cloud ID.
+const TENANT_INFO_PATH: &str = "/_edge/tenant_info";
+/// The longest Cloud ID taken (they are UUIDs of 36 characters).
+const CLOUD_ID_LIMIT: usize = 64;
 const TIMEOUT: Duration = Duration::from_secs(15);
 /// How much of an error body goes into the message.
 const BODY_LIMIT: usize = 200;
@@ -131,15 +137,70 @@ fn user_of(status: u16, body: &str) -> Result<JiraUser, String> {
     }
 }
 
-/// Asks the site who the credential belongs to. `base` is the origin from `site_url`. A redirect is not followed, so the credential never goes to another host.
-async fn fetch_user(base: &str, authorization: &str) -> Result<JiraUser, String> {
-    let mut header = HeaderValue::from_str(authorization).map_err(|e| e.to_string())?;
-    header.set_sensitive(true);
-    let http = reqwest::Client::builder()
+/// The client of every call here. A redirect is not followed, so a credential never goes to another host.
+fn client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(TIMEOUT)
         .build()
+        .map_err(|e| e.to_string())
+}
+
+/// The Cloud ID in the answer of `TENANT_INFO_PATH`: letters, digits and hyphens only, since it goes into a URL.
+fn cloud_id_of(status: u16, body: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TenantInfo {
+        cloud_id: String,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(format!("Jira のサイトを確かめられません（{status}）"));
+    }
+    let id = serde_json::from_str::<TenantInfo>(body)
+        .map_err(|e| format!("Jira のサイトの応答を読めません: {e}"))?
+        .cloud_id;
+    let ok = !id.is_empty()
+        && id.len() <= CLOUD_ID_LIMIT
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok {
+        Ok(id)
+    } else {
+        Err("Jira のサイトの Cloud ID の形が正しくありません".into())
+    }
+}
+
+/// The URL that Jira's REST paths (`/rest/api/3/...`) are put after, for this credential: the one place that chooses it.
+/// With an email address (an API token of an account, Basic) it is the site's own origin.
+/// With none (a scoped token, Bearer) it is the gateway, `{gateway}/ex/jira/{cloudId}`, because Atlassian refuses a scoped token on the site's URL (401); the Cloud ID is asked of the site, which is sent no credential.
+/// `gateway` is `GATEWAY` outside the tests.
+pub(crate) async fn api_base(
+    http: &reqwest::Client,
+    site: &str,
+    email: &str,
+    gateway: &str,
+) -> Result<String, String> {
+    if !email.is_empty() {
+        return Ok(site.to_owned());
+    }
+    let res = http
+        .get(format!("{site}{TENANT_INFO_PATH}"))
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
         .map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    Ok(format!("{gateway}/ex/jira/{}", cloud_id_of(status, &body)?))
+}
+
+/// Asks Jira who the credential belongs to. `base` is what `api_base` answered.
+async fn fetch_user(
+    http: &reqwest::Client,
+    base: &str,
+    authorization: &str,
+) -> Result<JiraUser, String> {
+    let mut header = HeaderValue::from_str(authorization).map_err(|e| e.to_string())?;
+    header.set_sensitive(true);
     let res = http
         .get(format!("{base}{MYSELF_PATH}"))
         .header(AUTHORIZATION, header)
@@ -150,6 +211,13 @@ async fn fetch_user(base: &str, authorization: &str) -> Result<JiraUser, String>
     let status = res.status().as_u16();
     let body = res.text().await.map_err(|e| e.to_string())?;
     user_of(status, &body)
+}
+
+/// The test of a connection: `api_base`, then the call of `fetch_user` with the credential.
+async fn check(site: &str, email: &str, token: &str, gateway: &str) -> Result<JiraUser, String> {
+    let http = client()?;
+    let base = api_base(&http, site, email, gateway).await?;
+    fetch_user(&http, &base, &authorization(email, token)).await
 }
 
 fn load_file(dir: &Path) -> Result<Saved, String> {
@@ -251,7 +319,7 @@ pub async fn jira_test(site: String, email: String, token: String) -> Result<Jir
             .map_err(|e| log_failure(command, LOG_ACCOUNT, e))?
             .ok_or(TOKEN_MISSING)?,
     };
-    fetch_user(&site, &authorization(&email, &token))
+    check(&site, &email, &token, GATEWAY)
         .await
         .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
 }
@@ -460,73 +528,188 @@ mod tests {
         )
     }
 
+    const TENANT_ANSWER_ID: &str = "11111111-2222-3333-4444-555555555555";
+
+    fn json_answer(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn tenant_answer() -> String {
+        json_answer(&format!(r#"{{"cloudId":"{TENANT_ANSWER_ID}"}}"#))
+    }
+
+    const NOT_FOUND: &str =
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    /// The first line and the headers of a request, lowercased.
+    fn lower(request: &str) -> String {
+        request.to_lowercase()
+    }
+
+    #[test]
+    fn cloud_id_of_takes_a_cloud_id_and_refuses_what_cannot_go_into_a_url() {
+        assert_eq!(
+            cloud_id_of(200, r#"{"cloudId":"a436116f-02ce-4520-8fbb-7301462a1674"}"#),
+            Ok("a436116f-02ce-4520-8fbb-7301462a1674".into())
+        );
+        for body in [
+            r#"{"cloudId":""}"#,
+            r#"{"cloudId":"a/../b"}"#,
+            r#"{"cloudId":"a b"}"#,
+            r#"{"cloudId":"a?x=1"}"#,
+            r#"{"cloudId":"é"}"#,
+            r#"{}"#,
+            "<html></html>",
+        ] {
+            assert!(cloud_id_of(200, body).is_err(), "{body}");
+        }
+        let long = format!(r#"{{"cloudId":"{}"}}"#, "a".repeat(CLOUD_ID_LIMIT + 1));
+        assert!(cloud_id_of(200, &long).is_err());
+        assert_eq!(
+            cloud_id_of(404, "<html></html>"),
+            Err("Jira のサイトを確かめられません（404）".into())
+        );
+    }
+
     #[tokio::test]
-    async fn fetch_user_sends_a_basic_credential_to_myself_and_reads_the_user() {
-        let (base, seen) = serve_once(ok_answer()).await;
-        let user = fetch_user(&base, &authorization("me@example.com", "tok"))
+    async fn api_base_is_the_site_itself_for_a_basic_credential_and_asks_nothing() {
+        // The gateway is a host that does not exist, so a call to it would fail.
+        let http = client().unwrap();
+        let base = api_base(
+            &http,
+            "https://example.atlassian.net",
+            "me@example.com",
+            "http://gateway.invalid",
+        )
+        .await;
+        assert_eq!(base, Ok("https://example.atlassian.net".into()));
+    }
+
+    #[tokio::test]
+    async fn api_base_for_a_bearer_credential_is_the_gateway_with_the_cloud_id_of_the_site() {
+        let (site, seen) = serve_once(tenant_answer()).await;
+        let http = client().unwrap();
+        let base = api_base(&http, &site, "", "https://api.example.invalid")
+            .await
+            .unwrap();
+        assert_eq!(
+            base,
+            format!("https://api.example.invalid/ex/jira/{TENANT_ANSWER_ID}")
+        );
+        let request = lower(&seen.await.unwrap());
+        assert!(
+            request.starts_with("get /_edge/tenant_info http/1.1"),
+            "{request}"
+        );
+        // The site is asked who it is with no credential at all.
+        assert!(!request.contains("authorization"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn api_base_stops_when_the_site_does_not_answer_with_a_cloud_id() {
+        let http = client().unwrap();
+        let (site, _seen) = serve_once(NOT_FOUND.into()).await;
+        assert_eq!(
+            api_base(&http, &site, "", "http://gateway.invalid").await,
+            Err("Jira のサイトを確かめられません（404）".into())
+        );
+        let (site, _seen) = serve_once(json_answer(r#"{"cloudId":"a/b"}"#)).await;
+        assert!(api_base(&http, &site, "", "http://gateway.invalid")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn check_sends_a_basic_credential_to_the_site_and_reads_the_user() {
+        let (site, seen) = serve_once(ok_answer()).await;
+        let user = check(&site, "me@example.com", "tok", "http://gateway.invalid")
             .await
             .unwrap();
         assert_eq!(user.display_name, "Example User");
-        let request = seen.await.unwrap();
+        let request = lower(&seen.await.unwrap());
         assert!(
-            request.starts_with("GET /rest/api/3/myself HTTP/1.1"),
+            request.starts_with("get /rest/api/3/myself http/1.1"),
             "{request}"
         );
         assert!(
-            request
-                .to_lowercase()
-                .contains("authorization: basic bwvazxhhbxbszs5jb206dg9r"),
+            request.contains("authorization: basic bwvazxhhbxbszs5jb206dg9r"),
             "{request}"
         );
     }
 
     #[tokio::test]
-    async fn fetch_user_sends_a_bearer_credential_when_there_is_no_email() {
-        let (base, seen) = serve_once(ok_answer()).await;
-        fetch_user(&base, &authorization("", "tok")).await.unwrap();
-        assert!(seen
-            .await
-            .unwrap()
-            .to_lowercase()
-            .contains("authorization: bearer tok\r\n"));
+    async fn check_sends_a_bearer_credential_to_the_gateway_and_none_to_the_site() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, gateway_seen) = serve_once(ok_answer()).await;
+        let user = check(&site, "", "tok", &gateway).await.unwrap();
+        assert_eq!(user.display_name, "Example User");
+        let request = lower(&gateway_seen.await.unwrap());
+        assert!(
+            request.starts_with(&format!(
+                "get /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/myself http/1.1"
+            )),
+            "{request}"
+        );
+        assert!(
+            request.contains("authorization: bearer tok\r\n"),
+            "{request}"
+        );
+        let tenant = lower(&tenant_seen.await.unwrap());
+        assert!(
+            !tenant.contains("authorization") && !tenant.contains("tok"),
+            "{tenant}"
+        );
     }
 
     #[tokio::test]
-    async fn fetch_user_reports_a_rejected_credential() {
-        let (base, _seen) = serve_once(
+    async fn check_reports_a_rejected_credential() {
+        let (site, _seen) = serve_once(
             "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
         )
         .await;
-        let err = fetch_user(&base, &authorization("", "bad"))
+        let err = check(&site, "me@example.com", "bad", "http://gateway.invalid")
             .await
             .unwrap_err();
         assert_eq!(err, "Jira が認証を拒否しました（401）");
     }
 
     #[tokio::test]
-    async fn fetch_user_does_not_follow_a_redirect() {
-        let (base, seen) = serve_once(
-            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                .into(),
-        )
-        .await;
-        let err = fetch_user(&base, &authorization("", "tok"))
+    async fn check_does_not_follow_a_redirect_of_either_call() {
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (site, seen) = serve_once(redirect.into()).await;
+        let err = check(&site, "me@example.com", "tok", "http://gateway.invalid")
             .await
             .unwrap_err();
         assert_eq!(err, "Jira が 302 を返しました: ");
         assert!(seen.await.unwrap().starts_with("GET /rest/api/3/myself"));
+        let (site, seen) = serve_once(redirect.into()).await;
+        let err = check(&site, "", "tok", "http://gateway.invalid")
+            .await
+            .unwrap_err();
+        assert_eq!(err, "Jira のサイトを確かめられません（302）");
+        assert!(seen.await.unwrap().starts_with("GET /_edge/tenant_info"));
     }
 
     #[tokio::test]
-    async fn fetch_user_reports_a_host_that_cannot_be_reached() {
+    async fn check_reports_a_host_that_cannot_be_reached() {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        let err = fetch_user(&format!("http://127.0.0.1:{port}"), "Bearer tok")
+        let site = format!("http://127.0.0.1:{port}");
+        assert!(
+            !check(&site, "me@example.com", "tok", "http://gateway.invalid")
+                .await
+                .unwrap_err()
+                .is_empty()
+        );
+        assert!(!check(&site, "", "tok", "http://gateway.invalid")
             .await
-            .unwrap_err();
-        assert!(!err.is_empty());
+            .unwrap_err()
+            .is_empty());
     }
 }
