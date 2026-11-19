@@ -281,6 +281,8 @@ pub fn run() {
             calendar::set_calendar_first_day,
             calendar::calendar_month,
             calendar::calendar_choices,
+            calendar::calendar_owned,
+            calendar::calendar_create_event,
             calendar::set_calendar_shown,
             gmail::inbox,
             gmail::thread,

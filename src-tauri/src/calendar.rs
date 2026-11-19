@@ -12,6 +12,7 @@ use chrono::{
 };
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 #[cfg(test)]
 use ts_rs::TS;
@@ -19,7 +20,7 @@ use url::Url;
 
 use crate::{
     accounts::{self, write_atomic},
-    auth::{config_dir, Auth},
+    auth::{config_dir, random_string, Auth},
     disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
 };
@@ -1226,22 +1227,32 @@ pub async fn calendar_choices(
     auth: State<'_, Auth>,
     cache: State<'_, CalendarCache>,
 ) -> Result<CalendarChoices, String> {
-    let dir = config_dir(&app).map_err(|e| log_failure("calendar_choices", "-", e))?;
+    load_choices(&app, &auth, &cache, "calendar_choices").await
+}
+
+/// The body of `calendar_choices` and `calendar_owned`; `command` names the one that asks, for the log.
+async fn load_choices(
+    app: &AppHandle,
+    auth: &Auth,
+    cache: &CalendarCache,
+    command: &str,
+) -> Result<CalendarChoices, String> {
+    let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
     let selection = load_selection(&dir);
     let accounts = auth
         .accounts(&dir)
-        .map_err(|e| log_failure("calendar_choices", "-", e))?;
+        .map_err(|e| log_failure(command, "-", e))?;
     let jobs = accounts
         .iter()
         .map(|account| {
-            let (dir, auth, cache) = (dir.clone(), auth.inner().clone(), cache.inner().clone());
+            let (dir, auth, cache) = (dir.clone(), auth.clone(), cache.clone());
             let account = account.clone();
             async move { account_calendars(&dir, &auth, &cache, &account, false).await }
         })
         .collect();
     let results = join_all(jobs)
         .await
-        .map_err(|e| log_failure("calendar_choices", "-", e))?;
+        .map_err(|e| log_failure(command, "-", e))?;
     let mut out = CalendarChoices {
         accounts: Vec::new(),
         needs_login: Vec::new(),
@@ -1260,7 +1271,7 @@ pub async fn calendar_choices(
             Err(e) => {
                 cache.forget(&account);
                 let status = e.status;
-                let message = log_failure("calendar_choices", &account, e);
+                let message = log_failure(command, &account, e);
                 match classify(status, &message) {
                     Failure::NeedsLogin => out.needs_login.push(account),
                     Failure::Message(m) => {
@@ -1377,6 +1388,298 @@ pub async fn calendar_cached(app: AppHandle) -> Result<Vec<Week>, String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(cached.map(|c| c.weeks).unwrap_or_default())
+}
+
+/// The calendars an event can be created in: those of every account that the user owns.
+/// Accounts needing login or failing to load are listed, not fatal, as in `calendar_choices`.
+#[tauri::command]
+pub async fn calendar_owned(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    cache: State<'_, CalendarCache>,
+) -> Result<CalendarChoices, String> {
+    let mut found = load_choices(&app, &auth, &cache, "calendar_owned").await?;
+    owned_only(&mut found);
+    Ok(found)
+}
+
+/// Drops the calendars the user does not own, and the accounts left with none.
+fn owned_only(found: &mut CalendarChoices) {
+    for a in &mut found.accounts {
+        a.calendars.retain(|c| c.mine);
+    }
+    found.accounts.retain(|a| !a.calendars.is_empty());
+}
+
+const TITLE_MAX: usize = 1024;
+/// The limit of Google's own description, in characters.
+const DESCRIPTION_INPUT_MAX: usize = 8192;
+const GUESTS_MAX: usize = 200;
+/// What `events.insert` answers with: the ID, and the Meet link if one was made.
+const INSERT_FIELDS: &str = "id,hangoutLink";
+
+/// An event to create, as the screen sends it.
+/// `all_day`: `start` and `end` are dates (YYYY-MM-DD) and `end` is the last day, included;
+/// otherwise they are RFC 3339 date-times with an offset or `Z`.
+#[derive(Deserialize, Debug)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct NewEvent {
+    account: String,
+    calendar_id: String,
+    title: String,
+    all_day: bool,
+    start: String,
+    end: String,
+    /// Email addresses; each one is invited.
+    guests: Vec<String>,
+    /// Whether to add a Google Meet conference.
+    meet: bool,
+    description: String,
+}
+
+/// The part of the answer of `events.insert` that is read.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ApiCreated {
+    id: String,
+    hangout_link: Option<String>,
+}
+
+/// The event that was created.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedEvent {
+    id: String,
+    /// The Meet link, when the event has one. Google may add it a moment after the answer.
+    meet_url: Option<String>,
+}
+
+impl From<ApiCreated> for CreatedEvent {
+    fn from(c: ApiCreated) -> Self {
+        Self {
+            id: c.id,
+            meet_url: meet_url(c.hangout_link.as_deref()),
+        }
+    }
+}
+
+/// The first 100 characters, for an error message.
+fn shown_text(s: &str) -> String {
+    s.chars().take(100).collect()
+}
+
+/// A plain `local@domain` with a dot in the domain, and no space, quote, bracket or comma.
+fn valid_guest(addr: &str) -> bool {
+    let Some((local, domain)) = addr.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && addr.matches('@').count() == 1
+        && !addr
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "<>(),;:\"\\[]".contains(c))
+}
+
+/// The guests as the API takes them: trimmed, each a valid address, none twice (the case of the address does not count).
+fn check_guests(guests: &[String]) -> Result<Vec<String>, String> {
+    if guests.len() > GUESTS_MAX {
+        return Err(format!("ゲストは {GUESTS_MAX} 人までです"));
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(guests.len());
+    for guest in guests {
+        let addr = guest.trim();
+        if addr.is_empty() {
+            return Err("ゲストのメールアドレスが空です".into());
+        }
+        if !valid_guest(addr) {
+            return Err(format!(
+                "ゲストのメールアドレスの形が正しくありません: {}",
+                shown_text(addr)
+            ));
+        }
+        if !seen.insert(addr.to_lowercase()) {
+            return Err(format!(
+                "ゲストのメールアドレスが重複しています: {}",
+                shown_text(addr)
+            ));
+        }
+        out.push(addr.to_owned());
+    }
+    Ok(out)
+}
+
+/// The `start` and `end` of the request body.
+fn check_times(event: &NewEvent) -> Result<(Value, Value), String> {
+    let after = "開始が終了より後になっています";
+    if event.all_day {
+        let day = |text: &str, what: &str| {
+            NaiveDate::parse_from_str(text, "%Y-%m-%d")
+                .map_err(|_| format!("{what}の日付が正しくありません: {}", shown_text(text)))
+        };
+        let (start, last) = (day(&event.start, "開始")?, day(&event.end, "終了")?);
+        if start > last {
+            return Err(after.into());
+        }
+        // The API's end of an all-day event is exclusive.
+        let end = last.succ_opt().ok_or("終了の日付が正しくありません")?;
+        Ok((
+            json!({"date": start.to_string()}),
+            json!({"date": end.to_string()}),
+        ))
+    } else {
+        let time = |text: &str, what: &str| {
+            DateTime::parse_from_rfc3339(text)
+                .map_err(|_| format!("{what}の日時が正しくありません: {}", shown_text(text)))
+        };
+        let (start, end) = (time(&event.start, "開始")?, time(&event.end, "終了")?);
+        if start > end {
+            return Err(after.into());
+        }
+        let text = |t: DateTime<FixedOffset>| t.to_rfc3339_opts(SecondsFormat::Secs, false);
+        Ok((
+            json!({"dateTime": text(start)}),
+            json!({"dateTime": text(end)}),
+        ))
+    }
+}
+
+/// The query parameters of a request.
+type Query = Vec<(&'static str, &'static str)>;
+
+/// The query and the body of `events.insert` for `event`, after checking the input.
+/// `request_id` is new for each event: Google makes the Meet of a request ID once.
+/// The invitation goes out only when there are guests.
+fn build_insert(event: &NewEvent, request_id: &str) -> Result<(Query, Value), String> {
+    let title = event.title.trim();
+    if title.chars().count() > TITLE_MAX {
+        return Err(format!("タイトルは {TITLE_MAX} 文字までです"));
+    }
+    if event.description.chars().count() > DESCRIPTION_INPUT_MAX {
+        return Err(format!("説明は {DESCRIPTION_INPUT_MAX} 文字までです"));
+    }
+    let (start, end) = check_times(event)?;
+    let guests = check_guests(&event.guests)?;
+    let mut body = json!({"start": start, "end": end});
+    if !title.is_empty() {
+        body["summary"] = json!(title);
+    }
+    if !event.description.trim().is_empty() {
+        body["description"] = json!(event.description);
+    }
+    if !guests.is_empty() {
+        body["attendees"] = guests.iter().map(|g| json!({"email": g})).collect();
+    }
+    let mut query = vec![("fields", INSERT_FIELDS)];
+    if event.meet {
+        body["conferenceData"] = json!({"createRequest": {
+            "requestId": request_id,
+            "conferenceSolutionKey": {"type": "hangoutsMeet"},
+        }});
+        query.push(("conferenceDataVersion", "1"));
+    }
+    query.push((
+        "sendUpdates",
+        if guests.is_empty() { "none" } else { "all" },
+    ));
+    Ok((query, body))
+}
+
+/// Whether `id` is a calendar of `calendars` that the user owns. Only those take an event.
+fn owned_calendar(calendars: &[CalendarEntry], id: &str) -> Result<(), String> {
+    match calendars.iter().find(|c| c.id == id) {
+        None => Err("カレンダーが見つかりません".into()),
+        Some(c) if c.is_mine() => Ok(()),
+        Some(_) => {
+            Err("このカレンダーには予定を作れません。自分が持つカレンダーだけに作れます".into())
+        }
+    }
+}
+
+/// Reads the calendars of `account` (the kept list first; once again from Google when the kept one does not show it as owned,
+/// so a calendar made after the list was kept is found) and checks that `id` is owned.
+/// `Ok(None)` means `account` must log in again.
+async fn check_owned(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    id: &str,
+) -> Result<Option<()>, ApiError> {
+    for refresh in [false, true] {
+        let Some(calendars) = account_calendars(dir, auth, cache, account, refresh).await? else {
+            return Ok(None);
+        };
+        match owned_calendar(&calendars, id) {
+            Ok(()) => return Ok(Some(())),
+            Err(e) if refresh => return Err(e.into()),
+            Err(_) => {}
+        }
+    }
+    unreachable!("the second round returns")
+}
+
+/// Creates an event in a calendar the user owns, with the invitations and the Google Meet that `event` asks for.
+/// `None` means the account must log in again (it has not granted the permission to create events yet).
+/// The screen reads the week again to draw the event.
+#[tauri::command]
+pub async fn calendar_create_event(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    cache: State<'_, CalendarCache>,
+    event: NewEvent,
+) -> Result<Option<CreatedEvent>, String> {
+    const COMMAND: &str = "calendar_create_event";
+    let account = event.account.as_str();
+    let dir = config_dir(&app).map_err(|e| log_failure(COMMAND, "-", e))?;
+    let listed = auth
+        .accounts(&dir)
+        .map_err(|e| log_failure(COMMAND, "-", e))?;
+    check_choice(&listed, account, &event.calendar_id)?;
+    let request_id = random_string().map_err(|e| log_failure(COMMAND, account, e))?;
+    let (query, body) = build_insert(&event, &request_id)?;
+    let url = events_url(&event.calendar_id)?;
+    // The role is read from Google, not taken from the screen.
+    match check_owned(&dir, &auth, &cache, account, &event.calendar_id).await {
+        Ok(Some(())) => {}
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(log_failure(COMMAND, account, e)),
+    }
+    match send_json_refreshing::<ApiCreated>(
+        &dir,
+        &auth,
+        account,
+        Method::POST,
+        &url,
+        &query,
+        Some(&body),
+    )
+    .await
+    {
+        Ok(Some(created)) => Ok(Some(created.into())),
+        Ok(None) => {
+            cache.forget(account);
+            Ok(None)
+        }
+        Err(e) => {
+            let status = e.status;
+            let message = log_failure(COMMAND, account, e);
+            match classify(status, &message) {
+                Failure::NeedsLogin => {
+                    cache.forget(account);
+                    Ok(None)
+                }
+                Failure::Message(m) => Err(m),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2504,5 +2807,352 @@ mod tests {
         std::fs::write(dir.join(SELECTION_FILE), "{").unwrap();
         assert_eq!(load_selection(&dir), Selection::default());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---- creating an event ----
+
+    fn new_event() -> NewEvent {
+        NewEvent {
+            account: "a@example.com".into(),
+            calendar_id: "id@example.com".into(),
+            title: "定例".into(),
+            all_day: false,
+            start: "2026-11-20T10:00:00+09:00".into(),
+            end: "2026-11-20T11:00:00+09:00".into(),
+            guests: Vec::new(),
+            meet: false,
+            description: String::new(),
+        }
+    }
+
+    fn all_day_event(start: &str, end: &str) -> NewEvent {
+        NewEvent {
+            all_day: true,
+            start: start.into(),
+            end: end.into(),
+            ..new_event()
+        }
+    }
+
+    fn query_of(q: &[(&str, &str)], key: &str) -> Option<String> {
+        q.iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn a_timed_event_with_guests_and_meet_is_built_for_the_api() {
+        let event = NewEvent {
+            guests: vec!["b@example.com".into(), " C@Example.com ".into()],
+            meet: true,
+            description: "議題".into(),
+            ..new_event()
+        };
+        let (query, body) = build_insert(&event, "req-1").unwrap();
+        assert_eq!(
+            query_of(&query, "conferenceDataVersion").as_deref(),
+            Some("1")
+        );
+        assert_eq!(query_of(&query, "sendUpdates").as_deref(), Some("all"));
+        assert_eq!(
+            query_of(&query, "fields").as_deref(),
+            Some("id,hangoutLink")
+        );
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "summary": "定例",
+                "description": "議題",
+                "start": {"dateTime": "2026-11-20T10:00:00+09:00"},
+                "end": {"dateTime": "2026-11-20T11:00:00+09:00"},
+                "attendees": [{"email": "b@example.com"}, {"email": "C@Example.com"}],
+                "conferenceData": {"createRequest": {
+                    "requestId": "req-1",
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"}
+                }}
+            })
+        );
+    }
+
+    #[test]
+    fn an_event_without_guests_or_meet_sends_no_invitation_and_no_conference() {
+        let (query, body) = build_insert(&new_event(), "req-1").unwrap();
+        assert_eq!(query_of(&query, "sendUpdates").as_deref(), Some("none"));
+        assert_eq!(query_of(&query, "conferenceDataVersion"), None);
+        assert!(body.get("conferenceData").is_none());
+        assert!(body.get("attendees").is_none());
+        assert!(body.get("description").is_none());
+    }
+
+    #[test]
+    fn a_blank_title_is_left_out_and_the_title_is_trimmed() {
+        let blank = NewEvent {
+            title: "  ".into(),
+            ..new_event()
+        };
+        assert!(build_insert(&blank, "r")
+            .unwrap()
+            .1
+            .get("summary")
+            .is_none());
+        let padded = NewEvent {
+            title: " 定例 ".into(),
+            ..new_event()
+        };
+        assert_eq!(build_insert(&padded, "r").unwrap().1["summary"], "定例");
+    }
+
+    #[test]
+    fn an_all_day_event_ends_the_day_after_its_last_day() {
+        let (_, body) = build_insert(&all_day_event("2026-11-20", "2026-11-22"), "r").unwrap();
+        assert_eq!(body["start"], serde_json::json!({"date": "2026-11-20"}));
+        assert_eq!(body["end"], serde_json::json!({"date": "2026-11-23"}));
+        let (_, one) = build_insert(&all_day_event("2026-12-31", "2026-12-31"), "r").unwrap();
+        assert_eq!(one["end"], serde_json::json!({"date": "2027-01-01"}));
+    }
+
+    #[test]
+    fn a_timed_event_keeps_its_offset_and_accepts_utc() {
+        let event = NewEvent {
+            start: "2026-11-20T01:00:00Z".into(),
+            end: "2026-11-20T02:30:00.000Z".into(),
+            ..new_event()
+        };
+        let (_, body) = build_insert(&event, "r").unwrap();
+        assert_eq!(body["start"]["dateTime"], "2026-11-20T01:00:00+00:00");
+        assert_eq!(body["end"]["dateTime"], "2026-11-20T02:30:00+00:00");
+    }
+
+    #[test]
+    fn bad_input_is_refused_in_japanese() {
+        let long = "あ".repeat(TITLE_MAX + 1);
+        let guests = |g: &[&str]| NewEvent {
+            guests: g.iter().map(|s| s.to_string()).collect(),
+            ..new_event()
+        };
+        let many: Vec<String> = (0..=GUESTS_MAX)
+            .map(|i| format!("g{i}@example.com"))
+            .collect();
+        let cases = vec![
+            // start after end
+            NewEvent {
+                start: "2026-11-20T11:00:00+09:00".into(),
+                end: "2026-11-20T10:00:00+09:00".into(),
+                ..new_event()
+            },
+            all_day_event("2026-11-21", "2026-11-20"),
+            // not a date or a date and time
+            all_day_event("2026-11-20", "2026-13-01"),
+            all_day_event("2026-11-20T10:00:00+09:00", "2026-11-21"),
+            NewEvent {
+                start: "2026-11-20".into(),
+                ..new_event()
+            },
+            NewEvent {
+                end: "あした".into(),
+                ..new_event()
+            },
+            // guests
+            guests(&[""]),
+            guests(&["  "]),
+            guests(&["not-an-address"]),
+            guests(&["a@b"]),
+            guests(&["a b@example.com"]),
+            guests(&["<a@example.com>"]),
+            guests(&["a@example.com,b@example.com"]),
+            guests(&["a@example.com", "A@EXAMPLE.com"]),
+            NewEvent {
+                guests: many,
+                ..new_event()
+            },
+            // lengths
+            NewEvent {
+                title: long,
+                ..new_event()
+            },
+            NewEvent {
+                description: "あ".repeat(DESCRIPTION_INPUT_MAX + 1),
+                ..new_event()
+            },
+        ];
+        for event in cases {
+            let e = build_insert(&event, "r").unwrap_err();
+            assert!(!e.is_ascii(), "not Japanese: {e}");
+        }
+    }
+
+    #[test]
+    fn the_longest_title_and_description_are_accepted() {
+        let event = NewEvent {
+            title: "あ".repeat(TITLE_MAX),
+            description: "あ".repeat(DESCRIPTION_INPUT_MAX),
+            ..new_event()
+        };
+        assert!(build_insert(&event, "r").is_ok());
+    }
+
+    #[test]
+    fn only_a_calendar_the_user_owns_takes_an_event() {
+        let calendars = [
+            entry("mine", true, Some("owner")),
+            entry("shared", true, Some("writer")),
+            entry("holiday", true, Some("reader")),
+            entry("none", true, None),
+        ];
+        assert!(owned_calendar(&calendars, "mine").is_ok());
+        for id in ["shared", "holiday", "none", "missing"] {
+            let e = owned_calendar(&calendars, id).unwrap_err();
+            assert!(!e.is_ascii(), "not Japanese: {e}");
+        }
+    }
+
+    #[test]
+    fn the_list_of_calendars_to_create_in_keeps_the_owned_ones_only() {
+        let choice = |id: &str, mine: bool| CalendarChoice {
+            id: id.into(),
+            name: id.into(),
+            color: None,
+            mine,
+            shown: true,
+        };
+        let mut choices = CalendarChoices {
+            accounts: vec![
+                AccountCalendars {
+                    account: "a@example.com".into(),
+                    calendars: vec![choice("mine", true), choice("shared", false)],
+                },
+                AccountCalendars {
+                    account: "b@example.com".into(),
+                    calendars: vec![choice("holiday", false)],
+                },
+            ],
+            needs_login: vec!["c@example.com".into()],
+            failed: HashMap::new(),
+        };
+        owned_only(&mut choices);
+        assert_eq!(choices.accounts.len(), 1);
+        assert_eq!(choices.accounts[0].account, "a@example.com");
+        assert_eq!(choices.accounts[0].calendars.len(), 1);
+        assert_eq!(choices.accounts[0].calendars[0].id, "mine");
+        assert_eq!(choices.needs_login, ["c@example.com"]);
+    }
+
+    #[test]
+    fn the_answer_gives_the_id_and_only_a_meet_link() {
+        let created: ApiCreated = serde_json::from_str(
+            r#"{"id":"e1","hangoutLink":"https://meet.google.com/abc-defg-hij","kind":"calendar#event"}"#,
+        )
+        .unwrap();
+        let created = CreatedEvent::from(created);
+        assert_eq!(created.id, "e1");
+        assert_eq!(
+            created.meet_url.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+        let plain: ApiCreated = serde_json::from_str(r#"{"id":"e2"}"#).unwrap();
+        assert_eq!(CreatedEvent::from(plain).meet_url, None);
+        let other: ApiCreated =
+            serde_json::from_str(r#"{"id":"e3","hangoutLink":"https://example.com/x"}"#).unwrap();
+        assert_eq!(CreatedEvent::from(other).meet_url, None);
+    }
+
+    /// Serves one response and returns what it received (the request head and body) once it is done.
+    fn serve_once(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/calendars/c/events",
+            listener.local_addr().unwrap()
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&got).to_string();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(str::to_owned)
+                        })
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&got).to_string()
+        });
+        (url, handle)
+    }
+
+    fn post_to(
+        url: &str,
+        query: &[(&str, &str)],
+        body: &serde_json::Value,
+    ) -> Result<Option<ApiCreated>, crate::gmail::ApiError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(crate::gmail::send_json::<ApiCreated>(
+                &reqwest::Client::new(),
+                Method::POST,
+                "token",
+                url,
+                query,
+                Some(body),
+                0,
+            ))
+    }
+
+    #[test]
+    fn the_request_reaches_the_server_as_built_and_the_answer_is_read() {
+        let ok = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 70\r\nConnection: close\r\n\r\n{\"id\":\"e1\",\"hangoutLink\":\"https://meet.google.com/abc-defg-hij\",\"x\":1}";
+        let (url, server) = serve_once(ok);
+        let event = NewEvent {
+            guests: vec!["b@example.com".into()],
+            meet: true,
+            ..new_event()
+        };
+        let (query, body) = build_insert(&event, "req-9").unwrap();
+        let created = post_to(&url, &query, &body).unwrap().unwrap();
+        let request = server.join().unwrap();
+        let (head, sent) = request.split_once("\r\n\r\n").unwrap();
+        let line = head.lines().next().unwrap();
+        assert!(line.starts_with("POST /calendars/c/events?"), "{line}");
+        assert!(line.contains("conferenceDataVersion=1"), "{line}");
+        assert!(line.contains("sendUpdates=all"), "{line}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(sent).unwrap(),
+            body
+        );
+        let created = CreatedEvent::from(created);
+        assert_eq!(created.id, "e1");
+        assert_eq!(
+            created.meet_url.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+    }
+
+    #[test]
+    fn a_403_for_an_old_scope_while_creating_means_login_again() {
+        let denied = "HTTP/1.1 403 Forbidden\r\nContent-Length: 130\r\nConnection: close\r\n\r\n{\"error\":{\"code\":403,\"message\":\"Request had insufficient authentication scopes.\",\"errors\":[{\"reason\":\"insufficientPermissions\"}]}}";
+        let (url, server) = serve_once(denied);
+        let (query, body) = build_insert(&new_event(), "r").unwrap();
+        let e = post_to(&url, &query, &body).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(e.status, Some(403));
+        assert_eq!(classify(e.status, &e.message), Failure::NeedsLogin);
     }
 }
