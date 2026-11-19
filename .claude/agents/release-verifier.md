@@ -14,7 +14,7 @@ Even when the third round fails, do not ask the owner to decide. As `.claude/rul
 A reviewer's reply is material to check, not fact.
 Do not edit files.
 When the push range has a commit with a pass record, and only release work follows it up to HEAD (`release-only-diff.sh`), this agent is not needed (`pre-git.sh` checks it).
-This agent also does not check the range of a diff that fixes non-blocking findings after a pass. `.claude/tools/range-check.sh` does that, and writes the record itself when it passes (`.claude/rules/review.md`).
+The non-blocking findings that are left after a pass are not fixed (`.claude/rules/review.md`), so the caller lists the report-only findings of your reply in its completion report. This agent also does not check the range of a diff that fixes only the non-blocking findings of a merged version. `.claude/tools/range-check.sh` does that, and writes the record itself when it passes (`.claude/rules/review.md`).
 
 ## Checking the CI and E2E records
 
