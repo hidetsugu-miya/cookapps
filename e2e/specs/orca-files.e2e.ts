@@ -2041,6 +2041,182 @@ describe("orca: files and editor (A-18)", () => {
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
   });
 
+  // A-44: the git writes of the right button. Rust runs them (unit tests); here the screen is checked: the items on a row that differs from HEAD, the commands and their arguments, the confirmation of putting back, and the read again.
+  const menuButtons = () => textsOf('.menu[role="menu"] button');
+  const markedRoot = () => [change("src", "changed"), change("target", "new"), change("a.rs", "changed"), change("b.log", "new")];
+  const git = (extra: Record<string, unknown> = {}) => openFiles({ orca_files_changes: markedRoot(), ...extra });
+  const rootArgs = (paths: string[], environment: string | null = null) => ({ path: "/work/example-app", paths, environment });
+  const pressedOnce = (label: string) => $(`.pop[role="alertdialog"] .text-btn${label === "元に戻す" ? ".danger" : ":not(.danger)"}`).click();
+
+  it("adds 「ステージ」, 「ステージ解除」 and a red 「変更を元に戻す」 after a line to the menu of a file and of a folder that differ from HEAD (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ステージ", "ステージ解除", "変更を元に戻す", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "ステージ", "ステージ解除", "変更を元に戻す", "", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(9);
+    expect(await count('.menu[role="menu"] button.danger')).toBe(2);
+    expect(await textsOf('.menu[role="menu"] button.danger')).toEqual(["変更を元に戻す", "削除"]);
+    expect(await deleteItemIsRed()).toBe(true);
+    await browser.keys("Escape");
+    expect(await rightClickRow("src")).toBe(true);
+    expect(await menuButtons()).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "ステージ", "ステージ解除", "変更を元に戻す", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー", "", "ステージ", "ステージ解除", "変更を元に戻す", "", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(9);
+    expect(await deleteItemIsRed()).toBe(true);
+  });
+
+  it("keeps the menu as it was on a row that does not differ from HEAD, and while git has not answered (A-44)", async () => {
+    await openFiles({ orca_files_changes: [change("a.rs", "changed")] });
+    await waitForCount(".orca-file[data-change]", 1);
+    expect(await rightClickRow("b.log")).toBe(true);
+    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    await browser.keys("Escape");
+    expect(await rightClickRow("target")).toBe(true);
+    expect(await menuButtons()).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
+  });
+
+  it("keeps several selected rows to the 「n 件を削除」 alone, whatever they differ in (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    await row("a.rs").click();
+    await press("b.log", { metaKey: true });
+    expect(await rightClickRow("b.log")).toBe(true);
+    expect(await menuButtons()).toEqual(["2 件を削除"]);
+  });
+
+  it("stages a file on 「ステージ」 with no question, and reads the files and their marks again (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const stage = await mock("orca_files_stage", null);
+    const list = await mock("orca_files_list", root());
+    const marks = await mock("orca_files_changes", [change("src", "changed"), change("target", "new"), change("b.log", "new")]);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ステージ");
+    await expect($(".menu")).not.toExist();
+    expect(await waitForCalls(stage)).toEqual([rootArgs(["a.rs"])]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    expect(await waitForCalls(marks)).toEqual([rootArgs(["src", "target", "a.rs", "b.log"])]);
+    await waitForCount(".orca-file[data-change]", 3);
+    expect((await gitLook("a.rs")).change).toBeNull();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("unstages a folder on 「ステージ解除」 with its path, calls neither of the other two, and reads again (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const unstage = await mock("orca_files_unstage", null);
+    const stage = await mock("orca_files_stage", null);
+    const revert = await mock("orca_files_revert", null);
+    const list = await mock("orca_files_list", root());
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem("ステージ解除");
+    expect(await waitForCalls(unstage)).toEqual([rootArgs(["src"])]);
+    await waitForCalls(list);
+    await browser.pause(200);
+    expect(await callsOf(stage)).toEqual([]);
+    expect(await callsOf(revert)).toEqual([]);
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+  });
+
+  it("sends the path from the worktree of a file in an open folder, and the name of a saved environment (A-44)", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, orca_files_changes: [change("src", "changed")] });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["main.rs", false]]));
+    await mock("orca_files_changes", [change("src", "changed"), change("src/main.rs", "changed")]);
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    await waitForCount(".orca-file[data-change]", 2);
+    const stage = await mock("orca_files_stage", null);
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("ステージ");
+    expect(await waitForCalls(stage)).toEqual([rootArgs(["src/main.rs"], "Studio")]);
+  });
+
+  it("asks before putting back, with the words of what is lost, 「キャンセル」 that has the keys, and calls nothing until 「元に戻す」 is pressed (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const revert = await mock("orca_files_revert", null);
+    const asked = async (path: string, words: string) => {
+      expect(await rightClickRow(path)).toBe(true);
+      await pickItem("変更を元に戻す");
+      await expect($(".menu")).not.toExist();
+      await expect($('.pop[role="alertdialog"]')).toBeDisplayed();
+      await expect($('.pop[role="alertdialog"] p')).toHaveText(words);
+      expect(await textsOf('.pop[role="alertdialog"] button')).toEqual(["元に戻す", "キャンセル"]);
+      expect(await browser.execute(() => document.activeElement?.textContent)).toBe("キャンセル");
+      expect(await textsOf('.pop[role="alertdialog"] h3')).toEqual(["変更を元に戻しますか？"]);
+    };
+    // A file that is changed is put back, a new one is deleted, and the words of a folder say that it may hold new files unless all of them are.
+    await asked("a.rs", "a.rs の変更を捨てて、HEAD の状態に戻します。元に戻せません。");
+    await pressedOnce("キャンセル");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await asked("b.log", "b.log は新しいファイルです。元に戻すと完全に削除します。元に戻せません。");
+    await browser.keys("Escape");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await asked("src", "src の中の変更をすべて捨てて、HEAD の状態に戻します。新しいファイルは完全に削除します。元に戻せません。");
+    await pressedOnce("キャンセル");
+    await asked("target", "target の中の変更は、すべて新しいファイルです。元に戻すと完全に削除します。元に戻せません。");
+    // A press elsewhere (the page's own, as WebDriver's click sends none).
+    await browser.execute(
+      (once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.getElementById("orca-files-bar")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+      },
+      onceId(),
+    );
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(revert)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
+  it("puts back on 「元に戻す」 with the worktree and the path, then reads the files and their marks again: a new file that was put back is gone (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const revert = await mock("orca_files_revert", null);
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["a.rs", false]]));
+    const marks = await mock("orca_files_changes", [change("src", "changed"), change("target", "new"), change("a.rs", "changed")]);
+    expect(await rightClickRow("b.log")).toBe(true);
+    await pickItem("変更を元に戻す");
+    await pressedOnce("元に戻す");
+    expect(await waitForCalls(revert)).toEqual([rootArgs(["b.log"])]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    expect(await waitForCalls(marks)).toEqual([rootArgs(["src", "target", "a.rs"])]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    expect(await names()).toEqual(["src", "target", "a.rs"]);
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await expect($(CARDS)).not.toExist();
+    // A folder goes in one call with its own path.
+    const second = await mock("orca_files_revert", null);
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem("変更を元に戻す");
+    await pressedOnce("元に戻す");
+    expect(await waitForCalls(second)).toEqual([rootArgs(["src"])]);
+  });
+
+  it("shows Orca's message when a write is refused, and reads the files again all the same (A-44)", async () => {
+    await git();
+    await waitForCount(".orca-file[data-change]", 4);
+    const stage = await mock("orca_files_stage", rejects("Orca がエラーを返しました（locked）"));
+    const list = await mock("orca_files_list", root());
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ステージ");
+    await waitForCalls(stage);
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（locked）");
+    await waitForCalls(list);
+    const revert = await mock("orca_files_revert", rejects("Orca がエラーを返しました（merge）"));
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("変更を元に戻す");
+    await pressedOnce("元に戻す");
+    await waitForCalls(revert);
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（merge）");
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
   // A-18: the selection. A press on a row selects it (⌘ adds it or takes it off, Shift selects from the row pressed before), the selected rows are drawn in the accent color, and the delete takes all of them.
   // A press as the page gets it, with ⌘ or Shift held (the WebDriver click holds none).
   const press = (path: string, keys: { metaKey?: boolean; shiftKey?: boolean } = {}) =>
