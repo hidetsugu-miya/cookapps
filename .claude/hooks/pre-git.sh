@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI・E2E・レビューの合格記録を確かめる（CI と E2E の検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
-# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、check-ci.sh、check-e2e.sh、release-only-diff.sh、range-check.sh、check-range-check.sh、record-review.sh、plan-release*.py、nightly-limit.sh、use-worktree.sh、ensure-deps.sh、handover.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
+# PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI とレビューの合格記録を確かめ、release/next の push は E2E の記録も確かめる（検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
+# E2E は機能の PR では回さず、Release PR の準備のときに 1 回回す（#1023）。機能のブランチの push は E2E の記録を見ない。
+# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、check-ci.sh、check-e2e.sh、check-release-e2e.sh、release-only-diff.sh、range-check.sh、check-range-check.sh、record-review.sh、plan-release*.py、nightly-limit.sh、use-worktree.sh、ensure-deps.sh、handover.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
 # 検査する checkout は hook 入力の cwd（先頭の cd DIR && か cd DIR; と、git の -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
@@ -67,43 +68,39 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   fi
   grep -q -E '^\.claude/(hooks/(guard-e2e|hook-log)\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
     && gate "guard-e2e.sh の自己テスト" "$top/.claude/tools/check-guard-e2e.sh"
-  grep -q -E '^\.claude/(hooks/(pre-git|hook-log)\.sh|tools/(check-pre-git|check-ci|check-e2e|release-only-diff)\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/(hooks/(pre-git|hook-log)\.sh|tools/(check-pre-git|check-ci|check-e2e|check-release-e2e|release-only-diff)\.sh)$' <<< "$changed" \
     && gate "pre-git.sh の自己テスト" "$top/.claude/tools/check-pre-git.sh"
-  grep -q -E '^\.claude/(hooks/record-review\.sh|tools/(range-check|check-range-check|check-ci|check-e2e)\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/(hooks/record-review\.sh|tools/(range-check|check-range-check|check-ci)\.sh)$' <<< "$changed" \
     && gate "range-check.sh の自己テスト" "$top/.claude/tools/check-range-check.sh"
   grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree|ensure-deps|handover)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"
-  # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and the pass record, written by release-verifier or range-check.sh (.claude/rules/review.md).
+  # New commits need run-ci.sh's passing record for HEAD and the pass record, written by release-verifier or range-check.sh (.claude/rules/review.md).
+  # A push of release/next also needs run-e2e.sh's passing record (check-release-e2e.sh): E2E runs once, when the Release PR is prepared, not for a feature's PR (#1023).
   # A push with no new commit (a tag on a commit already on the remote) needs none of them.
-  # None of the three is needed on HEAD when only the release work (README, CHANGELOG, docs) comes after an earlier commit that has them (#931).
-  # That earlier commit is the newest of the range with both passing CI and E2E records (for the review: the newest with a pass record), or else the range base.
+  # Neither the CI record nor the pass record is needed on HEAD when only the release work (README, CHANGELOG, docs) comes after an earlier commit that has them (#931).
+  # That earlier commit is the newest of the range with a passing CI record (for the review: the newest with a pass record), or else the range base.
   if ! git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1 || [ -n "$(git rev-list -n 1 "$range")" ]; then
     main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
     t=$(hook_log_now)
-    skip_ci=0
-    records_ok=0
-    # HEAD's own records are checked once here; when both pass, the gates below do not run the two checks again.
-    if "$main/.claude/tools/check-ci.sh" >/dev/null 2>&1 && "$main/.claude/tools/check-e2e.sh" >/dev/null 2>&1; then
-      records_ok=1
+    if "$main/.claude/tools/check-ci.sh" >/dev/null 2>&1; then
+      hook_log_gate "CI" "$t" 0
     else
       base=""
       for c in $(git rev-list "$range" 2>/dev/null); do
         jq -e --arg sha "$c" '.sha == $sha and .clean == true and .passed == true' "$main/.claude/ci/$c" >/dev/null 2>&1 \
-          && jq -e --arg sha "$c" '.sha == $sha and .clean == true and .passed == true' "$main/.claude/e2e/$c" >/dev/null 2>&1 \
           && { base=$c; break; }
       done
       # The range base is already on the remote, so it passed this gate: release work on top of it (a Release PR) needs no record of its own.
       [ -n "$base" ] || base="${range%..*}"
-      [ -n "$base" ] && "$main/.claude/tools/release-only-diff.sh" "$base" HEAD >/dev/null 2>&1 && skip_ci=1
+      if [ -n "$base" ] && "$main/.claude/tools/release-only-diff.sh" "$base" HEAD >/dev/null 2>&1; then
+        hook_log_gate "CI(リリース作業だけ)" "$t" 0
+      else
+        gate "CI" "$main/.claude/tools/check-ci.sh"
+      fi
     fi
-    if [ "$records_ok" -eq 1 ]; then
-      hook_log_gate "CI" "$t" 0
-      hook_log_gate "E2E" "$t" 0
-    elif [ "$skip_ci" -eq 1 ]; then
-      hook_log_gate "CI・E2E(リリース作業だけ)" "$t" 0
-    else
-      gate "CI" "$main/.claude/tools/check-ci.sh"
-      gate "E2E" "$main/.claude/tools/check-e2e.sh"
+    # E2E is asked only of the Release PR's branch. The range base is no way out here: origin/main has not passed E2E.
+    if [ "$(git symbolic-ref -q --short HEAD)" = "release/next" ]; then
+      gate "E2E" "$main/.claude/tools/check-release-e2e.sh"
     fi
     t=$(hook_log_now)
     if [ ! -f "$main/.claude/reviews/$(git rev-parse HEAD)" ]; then

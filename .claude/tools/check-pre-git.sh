@@ -17,7 +17,7 @@ git clone -q "$tmp/remote.git" "$tmp/main" 2>/dev/null || exit 2
 main="$tmp/main"
 mkdir -p "$main/src-tauri" "$main/.claude/tools"
 printf '[package]\nname = "x"\nversion = "0.0.0"\n' > "$main/src-tauri/Cargo.toml"
-cp "$tools/check-ci.sh" "$tools/check-e2e.sh" "$tools/release-only-diff.sh" "$main/.claude/tools/"
+cp "$tools/check-ci.sh" "$tools/check-e2e.sh" "$tools/check-release-e2e.sh" "$tools/release-only-diff.sh" "$main/.claude/tools/"
 git -C "$main" checkout -q -b main
 git -C "$main" add -A
 git -C "$main" commit -q -m init
@@ -58,10 +58,9 @@ check 2 "main で起動し main から git -C で相対の worktree を push（�
 check 2 "main で起動し cd で worktree に移って push（記録なし）" "$main" "cd $work && git push -u origin HEAD"
 check 2 "main で起動し cd の相対パスで worktree に移って push（記録なし）" "$tmp" "cd work; git push -u origin HEAD"
 
-# 通す: 記録がそろった worktree と、新しいコミットの無い main
+# 通す: CI と合格の記録がそろった機能のブランチ（E2E の記録は無い。E2E は release/next だけが求める、#1023）と、新しいコミットの無い main
 mkdir -p "$main/.claude/ci" "$main/.claude/e2e" "$main/.claude/reviews"
 jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$sha"
-jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$sha"
 check_gate "レビュー" "main で起動し worktree で push（合格記録なし、ゲートの行が残る）" "$work" "git push -u origin HEAD"
 : > "$main/.claude/reviews/$sha"
 # check_logged_pass <ゲート名> <名前> <hook 入力の cwd> <コマンド>: exit 0 で通り、ゲートの行が exit=0 でログに残ることを確かめる
@@ -76,8 +75,8 @@ check_logged_pass() {
   else echo "ok   $name"; fi
 }
 check_logged_pass "レビュー" "main で起動し worktree で push（記録あり、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
-check_logged_pass "CI" "main で起動し worktree で push（CI・E2E の記録あり、CI のゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
-check_logged_pass "E2E" "main で起動し worktree で push（CI・E2E の記録あり、E2E のゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+check_logged_pass "CI" "機能のブランチで push（CI の記録あり、E2E の記録なし、CI のゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+if cat "$tmp"/hook-logs/hooks-*.log 2>/dev/null | grep -q -F "gate=E2E"$'\t'; then echo "FAIL 機能のブランチで push（E2E のゲートが走った）"; fail=1; else echo "ok   機能のブランチで push（E2E のゲートは走らない）"; fi
 echo dirty > "$work/dirty.txt"
 git -C "$work" add dirty.txt
 check 2 "main で起動し worktree で push（記録あり、未コミットの変更あり）" "$work" "git push -u origin HEAD"
@@ -92,24 +91,24 @@ else echo "ok   未コミットの変更ありで tag と push（別のコマン
 git -C "$work" reset -q dirty.txt
 rm "$work/dirty.txt"
 
-# リリース作業だけの新しいコミット: 合格記録も CI・E2E の記録もなくても通り、CI・E2E とレビューのゲートの行が exit=0 で残る（#931）
+# リリース作業だけの新しいコミット: 合格記録も CI の記録もなくても通り、CI とレビューのゲートの行が exit=0 で残る（#931）
 echo "## v0.0.1" > "$work/CHANGELOG.md"
 git -C "$work" add CHANGELOG.md
 git -C "$work" commit -q -m "release"
-check_logged_pass "CI・E2E\\(リリース作業だけ\\)" "リリース作業だけの新しいコミットで push（CI・E2E の記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+check_logged_pass "CI\\(リリース作業だけ\\)" "リリース作業だけの新しいコミットで push（CI の記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
 check_logged_pass "レビュー" "リリース作業だけの新しいコミットで push（合格記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
-# 記録のあるコミットから HEAD までにリリース作業の外の変更があれば、CI と E2E の記録のない HEAD は止まる
+# 記録のあるコミットから HEAD までにリリース作業の外の変更があれば、CI の記録のない HEAD は止まる
 echo change2 > "$work/change2.txt"
 git -C "$work" add change2.txt
 git -C "$work" commit -q -m "change2"
-check_gate "CI" "リリース作業の外の変更を含む新しいコミットで push（CI・E2E の記録なし）" "$work" "git push -u origin HEAD" "CI の記録が無いか"
+check_gate "CI" "機能のブランチで CI の記録がなく、リリース作業だけでもない新しいコミットで push" "$work" "git push -u origin HEAD" "CI の記録が無いか"
 git -C "$work" reset -q --hard HEAD~1
 # 記録のあるコミットが範囲になく、範囲の基点から HEAD までがリリース作業だけでも通る（基点はリモートにある）
 git -C "$work" push -q -u origin HEAD 2>/dev/null || { echo "FAIL リモートへの push の準備"; fail=1; }
 echo "## v0.0.2" > "$work/CHANGELOG.md"
 git -C "$work" add CHANGELOG.md
 git -C "$work" commit -q -m "release 2"
-check_logged_pass "CI・E2E\\(リリース作業だけ\\)" "範囲の基点からリリース作業だけの新しいコミットで push（範囲に記録なし）" "$work" "git push origin HEAD"
+check_logged_pass "CI\\(リリース作業だけ\\)" "範囲の基点からリリース作業だけの新しいコミットで push（範囲に記録なし）" "$work" "git push origin HEAD"
 check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"
 check 0 "無関係なコマンド" "$work" "git status"
 
@@ -118,4 +117,30 @@ echo main-change > "$main/main-change.txt"
 git -C "$main" add main-change.txt
 git -C "$main" commit -q -m "main change"
 check 2 "main の checkout で push（記録なし）" "$main" "git push origin main"
+
+# release/next（Release PR のブランチ）は E2E の記録も求める（#1023）。origin/main は init のコミットで、E2E を通っていない
+git -C "$main" worktree add -q -b release/next "$tmp/rel" origin/main 2>/dev/null || { echo "FAIL release/next の worktree の準備"; fail=1; }
+rel="$tmp/rel"
+echo a > "$rel/a.txt"
+git -C "$rel" add a.txt
+git -C "$rel" commit -q -m "feature a"
+a=$(git -C "$rel" rev-parse HEAD)
+jq -n --arg sha "$a" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$a"
+: > "$main/.claude/reviews/$a"
+check_gate "E2E" "release/next で push（E2E の記録なし、ゲート E2E で止まる）" "$rel" "git push -u origin HEAD" "E2E の記録"
+jq -n --arg sha "$a" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$a"
+check_logged_pass "E2E" "release/next で push（HEAD の E2E の記録あり、E2E のゲートの行が exit=0 で残る）" "$rel" "git push -u origin HEAD"
+echo "## v0.0.3" > "$rel/CHANGELOG.md"
+git -C "$rel" add CHANGELOG.md
+git -C "$rel" commit -q -m "release 3"
+check_logged_pass "E2E" "release/next で push（E2E の記録のあるコミットのあとがリリース作業だけ、E2E のゲートの行が exit=0 で残る）" "$rel" "git push -u origin HEAD"
+echo b > "$rel/b.txt"
+git -C "$rel" add b.txt
+git -C "$rel" commit -q -m "feature b"
+b=$(git -C "$rel" rev-parse HEAD)
+jq -n --arg sha "$b" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$b"
+: > "$main/.claude/reviews/$b"
+check_gate "E2E" "release/next で push（E2E の記録のあるコミットのあとにリリース作業の外の変更がある）" "$rel" "git push -u origin HEAD" "リリース作業の外の変更"
+rm "$main/.claude/e2e/$a"
+check_gate "E2E" "release/next で push（範囲のどのコミットにも E2E の記録がない。origin/main への退避はしない）" "$rel" "git push -u origin HEAD" "E2E の記録"
 exit $fail
