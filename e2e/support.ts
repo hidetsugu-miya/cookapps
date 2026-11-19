@@ -318,6 +318,10 @@ export function weekOfToday(firstDay = 0): Week {
     description: null,
     attendees: 0,
     accepted: 0,
+    allDay: false,
+    start: "",
+    end: "",
+    guests: [],
     ...detail,
   });
   const detail: Partial<Info> = {
@@ -340,6 +344,15 @@ export function weekOfToday(firstDay = 0): Week {
     calendarFailed: [],
   };
 }
+
+// A local date and time ("YYYY-MM-DD", "HH:MM") as RFC 3339 with the offset of that moment, as the form of the calendar sends it.
+export const rfc = (date: string, time: string) => {
+  const [y, m, d] = date.split("-").map(Number);
+  const [h, mi] = time.split(":").map(Number);
+  const offset = -new Date(y, m - 1, d, h, mi).getTimezoneOffset();
+  const p = (n: number) => String(Math.abs(n)).padStart(2, "0");
+  return `${date}T${time}:00${offset < 0 ? "-" : "+"}${p(Math.floor(Math.abs(offset) / 60))}:${p(offset % 60)}`;
+};
 
 // The calendars of the account: "Work" is its own with a color of its own, "Holidays" is another one (the calendars of `weekOfToday`'s events) and takes the account's color.
 export const calendarChoices = (): CalendarChoices => ({

@@ -416,7 +416,9 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .cal-create textarea:focus { border-color: var(--accent); }
 .cal-create-error { flex: 1; min-width: 0; color: var(--danger); font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
 .cal-create-error .text-btn { margin-left: 8px; }
-.cal-create .text-btn:disabled { opacity: .4; cursor: default; }
+.cal-create .text-btn:disabled, .cal-pop-confirm .text-btn:disabled { opacity: .4; cursor: default; }
+.cal-pop-confirm { display: flex; flex-direction: column; gap: 12px; }
+.cal-pop-confirm p { margin: 0; overflow-wrap: anywhere; }
 .cal-now { position: absolute; z-index: 2; pointer-events: none; }
 .cal-now-line { left: 0; right: 0; border-top: 2px solid #ff9f43; }
 .cal-now-line::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ff9f43; }

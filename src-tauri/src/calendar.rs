@@ -31,7 +31,7 @@ const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me
 /// The `fields` of an event list: what `list_events` needs, and what the detail of the week adds.
 const EVENT_FIELDS: &str =
     "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))";
-const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(id,summary,iCalUID,start,end,description,location,hangoutLink,organizer(self),attendees(self,responseStatus,resource))";
+const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(id,summary,iCalUID,start,end,description,location,hangoutLink,organizer(self),attendees(self,responseStatus,resource,email))";
 const CALENDARS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 // shortcut: past this many pages (2500 events of one calendar) the rest is dropped, upgrade if a week ever needs more.
 const MAX_PAGES: usize = 10;
@@ -71,6 +71,8 @@ struct Attendee {
     /// A room or other resource, not a person.
     #[serde(default)]
     resource: bool,
+    #[serde(default)]
+    email: String,
 }
 
 /// How many people are invited (rooms left out), and how many of them accepted.
@@ -237,12 +239,20 @@ struct RawEvent {
     /// Invited people (rooms left out), and how many of them accepted.
     attendees: u32,
     accepted: u32,
+    /// The addresses of the invited besides the user (a room is among them), which the form of C-7 starts its guests with.
+    guests: Vec<String>,
     when: When,
 }
 
 impl RawEvent {
     fn from_api(e: ApiEvent, account: &str, cal: &CalendarEntry) -> Option<Self> {
         let (attendees, accepted) = attendee_counts(&e.attendees);
+        let guests = e
+            .attendees
+            .iter()
+            .filter(|a| !a.is_self && !a.email.is_empty())
+            .map(|a| a.email.clone())
+            .collect();
         Some(Self {
             when: when(&e.start, &e.end)?,
             response: e
@@ -264,6 +274,7 @@ impl RawEvent {
             description: non_empty(e.description).map(clip_description),
             attendees,
             accepted,
+            guests,
         })
     }
 }
@@ -352,11 +363,25 @@ pub struct Info {
     attendees: u32,
     #[serde(default)]
     accepted: u32,
+    /// The whole event as the form of C-5 holds it (`NewEvent`: all day, the dates or the times, the guests), which the edit of C-7 starts from.
+    /// Absent in a cache an older version wrote (`false`, empty text, none); such an event is not `editable` either.
+    #[serde(default)]
+    all_day: bool,
+    /// A date for an all-day event, else an RFC 3339 time.
+    #[serde(default)]
+    start: String,
+    /// Same form as `start`; the last day for an all-day event.
+    #[serde(default)]
+    end: String,
+    /// The addresses of the invited besides the user.
+    #[serde(default)]
+    guests: Vec<String>,
 }
 
 impl Info {
     /// `tz` is the zone the times are shown in.
     fn new<Tz: TimeZone>(e: &RawEvent, tz: &Tz) -> Self {
+        let (all_day, start, end) = form_of(&e.when);
         Self {
             summary: e.summary.clone(),
             event_id: e.event_id.clone(),
@@ -372,6 +397,10 @@ impl Info {
             description: e.description.clone(),
             attendees: e.attendees,
             accepted: e.accepted,
+            all_day,
+            start,
+            end,
+            guests: e.guests.clone(),
         }
     }
 }
@@ -435,17 +464,22 @@ pub struct EventItem {
     end: String,
 }
 
+/// Whether the event is all day, and its start and end as the screen and `list_events` give them: a date for an all-day event (`end` the last day, included), else an RFC 3339 time.
+fn form_of(when: &When) -> (bool, String, String) {
+    match when {
+        // The API's end date is exclusive.
+        When::AllDay { start, end } => (
+            true,
+            start.to_string(),
+            (*end - Duration::days(1)).max(*start).to_string(),
+        ),
+        When::Timed { start, end } => (false, start.to_rfc3339(), end.to_rfc3339()),
+    }
+}
+
 impl From<&RawEvent> for EventItem {
     fn from(e: &RawEvent) -> Self {
-        let (all_day, start, end) = match &e.when {
-            // The API's end date is exclusive.
-            When::AllDay { start, end } => (
-                true,
-                start.to_string(),
-                (*end - Duration::days(1)).max(*start).to_string(),
-            ),
-            When::Timed { start, end } => (false, start.to_rfc3339(), end.to_rfc3339()),
-        };
+        let (all_day, start, end) = form_of(&e.when);
         Self {
             account: e.account.clone(),
             calendar: e.calendar.clone(),
@@ -2126,6 +2160,7 @@ mod tests {
             description: None,
             attendees: 0,
             accepted: 0,
+            guests: Vec::new(),
             when: When::AllDay {
                 start: date("2026-01-01"),
                 end: date("2026-01-02"),
@@ -2149,6 +2184,10 @@ mod tests {
             description: None,
             attendees: 0,
             accepted: 0,
+            all_day: false,
+            start: String::new(),
+            end: String::new(),
+            guests: Vec::new(),
         }
     }
 
@@ -3753,6 +3792,40 @@ mod tests {
     }
 
     #[test]
+    fn the_week_carries_the_event_as_the_form_starts_from_it() {
+        let api = |json: &str| serde_json::from_str::<ApiEvent>(json).unwrap();
+        let info = |e: ApiEvent| {
+            Info::new(
+                &RawEvent::from_api(e, "a@example.com", &cal(None)).unwrap(),
+                &jst(),
+            )
+        };
+        // The guests are the invited besides the user, a room among them; the user's own entry and one with no address are left out.
+        let timed = info(api(
+            r#"{"id":"e","start":{"dateTime":"2026-11-20T13:00:00+09:00"},"end":{"dateTime":"2026-11-20T14:30:00+09:00"},
+                "attendees":[{"email":"me@example.com","self":true},{"email":"b@example.com"},
+                {"email":"room@resource.calendar.google.com","resource":true},{}]}"#,
+        ));
+        assert!(!timed.all_day);
+        assert_eq!(timed.start, "2026-11-20T13:00:00+09:00");
+        assert_eq!(timed.end, "2026-11-20T14:30:00+09:00");
+        assert_eq!(
+            timed.guests,
+            ["b@example.com", "room@resource.calendar.google.com"]
+        );
+        // An all-day event ends on its last day, not on the day after as the API says.
+        let all_day = info(api(
+            r#"{"id":"e","start":{"date":"2026-11-20"},"end":{"date":"2026-11-23"}}"#,
+        ));
+        assert!(all_day.all_day);
+        assert_eq!(
+            (all_day.start.as_str(), all_day.end.as_str()),
+            ("2026-11-20", "2026-11-22")
+        );
+        assert!(all_day.guests.is_empty());
+    }
+
+    #[test]
     fn a_kept_week_of_an_older_version_has_no_mark_and_cannot_be_changed() {
         let old = r##"{"summary":"a","color":null,"account":"a@example.com"}"##;
         let info: Info = serde_json::from_str(old).unwrap();
@@ -3763,6 +3836,15 @@ mod tests {
                 info.editable
             ),
             ("", "", false)
+        );
+        assert_eq!(
+            (
+                info.all_day,
+                info.start.as_str(),
+                info.end.as_str(),
+                info.guests.len()
+            ),
+            (false, "", "", 0)
         );
     }
 

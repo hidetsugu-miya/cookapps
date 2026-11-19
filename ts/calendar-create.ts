@@ -2,9 +2,11 @@
 // of the frame of the detail of C-2 (ts/calendar-detail.ts). The popover holds the form; "保存" calls `calendar_create_event`, closes it and has the week read again.
 // It closes as the detail does: ✕, Escape, a press elsewhere, a week change and a screen change. What was written is lost then, with the draft, and nothing asks first.
 // A scroll or a resize of the week moves the popover with the draft instead of closing it, so that what was written stays.
+// C-7: the same form edits an event. `openEdit` starts it with the event's values, beside the event itself (no draft), with the calendar shown and not changeable, and "保存" calls `calendar_update_event`.
+import type { Info } from "./bindings/Info";
 import type { NewEvent } from "./bindings/NewEvent";
 import { addAccount } from "./accounts.js";
-import { closeDetail, place, row } from "./calendar-detail.js";
+import { closeDetail, eventNode, place, row } from "./calendar-detail.js";
 import { $, composing, tag } from "./dom.js";
 import { showFailure } from "./error-card.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2 } from "./format.js";
@@ -67,7 +69,7 @@ function defaultChoice(list: Choice[]) {
 }
 
 // A line of the form's error that asks `account` to log in again, with the button that does it.
-function reloginLine(account: string, text: string) {
+export function reloginLine(account: string, text: string) {
   const login = tag("button", "text-btn", "再ログイン");
   login.type = "button";
   login.onclick = () => addAccount(account, login);
@@ -78,10 +80,34 @@ function reloginLine(account: string, text: string) {
 
 const colorOf = (c: Choice) => c.color || avatarColor(c.account);
 
-// The open form, and what to read from it. The first day of the week shown is what the draft is placed by.
-let open: { pop: HTMLElement; fields: () => Fields } | null = null;
+// The open form, and what to read from it; `edit` is set when it edits `info`, beside `node` (the event as the week draws it now), with the color of its calendar.
+// The first day of the week shown is what the draft is placed by.
+interface Editing {
+  info: Info;
+  node: HTMLElement;
+  color: string;
+}
+let open: { pop: HTMLElement; fields: () => Fields; edit: Editing | null } | null = null;
 let shownWeek = "";
-let onCreated: () => void = () => {};
+let onChanged: () => void = () => {};
+
+// What a form starts with.
+interface Initial {
+  title: string;
+  allDay: boolean;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  guests: string[];
+  meet: boolean;
+  description: string;
+}
+
+// The week read again after a save, or after the delete of the detail (C-7).
+export function eventChanged() {
+  onChanged();
+}
 
 const parseTime = (t: string) => {
   const [h, m] = t.split(":").map(Number);
@@ -93,7 +119,8 @@ const dayOf = (date: string) => Math.round((addDays(date, 0).getTime() - addDays
 // The draft in the week: a box in the hour columns, or a chip in each day of the all-day band that the event covers. Drawn again with the week, since the week's draw drops it.
 function drawDraft() {
   for (const n of document.querySelectorAll(".cal-draft")) n.remove();
-  if (!open) return;
+  // An edit has the event itself in the week, not a draft.
+  if (!open || open.edit) return;
   const f = open.fields();
   const name = f.title || "(件名なし)";
   const first = dayOf(f.startDate);
@@ -126,11 +153,22 @@ function drawDraft() {
 // Called when the week is drawn: the draft of an open form goes into the new draw.
 export function redrawDraft(weekStart: string) {
   shownWeek = weekStart;
+  if (open?.edit) return followEdit(open.edit);
   drawDraft();
+}
+
+// A form that edits an event goes beside the event of the new draw, or closes when the draw has no such event.
+function followEdit(edit: Editing) {
+  const node = eventNode(edit.info);
+  if (!node) return closeCreate();
+  edit.node = node;
+  node.classList.add("selected");
+  if (open) place(open.pop, node);
 }
 
 export function closeCreate() {
   if (!open) return;
+  open.edit?.node.classList.remove("selected");
   open.pop.remove();
   open = null;
   for (const n of document.querySelectorAll(".cal-draft")) n.remove();
@@ -165,21 +203,61 @@ function rfc3339(date: string, time: string) {
 
 // Opens the form for the empty place of `day` (0 to 6) of the week that starts on `weekStart`: the hour that starts at `startMin`, or the all-day band.
 export function openCreate(weekStart: string, day: number, allDay: boolean, startMin: number) {
-  closeDetail();
-  closeCreate();
-  shownWeek = weekStart;
   const date = isoDate(addDays(weekStart, day));
   const start = new Date(addDays(date, 0).getTime());
   start.setMinutes(startMin);
   const end = new Date(start.getTime() + 3600000);
+  shownWeek = weekStart;
+  openForm(
+    {
+      title: "",
+      allDay,
+      startDate: date,
+      startTime: clock(start),
+      endDate: allDay ? date : isoDate(end),
+      endTime: clock(end),
+      guests: [],
+      meet: false,
+      description: "",
+    },
+    null,
+  );
+}
+
+// Opens the form on the event `info` (C-7), beside `node`, with `color` the color of its calendar.
+export function openEdit(info: Info, color: string, node: HTMLElement) {
+  // The event is in the week as it was drawn: a timed event as an RFC 3339 time, in this Mac's zone here, and an all-day event as dates.
+  const from = new Date(info.start);
+  const to = new Date(info.end);
+  openForm(
+    {
+      title: info.summary,
+      allDay: info.allDay,
+      startDate: info.allDay ? info.start : isoDate(from),
+      startTime: info.allDay ? "00:00" : clock(from),
+      endDate: info.allDay ? info.end : isoDate(to),
+      endTime: info.allDay ? "00:00" : clock(to),
+      guests: info.guests,
+      meet: info.meetUrl !== null,
+      description: info.description ?? "",
+    },
+    { info, node, color },
+  );
+}
+
+// The form of C-5 and C-7: `edit` is null for a new event, else the event to rewrite.
+function openForm(init: Initial, edit: Editing | null) {
+  closeDetail();
+  closeCreate();
 
   const pop = tag("div", "pop cal-pop cal-create");
   pop.setAttribute("role", "dialog");
-  pop.setAttribute("aria-label", "新しい予定");
+  pop.setAttribute("aria-label", edit ? "予定を編集" : "新しい予定");
   pop.tabIndex = -1;
 
   const title = tag("input", "cal-create-title");
   title.type = "text";
+  title.value = init.title;
   title.placeholder = "タイトルを追加";
   title.setAttribute("aria-label", "タイトル");
   title.autocomplete = "off";
@@ -194,13 +272,13 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   const head = tag("div", "cal-pop-head");
   head.append(dot, titleBox, close);
 
-  const startDate = dateField("開始日", date);
-  const startTime = timeField("開始時刻", clock(start));
-  const endDate = dateField("終了日", allDay ? date : isoDate(end));
-  const endTime = timeField("終了時刻", clock(end));
+  const startDate = dateField("開始日", init.startDate);
+  const startTime = timeField("開始時刻", init.startTime);
+  const endDate = dateField("終了日", init.endDate);
+  const endTime = timeField("終了時刻", init.endTime);
   const allDayBox = document.createElement("input");
   allDayBox.type = "checkbox";
-  allDayBox.checked = allDay;
+  allDayBox.checked = init.allDay;
   const allDayLabel = tag("label", "cal-create-allday");
   allDayLabel.append(allDayBox, "終日");
   const startLine = tag("div", "cal-create-when");
@@ -211,7 +289,7 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   when.append(startLine, endLine, allDayLabel);
 
   // The guests: an address typed and ended with Enter, a comma or leaving the field becomes a chip (as the recipients of a mail do), and Rust checks the addresses when the event is saved.
-  const guests: string[] = [];
+  const guests = [...init.guests];
   const guestInput = tag("input", "");
   guestInput.type = "text";
   guestInput.placeholder = "ゲストを追加";
@@ -255,7 +333,7 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   guestInput.onblur = commitGuest;
 
   // The Meet is a button until it is pressed, then a card that takes it off again; its URL is made when the event is saved.
-  let meet = false;
+  let meet = init.meet;
   const meetBox = tag("div", "cal-create-meet");
   const drawMeet = (focus: boolean) => {
     if (meet) {
@@ -287,6 +365,7 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   const description = tag("textarea", "cal-create-desc");
   description.placeholder = "説明を追加";
   description.setAttribute("aria-label", "説明");
+  description.value = init.description;
   description.rows = 3;
 
   // The calendars arrive after the form is open (the first time); "保存" waits for them.
@@ -296,6 +375,7 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   select.disabled = true;
   const chosen = () => choices[select.selectedIndex] as Choice | undefined;
   const color = () => {
+    if (edit) return edit.color;
     const c = chosen();
     return c ? colorOf(c) : "var(--accent)";
   };
@@ -331,14 +411,13 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
     endTime: endTime.value,
     color: color(),
   });
-  const here = { pop, fields };
+  const here = { pop, fields, edit };
   open = here;
 
   // The end follows the start by the same length (as a calendar does), unless the start is not a complete date and time.
   const startAt = () => moment(startDate.value, allDayBox.checked ? "00:00" : startTime.value);
   const endAt = () => moment(endDate.value, allDayBox.checked ? "00:00" : endTime.value);
-  let span = end.getTime() - start.getTime();
-  if (allDay) span = 0;
+  let span = 0;
   const syncAllDay = () => {
     startTime.hidden = endTime.hidden = allDayBox.checked;
     span = Math.max(endAt().getTime() - startAt().getTime(), 0);
@@ -368,10 +447,12 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   syncAllDay();
 
   let saving = false;
+  const source = edit ? "calendar-edit" : "calendar-create";
   const showError = (text: string) => error.replaceChildren(text);
   save.onclick = async () => {
     commitGuest();
-    const c = chosen();
+    // The calendar of an edit is the event's own.
+    const c = edit ? { account: edit.info.account, id: edit.info.calendarId } : chosen();
     if (saving || !c) return;
     const f = fields();
     const event: NewEvent = {
@@ -389,28 +470,40 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
     save.disabled = true;
     error.replaceChildren();
     try {
-      const created = await invoke("calendar_create_event", { event });
-      if (created === null) {
-        // The account has not granted the permission to create events yet: log in again, as the week asks for it.
-        const text = `${c.account} は予定を作るため再ログインが必要です`;
+      const saved = edit
+        ? await invoke("calendar_update_event", { event: { ...event, eventId: edit.info.eventId } })
+        : await invoke("calendar_create_event", { event });
+      if (saved === null) {
+        // The account has not granted the permission to create or change events yet: log in again, as the week asks for it.
+        const text = `${c.account} は予定を${edit ? "書き換える" : "作る"}ため再ログインが必要です`;
         // A form closed meanwhile has no place for it, so it goes to a card.
         if (open === here) error.replaceChildren(reloginLine(c.account, text));
-        else showFailure("calendar-create", text);
+        else showFailure(source, text);
         return;
       }
       if (open === here) closeCreate();
-      onCreated();
+      onChanged();
     } catch (e) {
       // What was written stays. A form closed meanwhile has no place for the error, so it goes to a card.
       if (open === here) showError(String(e));
-      else showFailure("calendar-create", e);
+      else showFailure(source, e);
     } finally {
       saving = false;
-      save.disabled = chosen() === undefined;
+      save.disabled = !edit && chosen() === undefined;
     }
   };
 
-  pop.style.setProperty("--c", "var(--accent)");
+  pop.style.setProperty("--c", color());
+  drawGuests();
+  if (edit) {
+    // The calendar is shown and cannot be changed, so no list is read.
+    select.replaceChildren(new Option([edit.info.calendar || edit.info.calendarId, edit.info.account].filter(Boolean).join(" ・ ")));
+    save.disabled = false;
+    edit.node.classList.add("selected");
+    place(pop, edit.node);
+    title.focus({ preventScroll: true });
+    return;
+  }
   drawDraft();
   // A date outside the week has no draft to stand beside.
   if (!pop.isConnected) document.body.append(pop);
@@ -441,8 +534,8 @@ export function openCreate(weekStart: string, day: number, allDay: boolean, star
   );
 }
 
-export function initCalendarCreate(created: () => void) {
-  onCreated = created;
+export function initCalendarCreate(changed: () => void) {
+  onChanged = changed;
   // A press elsewhere closes it; the draft is part of it, and a press on an event or a chip is the detail's, which closes it too.
   document.addEventListener("pointerdown", (e) => {
     if (open && !(e.target as Element).closest(".cal-create, .cal-draft")) closeCreate();
@@ -450,10 +543,10 @@ export function initCalendarCreate(created: () => void) {
   document.addEventListener("keydown", (e) => {
     if (open && e.key === "Escape" && !composing(e)) closeCreate();
   });
-  // The draft is already in the week, so the popover is only put beside it again; the draft is drawn again by a change of the form and by the week's draw.
+  // The draft (or the event, for an edit) is already in the week, so the popover is only put beside it again; the draft is drawn again by a change of the form and by the week's draw.
   const follow = () => {
-    const draft = document.querySelector<HTMLElement>(".cal-draft");
-    if (open && draft) place(open.pop, draft);
+    const anchor = open?.edit ? open.edit.node : document.querySelector<HTMLElement>(".cal-draft");
+    if (open && anchor) place(open.pop, anchor);
   };
   $("cal-scroll").addEventListener("scroll", follow);
   window.addEventListener("resize", follow);

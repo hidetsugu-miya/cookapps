@@ -182,6 +182,10 @@ function week(): Week {
     description: null,
     attendees: 0,
     accepted: 0,
+    allDay: false,
+    start: "",
+    end: "",
+    guests: [],
     ...detail,
   });
   const ev = (day: number, from: string, to: string, summary: string, detail: Partial<Info> = {}, col = 0, cols = 1) => {

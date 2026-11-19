@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
+import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, rfc, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -652,15 +652,6 @@ describe("calendar: create an event", () => {
       label,
       value,
     );
-
-  // A local time as RFC 3339 with that moment's offset.
-  const rfc = (date: string, time: string) => {
-    const [y, m, d] = date.split("-").map(Number);
-    const [h, mi] = time.split(":").map(Number);
-    const offset = -new Date(y, m - 1, d, h, mi).getTimezoneOffset();
-    const p = (n: number) => String(Math.abs(n)).padStart(2, "0");
-    return `${date}T${time}:00${offset < 0 ? "-" : "+"}${p(Math.floor(Math.abs(offset) / 60))}:${p(offset % 60)}`;
-  };
 
   const guestInput = () => $('.cal-create [aria-label="ゲスト"]');
 
