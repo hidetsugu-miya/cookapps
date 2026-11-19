@@ -2,6 +2,7 @@
 import { closePopup, renderGoogleCard } from "./accounts.js";
 import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
+import { closeCreate } from "./calendar-create.js";
 import { closeDetail } from "./calendar-detail.js";
 import { databaseChanges, discardDatabaseChanges, showDatabase } from "./database.js";
 import { closeDatabaseForm } from "./database-form.js";
@@ -89,6 +90,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   screen = name;
   closeHint();
   closeDetail();
+  closeCreate();
   closeDatabaseForm();
   // The terminal of the Todo screen's Claude pane is hidden while another screen is shown (its process goes on).
   if (name !== "todo") hideTodoClaude();

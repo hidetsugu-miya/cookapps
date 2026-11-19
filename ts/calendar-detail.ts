@@ -7,6 +7,7 @@ import type { Info } from "./bindings/Info";
 import { $, composing, tag } from "./dom.js";
 import { CHECK_SVG, CLOSE_SVG, COPY_SVG, LINES_SVG, MEET_SVG, PEOPLE_SVG, PIN_SVG } from "./icons.js";
 import { htmlText, linkify } from "./mail-text.js";
+import { closeCreate } from "./calendar-create.js";
 import { showFailure } from "./error-card.js";
 
 const GAP = 8;
@@ -83,6 +84,7 @@ export function closeDetail(restoreFocus = false) {
 
 function show(target: Target) {
   closeDetail();
+  closeCreate();
   const pop = build(target);
   open = { target, pop, built: builtOf(target), scrollTop: $("cal-scroll").scrollTop };
   target.node.classList.add("selected");
@@ -90,8 +92,8 @@ function show(target: Target) {
   pop.focus({ preventScroll: true });
 }
 
-// A row of the body: an icon and its content.
-function row(icon: string, content: Node) {
+// A row of the body: an icon and its content (the form of C-5 uses it too).
+export function row(icon: string, content: Node) {
   const r = tag("div", "cal-pop-row");
   r.insertAdjacentHTML("beforeend", icon);
   r.append(content);
@@ -160,8 +162,8 @@ function build({ info: i, color }: Target) {
   return pop;
 }
 
-// Beside the event: to its right, or to its left when the right has no room; inside the window vertically.
-function place(pop: HTMLElement, node: HTMLElement) {
+// Beside the event: to its right, or to its left when the right has no room; inside the window vertically (the form of C-5 uses it too, beside its draft).
+export function place(pop: HTMLElement, node: HTMLElement) {
   // Not appended again when it is already there: a move would drop the focus inside it.
   if (!pop.isConnected) document.body.append(pop);
   pop.style.maxHeight = `${innerHeight - 2 * GAP}px`;

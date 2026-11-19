@@ -5,6 +5,7 @@ import type { AttachedFile } from "./bindings/AttachedFile";
 import type { BrowsedDir } from "./bindings/BrowsedDir";
 import type { Channel } from "./bindings/Channel";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
+import type { CreatedEvent } from "./bindings/CreatedEvent";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
@@ -63,6 +64,7 @@ import type { ScreenAnswer } from "./bindings/ScreenAnswer";
 import type { Skill } from "./bindings/Skill";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
+import type { NewEvent } from "./bindings/NewEvent";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
@@ -138,6 +140,10 @@ export interface Commands {
   calendar_month: { args: { year: number; month: number; firstDay: number }; result: MonthGrid };
   calendar_choices: { args: undefined; result: CalendarChoices };
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
+  // C-5: the calendars an event can be created in (those of each account that the user owns), in the shape of `calendar_choices`.
+  calendar_owned: { args: undefined; result: CalendarChoices };
+  // C-5: creates the event, with the invitations and the Google Meet it asks for. `null` means the account must log in again (it has not granted the permission to create events).
+  calendar_create_event: { args: { event: NewEvent }; result: CreatedEvent | null };
   inbox: { args: undefined; result: Inbox };
   sync: { args: Account & { startHistoryId: string }; result: Sync };
   thread: { args: Thread; result: ThreadDetail | null };

@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
+import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -583,5 +583,380 @@ describe("calendar: event detail", () => {
     await expect($(".cal-pop")).toBeDisplayed();
     await $("#nav-settings").click();
     await waitForCount(".cal-pop", 0);
+  });
+});
+
+describe("calendar: create an event", () => {
+  // The column of the day after today (the day before when today is the last day of the week), which holds no event: the events are today's.
+  const slotDay = new Date().getDay() === 6 ? 5 : new Date().getDay() + 1;
+  const slotDate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + (slotDay - d.getDay()));
+    return isoDate(d);
+  };
+
+  async function openCreateCalendar(owned = ownedCalendars()) {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_owned: owned });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+  }
+
+  // A press as a mouse makes it at the hour of the day's column, `minutes` into the hour.
+  async function pressSlot(day: number, hour: number, minutes = 20) {
+    const at = await browser.execute(
+      (d, h, m) => {
+        document.getElementById("cal-scroll")!.scrollTop = Math.max(0, h * 64 - 200);
+        const r = document.getElementById("cal-body")!.children[d + 1].getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + h * 64 + (m / 60) * 64) };
+      },
+      day,
+      hour,
+      minutes,
+    );
+    await browser.action("pointer").move({ x: at.x, y: at.y }).down().up().perform();
+  }
+
+  // An empty place of the day's cell of the all-day band.
+  const pressBand = (day: number) => browser.action("pointer").move({ origin: $(`#cal-allday > :nth-child(${day + 2})`), x: 0, y: 8 }).down().up().perform();
+
+  // Sets a field of the form as a person does (the "input" event), for the date and time fields that a key cannot fill.
+  const setField = (label: string, value: string) =>
+    browser.execute(
+      (l, v) => {
+        const field = document.querySelector(`.cal-create [aria-label="${l}"]`) as HTMLInputElement;
+        field.value = v;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      label,
+      value,
+    );
+
+  // A local time as RFC 3339 with that moment's offset.
+  const rfc = (date: string, time: string) => {
+    const [y, m, d] = date.split("-").map(Number);
+    const [h, mi] = time.split(":").map(Number);
+    const offset = -new Date(y, m - 1, d, h, mi).getTimezoneOffset();
+    const p = (n: number) => String(Math.abs(n)).padStart(2, "0");
+    return `${date}T${time}:00${offset < 0 ? "-" : "+"}${p(Math.floor(Math.abs(offset) / 60))}:${p(offset % 60)}`;
+  };
+
+  const guestInput = () => $('.cal-create [aria-label="ゲスト"]');
+
+  it("draws a draft of one hour at the hour pressed and opens the form beside it, with the primary calendar", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    const pop = $(".cal-create");
+    await expect(pop).toBeDisplayed();
+    await expect($(".cal-draft")).toBeDisplayed();
+    await expect($(".cal-draft")).toHaveText(expect.stringContaining("(件名なし)"));
+    await expect($(".cal-draft")).toHaveText(expect.stringContaining("10:00 - 11:00"));
+    // The draft is an hour tall, from the hour line, in the column of the day pressed.
+    const look = await browser.execute(() => {
+      const draft = document.querySelector(".cal-draft") as HTMLElement;
+      const col = draft.parentElement!;
+      const frame = document.querySelector(".cal-create")!.getBoundingClientRect();
+      const box = draft.getBoundingClientRect();
+      return { top: box.top - col.getBoundingClientRect().top, height: box.height, column: [...document.getElementById("cal-body")!.children].indexOf(col), beside: frame.left >= box.right || frame.right <= box.left, inside: frame.right <= innerWidth && frame.bottom <= innerHeight };
+    });
+    expect(look).toEqual({ top: 640, height: 63, column: slotDay + 1, beside: true, inside: true });
+    await expect($('.cal-create [aria-label="タイトル"]')).toHaveAttribute("placeholder", "タイトルを追加");
+    expect(await browser.execute(() => document.activeElement?.getAttribute("aria-label"))).toBe("タイトル");
+    await expect(pop.$('[aria-label="開始日"]')).toHaveValue(slotDate());
+    await expect(pop.$('[aria-label="開始時刻"]')).toHaveValue("10:00");
+    await expect(pop.$('[aria-label="終了日"]')).toHaveValue(slotDate());
+    await expect(pop.$('[aria-label="終了時刻"]')).toHaveValue("11:00");
+    // The calendar waits for the read of the owned calendars, and starts on the primary one of the account.
+    await browser.waitUntil(async () => (await pop.$('[aria-label="カレンダー"]').getValue()) !== "", { timeoutMsg: "no calendar" });
+    expect(await textsOf(".cal-create [aria-label='カレンダー'] option")).toEqual(["Work", "Me"]);
+    expect(await browser.execute(() => (document.querySelector(".cal-create select") as HTMLSelectElement).selectedIndex)).toBe(1);
+    await expect(pop.$('[aria-label="ゲスト"]')).toHaveAttribute("placeholder", "ゲストを追加");
+    await expect(pop.$('[aria-label="説明"]')).toHaveAttribute("placeholder", "説明を追加");
+    await expect(pop.$(".cal-create-meet-add")).toHaveText("Google Meet のビデオ会議を追加");
+    await expect(pop.$(".text-btn.primary")).toHaveText("保存");
+  });
+
+  it("shows what is typed in the title on the draft, and moves the draft and the end with the start", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await $('.cal-create [aria-label="タイトル"]').setValue("Kickoff");
+    await expect($(".cal-draft")).toHaveText(expect.stringContaining("Kickoff"));
+    await setField("開始時刻", "13:30");
+    await expect($('.cal-create [aria-label="終了時刻"]')).toHaveValue("14:30");
+    await expect($(".cal-draft")).toHaveText(expect.stringContaining("13:30 - 14:30"));
+    expect(await count(".cal-draft")).toBe(1);
+  });
+
+  it("makes an all-day event from the band, and draws a chip", async () => {
+    await openCreateCalendar();
+    await pressBand(slotDay);
+    await expect($(".cal-create")).toBeDisplayed();
+    const box = $(".cal-create-allday input");
+    await expect(box).toBeSelected();
+    await expect($('.cal-create [aria-label="開始時刻"]')).not.toBeDisplayed();
+    await expect($('.cal-create [aria-label="終了時刻"]')).not.toBeDisplayed();
+    await expect($('.cal-create [aria-label="開始日"]')).toHaveValue(slotDate());
+    await expect($('.cal-create [aria-label="終了日"]')).toHaveValue(slotDate());
+    await expect($(`#cal-allday > :nth-child(${slotDay + 2}) .cal-draft-chip`)).toHaveText("(件名なし)");
+    expect(await count("#cal-body .cal-draft")).toBe(0);
+    // Taken off, it becomes an event of an hour from the time fields.
+    await box.click();
+    await expect($('.cal-create [aria-label="開始時刻"]')).toBeDisplayed();
+    await waitForCount("#cal-allday .cal-draft", 0);
+    await expect($("#cal-body .cal-draft")).toBeDisplayed();
+  });
+
+  it("opens the detail of an event, and no form, when an event is pressed", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await expect($(".cal-create")).toBeDisplayed();
+    await eventButton("Team sync").click();
+    await waitForCount(".cal-create", 0);
+    await waitForCount(".cal-draft", 0);
+    await expect($(".cal-pop h2")).toHaveText("Team sync");
+    await eventButton("Team sync").click();
+    await waitForCount(".cal-pop", 0);
+    expect(await count(".cal-create")).toBe(0);
+  });
+
+  it("makes a chip of each guest with Enter, and takes one off with its ×", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await guestInput().setValue("ann@example.com");
+    await browser.keys("Enter");
+    await guestInput().setValue("bob@example.com,");
+    await guestInput().setValue("cy@example.com");
+    await $(".cal-create .cal-create-desc").click();
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com", "bob@example.com", "cy@example.com"]);
+    await expect(guestInput()).toHaveValue("");
+    await $('.cal-create button[aria-label="bob@example.com を外す"]').click();
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com", "cy@example.com"]);
+  });
+
+  it("does not add an address that a chip already shows, whatever its case", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await guestInput().setValue("ann@example.com");
+    await browser.keys("Enter");
+    await guestInput().setValue("Ann@Example.com");
+    await browser.keys("Enter");
+    await expect(guestInput()).toHaveValue("");
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com"]);
+  });
+
+  it("turns the Meet button into a card, which a × turns back", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await $(".cal-create-meet-add").click();
+    await expect($(".cal-create-card")).toHaveText(expect.stringContaining("Google Meet"));
+    await expect($(".cal-create-meet-add")).not.toExist();
+    await $('.cal-create button[aria-label="Meet を外す"]').click();
+    await expect($(".cal-create-meet-add")).toBeDisplayed();
+    expect(await count(".cal-create-card")).toBe(0);
+  });
+
+  it("saves with the fields as they are, closes the form and reads the week again", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await $('.cal-create [aria-label="タイトル"]').setValue("Kickoff");
+    await guestInput().setValue("ann@example.com");
+    await browser.keys("Enter");
+    await $(".cal-create-meet-add").click();
+    await $('.cal-create [aria-label="説明"]').setValue("Plan the work.");
+    await setField("終了時刻", "11:30");
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", { id: "e1", meetUrl: null });
+    const week = await mock("calendar_week", weekOfToday());
+    await $(".cal-create .text-btn.primary").click();
+    expect(await waitForCalls(create)).toEqual([
+      {
+        event: {
+          account,
+          calendarId: account,
+          title: "Kickoff",
+          allDay: false,
+          start: rfc(slotDate(), "10:00"),
+          end: rfc(slotDate(), "11:30"),
+          guests: ["ann@example.com"],
+          meet: true,
+          description: "Plan the work.",
+        },
+      },
+    ]);
+    await waitForCount(".cal-create", 0);
+    await waitForCount(".cal-draft", 0);
+    // The events only: the calendar lists are not listed again.
+    expect(await waitForCalls(week)).toContainEqual({ date: expect.any(String), firstDay: 0, refresh: false });
+  });
+
+  it("saves an all-day event with dates, and no times", async () => {
+    await openCreateCalendar();
+    await pressBand(slotDay);
+    await $('.cal-create [aria-label="タイトル"]').setValue("Trip");
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", { id: "e2", meetUrl: null });
+    await $(".cal-create .text-btn.primary").click();
+    expect(await waitForCalls(create)).toEqual([
+      { event: { account, calendarId: account, title: "Trip", allDay: true, start: slotDate(), end: slotDate(), guests: [], meet: false, description: "" } },
+    ]);
+  });
+
+  it("keeps the save button disabled while it saves, so that it is not pressed twice", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", holds);
+    await $(".cal-create .text-btn.primary").click();
+    await waitForCalls(create);
+    await expect($(".cal-create .text-btn.primary")).toBeDisabled();
+    await release(create, { id: "e3", meetUrl: null });
+    await waitForCount(".cal-create", 0);
+    expect(await callsOf(create)).toHaveLength(1);
+  });
+
+  it("shows the error in the form when the save fails, and keeps what was written", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await $('.cal-create [aria-label="タイトル"]').setValue("Kickoff");
+    await guestInput().setValue("ann@example.com");
+    await browser.keys("Enter");
+    await $(".cal-create-meet-add").click();
+    await $('.cal-create [aria-label="説明"]').setValue("Plan the work.");
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", rejects("ゲストのメールアドレスの形が正しくありません: ann@example.com"));
+    const week = await mock("calendar_week", weekOfToday());
+    await $(".cal-create .text-btn.primary").click();
+    await waitForCalls(create);
+    await expect($(".cal-create-error")).toHaveText("ゲストのメールアドレスの形が正しくありません: ann@example.com");
+    await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Kickoff");
+    expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com"]);
+    await expect($(".cal-create-card")).toBeDisplayed();
+    await expect($('.cal-create [aria-label="説明"]')).toHaveValue("Plan the work.");
+    await expect($(".cal-create .text-btn.primary")).toBeEnabled();
+    await expect($(".cal-draft")).toBeDisplayed();
+    expect(await callsOf(week)).toEqual([]);
+  });
+
+  it("asks to log in again in the form when the account has not granted the permission", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", null);
+    await $(".cal-create .text-btn.primary").click();
+    await waitForCalls(create);
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining(`${account} は予定を作るため再ログインが必要です`));
+    const login = await mock("login", account);
+    await $(".cal-create-error .text-btn").click();
+    expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+  });
+
+  it("says in a card that the account must log in again when the form was closed during the save", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
+    const create = await mock("calendar_create_event", holds);
+    await $(".cal-create .text-btn.primary").click();
+    await waitForCalls(create);
+    await browser.keys("Escape");
+    await waitForCount(".cal-create", 0);
+    await release(create, null);
+    await waitForText(CARD, `${account} は予定を作るため再ログインが必要です`);
+  });
+
+  it("says why in the form when no calendar can be listed, and keeps the save button disabled", async () => {
+    await openCreateCalendar({ accounts: [], needsLogin: [account], failed: { "you@example.com": "boom" } });
+    await pressSlot(slotDay, 10);
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining(`${account} はカレンダーを読むため再ログインが必要です`));
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining("you@example.com のカレンダーの読み込みに失敗しました: boom"));
+    await expect($(".cal-create .text-btn.primary")).toBeDisabled();
+    const login = await mock("login", account);
+    await $(".cal-create-error .text-btn").click();
+    expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+  });
+
+  it("reads the owned calendars again at the next form when the last answer had none", async () => {
+    await openCreateCalendar({ accounts: [], needsLogin: [], failed: { [account]: "boom" } });
+    await pressSlot(slotDay, 10);
+    await expect($(".cal-create-error")).toHaveText(expect.stringContaining("boom"));
+    await browser.keys("Escape");
+    await waitForCount(".cal-create", 0);
+    const owned = await mock("calendar_owned", ownedCalendars());
+    await pressSlot(slotDay, 10);
+    await waitForCalls(owned);
+    await browser.waitUntil(async () => (await count(".cal-create select option")) === 2, { timeoutMsg: "no calendars" });
+    await expect($(".cal-create-error")).toHaveText("");
+  });
+
+  it("moves the form with the draft when the week is scrolled, and does not draw the draft again", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await browser.execute(() => {
+      (document.querySelector(".cal-draft") as unknown as { kept: boolean }).kept = true;
+    });
+    await browser.execute(() => {
+      const scroll = document.getElementById("cal-scroll")!;
+      scroll.scrollTop += scroll.scrollTop > 40 ? -40 : 40;
+    });
+    // The scroll event is async: the draft is the same node and the form is open once it has been handled.
+    await browser.pause(300);
+    expect(await browser.execute(() => (document.querySelector(".cal-draft") as unknown as { kept?: boolean }).kept === true)).toBe(true);
+    expect(await count(".cal-create")).toBe(1);
+    expect(await count(".cal-draft")).toBe(1);
+  });
+
+  it("names the account beside each calendar when there are several accounts", async () => {
+    const owned = ownedCalendars();
+    owned.accounts.push({ account: "you@example.com", calendars: [{ id: "side", name: "Side", color: null, mine: true, shown: true }] });
+    await openCreateCalendar(owned);
+    await pressSlot(slotDay, 10);
+    await browser.waitUntil(async () => (await count(".cal-create select option")) === 3, { timeoutMsg: "no calendars" });
+    expect(await textsOf(".cal-create select option")).toEqual([`Work（${account}）`, `Me（${account}）`, "Side（you@example.com）"]);
+    const create = await mock("calendar_create_event", { id: "e4", meetUrl: null });
+    await browser.execute(() => {
+      const select = document.querySelector(".cal-create select") as HTMLSelectElement;
+      select.selectedIndex = 2;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await $(".cal-create .text-btn.primary").click();
+    expect(((await waitForCalls(create)) as { event: { account: string; calendarId: string } }[])[0].event).toMatchObject({ account: "you@example.com", calendarId: "side" });
+  });
+
+  it("closes on Escape, and on ✕, and drops the draft", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await expect($(".cal-create")).toBeDisplayed();
+    await browser.keys("Escape");
+    await waitForCount(".cal-create", 0);
+    await waitForCount(".cal-draft", 0);
+    await pressSlot(slotDay, 10);
+    await $('.cal-create button[aria-label="閉じる"]').click();
+    await waitForCount(".cal-create", 0);
+    await waitForCount(".cal-draft", 0);
+  });
+
+  it("closes on a press elsewhere, when the week moves and when the screen changes", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await press($("#cal-title"));
+    await waitForCount(".cal-create", 0);
+    await waitForCount(".cal-draft", 0);
+    await pressSlot(slotDay, 10);
+    await $("#cal-next").click();
+    await waitForCount(".cal-create", 0);
+    await pressSlot(slotDay, 10);
+    await $("#nav-settings").click();
+    await waitForCount(".cal-create", 0);
+    await waitForCount(".cal-draft", 0);
+  });
+
+  it("keeps the form and the draft when the week is drawn again", async () => {
+    await openCreateCalendar();
+    await pressSlot(slotDay, 10);
+    await $('.cal-create [aria-label="タイトル"]').setValue("Kickoff");
+    const week = weekOfToday();
+    week.timed[0].location = "Room C";
+    await redrawWith(week);
+    await waitForCount(".cal-draft", 1);
+    await expect($(".cal-draft")).toHaveText(expect.stringContaining("Kickoff"));
+    await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Kickoff");
   });
 });
