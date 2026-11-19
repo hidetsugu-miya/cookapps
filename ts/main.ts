@@ -12,7 +12,7 @@ import { initFormation } from "./formation.js";
 import { initFormationFlow } from "./formation-flow.js";
 import { initGhostty } from "./ghostty.js";
 import { initHint } from "./hint.js";
-import { initInbox, load, showKeptInbox } from "./inbox.js";
+import { initInbox, load, showInboxList } from "./inbox.js";
 import { initLogSettings } from "./log-settings.js";
 import { initMailCompose } from "./mail-compose.js";
 import { initMenu } from "./menu.js";
@@ -73,7 +73,7 @@ initFormation();
 initFileDrops();
 initDatabase();
 
-showKeptInbox();
+showInboxList();
 refreshClaude();
 load();
 initUpdate();

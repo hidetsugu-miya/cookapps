@@ -28,6 +28,7 @@ use super::{
     script::Scripts,
     sql::{self, DatabaseSqlResult},
     structure::{self, DatabaseStructure},
+    write::{self, DatabaseApplied, DatabaseChange},
     Login,
 };
 
@@ -384,6 +385,39 @@ impl Sessions {
         self.settle(scripts, id, &session, read).await
     }
 
+    /// The `changes` of `table` in `database` written in one transaction (D-4, #863). The input is checked before the session is looked at.
+    pub async fn apply(
+        &self,
+        scripts: &Scripts,
+        id: &str,
+        database: &str,
+        table: &str,
+        changes: &[DatabaseChange],
+    ) -> Result<DatabaseApplied, String> {
+        write::check_request(database, table, changes)?;
+        let session = self.session(scripts, id).await?;
+        let read = {
+            let mut guard = session.connection.lock().await;
+            let Some(connection) = guard.as_mut() else {
+                return Err(NOT_OPEN.to_owned());
+            };
+            tokio::time::timeout(
+                QUERY_TIMEOUT,
+                write::apply(connection, database, table, changes),
+            )
+            .await
+        };
+        self.settle_with(
+            scripts,
+            id,
+            &session,
+            read,
+            write::failure,
+            write::TIMED_OUT,
+        )
+        .await?
+    }
+
     /// The text of the user run as one statement in `database` (D-6).
     pub async fn sql(
         &self,
@@ -581,6 +615,23 @@ mod tests {
         assert_eq!(
             sessions.sql(&scripts, "a", "shop", "SELECT 1").await,
             Err(NOT_OPEN.to_owned())
+        );
+        assert_eq!(
+            sessions
+                .apply(
+                    &scripts,
+                    "a",
+                    "shop",
+                    "orders",
+                    &[DatabaseChange::Insert { values: vec![] }]
+                )
+                .await,
+            Err(NOT_OPEN.to_owned())
+        );
+        // No change is told before the connection is looked at.
+        assert_eq!(
+            sessions.apply(&scripts, "a", "shop", "orders", &[]).await,
+            Err("変更がありません".to_owned())
         );
         // Nothing to run is told before the connection is looked at.
         assert_eq!(

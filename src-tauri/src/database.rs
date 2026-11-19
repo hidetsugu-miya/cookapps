@@ -4,7 +4,7 @@
 //! The password of a profile is in the OS keychain (service `KEYRING_SERVICE`, user the profile's id), never in the file and never in the answer of a command:
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
-//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
+//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_apply` writes the changes the records tab has gathered in one transaction (D-4, `write.rs`, #863), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
 //! `tsunagiai-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
@@ -14,6 +14,7 @@ pub mod script;
 pub mod session;
 pub mod sql;
 pub mod structure;
+pub mod write;
 
 use std::{
     collections::HashMap,
@@ -733,6 +734,22 @@ pub async fn database_records(
     let page = typed.as_deref().map_or(page, records::page_of_input);
     sessions
         .records(&scripts, &id, &database, &table, page, estimate)
+        .await
+}
+
+/// The inserts, updates and deletes `changes` of `table` in `database` on the open connection `id` (D-4), written in one transaction: any failure, and an update or a delete that does not match exactly one row, rolls all of them back.
+/// A table with no key takes inserts only. The values are bound, and NULL and the empty text are told apart (`write.rs`).
+#[tauri::command]
+pub async fn database_apply(
+    sessions: tauri::State<'_, session::Sessions>,
+    scripts: tauri::State<'_, script::Scripts>,
+    id: String,
+    database: String,
+    table: String,
+    changes: Vec<write::DatabaseChange>,
+) -> Result<write::DatabaseApplied, String> {
+    sessions
+        .apply(&scripts, &id, &database, &table, &changes)
         .await
 }
 
