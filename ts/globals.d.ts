@@ -13,6 +13,8 @@ interface Window {
   };
   // E2E build only (e2e/fixtures.js): the periods of the timers that a spec shortens (ts/e2e-timers.ts).
   __e2e_timers__?: Partial<Record<"orcaClock" | "orcaMirror" | "databaseProfiles" | "formationFlow" | "lspSettings", number>>;
+  // E2E build only: a spec sets it before it shows a terminal to have the WebGL renderer, which the build leaves off (ts/orca-terminal.ts).
+  __e2e_webgl__?: boolean;
 }
 
 declare const marked: { parse(markdown: string, options?: { breaks?: boolean }): string };
@@ -47,7 +49,7 @@ declare const mermaid: {
 };
 declare const DOMPurify: { sanitize(html: string, config?: Record<string, unknown>): string };
 
-// xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js), its Unicode 11 addon (src/vendor/addon-unicode11.js) and its web links addon (src/vendor/addon-web-links.js): only what the terminals of the Orca screen use.
+// xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js), its Unicode 11 addon (src/vendor/addon-unicode11.js), its web links addon (src/vendor/addon-web-links.js) and its WebGL addon (src/vendor/addon-webgl.js): only what the terminals of the Orca screen use.
 interface XTerm {
   cols: number;
   rows: number;
@@ -78,6 +80,10 @@ interface XTerm {
 declare const Terminal: new (options?: Record<string, unknown>) => XTerm;
 declare const FitAddon: { FitAddon: new () => { fit(): void; proposeDimensions(): { cols: number; rows: number } | undefined } };
 declare const Unicode11Addon: { Unicode11Addon: new () => unknown };
+// The WebGL renderer (a pre-release of the addon): `onContextLoss` fires when the GPU takes the context away, and `dispose` gives the drawing back to xterm.js's DOM renderer.
+declare const WebglAddon: {
+  WebglAddon: new () => { onContextLoss(listener: () => void): { dispose(): void }; dispose(): void };
+};
 // `handler` is called with the click on a link; `hover` and `leave` with the pointer over it; `urlRegex` finds the URLs in a line.
 declare const WebLinksAddon: {
   WebLinksAddon: new (

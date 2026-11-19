@@ -98,6 +98,9 @@ pub struct OrcaRow {
     pub latest: Option<String>,
     /// How many of the agent's subagents are at work (A-8); 0 when it has none.
     pub subagents: u32,
+    /// The command of the shell the agent is running (A-8): `Some` while its last tool is `Bash` and its main agent works (the command's first line, empty when Orca gave none); `None` otherwise.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub shell: Option<String>,
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
     #[cfg_attr(test, ts(type = "number"))]
     pub at_ms: i64,
@@ -645,6 +648,27 @@ fn working_subagents(agent: &Value) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
+/// The command of the shell an agent is running, for the badge of its row (A-8): `Some` only when its last tool (`toolName`) is `Bash` and its `mainAgent.state` is `working`.
+/// Orca keeps the last tool after it ended, and while only the subagents work (`mainAgent.state` is `done`) the last `Bash` stays, so the main agent must be at work for the shell to be running.
+/// The command is the first line of `toolInput` (a string, or an object with a string `command`), cut to `LINE_LIMIT` characters, its control characters replaced by spaces: it is text from outside, shown as the `title` of the badge. Empty when Orca gave none.
+fn running_shell(agent: &Value) -> Option<String> {
+    if agent["toolName"] != "Bash" || agent["mainAgent"]["state"] != "working" {
+        return None;
+    }
+    let input = &agent["toolInput"];
+    let command = input.as_str().or_else(|| input["command"].as_str());
+    Some(
+        command
+            .and_then(first_line)
+            .unwrap_or_default()
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .trim()
+            .to_owned(),
+    )
+}
+
 /// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first. The worktrees of an SSH host have no row (A-6 counts none of their sessions).
 /// A field that is absent or of another type is left out, not an error.
 pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
@@ -710,6 +734,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
                     latest: latest_of(agent),
                     subagents: working_subagents(agent),
+                    shell: running_shell(agent),
                     at_ms: if group == OrcaGroup::Done {
                         updated
                     } else {
@@ -2501,6 +2526,7 @@ mod tests {
                 line: "Write the docs".into(),
                 latest: Some("Write the docs".into()),
                 subagents: 0,
+                shell: None,
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
                 pane_key: Some("tabA:leaf1".into()),
@@ -2792,6 +2818,89 @@ mod tests {
         }
         let bare = agent("tabA:leaf1", "working");
         assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].subagents, 0);
+    }
+
+    #[test]
+    fn a_row_runs_a_shell_only_while_its_last_tool_is_bash_and_the_main_agent_works() {
+        let shell = |tool: Value, input: Value, main: Value| {
+            let mut a = agent("tabA:leaf1", "working");
+            a["toolName"] = tool;
+            a["toolInput"] = input;
+            a["mainAgent"] = main;
+            rows_of(&ps(&[a]), &terminals())[0].shell.clone()
+        };
+        let working = json!({"state": "working", "stateStartedAt": 1});
+        assert_eq!(
+            shell(json!("Bash"), json!("cargo test"), working.clone()).as_deref(),
+            Some("cargo test")
+        );
+        // The last Bash stays while only the subagents work, and when the main agent's state is not known.
+        for main in [
+            json!({"state": "done"}),
+            json!({"state": "waiting"}),
+            json!({}),
+            Value::Null,
+        ] {
+            assert_eq!(
+                shell(json!("Bash"), json!("ls"), main.clone()),
+                None,
+                "{main}"
+            );
+        }
+        // Another tool, a name that only starts like Bash, or none.
+        for tool in [
+            json!("Read"),
+            json!("Agent"),
+            json!("bash"),
+            json!("Bash "),
+            json!(1),
+            Value::Null,
+        ] {
+            assert_eq!(
+                shell(tool.clone(), json!("ls"), working.clone()),
+                None,
+                "{tool}"
+            );
+        }
+        // A command Orca did not give still shows the shell, with no command.
+        for input in [
+            Value::Null,
+            json!(""),
+            json!("  \n "),
+            json!(3),
+            json!({"description": "x"}),
+        ] {
+            assert_eq!(
+                shell(json!("Bash"), input.clone(), working.clone()).as_deref(),
+                Some(""),
+                "{input}"
+            );
+        }
+        // An object with a command is read as its command.
+        assert_eq!(
+            shell(
+                json!("Bash"),
+                json!({"command": "git status", "description": "x"}),
+                working.clone()
+            )
+            .as_deref(),
+            Some("git status")
+        );
+        // The first line that has text, its control characters replaced by spaces, cut to LINE_LIMIT characters.
+        assert_eq!(
+            shell(
+                json!("Bash"),
+                json!("\n  npm run\tbuild\u{1b}[0m \\\n  --watch"),
+                working.clone()
+            )
+            .as_deref(),
+            Some("npm run build [0m \\")
+        );
+        let long = shell(json!("Bash"), json!("あ".repeat(LINE_LIMIT + 50)), working).unwrap();
+        assert_eq!(long.chars().count(), LINE_LIMIT);
+        // An agent with no tool at all has none.
+        let bare = agent("tabA:leaf1", "working");
+        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].shell, None);
     }
 
     #[test]
@@ -3178,6 +3287,7 @@ mod tests {
                 line: String::new(),
                 latest: None,
                 subagents: 0,
+                shell: None,
                 at_ms: 0,
                 handle: None,
                 pane_key: None,

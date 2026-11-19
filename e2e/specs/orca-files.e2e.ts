@@ -3346,6 +3346,56 @@ describe("orca: files and editor (A-18)", () => {
     expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
   });
 
+  it("draws the branches at once and puts the worktree section in when its read is answered (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: holds });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
+    await waitForCalls("orca_git_worktrees");
+    await release("orca_git_worktrees", gitWorktrees());
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["worktree", "ローカル", "リモート"]);
+  });
+
+  it("asks for the worktrees only when the local branches have answered (A-25)", async () => {
+    await openBranches({ orca_local_branches: holds, orca_git_worktrees: gitWorktrees() });
+    await waitForCalls("orca_local_branches");
+    await browser.pause(400);
+    expect(await callsOf("orca_git_worktrees")).toEqual([]);
+    await release("orca_local_branches", [local("feat/a", { current: true }), local("main", { inUse: true }), local("feat/c")]);
+    await waitForCalls("orca_git_worktrees");
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+  });
+
+  it("uses the worktrees read for the next list that opens while they are fresh, and asks again when they are not (A-25)", async () => {
+    await openFiles({ ...branchFixtures({ orca_git_worktrees: gitWorktrees() }), ...timers({ orcaClock: 2500 }) });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    await browser.keys("Escape");
+    await expect($(".orca-dest-pop")).not.toExist();
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    expect(await callsOf("orca_git_worktrees")).toEqual([{ repo: "proj_example-app", environment: null }]);
+    await browser.keys("Escape");
+    await expect($(".orca-dest-pop")).not.toExist();
+    await browser.pause(3000);
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    expect(await waitForCalls("orca_git_worktrees", 2)).toHaveLength(2);
+  });
+
+  it("asks for the worktrees again after a switch of the branch (A-25)", async () => {
+    await openBranches({ orca_git_worktrees: gitWorktrees() });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    await mock("orca_overview", onFeatC());
+    await branchPick("local", "feat/c").click();
+    await waitForCalls("orca_switch_branch");
+    await expect(branchButton()).toHaveText("feat/c");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 7);
+    expect(await waitForCalls("orca_git_worktrees", 2)).toHaveLength(2);
+  });
+
   it("says why in the worktree section when the read failed, and keeps the branches (A-25)", async () => {
     await openBranches({ orca_git_worktrees: rejects("worktree の一覧を読めません") });
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);

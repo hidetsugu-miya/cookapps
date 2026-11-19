@@ -2,7 +2,7 @@
 // Each group is read once: the scripts keep their order, and a failed read is tried again at the next ask, only for the scripts that failed.
 // The paths are inside vendor/, so the CSP (`script-src 'self'`) is as it was.
 
-const TERMINAL = ["vendor/xterm.js", "vendor/addon-fit.js", "vendor/addon-unicode11.js", "vendor/addon-web-links.js"];
+const TERMINAL = ["vendor/xterm.js", "vendor/addon-fit.js", "vendor/addon-unicode11.js", "vendor/addon-web-links.js", "vendor/addon-webgl.js"];
 const HIGHLIGHT = ["vendor/highlight.min.js", "vendor/highlight-languages.js"];
 const MILKDOWN = ["vendor/milkdown.js"];
 const MERMAID = ["vendor/mermaid.min.js"];
@@ -54,7 +54,7 @@ function once(group: string, srcs: string[]) {
   return pending;
 }
 
-// xterm.js and its three addons (the terminals, A-8 and A-9).
+// xterm.js and its four addons (the terminals, A-8 and A-9).
 export const loadTerminalLibs = () => once("terminal", TERMINAL);
 export const terminalLibsReady = () => loaded.has("terminal");
 

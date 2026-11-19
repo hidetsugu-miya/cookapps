@@ -5,6 +5,7 @@ import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import { tag } from "./dom.js";
 import { BRANCH_SVG, CHECK_SVG, CLOUD_SVG, DOWN_SVG, FOLDER_SVG } from "./icons.js";
+import { periodMs } from "./e2e-timers.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { toast } from "./toast.js";
@@ -23,6 +24,40 @@ const SEARCH_MS = 250;
 
 // How many remote branches show while the filter is empty; the button under them opens the rest (A-25). Rust puts the ones picked last first in the answer to an empty text (`orca_branch_used`), so these are the first of the answer as it comes.
 const REMOTE_FIRST = 5;
+
+// How long the worktrees of a project that were read are used again by the next list that opens, the period of the list of Orca (the clock of the screen, A-25).
+const WORKTREES_MS = 10_000;
+
+// The read of `orca_git_worktrees` of each Orca and project, kept for `WORKTREES_MS` after it started; a read that failed is dropped at once. There is no timer: an entry out of its time is dropped when a list opens, and a switch drops its own.
+const worktreeReads = new Map<string, { at: number; read: Promise<OrcaGitWorktree[]> }>();
+const worktreesKey = (here: BranchSource) => JSON.stringify([here.target, here.repo]);
+
+// The read held for the project of `here`, or none when there is none or it is out of its time.
+function heldWorktrees(here: BranchSource) {
+  const limit = periodMs("orcaClock", WORKTREES_MS);
+  const now = Date.now();
+  for (const [key, held] of worktreeReads) {
+    if (now - held.at >= limit) worktreeReads.delete(key);
+  }
+  return worktreeReads.get(worktreesKey(here));
+}
+
+// The worktrees of the project: the read held, or a new one. `told` is called once for each new read (the screen forgets the worktrees that the answer lacks).
+function readWorktrees(here: BranchSource, told: (worktrees: OrcaGitWorktree[]) => void) {
+  const held = heldWorktrees(here);
+  if (held !== undefined) return held.read;
+  const key = worktreesKey(here);
+  const read = invoke("orca_git_worktrees", { repo: here.repo, environment: here.target }).then((worktrees) => {
+    told(worktrees);
+    return worktrees;
+  });
+  const entry = { at: Date.now(), read };
+  worktreeReads.set(key, entry);
+  read.catch(() => {
+    if (worktreeReads.get(key) === entry) worktreeReads.delete(key);
+  });
+  return read;
+}
 
 // Switches the worktree. A refusal is shown as a failure card; a switch that worked with a warning says so; the list of the screen is read again after a switch (`switched` is told the branch the worktree is on now).
 async function switchTo(here: BranchContext, kind: "local" | "remote", name: string, switched: (branch: string) => void) {
@@ -83,7 +118,12 @@ export function openBranchDialog(anchor: Element, here: BranchContext, switched:
     current: (_kind, _name, checkedOut) => checkedOut,
     refuseInUse: true,
     pickCurrent: false,
-    pick: (b) => void switchTo(here, b.kind, b.name, switched),
+    pick: (b) =>
+      void switchTo(here, b.kind, b.name, (branch) => {
+        // The branch of the worktree changed, so the worktrees held are stale.
+        worktreeReads.delete(worktreesKey(here));
+        switched(branch);
+      }),
     worktrees: { current: here.path, pick: pickWorktree, read: worktreesRead },
   });
 }
@@ -260,17 +300,21 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
   openPop = pop;
   filter.focus();
   void searchRemote();
-  if (options.worktrees) {
-    invoke("orca_git_worktrees", { repo: here.repo, environment: here.target }).then(
-      (read) => {
-        options.worktrees?.read(read);
-        if (pop.isConnected) fill(worktreeSection, read.map(worktreeRow), null);
-      },
-      (e) => pop.isConnected && fill(worktreeSection, [], String(e)),
-    );
-  }
-  invoke("orca_local_branches", { path: here.path, environment: here.target }).then(
+  // The branches are drawn first: the worktrees are asked for when the local branches have answered, so that the read of them (a process and a call to Orca) does not hold the rows back. A read held is drawn at once.
+  const local = invoke("orca_local_branches", { path: here.path, environment: here.target }).then(
     (read) => pop.isConnected && fill(localSection, read.map((b) => row("local", b.name, b.name, options.current("local", b.name, b.current), b.inUse || (options.refuseCurrent === true && b.current))), null),
     (e) => pop.isConnected && fill(localSection, [], String(e)),
   );
+  const worktrees = options.worktrees;
+  if (worktrees) {
+    const showWorktrees = () => {
+      if (!pop.isConnected) return;
+      readWorktrees(here, worktrees.read).then(
+        (read) => pop.isConnected && fill(worktreeSection, read.map(worktreeRow), null),
+        (e) => pop.isConnected && fill(worktreeSection, [], String(e)),
+      );
+    };
+    if (heldWorktrees(here) !== undefined) showWorktrees();
+    else void local.then(showWorktrees);
+  }
 }
