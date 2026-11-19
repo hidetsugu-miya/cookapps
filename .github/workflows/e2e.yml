@@ -3,10 +3,15 @@ name: E2E
 # Runs E2E on a pull request into main, to measure it on a hosted runner (AGENTS.md, CI; #1021, part 1, #1022).
 # It is a trial and not yet a condition of the merge: E2E still runs on the developer's machine before a push (`.claude/rules/testing.md`), and no ruleset reads this run.
 # It holds no secret, and it reads and writes no cache of `release` (its own `shared-key`), so nothing it builds reaches the signed release.
+# README.md, CHANGELOG.md and docs/ are what `release-only-diff.sh` leaves out: no spec reads them (`.claude/rules/testing.md`), so a pull request that changes only them runs no job.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
+    paths-ignore:
+      - README.md
+      - CHANGELOG.md
+      - "docs/**"
 
 permissions:
   contents: read
@@ -17,7 +22,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  # Neither the job ID nor `name:` may be `e2e` or `review`: the check run of a job takes the job's name, and the ruleset on main requires the statuses `e2e` and `review` (`post-checks.sh`) with no integration named, so a check run of the same name would also have to pass, and a running, failed or cancelled trial would block the merge (GitHub: "If a check and a commit status have the same name, both must pass when that name is required").
+  hosted-e2e:
+    name: E2E on a hosted runner (trial)
     # A pull request from a fork runs no job here: it would spend a macOS runner on code that nobody trusted (`.claude/rules/issues.md`).
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-latest
@@ -39,12 +46,14 @@ jobs:
             rustup toolchain uninstall "$toolchain"
           done
       # Its own key: the E2E build is a debug build with the `e2e` feature, and the cache of `release` (a release build, restored into the signed app) is never read or written here.
-      # A pull request saves it (the default of `save-if`), so that the second run of a pull request shows the time with a cache.
+      # Only the pull request of the trial (its head ref) saves it, so that the second run of that pull request shows the time with a cache; every other pull request only restores it. A save on each pull request would pass the 10 GB limit of the repository's caches and evict the cache of `release` that main made.
+      # When the trial ends (#1021), delete its caches (the keys that start with `v1-rust-e2e`, from `gh cache list`) with `gh cache delete {key}`; the way to make it on main is decided in part 2 (#1023).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
           shared-key: e2e
           prefix-key: v1-rust
+          save-if: ${{ github.head_ref == 'fix/e2e-on-actions' }}
       # WebdriverIO 10 needs 22.23.4, 24.22.1 or later of 24, or 26.12.1 or later (AGENTS.md, Run); mise.toml (private) pins 24.22.3 on the developer's machine.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
