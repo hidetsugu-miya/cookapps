@@ -10,7 +10,8 @@ import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, linkTextUrls, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
 import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
-import { linkify } from "./mail-text.js";
+import { addMailKey, initMailClaude, syncMailClaude } from "./mail-claude.js";
+import { linkify, mailText } from "./mail-text.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { bindReply, initReply, openReply, resetReply, type ReplyTarget } from "./mail-reply.js";
@@ -191,8 +192,8 @@ async function markRead(account: string, id: string) {
   }
 }
 
-// The buttons of the row above the subject (#thread-actions) that act on the loaded thread. They are disabled until it arrives; "戻る" is not one of them.
-const ACTIONS = ["thread-summary", "thread-slack", "thread-todo", "thread-orca", "trash", "archive"];
+// The buttons of the row above the subject (#thread-actions), and the icon of the pane to Orca on the right side, that act on the loaded thread. They are disabled until it arrives; "戻る" is not one of them.
+const ACTIONS = ["thread-summary", "thread-slack", "thread-todo", "mail-tool-orca", "trash", "archive"];
 
 // What the detail view holds until the thread arrives: the sender the list row has (none for a thread opened from Todo with no row),
 // and in the body's place a note and gray lines. The body is returned, so a failure can take its place.
@@ -373,22 +374,54 @@ function removeCurrent(command: "archive" | "trash") {
   removeRow(command, current.account, current.id, current.li!);
 }
 
+// What Claude Code reads of the open thread (the field `thread` of the target "mail-draft", M-10): Rust encloses the messages as data (`claude_thread_data`, which Slack's thread uses too), each as the sender, the date in seconds and the text.
+// The messages are taken from the newest back until their text reaches what Rust reads (`TEXT_LIMIT` of mail-summary.ts), so that the text of a long thread is not made for nothing.
+async function threadData() {
+  const t = opened.current;
+  if (!t) return "スレッドはまだ読めていません";
+  const thread = [];
+  let length = 0;
+  for (let i = t.messages.length - 1; i >= 0; i--) {
+    const m = t.messages[i];
+    const text = mailText(m);
+    thread.push({ name: m.from, ts: `${Math.floor(m.dateMs / 1000)}.000000`, text });
+    length += text.length;
+    if (length >= 10_000) break;
+  }
+  return invoke("claude_thread_data", { thread: thread.reverse(), truncated: false });
+}
+
 export function initThread() {
-  initReply(reloadSent);
+  initReply(reloadSent, threadData);
+  initMailClaude();
+  // The right side holds one talk with Claude Code for each thread.
+  addMailKey(() => {
+    const open = $("thread").hidden ? null : (opened.current ?? loading.current);
+    return open ? `thread:${open.account}/${open.id}` : null;
+  });
   handoff = new HandoffPane({
     root: $("mail-handoff"),
     current: () => {
       const t = opened.current;
       return $("thread").hidden || !t ? null : { key: `mail:${t.account}/${t.id}`, card: () => mailCard(t.subject, t.messages) };
     },
+    // The right side shows Claude Code or the pane to Orca, and the two icons say which.
     onOpen: (open) => {
       $("mail-handoff").hidden = !open;
-      $("mail-split").hidden = !open;
-      $("thread-orca").setAttribute("aria-pressed", String(open));
+      $("mail-claude").hidden = open;
+      $("mail-tool-claude").setAttribute("aria-pressed", String(!open));
+      $("mail-tool-orca").setAttribute("aria-pressed", String(open));
+      syncMailClaude();
     },
   });
-  $("thread-orca").onclick = () => handoff.toggle();
-  initSplit($("mail-area"), $("mail-split"), { initial: 0.4 });
+  // Pressing the icon of the pane that is shown does nothing; the other switches to it.
+  $("mail-tool-orca").onclick = () => {
+    if ($("mail-handoff").hidden) handoff.toggle();
+  };
+  $("mail-tool-claude").onclick = () => {
+    if (!$("mail-handoff").hidden) handoff.toggle();
+  };
+  initSplit($("mail-screen"), $("mail-split"), { initial: 0.4 });
   $("back").onclick = goBack;
   $("thread-todo").onclick = () => {
     const current = opened.current;

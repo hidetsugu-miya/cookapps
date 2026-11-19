@@ -27,6 +27,10 @@ const WORD_BYTES: usize = 42;
 const FOLD_AT: usize = 76;
 /// A plain subject longer than this is sent as encoded-words too, so that its line stays under the 998 of RFC 5322.
 const MAX_PLAIN_SUBJECT: usize = 900;
+/// The files of one mail may be this many bytes in all (Gmail's limit of 25 MB, M-12).
+pub(crate) const MAX_ATTACHMENTS: u64 = 25 * 1024 * 1024;
+/// The bytes of a file name (`NAME_MAX`).
+const MAX_NAME_BYTES: usize = 255;
 
 /// A mail to send, as the screen gives it. `to`, `cc` and `bcc` hold one mailbox each: `addr` or `Name <addr>`.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -50,6 +54,26 @@ pub struct OutgoingMail {
     #[serde(default)]
     #[cfg_attr(test, ts(optional))]
     pub reply_thread_id: Option<String>,
+    /// The files to attach (M-12): the mail then goes out as `multipart/mixed`.
+    #[serde(default)]
+    #[cfg_attr(test, ts(optional))]
+    pub attachments: Option<Vec<OutgoingAttachment>>,
+}
+
+/// A file of a mail to send, as the screen holds it: its name, and its bytes as base64.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OutgoingAttachment {
+    pub name: String,
+    pub data: String,
+}
+
+/// A file that passed the checks: its bytes are decoded.
+#[derive(Debug)]
+struct Attachment {
+    name: String,
+    bytes: Vec<u8>,
 }
 
 /// What of a mail passed the checks, ready to go into the headers.
@@ -62,6 +86,7 @@ struct Checked {
     subject: String,
     body: String,
     markdown: bool,
+    attachments: Vec<Attachment>,
 }
 
 /// The headers that put a reply in its thread.
@@ -175,6 +200,56 @@ fn reply_subject(subject: &str) -> String {
     }
 }
 
+/// Whether a file may be attached: it has a name that fits a header and some bytes, and it keeps the files of the mail (`held` bytes already) within Gmail's limit.
+pub(crate) fn check_attachment(name: &str, size: u64, held: u64) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("ファイル名がありません".into());
+    }
+    if name.len() > MAX_NAME_BYTES {
+        return Err(format!(
+            "ファイル名が長すぎます（{MAX_NAME_BYTES} バイトまで）: {}",
+            shown(name)
+        ));
+    }
+    if size == 0 {
+        return Err(format!("{} は空のファイルです", shown(name)));
+    }
+    if held.saturating_add(size) > MAX_ATTACHMENTS {
+        return Err(format!(
+            "添付の合計は {} MB までです",
+            MAX_ATTACHMENTS / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
+
+/// The files the screen gave, decoded and checked one by one against the limit of the whole.
+fn check_attachments(files: &[OutgoingAttachment]) -> Result<Vec<Attachment>, String> {
+    // Four characters are three bytes: refuse before any decode makes a copy.
+    let base64_limit = MAX_ATTACHMENTS / 3 * 4 + 4;
+    let sent: u64 = files.iter().map(|f| f.data.len() as u64).sum();
+    if sent > base64_limit {
+        return Err(format!(
+            "添付の合計は {} MB までです",
+            MAX_ATTACHMENTS / 1024 / 1024
+        ));
+    }
+    let mut held = 0;
+    let mut out = Vec::with_capacity(files.len());
+    for file in files {
+        let bytes = STANDARD
+            .decode(&file.data)
+            .map_err(|_| format!("{} を読めません", shown(&file.name)))?;
+        check_attachment(&file.name, bytes.len() as u64, held)?;
+        held += bytes.len() as u64;
+        out.push(Attachment {
+            name: file.name.clone(),
+            bytes,
+        });
+    }
+    Ok(out)
+}
+
 /// Checks everything the screen gave, before anything is asked of Gmail.
 fn check(account: &str, mail: &OutgoingMail) -> Result<Checked, String> {
     let from =
@@ -198,6 +273,7 @@ fn check(account: &str, mail: &OutgoingMail) -> Result<Checked, String> {
         subject: format_subject(&subject)?,
         body: mail.body.clone(),
         markdown: mail.markdown.unwrap_or(false),
+        attachments: check_attachments(mail.attachments.as_deref().unwrap_or_default())?,
     })
 }
 
@@ -318,7 +394,11 @@ fn encode_body(body: &str) -> String {
             c => text.push(c),
         }
     }
-    let encoded = STANDARD.encode(text);
+    wrap_base64(&STANDARD.encode(text))
+}
+
+/// Base64 in lines of 76 characters, each ending in CRLF.
+fn wrap_base64(encoded: &str) -> String {
     encoded
         .as_bytes()
         .chunks(76)
@@ -328,6 +408,8 @@ fn encode_body(body: &str) -> String {
 
 /// The boundary of `multipart/alternative`. The parts are base64, whose lines never hold a `-`, so no body can contain it.
 const BOUNDARY: &str = "tsunagiai-alternative";
+/// The boundary of `multipart/mixed`, the text and then the files (M-12). The same: the parts are base64 and no line of one begins with `--`.
+const MIXED_BOUNDARY: &str = "tsunagiai-mixed";
 
 fn escape_html(text: &str, out: &mut String) {
     for c in text.chars() {
@@ -437,6 +519,66 @@ fn text_part(subtype: &str, text: &str) -> String {
     )
 }
 
+/// The text of the mail with its own headers: one `text/plain` part, or `multipart/alternative` when it is Markdown.
+fn text_entity(c: &Checked) -> String {
+    if !c.markdown {
+        return text_part("plain", &c.body);
+    }
+    let mut m = format!("Content-Type: multipart/alternative; boundary=\"{BOUNDARY}\"\r\n\r\n");
+    m += &format!(
+        "--{BOUNDARY}\r\n{}",
+        text_part("plain", &plain_text(&c.body))
+    );
+    m += &format!(
+        "--{BOUNDARY}\r\n{}",
+        text_part("html", &markdown_to_html(&c.body))
+    );
+    m += &format!("--{BOUNDARY}--\r\n");
+    m
+}
+
+/// The bytes of `text` as `%XX`, except the characters that RFC 5987 lets stand in a parameter value.
+fn percent_encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The parameters of `Content-Disposition` that carry the file name, each on a line of its own: `filename` in quotes, with every character that is not a printable ASCII one (or is `"` or `\`) turned into `_`, and, when that changed the name,
+/// `filename*` (RFC 2231) with the real name percent-encoded as UTF-8. Nothing of the name stands in a header as it is, so no line break in it can start another header.
+fn filename_parameters(name: &str) -> String {
+    let plain: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut out = format!("\r\n filename=\"{plain}\"");
+    if plain != name {
+        out += &format!(";\r\n filename*=UTF-8''{}", percent_encode(name));
+    }
+    out
+}
+
+/// One attached file as a MIME part: an opaque type, base64 and the name.
+fn attachment_part(file: &Attachment) -> String {
+    format!(
+        "Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment;{}\r\n\r\n{}",
+        filename_parameters(&file.name),
+        wrap_base64(&STANDARD.encode(&file.bytes))
+    )
+}
+
 /// The RFC 5322 message.
 fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
     let mut m = format!("From: {}\r\n", c.from);
@@ -449,19 +591,15 @@ fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
         m += &format!("References: {}\r\n", fold_ids(&r.references));
     }
     m += "MIME-Version: 1.0\r\n";
-    if c.markdown {
-        m += &format!("Content-Type: multipart/alternative; boundary=\"{BOUNDARY}\"\r\n\r\n");
-        m += &format!(
-            "--{BOUNDARY}\r\n{}",
-            text_part("plain", &plain_text(&c.body))
-        );
-        m += &format!(
-            "--{BOUNDARY}\r\n{}",
-            text_part("html", &markdown_to_html(&c.body))
-        );
-        m += &format!("--{BOUNDARY}--\r\n");
+    if c.attachments.is_empty() {
+        m += &text_entity(c);
     } else {
-        m += &text_part("plain", &c.body);
+        m += &format!("Content-Type: multipart/mixed; boundary=\"{MIXED_BOUNDARY}\"\r\n\r\n");
+        m += &format!("--{MIXED_BOUNDARY}\r\n{}", text_entity(c));
+        for file in &c.attachments {
+            m += &format!("--{MIXED_BOUNDARY}\r\n{}", attachment_part(file));
+        }
+        m += &format!("--{MIXED_BOUNDARY}--\r\n");
     }
     m
 }
@@ -556,7 +694,56 @@ mod tests {
             body: body.into(),
             markdown: None,
             reply_thread_id: None,
+            attachments: None,
         }
+    }
+
+    fn file(name: &str, bytes: &[u8]) -> OutgoingAttachment {
+        OutgoingAttachment {
+            name: name.into(),
+            data: STANDARD.encode(bytes),
+        }
+    }
+
+    fn with_files(files: Vec<OutgoingAttachment>) -> OutgoingMail {
+        let mut m = mail(&["a@example.com"], "s", "text");
+        m.attachments = Some(files);
+        m
+    }
+
+    /// The parts of a `multipart/mixed` message: each one's unfolded header lines and its body (the text up to the next delimiter, as it is).
+    fn mixed_parts(message: &str) -> Vec<(Vec<String>, String)> {
+        let body = message.split_once("\r\n\r\n").unwrap().1;
+        let delimiter = format!("--{MIXED_BOUNDARY}");
+        let mut pieces = body.split(delimiter.as_str());
+        assert_eq!(pieces.next(), Some(""));
+        let mut out = Vec::new();
+        for piece in pieces {
+            if piece == "--\r\n" {
+                return out;
+            }
+            let (head, rest) = piece
+                .strip_prefix("\r\n")
+                .unwrap()
+                .split_once("\r\n\r\n")
+                .unwrap();
+            let mut lines: Vec<String> = Vec::new();
+            for line in head.split("\r\n") {
+                if line.starts_with(' ') {
+                    lines.last_mut().unwrap().push_str(line);
+                } else {
+                    lines.push(line.to_owned());
+                }
+            }
+            out.push((lines, rest.to_owned()));
+        }
+        panic!("no closing delimiter");
+    }
+
+    fn decode_lines(b64: &str) -> Vec<u8> {
+        STANDARD
+            .decode(b64.split("\r\n").collect::<String>())
+            .unwrap()
     }
 
     /// The mail parts of a multipart message: each one's unfolded header lines and its decoded body.
@@ -1219,5 +1406,192 @@ mod tests {
             SEND_URL,
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
         );
+    }
+
+    #[test]
+    fn a_mail_with_a_file_is_multipart_mixed_with_the_text_first() {
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        let m = with_files(vec![file("report.pdf", &bytes), file("b.txt", b"hello")]);
+        let message = build("me@example.com", &m, None).unwrap();
+        let h = headers(&message);
+        assert!(h.contains(&format!(
+            "Content-Type: multipart/mixed; boundary=\"{MIXED_BOUNDARY}\""
+        )));
+        assert!(!h.iter().any(|l| l.starts_with("Content-Transfer-Encoding")));
+        let parts = mixed_parts(&message);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(
+            parts[0].0,
+            [
+                "Content-Type: text/plain; charset=UTF-8",
+                "Content-Transfer-Encoding: base64"
+            ]
+        );
+        assert_eq!(
+            String::from_utf8(decode_lines(&parts[0].1)).unwrap(),
+            "text"
+        );
+        assert_eq!(
+            parts[1].0,
+            [
+                "Content-Type: application/octet-stream",
+                "Content-Transfer-Encoding: base64",
+                "Content-Disposition: attachment; filename=\"report.pdf\"",
+            ]
+        );
+        assert_eq!(decode_lines(&parts[1].1), bytes);
+        assert!(parts[1].1.split("\r\n").all(|l| l.len() <= 76));
+        assert_eq!(decode_lines(&parts[2].1), b"hello");
+        assert!(message.ends_with(&format!("--{MIXED_BOUNDARY}--\r\n")));
+    }
+
+    #[test]
+    fn a_markdown_mail_with_a_file_keeps_its_alternative_inside_the_mixed() {
+        let mut m = with_files(vec![file("a.bin", &[1, 2, 3])]);
+        m.markdown = Some(true);
+        m.body = "**bold**".into();
+        let message = build("me@example.com", &m, None).unwrap();
+        let parts = mixed_parts(&message);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(
+            parts[0].0,
+            [format!(
+                "Content-Type: multipart/alternative; boundary=\"{BOUNDARY}\""
+            )]
+        );
+        let inner = format!("--{BOUNDARY}");
+        assert_eq!(parts[0].1.matches(inner.as_str()).count(), 3);
+        assert!(parts[0].1.contains(&format!("--{BOUNDARY}--\r\n")));
+        assert_eq!(decode_lines(&parts[1].1), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_mail_with_no_file_stays_as_it_was() {
+        let plain = build(
+            "me@example.com",
+            &mail(&["a@example.com"], "s", "text"),
+            None,
+        )
+        .unwrap();
+        let empty = build("me@example.com", &with_files(vec![]), None).unwrap();
+        assert_eq!(plain, empty);
+        assert!(!plain.contains("multipart/mixed"));
+    }
+
+    #[test]
+    fn a_name_that_is_not_plain_ascii_is_sent_as_filename_star_too() {
+        let name = "請求書 \"2026\"\\.pdf";
+        let message = build("me@example.com", &with_files(vec![file(name, b"x")]), None).unwrap();
+        let disposition = mixed_parts(&message)[1].0[2].clone();
+        assert_eq!(
+            disposition,
+            "Content-Disposition: attachment; filename=\"___ _2026__.pdf\"; filename*=UTF-8''%E8%AB%8B%E6%B1%82%E6%9B%B8%20%222026%22%5C.pdf"
+        );
+    }
+
+    #[test]
+    fn a_line_break_in_a_name_starts_no_header() {
+        let name = "a\r\nBcc: evil@example.com\r\n\r\nbody.txt";
+        let message = build("me@example.com", &with_files(vec![file(name, b"x")]), None).unwrap();
+        assert!(!message.contains("evil@example.com\r\n"));
+        assert!(!message.contains("\r\nBcc:"));
+        let part = &mixed_parts(&message)[1];
+        assert_eq!(part.0.len(), 3);
+        assert!(part.0[2].contains("filename=\"a__Bcc: evil@example.com____body.txt\""));
+        assert!(part.0[2]
+            .contains("filename*=UTF-8''a%0D%0ABcc%3A%20evil%40example.com%0D%0A%0D%0Abody.txt"));
+        assert_eq!(decode_lines(&part.1), b"x");
+    }
+
+    #[test]
+    fn a_long_name_keeps_every_line_short() {
+        let name = "あ".repeat(85);
+        let message = build("me@example.com", &with_files(vec![file(&name, b"x")]), None).unwrap();
+        assert!(message.split("\r\n").all(|l| l.len() <= 998));
+        let star = &mixed_parts(&message)[1].0[2];
+        let value = star.split("filename*=UTF-8''").nth(1).unwrap();
+        let bytes: Vec<u8> = value
+            .split('%')
+            .skip(1)
+            .map(|h| u8::from_str_radix(&h[..2], 16).unwrap())
+            .collect();
+        assert_eq!(String::from_utf8(bytes).unwrap(), name);
+    }
+
+    #[test]
+    fn the_limit_is_on_the_total_of_the_files() {
+        let limit = MAX_ATTACHMENTS;
+        assert!(check_attachment("a", limit, 0).is_ok());
+        assert!(check_attachment("a", limit + 1, 0).is_err());
+        assert!(check_attachment("a", 1, limit - 1).is_ok());
+        assert_eq!(
+            check_attachment("a", 1, limit),
+            Err("添付の合計は 25 MB までです".into())
+        );
+        assert!(check_attachment("a", 1, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn a_name_and_a_size_are_checked() {
+        assert_eq!(
+            check_attachment("", 1, 0),
+            Err("ファイル名がありません".into())
+        );
+        assert_eq!(
+            check_attachment(" \t", 1, 0),
+            Err("ファイル名がありません".into())
+        );
+        assert_eq!(
+            check_attachment("empty.txt", 0, 0),
+            Err("empty.txt は空のファイルです".into())
+        );
+        assert!(check_attachment(&"あ".repeat(85), 1, 0).is_ok());
+        let long = "あ".repeat(86);
+        assert!(check_attachment(&long, 1, 0)
+            .unwrap_err()
+            .starts_with("ファイル名が長すぎます（255 バイトまで）"));
+    }
+
+    #[test]
+    fn the_files_of_a_mail_are_checked_before_it_is_built() {
+        let half = vec![7u8; MAX_ATTACHMENTS as usize / 2 + 1];
+        let over = with_files(vec![file("a", &half), file("b", &half)]);
+        assert_eq!(
+            check("me@example.com", &over).unwrap_err(),
+            "添付の合計は 25 MB までです"
+        );
+        let just = vec![7u8; MAX_ATTACHMENTS as usize / 2];
+        let ok = with_files(vec![file("a", &just), file("b", &just)]);
+        assert!(check("me@example.com", &ok).is_ok());
+        let flood = with_files(vec![OutgoingAttachment {
+            name: "a".into(),
+            data: "A".repeat(MAX_ATTACHMENTS as usize / 3 * 4 + 8),
+        }]);
+        assert_eq!(
+            check("me@example.com", &flood).unwrap_err(),
+            "添付の合計は 25 MB までです"
+        );
+        let broken = with_files(vec![OutgoingAttachment {
+            name: "a.txt".into(),
+            data: "***".into(),
+        }]);
+        assert_eq!(
+            check("me@example.com", &broken).unwrap_err(),
+            "a.txt を読めません"
+        );
+        assert_eq!(
+            check("me@example.com", &with_files(vec![file("e", b"")])).unwrap_err(),
+            "e は空のファイルです"
+        );
+    }
+
+    #[test]
+    fn the_screen_may_leave_the_files_out_of_the_mail() {
+        let m: OutgoingMail =
+            serde_json::from_value(json!({"to": ["a@example.com"], "subject": "s", "body": "b"}))
+                .unwrap();
+        assert_eq!(m.attachments, None);
+        let m: OutgoingMail = serde_json::from_value(json!({"to": ["a@example.com"], "subject": "s", "body": "b", "attachments": [{"name": "n", "data": "AQ=="}]})).unwrap();
+        assert_eq!(m.attachments, Some(vec![file("n", &[1])]));
     }
 }

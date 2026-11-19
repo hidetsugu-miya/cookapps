@@ -1,6 +1,7 @@
+import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -13,7 +14,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "開発"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -251,6 +252,120 @@ describe("settings: Slack", () => {
     await waitForCalls(remove);
     expect(await callsOf(remove)).toEqual([{ teamId: "T1" }]);
     await expect($("#slack-workspaces")).toHaveText(expect.stringContaining("ワークスペースはまだありません"));
+  });
+});
+
+describe("settings: Notion (N-1)", () => {
+  const ok: NotionAccount = { workspaceId: "w1", workspaceName: "Example Workspace", userName: "Example User", userEmail: "user@example.com", reconnect: false };
+  const lapsed: NotionAccount = { workspaceId: "w2", workspaceName: "Second Space", userName: null, userEmail: "second@example.com", reconnect: true };
+  const openNotion = async (list: NotionAccount[]) => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, notion_accounts: list });
+    await $("#nav-settings").click();
+    await expect($("#settings")).toBeDisplayed();
+    await openTab("notion");
+    await waitForCalls("notion_accounts");
+  };
+  const unlinkOf = (name: string) => $(`button[aria-label="${name} の接続を解除"]`);
+
+  it("reads the workspaces only when the tab is shown, and draws each with its name, user, state and unlink", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, notion_accounts: [ok, lapsed] });
+    await $("#nav-settings").click();
+    expect(await callsOf("notion_accounts")).toHaveLength(0);
+    await openTab("notion");
+    await waitForCalls("notion_accounts");
+    await waitForText("#notion-accounts .item-name", "Second Space");
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace", "Second Space"]);
+    expect(await textsOf("#notion-accounts .item-meta")).toEqual(["Example User ・ user@example.com", "second@example.com"]);
+    expect(await textsOf("#notion-accounts .status")).toEqual(["使える", "再連携が要る"]);
+    await expect($$("#notion-accounts .status")[0]).toHaveElementClass("ok");
+    await expect($$("#notion-accounts .status")[1]).toHaveElementClass("warn");
+    await expect(unlinkOf("Example Workspace")).toExist();
+    await expect(unlinkOf("Second Space")).toExist();
+    await expect($$("#notion-accounts .avatar")[0]).toHaveText("EW");
+  });
+
+  it("has a header row, the rows and an add row", async () => {
+    await openNotion([ok]);
+    await expect($("#settings-panel-notion .card-head .logo.notion")).toHaveText("N");
+    await expect($("#settings-panel-notion .card-head h2")).toHaveText(expect.stringContaining("Notion"));
+    await expect($("#notion-help")).toExist();
+    await expect($("#settings-panel-notion .card-add #notion-add")).toHaveText("追加");
+  });
+
+  it("says so when no workspace is connected", async () => {
+    await openNotion([]);
+    await expect($("#notion-accounts .card-empty")).toHaveText("ワークスペースはまだありません");
+  });
+
+  it("calls notion_connect from 追加, keeps the button off while the consent is open, and reads the list again", async () => {
+    await openNotion([]);
+    const connect = await mock("notion_connect", holds);
+    await $("#notion-add").click();
+    await waitForCalls(connect);
+    await expect($("#notion-add")).toBeDisabled();
+    await mock("notion_accounts", [ok]);
+    await release(connect, ok);
+    await waitForText("#notion-accounts .item-name", "Example Workspace");
+    await expect($("#notion-add")).toBeEnabled();
+  });
+
+  it("lists a second workspace beside the first", async () => {
+    await openNotion([ok]);
+    const connect = await mock("notion_connect", lapsed);
+    await mock("notion_accounts", [ok, lapsed]);
+    await $("#notion-add").click();
+    expect(await waitForCalls(connect)).toEqual([null]);
+    await waitForText("#notion-accounts .item-name", "Second Space");
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace", "Second Space"]);
+  });
+
+  it("shows the failure of a connection on a card and leaves the list as it was", async () => {
+    await openNotion([ok]);
+    await mock("notion_connect", rejects("ログインがタイムアウトしました"));
+    await $("#notion-add").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("ログインがタイムアウトしました"));
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace"]);
+    await expect($("#notion-add")).toBeEnabled();
+  });
+
+  it("asks before unlinking: キャンセル sends nothing, 解除 calls notion_disconnect with the workspace and draws the rest", async () => {
+    await openNotion([ok, lapsed]);
+    const remove = await mock("notion_disconnect", null);
+    await unlinkOf("Example Workspace").click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toBeDisplayed();
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toExist();
+    expect(await callsOf(remove)).toHaveLength(0);
+
+    await unlinkOf("Example Workspace").click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(remove)).toEqual([{ workspaceId: "w1" }]);
+    await browser.waitUntil(async () => (await textsOf("#notion-accounts .item-name")).join() === "Second Space", { timeoutMsg: "the unlinked workspace stayed" });
+  });
+
+  it("keeps the row and shows the failure on a card when the workspace cannot be unlinked", async () => {
+    await openNotion([ok]);
+    await mock("notion_disconnect", rejects("取り消せません"));
+    await unlinkOf("Example Workspace").click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("取り消せません"));
+    expect(await textsOf("#notion-accounts .item-name")).toEqual(["Example Workspace"]);
+  });
+
+  it("writes a failed read of the list to the log and draws no row", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, notion_accounts: rejects("読めません") });
+    await $("#nav-settings").click();
+    await openTab("notion");
+    const line = await waitForLog("読めません");
+    expect(line).toMatchObject({ level: "error", source: "notion-settings" });
+    await expect($("#notion-accounts .item")).not.toExist();
+  });
+
+  it("opens the hint with the steps from ?", async () => {
+    await openNotion([]);
+    await $("#notion-help").click();
+    await expect($('[role="dialog"][aria-label="Notion のワークスペースの追加"]')).toBeDisplayed();
   });
 });
 
@@ -1292,14 +1407,140 @@ describe("settings: the PCs with the server of the orchestration (the Orca tab)"
   });
 });
 
-describe("settings: the Orca tab has no card of the target (A-6)", () => {
-  it("has the cards of the terminal colors, the editor, Ghostty's settings and the PCs with the server, and none of the target", async () => {
+describe("settings: the 開発 tab (the tab `orca`) has no card of the target (A-6)", () => {
+  it("has the cards of the terminal colors, the editor, Ghostty's settings, the PCs with the server and the Jira connection, and none of the target", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("orca");
     await expect($("#settings-panel-orca")).toBeDisplayed();
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続"]);
     expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
+  });
+});
+
+// J-1 (#868): the card of the Jira connection in the 開発 tab.
+describe("settings: Jira connection (the 開発 tab, J-1)", () => {
+  const saved = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true };
+  const user = { displayName: "Example User", emailAddress: "me@example.com" };
+
+  async function openJira(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await waitForCalls("jira_settings");
+  }
+  const fill = async (site: string, email: string, token: string) => {
+    await $("#jira-site").setValue(site);
+    await $("#jira-email").setValue(email);
+    await $("#jira-token").setValue(token);
+  };
+
+  it("is named 開発 on the tab, and reads the saved connection only once the tab is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, jira_settings: saved });
+    await $("#nav-settings").click();
+    expect(await callsOf("jira_settings")).toHaveLength(0);
+    await openTab("orca");
+    await expect($("#settings-tab-orca")).toHaveText("開発");
+    await waitForCalls("jira_settings");
+    await expect($("#jira-site")).toHaveValue(saved.site);
+    await expect($("#jira-email")).toHaveValue(saved.email);
+    await expect($("#jira-token")).toHaveValue("");
+    await expect($("#jira-token")).toHaveAttribute("type", "password");
+  });
+
+  it("has a header row with the hint, the state row and a form with the three fields and the two buttons", async () => {
+    await openJira({ jira_settings: saved });
+    expect(await count("#settings-panel-orca > .card:last-child .card-head .logo.orca")).toBe(1);
+    await expect($("#jira-help")).toHaveAttribute("aria-label", "Jira 接続の説明");
+    await expect($("#jira-items .item-name")).toHaveText("Jira");
+    await expect($("#jira-items .status.ok")).toHaveText("保存済み");
+    await expect($("#jira-items .item-meta")).toHaveText(saved.site);
+    expect(await textsOf("#jira-form .text-btn")).toEqual(["保存", "接続を試す"]);
+    await expect($("#jira-site")).toHaveAttribute("aria-label", "サイトの URL");
+    await expect($("#jira-email")).toHaveAttribute("aria-label", "メールアドレス");
+    await expect($("#jira-token")).toHaveAttribute("aria-label", "API トークン");
+  });
+
+  it("says 未設定 until a site and a token are saved", async () => {
+    await openJira();
+    await expect($("#jira-items .status.off")).toHaveText("未設定");
+  });
+
+  it("calls jira_save with the three fields from 保存, empties the token field and draws what was saved", async () => {
+    await openJira();
+    const save = await mock("jira_save", saved);
+    await fill("https://example.atlassian.net", "me@example.com", "tok-1");
+    await $("#jira-form .text-btn.primary").click();
+    expect(await waitForCalls(save)).toEqual([{ site: "https://example.atlassian.net", email: "me@example.com", token: "tok-1" }]);
+    await expect($("#jira-items .status.ok")).toHaveText("保存済み");
+    await expect($("#jira-token")).toHaveValue("");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("sends an empty email as it is, for a Bearer token", async () => {
+    await openJira();
+    const save = await mock("jira_save", { ...saved, email: "" });
+    await fill("https://example.atlassian.net", "", "tok-2");
+    await $("#jira-form .text-btn.primary").click();
+    expect(await waitForCalls(save)).toEqual([{ site: "https://example.atlassian.net", email: "", token: "tok-2" }]);
+  });
+
+  it("shows the words of a refused save on a card, and keeps the form", async () => {
+    await openJira();
+    const reason = "サイトの URL は https://{名前}.atlassian.net の形で入力してください";
+    await mock("jira_save", rejects(reason));
+    await fill("https://example.com", "", "tok-3");
+    await $("#jira-form .text-btn.primary").click();
+    await expect($(CARD)).toHaveText(reason);
+    await expect($("#jira-site")).toHaveValue("https://example.com");
+    await expect($("#jira-items .status.off")).toHaveText("未設定");
+  });
+
+  it("calls jira_test with the form's values from 接続を試す, keeps the button off while it waits, and says who it found", async () => {
+    await openJira({ jira_settings: saved });
+    const test = await mock("jira_test", holds);
+    await $("#jira-token").setValue("tok-4");
+    await $("#jira-test").click();
+    expect(await waitForCalls(test)).toEqual([{ site: saved.site, email: saved.email, token: "tok-4" }]);
+    await expect($("#jira-test")).toBeDisabled();
+    await release(test, user);
+    await expect($("#jira-items .status.ok")).toHaveText("接続できました");
+    await expect($("#jira-items .item-meta")).toHaveText("Example User ・ me@example.com");
+    await expect($("#jira-test")).toBeEnabled();
+    await expect($("#jira-token")).toHaveValue("");
+    expect(await callsOf("jira_save")).toEqual([]);
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("sends an empty token to try the stored one", async () => {
+    await openJira({ jira_settings: saved });
+    const test = await mock("jira_test", user);
+    await $("#jira-test").click();
+    expect(await waitForCalls(test)).toEqual([{ site: saved.site, email: saved.email, token: "" }]);
+  });
+
+  it("shows the words of a failed test on a card and the state 接続できません", async () => {
+    await openJira({ jira_settings: saved });
+    const reason = "Jira が認証を拒否しました（401）";
+    await mock("jira_test", rejects(reason));
+    await $("#jira-test").click();
+    await expect($(CARD)).toHaveText(reason);
+    await expect($("#jira-items .status.warn")).toHaveText("接続できません");
+    await expect($("#jira-test")).toBeEnabled();
+  });
+
+  it("writes the words to the log, with no card, when the saved connection cannot be read", async () => {
+    await openJira({ jira_settings: rejects("jira-settings.json を読めません") });
+    await waitForLog("jira-settings.json を読めません");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("opens a hint that says how the email address decides the authentication, and that the token stays in the keychain", async () => {
+    await openJira();
+    await $("#jira-help").click();
+    await expect($("#jira-help")).toHaveAttribute("aria-expanded", "true");
+    await expect($('[role="dialog"][aria-label="Jira 接続"]')).toHaveText(expect.stringContaining("Bearer"));
+    await expect($('[role="dialog"][aria-label="Jira 接続"]')).toHaveText(expect.stringContaining("トークンは OS の資格情報の保管場所"));
   });
 });
 
@@ -1325,7 +1566,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
 
   it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
     expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });
@@ -1866,7 +2107,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the ten tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the eleven tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
@@ -2262,6 +2503,103 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await expect($(CARD)).toHaveText("スキル「alpha」を消せません");
     await expect($("#skill-form")).toBeDisplayed();
     expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
+  });
+
+  // The pane of Claude Code at the right of the form (A-32, A-36, #345): `skill_list`, `skill_get` and `skill_save` of tsunagiai-mcp, and `changed` `skills`.
+  const term = "#skill-term";
+  const changed = (what: string) => emitEvent("screen-bridge-changed", what);
+
+  it("has the terminal and やり直す at the right of the form, with none of the conversation and no help text", async () => {
+    await openSkills();
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#skill-restart")).toHaveText("やり直す");
+    await expect($("#skill-restart")).toBeEnabled();
+    expect(await browser.execute(() => document.querySelector("#skill-chat .chat-head")!.lastElementChild!.id)).toBe("skill-restart");
+    // The pane follows the form in the card.
+    expect(await browser.execute(() => document.getElementById("skill-form")!.nextElementSibling!.id)).toBe("skill-chat");
+    // Only the head (with the one button) and the terminal: no log, request field, model select or note (the terminal's own hidden field is xterm's).
+    expect(await browser.execute(() => [...document.getElementById("skill-chat")!.children].map((e) => e.id || e.className))).toEqual(["chat-head", "skill-term"]);
+    expect(await count("#skill-chat .chat-head > :not(svg):not(#skill-restart)")).toBe(0);
+  });
+
+  it("starts Claude Code only once the tab is shown, with the tools of tsunagiai-mcp only and a first instruction that names the tools and holds no skill", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, skill_list: [skill("alpha")] });
+    await $("#nav-settings").click();
+    await openTab("claude");
+    await browser.pause(300);
+    expect(await callsOf("claude_code_start")).toEqual([]);
+    await openTab("skill");
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "skill-claude", builtinTools: false, permissionMode: "manual", skill: null });
+    const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
+    for (const word of ["スキル", "skill_list", "skill_get", "skill_save", "create", "従わない"]) expect(prompt).toContain(word);
+    expect(prompt).not.toContain("Do alpha.");
+    expect(viewport.cols).toBeGreaterThan(20);
+    expect(viewport.rows).toBeGreaterThan(5);
+    for (const command of ["claude_chat_thread", "orca_stream_terminal", "orca_terminal_read"]) expect(await callsOf(command)).toEqual([]);
+  });
+
+  it("hides the terminal while another tab is shown and starts nothing again when the tab is shown again", async () => {
+    await openSkills();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await openTab("google");
+    await expect($(term)).not.toBeDisplayed();
+    await openTab("skill");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("ends the process and starts a new one with やり直す", async () => {
+    await openSkills();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await $("#skill-restart").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "skill-claude", launch: 1 }]);
+    expect(await waitForCalls("claude_code_start", 2)).toHaveLength(2);
+    await expect($("#skill-restart")).toBeEnabled();
+  });
+
+  it("fills the form again with the skill that Claude Code saved, and reads the list again", async () => {
+    await openSkills([skill("alpha"), skill("beta")]);
+    await waitForCount("#skill-list .skill-row", 2);
+    await row(1).click();
+    await expect($("#skill-instructions")).toHaveValue("Do alpha.");
+    const list = await mock("skill_list", [skill("alpha", { displayName: "新しい表示名", instructions: "Rewritten." }), skill("beta")]);
+    await changed("skills");
+    await waitForCalls(list);
+    await expect($("#skill-instructions")).toHaveValue("Rewritten.");
+    await expect($("#skill-display-name")).toHaveValue("新しい表示名");
+    await expect($("#skill-name")).toHaveAttribute("readonly");
+    await expect(row(1)).toHaveAttribute("aria-current", "true");
+    expect(await rows()).toEqual(["新しい表示名alpha", "Skill betabeta"]);
+  });
+
+  it("lists a skill that Claude Code made, and keeps what was typed when the skill shown did not change", async () => {
+    await openSkills([skill("alpha")]);
+    await waitForCount("#skill-list .skill-row", 1);
+    await row(1).click();
+    await $("#skill-instructions").setValue("Typed by hand");
+    const list = await mock("skill_list", [skill("alpha"), skill("gamma")]);
+    await changed("skills");
+    await waitForCalls(list);
+    await waitForCount("#skill-list .skill-row", 2);
+    await expect($("#skill-instructions")).toHaveValue("Typed by hand");
+  });
+
+  it("reads nothing for another kind of change, and nothing while the tab is not shown until it is", async () => {
+    await openSkills();
+    await waitForCount("#skill-list .skill-row", 2);
+    const list = await mock("skill_list", [skill("alpha", { instructions: "Rewritten." }), skill("beta")]);
+    await changed("todo");
+    await openTab("google");
+    await changed("skills");
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([]);
+    await openTab("skill");
+    await waitForCalls(list);
   });
 });
 

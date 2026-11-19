@@ -12,11 +12,9 @@ import { closeClaudePopup } from "./accounts.js";
 import { code, confirmUnlink, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
-import { refreshSlackClaude } from "./slack-claude.js";
 import { refreshSlackThread } from "./slack-thread.js";
 import { updateAddMode } from "./todo-add.js";
-import { refreshDraftChat } from "./todo-draft.js";
-import { promptRow, refreshPrompt } from "./todo-prompt.js";
+import { promptRow } from "./todo-prompt.js";
 import { logError, showFailure } from "./error-card.js";
 import { setClaudeReady } from "./view.js";
 
@@ -172,10 +170,7 @@ function applyClaude(next: Claude | null) {
   else closeClaudePopup();
   redrawConnection();
   updateAddMode();
-  refreshPrompt();
   refreshSlackThread();
-  refreshDraftChat();
-  refreshSlackClaude();
 }
 
 // The model and effort of each purpose of the `claude -p` calls (A-2) as the selects show them; null until read.
@@ -239,11 +234,8 @@ function modelBlock() {
 }
 
 // The two selects of a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
-// The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the Slack thread conversation) have them in the frame of the field (composer.ts).
-// The Todo draft page's pane (S-18) has them for the Slack summary's purpose; the page is not always open, so a slot that is not in the page is skipped.
-// The Slack screen's Claude pane (S-24) has them for the Slack conversation's purpose.
 // The pane of A-9 has them in the frame of its field for the summary of a handoff.
-const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["slack-claude-model", "slackChat"], ["handoff-model", "orcaHandoff"]];
+const MODEL_SLOTS: [string, Purpose][] = [["handoff-model", "orcaHandoff"]];
 
 // The pane of A-9 is drawn in the mail, the Todo and the Slack thread at once, each with a slot of the same id, so every element of the id is drawn, not the first one `$` finds.
 function redrawModelSlot(id: string, onlyEmpty = false) {
@@ -253,7 +245,7 @@ function redrawModelSlot(id: string, onlyEmpty = false) {
   }
 }
 
-// Every select drawn, on the settings screen and on the prompt screen.
+// Every select drawn, on the settings screen and in the panes.
 const modelSelects = () => [...document.querySelectorAll<HTMLSelectElement>("select[data-purpose]")];
 
 // Puts the saved values into the drawn selects and lets them be used (or not, while a save is on its way).
@@ -293,7 +285,7 @@ export function showModelSlot(id: string) {
   else redrawModelSlot(id, true);
 }
 
-// Reads the saved model and effort; the card and the prompt screen follow. A read that a save overtook is dropped: the save's answer is newer.
+// Reads the saved model and effort; the card and the panes follow. A read that a save overtook is dropped: the save's answer is newer.
 export async function loadModelSettings() {
   const started = saves;
   let read: ClaudeSettings;

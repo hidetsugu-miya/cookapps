@@ -110,6 +110,20 @@ list.replaceChild(newRow, oldRow);
 await reload(); show("list");
 ```
 
+## Tauri permissions
+
+### Add the permission to the production capability in the same pull request as a new Tauri API call
+
+`core.invoke` of an app command needs none. Any other API of `window.__TAURI__` (`event`, `window`, and the like) is checked against the capability of the window: a call whose permission is missing is refused at run time, and only in the app that lacks it.
+When a screen starts to use such an API, add its permission to `src-tauri/capabilities/default.json` in the same pull request, with the requirement ID in the `description`.
+E2E runs with the same `default` (`e2e.md`, "Run the E2E app with the production capability…"), so a missing permission fails a spec; do not add it to the capability of E2E.
+At the owner's instruction, 2026-11-19; #1068. `listen` was refused in production from v0.88.1 to v0.90.0 because `default.json` had no `core:event` (#1066).
+
+```text
+Good: a screen calls `window.__TAURI__.event.listen` -> `core:event:default` is in capabilities/default.json in the same pull request
+Bad:  a screen calls `window.__TAURI__.window.setSize` and the pull request does not touch capabilities/
+```
+
 ## Checking
 
 ### Check a UI change with E2E, and make no throwaway mock

@@ -11,7 +11,7 @@ import { currentScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
-import { initSplit } from "./split.js";
+import { initSplit, type SplitHandle } from "./split.js";
 import { initTodoClaude, syncTodoClaude, toggleTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
@@ -34,12 +34,44 @@ let sideUsable = false;
 let listOpen = true;
 let tokenForm = false;
 
+// Where Claude's pane sits (T-7): on the right of the tasks, or, when their column would be under 612px (the detail's 556px and the 56px of its margins) with the side at its least (30% of the screen),
+// under them, with the divider lying down and the ✳ in the header of the tasks. It follows the screen's width and the project list only, never the side's own width, so that the two places cannot flip each other.
+const TASKS_MIN = 612;
+const SIDE_LEAST = 0.3;
+// The divider's width (`.split-bar`), which the right side leaves out of the tasks' column.
+const DIVIDER = 7;
+let below = false;
+let split: SplitHandle | undefined;
+
+function setBelow(on: boolean) {
+  if (on === below) return;
+  below = on;
+  $("todo").classList.toggle("below", on);
+  split?.lie(on);
+  $("todo-split").setAttribute("aria-label", on ? "Claude の高さ" : "Claude の幅");
+  // The ✳ goes to the header of the tasks, and back to its row of the side.
+  const button = $("todo-tool-claude");
+  const focused = document.activeElement === button;
+  (on ? $("todo-body").querySelector("header")! : $("todo-tools")).append(button);
+  if (focused) button.focus({ preventScroll: true });
+}
+
+function layoutSide() {
+  const width = $("todo").getBoundingClientRect().width;
+  // The screen is not shown: its size is not known, and it is read again when it is.
+  if (width === 0) return;
+  const projects = $("projects").hidden ? 0 : $("projects").getBoundingClientRect().width;
+  setBelow(width * (1 - SIDE_LEAST) - projects - DIVIDER < TASKS_MIN);
+}
+
 // Shows the list, or (closed) the button in the header that opens it again. The list's own button is in the list, so it goes with it.
 function layoutList() {
   $("projects").hidden = tokenForm || !listOpen;
   $("todo-list-toggle").hidden = tokenForm || listOpen;
   drawListToggle($("projects-toggle"), listOpen);
   drawListToggle($("todo-list-toggle"), listOpen);
+  // The list takes its width off the tasks' column, or gives it back.
+  layoutSide();
 }
 
 // Closes the list or opens it again; the tasks take the width of a closed list.
@@ -54,6 +86,10 @@ function toggleList() {
 function layoutPanes() {
   $("todo-side").hidden = !sideUsable;
   $("todo-split").hidden = !sideUsable;
+  // Under the tasks the column of the tasks has the whole height while the side is hidden (the CSS).
+  $("todo").classList.toggle("side-off", !sideUsable);
+  // The ✳ is in the header of the tasks while Claude is under them, and the header is shown under the token form and the page of a draft too.
+  $("todo-tool-claude").hidden = !sideUsable;
   // The terminal is shown while the side is in view, and hidden when it is not.
   syncTodoClaude();
 }
@@ -349,8 +385,10 @@ export function initTodo() {
   };
   initTodoClaude();
   $("todo-tool-claude").onclick = toggleTodoClaude;
-  // 30% of the screen at first, its least; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range).
-  initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45 });
+  // 30% of the screen at first, its least; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range). Under the tasks it is the height, 30% to 45%, kept apart from the width.
+  split = initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45, lying: { min: 0.3, max: 0.45 } });
+  split.lie(below);
+  new ResizeObserver(layoutSide).observe($("todo"));
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
   let wasOpen = false;
   $("todo-more").onpointerdown = () => (wasOpen = $("todo-more").hasAttribute("aria-expanded"));

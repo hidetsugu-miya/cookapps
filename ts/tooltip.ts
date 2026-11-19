@@ -1,4 +1,4 @@
-// Tooltip for icon-only controls. The native title is slow or missing in WKWebView, so the text is the control's aria-label.
+// Tooltip for icon-only controls. The native title is slow or missing in WKWebView, so the text is the control's aria-label (and its `data-shortcut`, when it has one).
 import { popupOpen } from "./accounts.js";
 import { el } from "./dom.js";
 
@@ -18,7 +18,9 @@ function showTip(target: Element) {
   const inFooter = target.closest("#footer");
   if (popupOpen() && target.closest("#account-list, #slack-workspace-list, #claude-btn")) return;
   tipTimer = setTimeout(() => {
-    tip.textContent = target.getAttribute("aria-label");
+    // A sidebar button that a number key reaches (A-5) adds it: "Slack ⌘3".
+    const key = (target as HTMLElement).dataset.shortcut;
+    tip.textContent = key ? `${target.getAttribute("aria-label")} ${key}` : target.getAttribute("aria-label");
     tip.hidden = false;
     const r = target.getBoundingClientRect();
     const left = inSidebar ? r.right + 8 : r.left + (r.width - tip.offsetWidth) / 2;

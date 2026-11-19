@@ -40,10 +40,14 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5l1.6 2.6 3-.7.9 2.9 2.9.9-.7 3 2.6 1.6-2.6 1.6.7 3-2.9.9-.9 2.9-3-.7-1.6 2.6-1.6-2.6-3 .7-.9-2.9-2.9-.9.7-3L2.5 12l2.6-1.6-.7-3 2.9-.9.9-2.9 3 .7z"/></svg>
         <span class="nav-dot" aria-hidden="true" hidden></span>
       </button>
+      <span id="app-version"></span>
     </div>
     <div id="account-popup" role="dialog" aria-label="アカウントの情報" hidden></div>
   </nav>
   <div id="content">
+    <div id="error-cards"></div>
+    <div id="mail-screen" class="split-main">
+    <div id="mail-col">
     <header id="mail-header" data-tauri-drag-region="deep" hidden>
       <button id="back" class="icon-btn" aria-label="戻る" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
@@ -62,8 +66,7 @@
       <h1>新規メッセージ</h1>
       <button id="new-mail-discard" class="text-btn" type="button">破棄</button>
     </header>
-    <div id="error-cards"></div>
-    <div id="mail-area" class="split-main">
+    <div id="mail-area">
     <main id="main">
       <section id="login" hidden>
         <button id="login-button">Google でログイン</button>
@@ -86,9 +89,6 @@
           </button>
           <button id="thread-todo" class="icon-btn" aria-label="Todo にする" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
-          </button>
-          <button id="thread-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
           </button>
           <button id="trash" class="icon-btn" aria-label="ゴミ箱へ移動" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
@@ -116,8 +116,11 @@
               <div id="mail-reply-bcc-field" class="mail-reply-field"><input id="mail-reply-bcc-input" class="mail-reply-input" aria-label="Bcc を追加" autocomplete="off" spellcheck="false"></div>
             </div>
             <div id="mail-reply-body"></div>
+            <div id="mail-reply-attach" class="mail-attach" hidden></div>
             <div class="mail-reply-foot">
               <button id="mail-reply-send" class="text-btn primary" type="button" disabled>送信</button>
+              <button id="mail-reply-attach-open" class="icon-btn" type="button" aria-label="ファイルを添付"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
+              <button id="mail-reply-undo" class="text-btn" type="button" hidden>元に戻す</button>
               <button id="mail-reply-discard" class="text-btn" type="button">破棄</button>
             </div>
           </div>
@@ -147,13 +150,35 @@
           <input id="new-mail-subject" aria-label="件名" autocomplete="off">
         </div>
         <textarea id="new-mail-body" aria-label="本文"></textarea>
+        <div id="new-mail-attach" class="mail-attach" hidden></div>
         <div id="new-mail-foot">
           <button id="new-mail-send" class="text-btn primary" type="button" disabled>送信</button>
+          <button id="new-mail-attach-open" class="icon-btn" type="button" aria-label="ファイルを添付"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
+          <button id="new-mail-undo" class="text-btn" type="button" hidden>元に戻す</button>
         </div>
       </section>
     </main>
-    <div id="mail-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Orca の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="40" tabindex="0" hidden><span></span></div>
-    <aside id="mail-handoff" class="ho-pane split-chat" aria-label="Orca に渡す" hidden></aside>
+    </div>
+    </div>
+    <div id="mail-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="右のペインの幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="40" tabindex="0" hidden><span></span></div>
+    <div id="mail-side" class="split-chat" hidden>
+      <div id="mail-tools" data-tauri-drag-region="deep">
+        <button id="mail-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+        </button>
+        <button id="mail-tool-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+        </button>
+      </div>
+      <aside id="mail-claude" class="chat-pane" aria-label="Claude">
+        <div class="chat-head">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+          <button id="mail-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
+        </div>
+        <div id="mail-claude-term"></div>
+      </aside>
+      <aside id="mail-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
+    </div>
     </div>
     <section id="calendar" hidden>
       <div id="cal-bar" data-tauri-drag-region="deep">
@@ -198,59 +223,61 @@
     </section>
     <section id="todo" class="split-main" hidden>
       <aside id="projects"></aside>
-      <div id="todo-body">
-        <header data-tauri-drag-region="deep">
-          <button id="todo-back" class="icon-btn" aria-label="戻る" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
-          </button>
-          <h1 id="todo-title">今日</h1>
-          <button id="todo-orca-open" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
-          </button>
-          <button id="todo-more" class="text-btn" aria-label="編集" aria-haspopup="menu" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
-            <span>編集</span>
-          </button>
-        </header>
-        <div id="todo-notice"></div>
-        <div id="todo-main">
-          <form id="todo-token" hidden>
-            <p>Todoist の設定の「連携」にある個人 API トークンを入力してください。トークンは OS の資格情報の保管場所（macOS はキーチェーン、Windows は資格情報マネージャー）に保存し、画面には表示しません。</p>
-            <p id="todo-token-note"></p>
-            <div class="row">
-              <input id="todo-token-input" type="password" autocomplete="off" aria-label="Todoist の API トークン" placeholder="API トークン">
-              <button class="text-btn">保存</button>
+      <div id="todo-work">
+        <div id="todo-body">
+          <header data-tauri-drag-region="deep">
+            <button id="todo-back" class="icon-btn" aria-label="戻る" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+            </button>
+            <h1 id="todo-title">今日</h1>
+            <button id="todo-orca-open" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+            </button>
+            <button id="todo-more" class="text-btn" aria-label="編集" aria-haspopup="menu" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>
+              <span>編集</span>
+            </button>
+          </header>
+          <div id="todo-notice"></div>
+          <div id="todo-main">
+            <form id="todo-token" hidden>
+              <p>Todoist の設定の「連携」にある個人 API トークンを入力してください。トークンは OS の資格情報の保管場所（macOS はキーチェーン、Windows は資格情報マネージャー）に保存し、画面には表示しません。</p>
+              <p id="todo-token-note"></p>
+              <div class="row">
+                <input id="todo-token-input" type="password" autocomplete="off" aria-label="Todoist の API トークン" placeholder="API トークン">
+                <button class="text-btn">保存</button>
+              </div>
+            </form>
+            <form id="todo-add">
+              <input id="todo-add-input" aria-label="タスクを追加" autocomplete="off">
+              <button id="todo-add-button" class="text-btn">追加</button>
+              <p id="todo-add-hint" hidden></p>
+            </form>
+            <div id="todo-pending"></div>
+            <div id="todo-list"></div>
+            <section id="todo-detail" hidden></section>
+            <aside id="todo-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
+          </div>
+        </div>
+        <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="30" aria-valuemax="45" aria-valuenow="30" tabindex="0" hidden><span></span></div>
+        <div id="todo-side" hidden>
+          <div id="todo-tools" data-tauri-drag-region="deep">
+            <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+            </button>
+          </div>
+          <aside id="todo-claude" class="chat-pane" aria-label="Claude">
+            <div id="todo-claude-ask">
+              <p>Claude に相談しますか？</p>
+              <button id="todo-claude-open" type="button" class="text-btn">相談する</button>
             </div>
-          </form>
-          <form id="todo-add">
-            <input id="todo-add-input" aria-label="タスクを追加" autocomplete="off">
-            <button id="todo-add-button" class="text-btn">追加</button>
-            <p id="todo-add-hint" hidden></p>
-          </form>
-          <div id="todo-pending"></div>
-          <div id="todo-list"></div>
-          <section id="todo-detail" hidden></section>
-          <aside id="todo-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
+            <div class="chat-head" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+              <button id="todo-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
+            </div>
+            <div id="todo-claude-term" hidden></div>
+          </aside>
         </div>
-      </div>
-      <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="30" aria-valuemax="45" aria-valuenow="30" tabindex="0" hidden><span></span></div>
-      <div id="todo-side" hidden>
-        <div id="todo-tools" data-tauri-drag-region="deep">
-          <button id="todo-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
-          </button>
-        </div>
-        <aside id="todo-claude" class="chat-pane" aria-label="Claude">
-          <div id="todo-claude-ask">
-            <p>Claude に相談しますか？</p>
-            <button id="todo-claude-open" type="button" class="text-btn">相談する</button>
-          </div>
-          <div class="chat-head" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
-            <button id="todo-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
-          </div>
-          <div id="todo-claude-term" hidden></div>
-        </aside>
       </div>
     </section>
     <section id="settings" hidden>
@@ -261,9 +288,10 @@
           <button id="settings-tab-calendar" class="tab" role="tab" aria-controls="settings-panel-calendar" aria-selected="false" tabindex="-1">カレンダー</button>
           <button id="settings-tab-todoist" class="tab" role="tab" aria-controls="settings-panel-todoist" aria-selected="false" tabindex="-1">Todoist</button>
           <button id="settings-tab-slack" class="tab" role="tab" aria-controls="settings-panel-slack" aria-selected="false" tabindex="-1">Slack</button>
+          <button id="settings-tab-notion" class="tab" role="tab" aria-controls="settings-panel-notion" aria-selected="false" tabindex="-1">Notion</button>
           <button id="settings-tab-claude" class="tab" role="tab" aria-controls="settings-panel-claude" aria-selected="false" tabindex="-1">Claude</button>
           <button id="settings-tab-skill" class="tab" role="tab" aria-controls="settings-panel-skill" aria-selected="false" tabindex="-1">スキル</button>
-          <button id="settings-tab-orca" class="tab" role="tab" aria-controls="settings-panel-orca" aria-selected="false" tabindex="-1">Orca</button>
+          <button id="settings-tab-orca" class="tab" role="tab" aria-controls="settings-panel-orca" aria-selected="false" tabindex="-1">開発</button>
           <button id="settings-tab-font" class="tab" role="tab" aria-controls="settings-panel-font" aria-selected="false" tabindex="-1">フォント</button>
           <button id="settings-tab-update" class="tab" role="tab" aria-controls="settings-panel-update" aria-selected="false" tabindex="-1">アップデート<span class="tab-dot" hidden></span></button>
           <button id="settings-tab-log" class="tab" role="tab" aria-controls="settings-panel-log" aria-selected="false" tabindex="-1">ログ</button>
@@ -337,6 +365,20 @@
         </form>
       </section>
       </div>
+      <section id="settings-panel-notion" class="card" role="tabpanel" aria-labelledby="settings-tab-notion" hidden>
+        <div class="card-head">
+          <h2>
+            <span class="logo notion">N</span>Notion
+          </h2>
+          <button id="notion-help" class="icon-btn" data-hint aria-label="Notion のワークスペースの追加方法" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="notion-accounts"></div>
+        <div class="card-add">
+          <button id="notion-add" class="text-btn primary">追加</button>
+        </div>
+      </section>
       <div id="settings-panel-claude" role="tabpanel" aria-labelledby="settings-tab-claude" hidden>
       <section class="card">
         <div class="card-head">
@@ -391,6 +433,14 @@
               <button id="skill-save" class="text-btn primary">保存</button>
             </div>
           </form>
+          <aside id="skill-chat" class="chat-pane" aria-label="Claude と編集">
+            <div class="chat-head">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+              Claude と編集
+              <button id="skill-restart" type="button" class="text-btn chat-clear">やり直す</button>
+            </div>
+            <div id="skill-term"></div>
+          </aside>
         </div>
       </section>
       <div id="settings-panel-orca" role="tabpanel" aria-labelledby="settings-tab-orca" hidden>
@@ -440,6 +490,24 @@
           </button>
         </div>
         <div id="formation-consent-items"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
+            <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span>Jira 接続
+          </h2>
+          <button id="jira-help" class="icon-btn" data-hint aria-label="Jira 接続の説明" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="jira-items"></div>
+        <form id="jira-form" class="card-add">
+          <input id="jira-site" aria-label="サイトの URL" placeholder="サイトの URL" autocomplete="off" spellcheck="false">
+          <input id="jira-email" aria-label="メールアドレス" placeholder="メールアドレス" autocomplete="off" spellcheck="false">
+          <input id="jira-token" type="password" aria-label="API トークン" placeholder="API トークン" autocomplete="off">
+          <button class="text-btn primary">保存</button>
+          <button id="jira-test" type="button" class="text-btn">接続を試す</button>
+        </form>
       </section>
       </div>
       <section id="settings-panel-font" class="card" role="tabpanel" aria-labelledby="settings-tab-font" hidden>
@@ -491,6 +559,7 @@
         <h1>Todo の要約プロンプト</h1>
         <span id="prompt-status" class="status warn" hidden>未保存の変更</span>
         <span class="grow"></span>
+        <button id="prompt-undo" type="button" class="text-btn" hidden>元に戻す</button>
         <button id="prompt-reset" class="text-btn">デフォルトに戻す</button>
         <button id="prompt-save" class="text-btn primary">保存</button>
       </header>
@@ -514,10 +583,9 @@
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
             Claude と編集
-            <button id="prompt-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+            <button id="prompt-restart" type="button" class="text-btn chat-clear">やり直す</button>
           </div>
-          <div id="prompt-log" class="chat-log"></div>
-          <p id="prompt-chat-note" class="chat-note" hidden></p>
+          <div id="prompt-term"></div>
         </aside>
       </div>
     </section>
@@ -542,6 +610,9 @@
           </header>
           <div id="sc-feed"></div>
           <div id="sc-reply">
+            <div id="sc-undo-bar" hidden>
+              <button id="sc-undo" class="text-btn" type="button">元に戻す</button>
+            </div>
             <p id="sc-error" class="pending fail" role="alert" hidden></p>
           </div>
         </section>
@@ -565,6 +636,9 @@
               <div id="st-card"></div>
             </div>
             <div id="st-reply">
+              <div id="st-undo-bar" hidden>
+                <button id="st-undo" class="text-btn" type="button">元に戻す</button>
+              </div>
               <p id="st-error" class="pending fail" role="alert" hidden></p>
             </div>
           </div>
@@ -579,13 +653,10 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Orca
                 </button>
               </div>
-              <button id="reply-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+              <button id="reply-restart" type="button" class="text-btn chat-clear">やり直す</button>
             </div>
-            <div id="reply-log" class="chat-log"></div>
+            <div id="reply-term"></div>
             <div id="st-orca" class="ho-pane ho-slack" hidden></div>
-            <div class="chat-foot">
-              <p id="reply-chat-note" class="chat-note" hidden></p>
-            </div>
           </aside>
         </section>
       </div>
@@ -593,12 +664,9 @@
       <aside id="slack-claude" class="chat-pane" aria-label="Claude">
         <div class="chat-head">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
-          <button id="slack-claude-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+          <button id="slack-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
         </div>
-        <div id="slack-claude-log" class="chat-log"></div>
-        <div class="chat-foot">
-          <p id="slack-claude-chat-note" class="chat-note" hidden></p>
-        </div>
+        <div id="slack-claude-term"></div>
       </aside>
     </section>
     <section id="database" class="split-main" hidden>

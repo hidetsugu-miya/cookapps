@@ -1,10 +1,11 @@
 //! The connection to Notion's MCP server (`mcp.notion.com`): OAuth with a dynamically registered public client
 //! (PKCE S256, loopback redirect), the tokens in the keychain, and one call of an MCP tool.
-//! It reads and writes no page yet; no screen uses it.
+//! It lists the favorites, the teamspaces and the pages of a teamspace (`pages.rs` reads the replies); no screen uses it yet.
 
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    future::Future,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -14,13 +15,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
-use tokio::{net::TcpListener, sync::Mutex as AsyncMutex};
+use tokio::{
+    net::TcpListener,
+    sync::{Mutex as AsyncMutex, Semaphore},
+};
 use url::Url;
+
+mod pages;
 
 use crate::{
     accounts,
     auth::{self, config_dir},
     keychain,
+};
+use pages::{
+    build_tree, parse_favorites, parse_search, parse_teamspaces, NotionFavorite, NotionPageNode,
+    NotionTeamspace,
 };
 
 const AUTH_URL: &str = "https://mcp.notion.com/authorize";
@@ -38,7 +48,20 @@ const REFRESH_MARGIN_SECS: i64 = 300;
 const DEFAULT_LIFETIME_SECS: i64 = 3600;
 const MCP_PROTOCOL: &str = "2025-06-18";
 /// The tools the app may call. The token holds the user's full rights (77 tools, deletion included), so a name outside this list is refused here.
-const ALLOWED_TOOLS: [&str; 1] = ["notion-get-self"];
+const ALLOWED_TOOLS: [&str; 4] = [
+    "notion-get-self",
+    "notion-list-favorite-pages",
+    "notion-get-teams",
+    "notion-search",
+];
+/// Notion allows 180 requests a minute, and one call is three requests (initialize, the notice, the call), so calls run a few at a time.
+const MAX_PARALLEL_CALLS: usize = 3;
+/// The replies of `notion-list-favorite-pages` read for one list, so a cursor that never ends cannot keep the loop.
+const MAX_FAVORITE_REPLIES: usize = 20;
+/// The most results one `notion-search` gives; it gives no cursor to read more.
+const SEARCH_PAGE_SIZE: u64 = 50;
+/// The seconds to wait when Notion says it is rate limited and does not say how long.
+const DEFAULT_RETRY_SECS: u64 = 60;
 
 /// What is saved in `notion-accounts.json`: the registered client and the connected workspaces. No token.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -110,6 +133,8 @@ pub struct NotionState {
     connecting: AsyncMutex<()>,
     /// Held for a read-modify-write of `notion-accounts.json`.
     file: Arc<Mutex<()>>,
+    /// One permit for each tool call in flight, so Notion's rate limit is not met by the lists of a screen asked at once.
+    calls: Semaphore,
 }
 
 impl Default for NotionState {
@@ -124,6 +149,7 @@ impl Default for NotionState {
             turns: Mutex::default(),
             connecting: AsyncMutex::default(),
             file: Arc::default(),
+            calls: Semaphore::new(MAX_PARALLEL_CALLS),
         }
     }
 }
@@ -196,6 +222,7 @@ impl NotionState {
         if !tool_allowed(tool) {
             return Err(format!("許可していない Notion のツールです: {tool}"));
         }
+        let _permit = self.calls.acquire().await.map_err(|e| e.to_string())?;
         let Some(token) = self.token(dir, workspace, "").await? else {
             return Ok(None);
         };
@@ -209,6 +236,41 @@ impl NotionState {
             Some(result) => tool_text(&result).map(Some),
             None => Ok(None),
         }
+    }
+
+    /// The user's favorites. `None` means a new connection is needed.
+    async fn favorites(
+        &self,
+        dir: &Path,
+        workspace: &str,
+    ) -> Result<Option<Vec<NotionFavorite>>, String> {
+        collect_favorites(|args| self.call_tool(dir, workspace, "notion-list-favorite-pages", args))
+            .await
+    }
+
+    /// The teamspaces of the workspace (Notion gives 10 at most). `None` means a new connection is needed.
+    async fn teamspaces(
+        &self,
+        dir: &Path,
+        workspace: &str,
+    ) -> Result<Option<Vec<NotionTeamspace>>, String> {
+        let text = self
+            .call_tool(dir, workspace, "notion-get-teams", json!({}))
+            .await?;
+        text.map(|t| parse_teamspaces(&t)).transpose()
+    }
+
+    /// The pages of a teamspace the search finds (50 at most, in the order of the search), with the pages under each. `None` means a new connection is needed.
+    async fn teamspace_pages(
+        &self,
+        dir: &Path,
+        workspace: &str,
+        teamspace: &str,
+    ) -> Result<Option<Vec<NotionPageNode>>, String> {
+        let text = self
+            .call_tool(dir, workspace, "notion-search", search_args(teamspace))
+            .await?;
+        text.map(|t| parse_search(&t).map(build_tree)).transpose()
     }
 
     /// The connected workspaces, each with whether it needs a new connection. Asks Notion nothing.
@@ -460,6 +522,62 @@ pub async fn notion_accounts(
     })
 }
 
+/// The favorites of a workspace, or `null` when it needs a new connection.
+#[tauri::command]
+pub async fn notion_favorites(
+    app: AppHandle,
+    state: State<'_, NotionState>,
+    workspace_id: String,
+) -> Result<Option<Vec<NotionFavorite>>, String> {
+    let list = match config_dir(&app) {
+        Ok(dir) => state.favorites(&dir, &workspace_id).await,
+        Err(e) => Err(e),
+    };
+    list.map_err(|e| {
+        eprintln!("tsunagiai: notion_favorites workspace={workspace_id} status=- error={e}");
+        e
+    })
+}
+
+/// The teamspaces of a workspace, or `null` when it needs a new connection.
+#[tauri::command]
+pub async fn notion_teamspaces(
+    app: AppHandle,
+    state: State<'_, NotionState>,
+    workspace_id: String,
+) -> Result<Option<Vec<NotionTeamspace>>, String> {
+    let list = match config_dir(&app) {
+        Ok(dir) => state.teamspaces(&dir, &workspace_id).await,
+        Err(e) => Err(e),
+    };
+    list.map_err(|e| {
+        eprintln!("tsunagiai: notion_teamspaces workspace={workspace_id} status=- error={e}");
+        e
+    })
+}
+
+/// The pages of a teamspace as a tree, or `null` when the workspace needs a new connection.
+#[tauri::command]
+pub async fn notion_teamspace_pages(
+    app: AppHandle,
+    state: State<'_, NotionState>,
+    workspace_id: String,
+    teamspace_id: String,
+) -> Result<Option<Vec<NotionPageNode>>, String> {
+    let list = match config_dir(&app) {
+        Ok(dir) => {
+            state
+                .teamspace_pages(&dir, &workspace_id, &teamspace_id)
+                .await
+        }
+        Err(e) => Err(e),
+    };
+    list.map_err(|e| {
+        eprintln!("tsunagiai: notion_teamspace_pages workspace={workspace_id} status=- error={e}");
+        e
+    })
+}
+
 /// Connects one workspace: the browser opens for Notion's consent. Connecting a workspace again replaces its token.
 #[tauri::command]
 pub async fn notion_connect(
@@ -571,6 +689,84 @@ fn tool_allowed(tool: &str) -> bool {
     ALLOWED_TOOLS.contains(&tool)
 }
 
+/// The arguments of the search that lists a teamspace: an empty query narrowed by the teamspace.
+fn search_args(teamspace: &str) -> Value {
+    json!({"query": "", "teamspace_id": teamspace, "page_size": SEARCH_PAGE_SIZE})
+}
+
+/// Reads `notion-list-favorite-pages` through `call` (the arguments in, the text of the reply out, `None` when a connection is needed),
+/// following `nextCursor` until there is none, a cursor repeats or the cap is met.
+async fn collect_favorites<F, Fut>(mut call: F) -> Result<Option<Vec<NotionFavorite>>, String>
+where
+    F: FnMut(Value) -> Fut,
+    Fut: Future<Output = Result<Option<String>, String>>,
+{
+    let mut items = vec![];
+    let mut cursor: Option<String> = None;
+    for _ in 0..MAX_FAVORITE_REPLIES {
+        let args = match &cursor {
+            Some(c) => json!({"cursor": c}),
+            None => json!({}),
+        };
+        let Some(text) = call(args).await? else {
+            return Ok(None);
+        };
+        let page = parse_favorites(&text)?;
+        items.extend(page.items);
+        match page.next_cursor {
+            Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+            _ => break,
+        }
+    }
+    Ok(Some(items))
+}
+
+/// How many seconds Notion says to wait, when `text` is its rate-limit error (`rate_limited`, `retry_after_seconds`):
+/// JSON, possibly after a lead-in text, with the words anywhere in it. No seconds given is a minute.
+fn retry_after_of(text: &str) -> Option<u64> {
+    let value = text
+        .find('{')
+        .and_then(|i| {
+            serde_json::Deserializer::from_str(&text[i..])
+                .into_iter::<Value>()
+                .next()
+        })
+        .and_then(Result::ok);
+    match value {
+        Some(v) => holds_rate_limit(&v).then(|| {
+            seconds_in(&v)
+                .map(|s| (s.ceil() as u64).max(1))
+                .unwrap_or(DEFAULT_RETRY_SECS)
+        }),
+        None => text.contains("rate_limited").then_some(DEFAULT_RETRY_SECS),
+    }
+}
+
+fn holds_rate_limit(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s == "rate_limited",
+        Value::Array(a) => a.iter().any(holds_rate_limit),
+        Value::Object(o) => o.values().any(holds_rate_limit),
+        _ => false,
+    }
+}
+
+fn seconds_in(v: &Value) -> Option<f64> {
+    match v {
+        Value::Array(a) => a.iter().find_map(seconds_in),
+        Value::Object(o) => o
+            .get("retry_after_seconds")
+            .and_then(Value::as_f64)
+            .or_else(|| o.values().find_map(seconds_in)),
+        _ => None,
+    }
+}
+
+/// The error a rate limit becomes: the seconds to wait are in its text.
+fn rate_limited_message(seconds: u64) -> String {
+    format!("Notion のリクエストが多すぎます。{seconds} 秒待ってからやり直してください")
+}
+
 /// The JSON-RPC message with `id` in a reply that is plain JSON or a server-sent event stream.
 /// Its `result` is answered; an `error` is the message.
 fn rpc_result(body: &str, id: i64) -> Result<Value, String> {
@@ -588,6 +784,9 @@ fn rpc_result(body: &str, id: i64) -> Result<Value, String> {
         .find(|m| m["id"] == id)
         .ok_or("Notion MCP の応答に結果がありません")?;
     if let Some(error) = message.get("error") {
+        if let Some(seconds) = retry_after_of(&error.to_string()) {
+            return Err(rate_limited_message(seconds));
+        }
         let text = error["message"].as_str().unwrap_or("不明なエラー");
         return Err(format!(
             "Notion MCP がエラーを返しました: {}",
@@ -613,6 +812,9 @@ fn tool_text(result: &Value) -> Result<String, String> {
         })
         .unwrap_or_default();
     if result["isError"].as_bool() == Some(true) {
+        if let Some(seconds) = retry_after_of(&text) {
+            return Err(rate_limited_message(seconds));
+        }
         return Err(format!(
             "Notion MCP のツールが失敗しました: {}",
             text.chars().take(200).collect::<String>()
@@ -847,6 +1049,20 @@ async fn mcp_post(
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Ok(None);
     }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let header = res
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        let seconds = match header {
+            Some(s) => s.max(1),
+            None => {
+                retry_after_of(&res.text().await.unwrap_or_default()).unwrap_or(DEFAULT_RETRY_SECS)
+            }
+        };
+        return Err(rate_limited_message(seconds));
+    }
     if !status.is_success() {
         return Err(format!("Notion MCP が {status} を返しました"));
     }
@@ -986,9 +1202,25 @@ mod tests {
 
     #[test]
     fn only_the_listed_tools_are_allowed() {
-        assert!(tool_allowed("notion-get-self"));
-        assert!(!tool_allowed("notion-delete-pages"));
-        assert!(!tool_allowed(""));
+        for tool in [
+            "notion-get-self",
+            "notion-list-favorite-pages",
+            "notion-get-teams",
+            "notion-search",
+        ] {
+            assert!(tool_allowed(tool), "{tool}");
+        }
+        assert_eq!(ALLOWED_TOOLS.len(), 4);
+        for tool in [
+            "notion-delete-pages",
+            "notion-update-page-favorites",
+            "notion-create-pages",
+            "notion-fetch",
+            "notion-search ",
+            "",
+        ] {
+            assert!(!tool_allowed(tool), "{tool}");
+        }
     }
 
     #[test]
@@ -1442,5 +1674,164 @@ mod tests {
             KEYRING_SERVICE,
             format!("{}.notion", conf["identifier"].as_str().unwrap())
         );
+    }
+
+    #[test]
+    fn a_rate_limit_is_found_in_json_wherever_it_sits_and_waits_a_minute_when_no_seconds_come() {
+        assert_eq!(
+            retry_after_of(r#"{"error":"rate_limited","retry_after_seconds":12}"#),
+            Some(12)
+        );
+        assert_eq!(
+            retry_after_of(
+                r#"Error: {"error":{"code":"rate_limited","data":{"retry_after_seconds":7.2}}}"#
+            ),
+            Some(8)
+        );
+        assert_eq!(retry_after_of(r#"{"error":"rate_limited"}"#), Some(60));
+        assert_eq!(retry_after_of("rate_limited, slow down"), Some(60));
+        assert_eq!(
+            retry_after_of(r#"{"error":"rate_limited","retry_after_seconds":0}"#),
+            Some(1)
+        );
+        assert_eq!(retry_after_of(r#"{"error":"not_found"}"#), None);
+        assert_eq!(retry_after_of(r#"{"retry_after_seconds":5}"#), None);
+        assert_eq!(retry_after_of(""), None);
+    }
+
+    #[test]
+    fn a_rate_limit_in_an_rpc_error_or_an_error_result_says_how_long_to_wait() {
+        let body = json!({"jsonrpc": "2.0", "id": 2, "error": {
+            "code": -32000, "message": "rate_limited", "data": {"retry_after_seconds": 30}}});
+        let err = rpc_result(&body.to_string(), 2).unwrap_err();
+        assert_eq!(err, rate_limited_message(30));
+        let bad = json!({"isError": true, "content": [{"type": "text",
+            "text": "{\"error\":\"rate_limited\",\"retry_after_seconds\":9}"}]});
+        assert_eq!(tool_text(&bad).unwrap_err(), rate_limited_message(9));
+        assert!(rate_limited_message(9).contains("9 秒"));
+    }
+
+    #[test]
+    fn a_429_is_an_error_with_the_seconds_of_retry_after_or_of_its_body() {
+        let call = |url: &str| {
+            run(mcp_call(
+                &reqwest::Client::new(),
+                url,
+                "t",
+                "notion-search",
+                &json!({}),
+            ))
+        };
+        let (url, server) = serve(vec![http(
+            "429 Too Many Requests",
+            "text/plain",
+            "Retry-After: 17\r\n",
+            "",
+        )]);
+        assert_eq!(call(&url), Err(rate_limited_message(17)));
+        server.join().unwrap();
+        let (url, server) = serve(vec![json_http(
+            "429 Too Many Requests",
+            r#"{"error":"rate_limited","retry_after_seconds":4}"#,
+        )]);
+        assert_eq!(call(&url), Err(rate_limited_message(4)));
+        server.join().unwrap();
+        let (url, server) = serve(vec![http("429 Too Many Requests", "text/plain", "", "")]);
+        assert_eq!(call(&url), Err(rate_limited_message(60)));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_rate_limit_in_the_answer_of_the_call_itself_is_the_same_error() {
+        let limited = json!({"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[
+            {"type":"text","text":"{\"error\":\"rate_limited\",\"retry_after_seconds\":21}"}]}});
+        let (url, server) = serve(vec![
+            json_http("200 OK", r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+            http("202 Accepted", "text/plain", "", ""),
+            json_http("200 OK", &limited.to_string()),
+        ]);
+        let result = run(mcp_call(
+            &reqwest::Client::new(),
+            &url,
+            "t",
+            "notion-search",
+            &json!({}),
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(tool_text(&result), Err(rate_limited_message(21)));
+        server.join().unwrap();
+    }
+
+    /// The text of each reply in turn, and the arguments the calls were made with.
+    fn favorites_with(
+        replies: Vec<Option<&str>>,
+    ) -> (Result<Option<Vec<NotionFavorite>>, String>, Vec<Value>) {
+        let mut replies = replies.into_iter();
+        let mut seen = vec![];
+        let got = run(collect_favorites(|args| {
+            seen.push(args);
+            let next = replies.next().expect("a call too many");
+            std::future::ready(Ok(next.map(str::to_owned)))
+        }));
+        (got, seen)
+    }
+
+    #[test]
+    fn favorites_follow_the_cursor_until_there_is_none() {
+        let (got, seen) = favorites_with(vec![
+            Some(r#"{"results":[{"url":"u1","title":"a"}],"nextCursor":"c2"}"#),
+            Some(r#"{"results":[{"url":"u2","title":"b"}],"nextCursor":"c3"}"#),
+            Some(r#"{"results":[{"url":"u3","title":"c"}]}"#),
+        ]);
+        let urls: Vec<_> = got.unwrap().unwrap().into_iter().map(|f| f.url).collect();
+        assert_eq!(urls, ["u1", "u2", "u3"]);
+        assert_eq!(
+            seen,
+            vec![json!({}), json!({"cursor": "c2"}), json!({"cursor": "c3"})]
+        );
+    }
+
+    #[test]
+    fn favorites_stop_when_a_connection_is_needed_or_a_cursor_repeats_and_an_unreadable_reply_fails(
+    ) {
+        let (got, _) = favorites_with(vec![
+            Some(r#"{"results":[{"url":"u1"}],"nextCursor":"c2"}"#),
+            None,
+        ]);
+        assert_eq!(got, Ok(None));
+        let (got, seen) = favorites_with(vec![
+            Some(r#"{"results":[{"url":"u1"}],"nextCursor":"c2"}"#),
+            Some(r#"{"results":[{"url":"u2"}],"nextCursor":"c2"}"#),
+        ]);
+        assert_eq!(got.unwrap().unwrap().len(), 2);
+        assert_eq!(seen.len(), 2);
+        let (got, _) = favorites_with(vec![Some("not json")]);
+        assert!(got.is_err());
+    }
+
+    #[test]
+    fn favorites_are_read_in_at_most_the_capped_number_of_replies() {
+        let replies: Vec<String> = (0..MAX_FAVORITE_REPLIES + 5)
+            .map(|i| format!(r#"{{"results":[{{"url":"u{i}"}}],"nextCursor":"c{i}"}}"#))
+            .collect();
+        let (got, seen) = favorites_with(replies.iter().map(|r| Some(r.as_str())).collect());
+        assert_eq!(seen.len(), MAX_FAVORITE_REPLIES);
+        assert_eq!(got.unwrap().unwrap().len(), MAX_FAVORITE_REPLIES);
+    }
+
+    #[test]
+    fn the_pages_of_a_teamspace_are_asked_with_an_empty_query_its_id_and_the_largest_page() {
+        assert_eq!(
+            search_args("t-1"),
+            json!({"query": "", "teamspace_id": "t-1", "page_size": 50})
+        );
+    }
+
+    #[test]
+    fn calls_run_at_most_three_at_a_time() {
+        let state = NotionState::default();
+        assert_eq!(state.calls.available_permits(), 3);
+        assert_eq!(MAX_PARALLEL_CALLS, 3);
     }
 }

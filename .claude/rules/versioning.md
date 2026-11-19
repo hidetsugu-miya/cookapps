@@ -39,7 +39,7 @@ Bad:  delete v0.5.0 and tag the fixing commit v0.5.0 again
 
 ### Raise the minor version for a feature and the patch version for a fix only
 
-Count features by requirement ID (M-n, C-n, T-n, S-n, A-n, U-n).
+Count features by requirement ID (M-n, C-n, T-n, S-n, N-n, J-n, A-n, U-n).
 This lets the number tell the size of a change.
 
 ```text

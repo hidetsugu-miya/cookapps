@@ -53,6 +53,8 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   todoist_picked_due: null,
+  // N-1: no Notion workspace connected; a spec that connects or unlinks one mocks `notion_accounts` with the list it should read next, and `notion_connect` or `notion_disconnect`.
+  notion_accounts: [],
   slack_load: { workspaces: [], recent: [] },
   slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, unreadChannels: [], side: [] },
   slack_mark_read: true,
@@ -89,6 +91,9 @@ const answers = {
   orca_terminal_read: [],
   orca_terminal_input: null,
   orca_open_url: null,
+  // M-12: a file may always be added; a spec that picks files mocks `mail_attach_pick`.
+  mail_attach_check: null,
+  mail_attach_pick: [],
   orca_attach_file: { text: "/work/example/.orca/drops/image.png ", bracketed: true },
   orca_files_ignored: [],
   // A-39: no entry differs from HEAD; a spec that checks the marks mocks `orca_files_changes`.
@@ -168,6 +173,8 @@ const answers = {
   formation_page_answer: null,
   // A-37 (#893): no PC has the owner's consent yet; a spec that needs one gives `formationConsent` of e2e/support.ts, and one that presses 「同意する」 or 「取り消す」 mocks `formation_consent` or `formation_consent_revoke`.
   formation_consents: [],
+  // J-1: no Jira connection saved yet; a spec that saves or tries one mocks `jira_save` or `jira_test`, and one that starts with a saved connection gives `jira_settings`.
+  jira_settings: { site: "", email: "", hasToken: false },
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).

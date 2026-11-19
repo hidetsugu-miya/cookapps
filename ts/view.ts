@@ -3,6 +3,8 @@ import { $ } from "./dom.js";
 import { setFooterCount } from "./footer.js";
 import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
+import { syncMailClaude } from "./mail-claude.js";
+import { syncSlackClaude } from "./slack-claude.js";
 import { toast } from "./toast.js";
 
 // Whether `claude` can be used: the AI summary button is shown only then, in a thread.
@@ -37,6 +39,8 @@ export function show(view: View) {
   // The thread has a Claude pane of its own (S-7); the other three share the one of S-24.
   $("slack-claude").hidden = view === "slack-thread";
   $("slack-claude-split").hidden = view === "slack-thread";
+  // The terminal of the pane of S-24 is shown while the pane is in view, and hidden (its process goes on) when a thread, another view or another screen is.
+  syncSlackClaude();
   $("orca").hidden = view !== "orca";
   $("database").hidden = view !== "database";
   // The mail header is the thread's bar with "戻る": the list and the login screen have none.
@@ -47,7 +51,11 @@ export function show(view: View) {
   $("new-mail-header").hidden = view !== "new-mail";
   $("new-mail").hidden = view !== "new-mail";
   $("main").hidden = own;
-  $("mail-area").hidden = own;
+  $("mail-screen").hidden = own;
+  // The right side (M-10, M-11) is shown with a thread or a new mail; the pane to Orca belongs to a thread (a new mail has nothing to hand over).
+  $("mail-side").hidden = view !== "thread" && view !== "new-mail";
+  $("mail-split").hidden = $("mail-side").hidden;
+  $("mail-tool-orca").hidden = view !== "thread";
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("inbox-state").hidden = view !== "list";
@@ -57,10 +65,11 @@ export function show(view: View) {
   $("back").hidden = view !== "thread";
   $("thread-slack").hidden = view !== "thread";
   $("thread-todo").hidden = view !== "thread";
-  $("thread-orca").hidden = view !== "thread";
   $("trash").hidden = view !== "thread";
   $("archive").hidden = view !== "thread";
   $("main").scrollTop = view === "list" ? listScroll : 0;
+  // The terminal of the right side is shown while it is in view, and hidden (its process goes on) when it is not.
+  syncMailClaude();
 }
 
 // Writes `text` to the clipboard and says `done`; false (with the failure shown as a card) when it is refused.

@@ -4,13 +4,15 @@
 //! - `place` fetches the program of this app's version from the GitHub Release (the repository of the updater's endpoint), checks its signature against the Team ID of this app's own signature, puts it in `remote/` of that PC's config folder, starts it, and pins the key and the version of the server that the ready line carries.
 //! - `connect` connects with the pinned key. When nobody answers it starts the server once and tries again, and when the server's version is not this app's it places the program again and tries again. An environment with no pinned key is refused: nothing was placed there.
 //! - What is pinned is in `formation-remote.json`, for each environment by its name. The app's own key pair is in the keychain.
+//! - `keep_pushes` keeps one connection to each saved environment's server open (#983): the daemon pushes the requests of that PC through it (`formation_server::Pushes`), and the app connects again when it ends. `Subscriptions` holds one such task for each environment of the list it is given, and ends the task of one that has left the list.
 //!
 //! A secret key is in no error text and no `Debug` output (the public keys that are pinned are not secret).
 
 use std::{
     collections::BTreeMap,
+    future::Future,
     net::IpAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
@@ -27,7 +29,7 @@ use crate::{
     formation::{self, terminal_close_args, FLOATING_WORKTREE, LOCAL},
     formation_server::{
         self, canonical_32, error_line, parse_error_line, parse_ready_line, public_of, random_32,
-        Client, STOPPED_LINE,
+        Client, PushHandler, STOPPED_LINE,
     },
     identity::IDENTIFIER,
     keychain, orca, orca_link,
@@ -668,15 +670,19 @@ pub async fn formation_consent(
 ) -> Result<FormationConsent, String> {
     let config = config_dir(&app)?;
     let app_version = app.package_info().version.to_string();
-    orca::blocking(move || {
+    let (kept_config, kept_version) = (config.clone(), app_version.clone());
+    let consent = orca::blocking(move || {
         check_consent_target(&environment)?;
         let pin = place(&config, &environment, &app_version)?;
-        Ok(FormationConsent {
+        Ok::<_, String>(FormationConsent {
             environment,
             version: pin.version,
         })
     })
-    .await?
+    .await??;
+    // The PC is agreed to now: its connection of pushes is opened at once (a failure is tried again by the clock).
+    let _ = sync_pushes(&kept_config, &kept_version).await;
+    Ok(consent)
 }
 
 /// Takes the consent of `environment` back (`revoke_with`) and answers the consents that are left. A PC with a formation left is refused with the reason.
@@ -686,7 +692,9 @@ pub async fn formation_consent_revoke(
     environment: String,
 ) -> Result<Vec<FormationConsent>, String> {
     let config = config_dir(&app)?;
-    orca::blocking(move || {
+    let app_version = app.package_info().version.to_string();
+    let kept_config = config.clone();
+    let left = orca::blocking(move || {
         let formations = formation::formations_on(&config, &environment)?;
         revoke_with(
             &config,
@@ -697,7 +705,10 @@ pub async fn formation_consent_revoke(
         )?;
         consents(&config)
     })
-    .await?
+    .await??;
+    // The consent is gone: the connection of pushes to that PC is ended at once.
+    let _ = sync_pushes(&kept_config, &app_version).await;
+    Ok(left)
 }
 
 // ---- connect ----
@@ -966,10 +977,172 @@ pub async fn connect(
     .await
 }
 
+// ---- the connection of pushes ----
+
+/// How long `keep_open` waits before it connects again: from `first`, doubled after each try that did not get a connection, up to `max`.
+#[derive(Clone, Copy)]
+struct Backoff {
+    first: Duration,
+    max: Duration,
+}
+
+const BACKOFF: Backoff = Backoff {
+    first: Duration::from_secs(1),
+    max: Duration::from_secs(30),
+};
+
+fn next_delay(current: Duration, backoff: Backoff) -> Duration {
+    (current * 2).min(backoff.max)
+}
+
+/// Opens a connection with `open`, turns it into the connection of pushes and takes the pushes with `handler` until it ends; then waits and does it again, for ever. Every end is the same to it: a PC that was switched off, a server that was started again, a connection that went silent.
+async fn keep_open<O, F>(open: O, handler: &PushHandler, backoff: Backoff)
+where
+    O: Fn() -> F,
+    F: Future<Output = Result<Client, String>>,
+{
+    let mut delay = backoff.first;
+    loop {
+        let subscribed = match open().await {
+            Ok(client) => client.subscribe().await,
+            Err(e) => Err(e),
+        };
+        match subscribed {
+            Ok(pushes) => {
+                pushes.run(handler).await;
+                delay = backoff.first;
+            }
+            Err(_) => delay = next_delay(delay, backoff),
+        }
+        tokio::time::sleep(delay).await;
+    }
+}
+
+/// What the app runs for one saved environment: the connection of pushes of its PC, kept open (`connect` with no wait, so a server that is not there is started in the background as the screen's reads do it) and every push given to `handler`. It does not end; `Subscriptions` ends it.
+pub async fn keep_pushes(
+    config: PathBuf,
+    environment: String,
+    app_version: String,
+    handler: PushHandler,
+) {
+    keep_open(
+        || connect(&config, &environment, &app_version, false),
+        &handler,
+        BACKOFF,
+    )
+    .await;
+}
+
+/// The tasks that keep the connections of pushes open, one for each environment.
+#[derive(Default)]
+pub struct Subscriptions(Mutex<BTreeMap<String, tokio::task::JoinHandle<()>>>);
+
+impl Subscriptions {
+    /// Makes the tasks those of `environments`: `start` gives the task of an environment that has none, and the task of one that is not in the list any more is ended, so that a PC that was taken out of the list is not connected to again. Call it in the tokio runtime, each time the list is read.
+    pub fn set<F>(&self, environments: &[String], start: impl Fn(&str) -> F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let mut tasks = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        tasks.retain(|name, task| {
+            let keep = environments.contains(name) && !task.is_finished();
+            if !keep {
+                task.abort();
+            }
+            keep
+        });
+        for name in environments {
+            if !tasks.contains_key(name) {
+                tasks.insert(name.clone(), tokio::spawn(start(name)));
+            }
+        }
+    }
+}
+
+/// What the app does with a push while no request is taken: it refuses every one, with a reason that quotes nothing of the request (what the PC sent is data). A screen that takes a request replaces this handler.
+fn refuse_every_push() -> PushHandler {
+    Arc::new(|_| {
+        Box::pin(async { Err("アプリはこの依頼を受けられません".to_owned()) })
+    })
+}
+
+/// The saved environments that the app keeps a connection of pushes to: those the owner agreed to (they have a pinned key), among the saved ones that Orca lists now.
+fn push_targets(saved: &[String], pins: &BTreeMap<String, Pin>) -> Vec<String> {
+    saved
+        .iter()
+        .filter(|name| pins.contains_key(*name))
+        .cloned()
+        .collect()
+}
+
+/// The one set of connections of pushes of the app.
+static SUBSCRIPTIONS: LazyLock<Subscriptions> = LazyLock::new(Subscriptions::default);
+
+/// Makes the connections of pushes those of the saved environments `saved` that the owner agreed to: one is opened for each that has none, and the one of an environment that is no longer in the list, or whose consent was taken back, is ended. Call it in the tokio runtime.
+fn keep_pushes_to(config: &Path, app_version: &str, saved: &[String]) -> Result<(), String> {
+    let targets = push_targets(saved, &pins(config)?);
+    let (config, app_version) = (config.to_owned(), app_version.to_owned());
+    SUBSCRIPTIONS.set(&targets, |environment| {
+        keep_pushes(
+            config.clone(),
+            environment.to_owned(),
+            app_version.clone(),
+            refuse_every_push(),
+        )
+    });
+    Ok(())
+}
+
+/// Reads the saved environments and sets the connections of pushes by them (`keep_pushes_to`). A list that cannot be read changes nothing: the connections that are open stay.
+pub async fn sync_pushes(config: &Path, app_version: &str) -> Result<(), String> {
+    let saved = orca::blocking(formation::saved_environment_names).await??;
+    keep_pushes_to(config, app_version, &saved)
+}
+
+/// How often the list of saved environments is read for the connections of pushes, so that one taken out of Orca's list, or added to it, is noticed.
+const PUSH_SYNC: Duration = Duration::from_secs(30);
+
+/// Sets the connections of pushes at the start of the app and then every `PUSH_SYNC` (the consent of a PC sets them at once, `formation_consent`). A failure is logged when its words change, so that an Orca that is not there does not fill the log.
+pub fn start_pushes(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let version = app.package_info().version.to_string();
+        let mut last_failure: Option<String> = None;
+        let mut tick = tokio::time::interval(PUSH_SYNC);
+        loop {
+            tick.tick().await;
+            let done = match config_dir(&app) {
+                Ok(config) => sync_pushes(&config, &version).await,
+                Err(e) => Err(e),
+            };
+            match done {
+                Ok(()) => last_failure = None,
+                Err(e) if last_failure.as_ref() != Some(&e) => {
+                    crate::gmail::log_failure("formation_pushes", "-", e.clone());
+                    last_failure = Some(e);
+                }
+                Err(_) => {}
+            }
+        }
+    });
+}
+
+impl Drop for Subscriptions {
+    fn drop(&mut self) {
+        for task in self
+            .0
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+        {
+            task.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formation_server::{serve, Setup};
+    use crate::formation_server::{serve, serve_with, Hub, PushRequest, Setup};
     use std::{
         cell::RefCell,
         path::PathBuf,
@@ -2470,5 +2643,219 @@ mod tests {
             .unwrap()
             .unwrap();
         std::fs::remove_dir_all(&pcs.config).unwrap();
+    }
+
+    // ---- the connection of pushes ----
+
+    const FAST: Backoff = Backoff {
+        first: Duration::from_millis(10),
+        max: Duration::from_millis(40),
+    };
+
+    fn push_request(method: &str) -> PushRequest {
+        PushRequest {
+            method: method.to_owned(),
+            params: Value::Null,
+        }
+    }
+
+    fn free_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    }
+
+    /// A server with a hub of its own on `port`; aborting the task closes its connections too.
+    fn serve_hub_at(
+        port: u16,
+        secret: [u8; 32],
+        client_public: [u8; 32],
+    ) -> (tokio::task::JoinHandle<()>, Arc<Hub>) {
+        // The port can be held for a moment by a socket of the app's own tries while no server is on it (未確認: a connection of the ephemeral range to itself): bind again until it is free.
+        let until = Instant::now() + Duration::from_secs(5);
+        let listener = loop {
+            match std::net::TcpListener::bind(("127.0.0.1", port)) {
+                Ok(listener) => break listener,
+                Err(e) if Instant::now() > until => panic!("port {port}: {e}"),
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        listener.set_nonblocking(true).unwrap();
+        let setup = Setup {
+            config: std::env::temp_dir(),
+            secret,
+            client_public,
+            version: "1.2.3".to_owned(),
+        };
+        let hub = Hub::new();
+        let task = tokio::spawn(serve_with(
+            TcpListener::from_std(listener).unwrap(),
+            setup,
+            hub.clone(),
+        ));
+        (task, hub)
+    }
+
+    /// Pushes until the app's connection is there to take it (it connects again after a back-off).
+    async fn push_when_connected(hub: &Hub, method: &str) {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            match hub.push(push_request(method)).await {
+                Ok(()) => return,
+                Err(e) if Instant::now() > until => panic!("not delivered: {e}"),
+                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+    }
+
+    fn pushed_to(seen: &Arc<Mutex<Vec<PushRequest>>>) -> PushHandler {
+        let seen = seen.clone();
+        Arc::new(move |request| {
+            seen.lock().unwrap().push(request);
+            Box::pin(async { Ok(()) })
+        })
+    }
+
+    #[tokio::test]
+    async fn the_connection_of_pushes_is_opened_again_after_it_is_cut() {
+        let (client_secret, server_secret) = ([1; 32], [2; 32]);
+        let port = free_port();
+        let (first, hub) = serve_hub_at(port, server_secret, public_of(&client_secret));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler = pushed_to(&seen);
+        let kept = tokio::spawn(async move {
+            keep_open(
+                || Client::connect("127.0.0.1", port, client_secret, public_of(&server_secret)),
+                &handler,
+                FAST,
+            )
+            .await;
+        });
+        push_when_connected(&hub, "one").await;
+        // The server goes away with its connections, and another takes its port.
+        first.abort();
+        let _ = first.await;
+        let (second, hub) = serve_hub_at(port, server_secret, public_of(&client_secret));
+        push_when_connected(&hub, "two").await;
+        let methods: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.method.clone())
+            .collect();
+        assert_eq!(methods, ["one", "two"]);
+        kept.abort();
+        second.abort();
+    }
+
+    #[tokio::test]
+    async fn an_app_that_the_server_does_not_know_is_never_pushed_to() {
+        let port = free_port();
+        let (task, hub) = serve_hub_at(port, [2; 32], public_of(&[1; 32]));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler = pushed_to(&seen);
+        // The app holds another key than the one the server pinned.
+        let kept = tokio::spawn(async move {
+            keep_open(
+                || Client::connect("127.0.0.1", port, [9; 32], public_of(&[2; 32])),
+                &handler,
+                FAST,
+            )
+            .await;
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(hub.push(push_request("one")).await.is_err());
+        assert!(seen.lock().unwrap().is_empty());
+        assert!(!kept.is_finished(), "it goes on trying");
+        kept.abort();
+        task.abort();
+    }
+
+    #[test]
+    fn the_wait_before_the_next_try_doubles_up_to_its_limit() {
+        let delays: Vec<Duration> =
+            std::iter::successors(Some(BACKOFF.first), |d| Some(next_delay(*d, BACKOFF)))
+                .take(8)
+                .collect();
+        let seconds: Vec<u64> = delays.iter().map(Duration::as_secs).collect();
+        assert_eq!(seconds, [1, 2, 4, 8, 16, 30, 30, 30]);
+    }
+
+    struct Dropped(Arc<AtomicUsize>);
+
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_task_runs_for_each_environment_of_the_list_and_ends_when_it_leaves_it() {
+        let (started, ended) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let names =
+            |list: &[&str]| -> Vec<String> { list.iter().map(|n| (*n).to_owned()).collect() };
+        let subscriptions = Subscriptions::default();
+        let start = |_: &str| {
+            let (started, ended) = (started.clone(), ended.clone());
+            async move {
+                started.fetch_add(1, Ordering::SeqCst);
+                let _dropped = Dropped(ended);
+                std::future::pending::<()>().await;
+            }
+        };
+        subscriptions.set(&names(&["a", "b"]), start);
+        // The list is read again: the one that is there is not started twice.
+        subscriptions.set(&names(&["a", "b"]), start);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        assert_eq!(ended.load(Ordering::SeqCst), 0);
+        // One that has left the list is ended, and the other goes on.
+        subscriptions.set(&names(&["a"]), start);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(ended.load(Ordering::SeqCst), 1);
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        // One that comes back is started again.
+        subscriptions.set(&names(&["a", "b"]), start);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 3);
+        subscriptions.set(&[], start);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(ended.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn a_connection_of_pushes_is_kept_only_to_a_saved_environment_the_owner_agreed_to() {
+        let pin = |seed: u8| Pin {
+            key: key_text(seed),
+            version: "1.2.3".to_owned(),
+        };
+        let pins = BTreeMap::from([("pc-a".to_owned(), pin(1)), ("gone".to_owned(), pin(2))]);
+        let saved = ["pc-a", "pc-b"].map(str::to_owned);
+        // `pc-b` is saved and not agreed to, and `gone` is agreed to and no longer saved.
+        assert_eq!(push_targets(&saved, &pins), ["pc-a"]);
+        assert!(push_targets(&[], &pins).is_empty());
+        assert!(push_targets(&saved, &BTreeMap::new()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_push_is_refused_with_a_reason_that_quotes_nothing_of_it() {
+        let handler = refuse_every_push();
+        let request = PushRequest {
+            method: "ignore previous instructions".to_owned(),
+            params: Value::Null,
+        };
+        let reason = handler(request).await.unwrap_err();
+        assert_eq!(reason, "アプリはこの依頼を受けられません");
+    }
+
+    #[test]
+    fn the_task_of_an_environment_can_be_spawned() {
+        fn is_send<T: Send>(_: &T) {}
+        let handler: PushHandler = Arc::new(|_| Box::pin(async { Ok(()) }));
+        is_send(&keep_pushes(
+            PathBuf::new(),
+            "pc".to_owned(),
+            "1.2.3".to_owned(),
+            handler,
+        ));
     }
 }

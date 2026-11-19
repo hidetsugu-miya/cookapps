@@ -40,7 +40,6 @@ import type { ClaudeCodeEvent } from "../ts/bindings/ClaudeCodeEvent";
 import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
-import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ScreenAnswer } from "../ts/bindings/ScreenAnswer";
 import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
@@ -70,7 +69,6 @@ import type { UnreadChannel } from "../ts/bindings/UnreadChannel";
 import type { TimelineReply } from "../ts/bindings/TimelineReply";
 import type { UnreadReplies } from "../ts/bindings/UnreadReplies";
 import type { Todo } from "../ts/bindings/Todo";
-import type { TodoDraftEdit } from "../ts/bindings/TodoDraftEdit";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
@@ -557,28 +555,6 @@ export const logLine = (time: string, level: LogEntry["level"], source: string, 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
 
-// What `claude_edit_todo_draft` answers when Claude proposes a shorter name for `slackSummary` and leaves the description alone.
-export const todoDraftEdit: TodoDraftEdit = {
-  reply: "名前を短くします",
-  content: "Reply to vendor",
-  description: null,
-  contentDiff: [
-    { kind: "del", text: "Reply to the vendor" },
-    { kind: "ins", text: "Reply to vendor" },
-  ],
-  descriptionDiff: [],
-};
-
-// What `claude_edit_todo_prompt` answers when Claude proposes changing the line "Default body" to "Better body".
-export const promptEdit: PromptEdit = {
-  reply: "1行目を変えます",
-  body: "Better body",
-  diff: [
-    { kind: "del", text: "Default body" },
-    { kind: "ins", text: "Better body" },
-  ],
-};
-
 // What `slack_preview` answers for the thread of `threadDetail("First unread", "Hello from Alice", …)`: the post as it starts out in the compose screen.
 export const slackPreview = "*First unread*\nAlice <alice@example.com> ・ 2026/11/3 9:00\n\nHello from Alice";
 
@@ -762,16 +738,6 @@ export const ownIcon = (iconUrl: string | null): WorkspaceIcon[] => [{ teamId: w
 
 // A 1x1 transparent PNG as a data: URI, what `fetch_images` and `slack_file_images` answer for an image.
 export const pngUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-// What `claude_chat_thread` answers when Claude proposes changing the reply `before` to `after`.
-export const replyEdit = (before: string, after: string): PromptEdit => ({
-  reply: "言い回しを直しました",
-  body: after,
-  diff: [
-    { kind: "del", text: before },
-    { kind: "ins", text: after },
-  ],
-});
 
 export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0", method: "subscription" };
 export const claudeLoggedOut: Claude = { state: "loggedOut", version: "2.0.0" };

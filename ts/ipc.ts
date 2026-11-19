@@ -50,6 +50,7 @@ import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
+import type { PickedAttachment } from "./bindings/PickedAttachment";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { MenuEntry } from "./bindings/MenuEntry";
@@ -65,8 +66,9 @@ import type { ScreenAnswer } from "./bindings/ScreenAnswer";
 import type { Skill } from "./bindings/Skill";
 import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
-import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { NewEvent } from "./bindings/NewEvent";
+import type { JiraSettings } from "./bindings/JiraSettings";
+import type { JiraUser } from "./bindings/JiraUser";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
@@ -89,7 +91,6 @@ import type { PaneLayout } from "./bindings/PaneLayout";
 import type { PaneOp } from "./bindings/PaneOp";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
-import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackAction } from "./bindings/SlackAction";
@@ -107,7 +108,6 @@ import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { ThreadRefresh } from "./bindings/ThreadRefresh";
 import type { Todo } from "./bindings/Todo";
-import type { TodoDraftEdit } from "./bindings/TodoDraftEdit";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { UpdateMode } from "./bindings/UpdateMode";
@@ -165,6 +165,10 @@ export interface Commands {
   set_read: { args: Thread & { read: boolean }; result: boolean | null };
   // Sends the mail from the account (a reply when `replyThreadId` is set). null: that account must log in again. true: sent.
   send_mail: { args: Account & { mail: OutgoingMail }; result: boolean | null };
+  // M-12: whether a file may be added to a mail that holds `held` bytes of files already (a refusal is a Japanese message); the page reads the file only after it was accepted. null: it may.
+  mail_attach_check: { args: { name: string; size: number; held: number }; result: null };
+  // M-12: opens the dialog that picks files, and answers them read (the dialog gives the place, never the page); an empty list when it was cancelled.
+  mail_attach_pick: { args: { held: number }; result: PickedAttachment[] };
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };
@@ -198,6 +202,11 @@ export interface Commands {
   todoist_create_label: { args: { id: string; name: string; labels: string[] }; result: boolean | null };
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };
   todoist_move_under: { args: { id: string; parentId: string }; result: boolean | null };
+  // T-2: puts the task under parentId, or at the top of projectId when parentId is null, before the sibling beforeId (last when null). null: a token is needed.
+  todoist_place: {
+    args: { id: string; parentId: string | null; projectId: string | null; beforeId: string | null };
+    result: boolean | null;
+  };
   todoist_delete: { args: { id: string }; result: boolean | null };
   // T-8: archives the project (its sub-projects with it); its tasks are kept in Todoist. null: a token is needed.
   todoist_archive_project: { args: { id: string }; result: boolean | null };
@@ -228,6 +237,12 @@ export interface Commands {
   notion_connect: { args: undefined; result: NotionAccount };
   // Revokes the grant at Notion and drops its token and entry.
   notion_disconnect: { args: { workspaceId: string }; result: null };
+  // J-1: the saved site and email address of the Jira connection, and whether a token is kept; the token is never returned. Asks Jira nothing.
+  jira_settings: { args: undefined; result: JiraSettings };
+  // J-1: saves the connection (an empty token keeps the stored one); answers what is saved.
+  jira_save: { args: { site: string; email: string; token: string }; result: JiraSettings };
+  // J-1: asks the site who the credential of the form is (an empty token takes the stored one); saves nothing.
+  jira_test: { args: { site: string; email: string; token: string }; result: JiraUser };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   slack_link: { args: { url: string }; result: Target };
   // What a post of the mail starts out as (plain text); the user edits it on the compose screen.
@@ -303,20 +318,13 @@ export interface Commands {
   claude_todo_prompt: { args: undefined; result: TodoPrompt };
   claude_todo_prompt_save: { args: { body: string }; result: TodoPrompt };
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
-  // Claude's answer to a request about the instructions in the edit field; `history` is the conversation before this request. Nothing is saved.
-  claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
-  // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
-  // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
-  claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
   // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent to Claude: Rust only checks it with the content against the limit of the prompt, before the call. The model and effort are those of `orcaHandoff`. Nothing is saved.
   claude_summarize_handoff: { args: { context: HandoffContext; instruction: string }; result: HandoffSummary };
-  // S-24: Claude's answer on the Slack screen: a short reply, and the draft of a post when the request asked for one (`draft` is null otherwise). Nothing is posted.
-  // `channel` is the channel the screen has open (null in the unread list and the watch, and then no Slack text is sent): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message),
-  // and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first. The model and effort are those of `slackChat`. Nothing is saved.
-  claude_chat_slack: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } | null; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackChatReply };
-  // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
-  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` (optional, none or null for no skill) is the name of a saved skill (S-7); a name that is not one is refused, and with one the request may be empty.
-  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string; skill?: string | null }; result: PromptEdit };
+  // S-24: the history of the open channel as Claude Code reads it (the field `channel` of the target "slack-channel"): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message), and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first.
+  // The answer names the channel by the workspace's name and the channel's name Rust holds, and encloses the messages as data between boundary lines. Nothing is sent or saved.
+  claude_channel_data: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } }; result: string };
+  // S-7: the open Slack thread as Claude Code reads it (the field `thread` of the target "slack-thread"): its messages as the screen shows them (`text` of `ThreadMessage`), with `truncated` (the read stopped before the end of the thread), enclosed as data between boundary lines. Nothing is sent or saved.
+  claude_thread_data: { args: { thread: { name: string; ts: string; text: string }[]; truncated: boolean }; result: string };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, and the owner corrects the file),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.

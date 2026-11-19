@@ -19,9 +19,11 @@ pub mod gmail;
 pub mod identity;
 pub mod image_senders;
 pub mod images;
+pub mod jira;
 mod keychain;
 pub mod lsp;
 pub mod mail_address;
+pub mod mail_attach;
 pub mod mail_send;
 pub mod markdown_patch;
 pub mod notion;
@@ -270,6 +272,9 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             start_badge_clock(app.handle().clone());
             tauri::async_runtime::spawn(slack::socket::start_all(app.handle().clone()));
+            // The connection of pushes to the server of each saved environment's PC (A-37, #983); E2E has no Orca to list them.
+            #[cfg(not(feature = "e2e"))]
+            formation_remote::start_pushes(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -296,6 +301,8 @@ pub fn run() {
             gmail::untrash,
             gmail::unarchive,
             gmail::set_read,
+            mail_attach::mail_attach_check,
+            mail_attach::mail_attach_pick,
             mail_send::send_mail,
             gmail::sync,
             images::fetch_images,
@@ -306,6 +313,9 @@ pub fn run() {
             todoist::todoist_connected,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
+            jira::jira_settings,
+            jira::jira_save,
+            jira::jira_test,
             todoist::todoist_add,
             todoist::todoist_add_subtask,
             todoist::todoist_task_from_mail,
@@ -318,6 +328,7 @@ pub fn run() {
             todoist::todoist_create_label,
             todoist::todoist_move,
             todoist::todoist_move_under,
+            todoist::todoist_place,
             todoist::todoist_delete,
             todoist::todoist_archive_project,
             todoist::todoist_delete_project,
@@ -361,6 +372,9 @@ pub fn run() {
             notion::notion_accounts,
             notion::notion_connect,
             notion::notion_disconnect,
+            notion::notion_favorites,
+            notion::notion_teamspaces,
+            notion::notion_teamspace_pages,
             claude::claude_status,
             claude::claude_connection,
             claude::claude_key_save,
@@ -372,11 +386,9 @@ pub fn run() {
             claude::claude_todo_prompt_reset,
             claude::claude_model_settings,
             claude::claude_model_settings_save,
-            claude::claude_edit_todo_prompt,
-            claude::claude_edit_todo_draft,
             claude::claude_summarize_handoff,
-            claude::claude_chat_slack,
-            claude::claude_chat_thread,
+            claude::claude_channel_data,
+            claude::claude_thread_data,
             orca::orca_overview,
             orca::orca_destination,
             orca::orca_send,
