@@ -60,7 +60,10 @@ describe("calendar: calendar panel", () => {
 
   it("lists the calendars under the account, as mine and others, left of the week", async () => {
     await openPanel();
-    await expect($("#cal-side-head")).toHaveText("カレンダー");
+    // The panel has no heading, and the month calendar is at its top.
+    expect(await count("#cal-side-bar, #cal-side-head, #cal-side-toggle")).toBe(0);
+    expect(await browser.execute(() => document.getElementById("cal-side")!.firstElementChild!.id)).toBe("cal-month");
+    expect(await count("#cal-side h1, #cal-side h2, #cal-side h3")).toBe(0);
     expect(await textsOf("#cal-side-feed > .cal-side-account .cal-side-email")).toEqual([account]);
     expect(await textsOf("#cal-side-feed .cal-side-body > *")).toEqual(["マイカレンダー", "Work", "他のカレンダー", "Holidays"]);
     await expect(choiceBox("Work")).toBeSelected();
@@ -108,20 +111,29 @@ describe("calendar: calendar panel", () => {
     await expect(choiceBox("Work")).toBeDisplayed();
   });
 
-  it("closes the panel with the button beside the heading, the week takes its width, and opens it again", async () => {
+  it("closes the panel with the one button of the bar, which stays where it is, the week takes its width, and opens it again", async () => {
     await openPanel();
     const scrollWidth = () => browser.execute(() => document.getElementById("cal-scroll")!.getBoundingClientRect().width);
+    const toggleAt = () => browser.execute(() => {
+      const r = document.getElementById("cal-bar-toggle")!.getBoundingClientRect();
+      return { left: r.left, top: r.top };
+    });
     const open = await scrollWidth();
-    await expect($("#cal-side-toggle")).toHaveAttribute("aria-expanded", "true");
-    await expect($("#cal-bar-toggle")).not.toBeDisplayed();
-    await $("#cal-side-toggle").click();
+    const place = await toggleAt();
+    // One toggle on the screen, in the bar, first.
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#calendar .list-toggle")].map((b) => b.id))).toEqual(["cal-bar-toggle"]);
+    expect(await browser.execute(() => document.getElementById("cal-bar")!.firstElementChild!.id)).toBe("cal-bar-toggle");
+    await expect($("#cal-bar-toggle")).toHaveAttribute("aria-expanded", "true");
+    await $("#cal-bar-toggle").click();
     await expect($("#cal-side")).not.toBeDisplayed();
     await expect($("#cal-bar-toggle")).toBeDisplayed();
     await expect($("#cal-bar-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(await toggleAt()).toEqual(place);
     expect(await scrollWidth()).toBe(open + 248);
     await $("#cal-bar-toggle").click();
     await expect($("#cal-side")).toBeDisplayed();
-    await expect($("#cal-bar-toggle")).not.toBeDisplayed();
+    await expect($("#cal-bar-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(await toggleAt()).toEqual(place);
     expect(await scrollWidth()).toBe(open);
     await expect(choiceBox("Work")).toBeSelected();
   });
@@ -198,7 +210,7 @@ const weekAsked = (date: string) =>
   browser.waitUntil(async () => ((await callsOf("calendar_week")) as { date: string }[]).some((c) => c.date === date), { timeoutMsg: `the week of ${date} was not asked for` });
 
 describe("calendar: header", () => {
-  it("has today, the arrows and the month in the band of the Todo header, and the panel's heading in the same band", async () => {
+  it("has the toggle, today, the arrows and the month in the band of the Todo header, across the whole width over the panel", async () => {
     await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
     await $("#nav-calendar").click();
     await waitForText("#cal-body .cal-name", "Team sync");
@@ -208,18 +220,25 @@ describe("calendar: header", () => {
       const style = (id: string) => getComputedStyle(document.getElementById(id)!);
       const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
       return {
-        order: ["cal-today", "cal-prev", "cal-next", "cal-title"].sort((a, b) => left(a) - left(b)),
-        background: [style("cal-bar").backgroundColor, style("cal-side-bar").backgroundColor],
-        underline: [style("cal-bar").borderBottomWidth, style("cal-side-bar").borderBottomWidth],
-        bottom: [box("cal-bar").bottom, box("cal-side-bar").bottom],
+        order: ["cal-bar-toggle", "cal-today", "cal-prev", "cal-next", "cal-title"].sort((a, b) => left(a) - left(b)),
+        background: style("cal-bar").backgroundColor,
+        underline: style("cal-bar").borderBottomWidth,
+        bar: box("cal-bar"),
+        screen: box("calendar"),
+        side: box("cal-side"),
+        main: box("cal-main"),
         soft: getComputedStyle(document.documentElement).getPropertyValue("--soft").trim(),
       };
     });
-    expect(bar.order).toEqual(["cal-today", "cal-prev", "cal-next", "cal-title"]);
-    expect(bar.background[0]).toBe(bar.background[1]);
-    expect(bar.background[0]).not.toBe("rgba(0, 0, 0, 0)");
-    expect(bar.underline).toEqual(["2px", "2px"]);
-    expect(bar.bottom[0]).toBe(bar.bottom[1]);
+    expect(bar.order).toEqual(["cal-bar-toggle", "cal-today", "cal-prev", "cal-next", "cal-title"]);
+    expect(bar.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(bar.underline).toBe("2px");
+    // The bar spans the screen's width, and the panel and the week are under it.
+    expect(bar.bar.left).toBe(bar.screen.left);
+    expect(bar.bar.right).toBe(bar.screen.right);
+    expect(bar.side.top).toBeGreaterThanOrEqual(bar.bar.bottom);
+    expect(bar.main.top).toBeGreaterThanOrEqual(bar.bar.bottom);
+    expect(bar.side.left).toBe(bar.screen.left);
   });
 
   it("still goes to the week before and after, and to today", async () => {
@@ -307,7 +326,7 @@ describe("calendar: month calendar", () => {
   it("opens from the month of the bar, over the week, also while the panel is closed, and shows the week of a pressed day and closes", async () => {
     await openMonth();
     await mock("calendar_week", weekOfToday());
-    await $("#cal-side-toggle").click();
+    await $("#cal-bar-toggle").click();
     await expect($("#cal-month")).not.toBeDisplayed();
     await expect($("#cal-month-pop")).not.toBeDisplayed();
     await expect($("#cal-title")).toHaveAttribute("aria-expanded", "false");
