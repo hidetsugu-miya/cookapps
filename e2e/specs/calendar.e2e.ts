@@ -218,7 +218,10 @@ describe("calendar: header", () => {
     const bar = await browser.execute(() => {
       const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
       const style = (id: string) => getComputedStyle(document.getElementById(id)!);
-      const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      const box = (id: string) => {
+        const { left, right, top, bottom } = document.getElementById(id)!.getBoundingClientRect();
+        return { left, right, top, bottom };
+      };
       return {
         order: ["cal-bar-toggle", "cal-today", "cal-prev", "cal-next", "cal-title"].sort((a, b) => left(a) - left(b)),
         background: style("cal-bar").backgroundColor,
