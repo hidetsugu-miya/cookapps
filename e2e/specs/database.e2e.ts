@@ -1796,7 +1796,7 @@ describe("database: tree", () => {
         expect(await addedOf()).toBe(1);
         await expect(changes()).toHaveText("変更 1 件");
         await expect(button("remove")).toBeDisabled();
-        await $("#database-work .database-grid tbody tr.added td").click();
+        await $("#database-work .database-grid tbody tr.added td:nth-child(1)").click();
         await expect($("#database-work tbody tr.added")).toHaveElementClass("selected");
         await expect(button("remove")).toBeEnabled();
         await button("remove").click();
