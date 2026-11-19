@@ -126,7 +126,7 @@ pub struct OrcaFileEntry {
     pub icon: Option<&'static str>,
 }
 
-/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, deleted, renamed or copied, `New` for one that is untracked or added. A folder is what its files are, and `Changed` when they are both.
+/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, deleted, renamed or copied, `New` for one that is untracked or added. A file that has an entry that is untracked or added is `New` whatever else it has (HEAD has no such file), and a folder is what its files are, and `Changed` when they are both.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -570,10 +570,11 @@ fn mark_of_status(status: &str) -> OrcaGitMark {
     }
 }
 
-/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it: a file by its own entries, a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
+/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it: a file by its own entries (`New` as soon as one of them is untracked or added, so a file that was added and edited again, git's `AM`, is `New`), a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
 fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
     let mut marks: HashMap<&str, OrcaGitMark> = HashMap::new();
     let mut new_folders: HashSet<&str> = HashSet::new();
+    let mut new_own: HashSet<&str> = HashSet::new();
     for entry in status["entries"].as_array().into_iter().flatten() {
         let Some(path) = entry["path"].as_str() else {
             continue;
@@ -583,6 +584,9 @@ fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
         let path = path.trim_end_matches('/');
         if path.is_empty() {
             continue;
+        }
+        if mark == OrcaGitMark::New {
+            new_own.insert(path);
         }
         if status == "untracked" && entry["path"].as_str().is_some_and(|p| p.ends_with('/')) {
             new_folders.insert(path);
@@ -602,12 +606,15 @@ fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
     paths
         .iter()
         .filter_map(|path| {
-            let mark = marks.get(path.as_str()).copied().or_else(|| {
-                let inside_new = path
-                    .match_indices('/')
-                    .any(|(i, _)| new_folders.contains(&path[..i]));
-                inside_new.then_some(OrcaGitMark::New)
-            })?;
+            let own_new = new_own.contains(path.as_str()).then_some(OrcaGitMark::New);
+            let mark = own_new
+                .or_else(|| marks.get(path.as_str()).copied())
+                .or_else(|| {
+                    let inside_new = path
+                        .match_indices('/')
+                        .any(|(i, _)| new_folders.contains(&path[..i]));
+                    inside_new.then_some(OrcaGitMark::New)
+                })?;
             Some(OrcaGitChange {
                 path: path.clone(),
                 mark,
@@ -3515,13 +3522,37 @@ mod tests {
 
     #[test]
     fn a_file_with_a_staged_and_an_unstaged_entry_is_one_mark() {
+        // A file that HEAD has not got is new, edited after the add or not (git's `AM`).
+        for entries in [
+            json!([{"status": "added", "path": "a", "area": "staged"}, {"status": "modified", "path": "a", "area": "unstaged"}]),
+            json!([{"status": "modified", "path": "a", "area": "unstaged"}, {"status": "added", "path": "a", "area": "staged"}]),
+        ] {
+            assert_eq!(
+                changes_in(&status_of(entries), &["a".to_owned()]),
+                [change("a", OrcaGitMark::New)]
+            );
+        }
+        // A file that HEAD has, staged and then edited again, is changed.
         let status = status_of(json!([
-            {"status": "added", "path": "a", "area": "staged"},
-            {"status": "modified", "path": "a", "area": "unstaged"},
+            {"status": "modified", "path": "b", "area": "staged"},
+            {"status": "modified", "path": "b", "area": "unstaged"},
         ]));
         assert_eq!(
-            changes_in(&status, &["a".to_owned()]),
-            [change("a", OrcaGitMark::Changed)]
+            changes_in(&status, &["b".to_owned()]),
+            [change("b", OrcaGitMark::Changed)]
+        );
+        // The folder above an added and edited file is changed, as it is for any mix.
+        let status = status_of(json!([
+            {"status": "added", "path": "d/a", "area": "staged"},
+            {"status": "modified", "path": "d/a", "area": "unstaged"},
+        ]));
+        let asked: Vec<String> = ["d", "d/a"].map(String::from).into();
+        assert_eq!(
+            changes_in(&status, &asked),
+            [
+                change("d", OrcaGitMark::Changed),
+                change("d/a", OrcaGitMark::New)
+            ]
         );
     }
 
