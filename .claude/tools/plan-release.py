@@ -18,7 +18,7 @@ Usage:
 `claim` refuses an issue whose owner is another worktree that still exists (stderr says `#{n} claimed by {path}`, exit 3, and it still claims the others); a claim whose worktree is gone is stale and is taken over; `use-worktree.sh --park` deletes the claims of its worktree.
 A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
 `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
-(open, no `needs:owner`, not in hand, no sub-issue, no parent, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
+(open, not in hand, no sub-issue, no parent, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
 `split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "parts": [{"title", "body", "labels", "points_reason"}]}; a `milestone` key is refused.
 It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes `solo` and `session` when they are missing,
 creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
@@ -442,14 +442,13 @@ def plan_positions(plan):
 
 
 def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
-    """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), not in hand (`pr_closing`, `mine`),
+    """The open issues of 5 or 8 points that wait for `issue-plan` step 3: not in hand (`pr_closing`, `mine`),
     no sub-issue, no parent (`split` refuses a part) and not labelled `whole`. The mark of a split issue is its sub-issues, and the mark of one kept as one is the label `whole`."""
     return [
         i
         for i in issues
         if i.state == "open"
         and points(i) in (5, 8)
-        and not has(i, "needs:owner")
         and i.number not in pr_closing
         and i.number not in mine
         and not is_parent(i)
@@ -464,7 +463,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, clai
     `claimed`: {issue number: the worktree that holds the claim}, only the claims whose worktree still exists (`read_claims`); another session works on those issues, so they are not in `start`, and `claimed` lists them.
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
-    An issue with needs:owner, and one with an open blocker, are left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
+    An issue with an open blocker is left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
     (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (.claude/skills/ship/SKILL.md, "Rules"): it may bundle issues of any units.
     `stop` says why `start` is empty on purpose: a change of a solo unit waits for the merge of its Release PR, and nothing new begins before it (the rest of its unit included); the night run only.
     `waiting` are the changes that wait for the release. A parent is in none of the lists: its parts are.
@@ -486,7 +485,6 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, clai
         "in_progress": [],
         "claimed": [],
         "held": [],
-        "needs_owner": [],
         "blocked": [],
         "waits_for_release": [],
         "waits_for_session": [],
@@ -501,8 +499,6 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, clai
             out["claimed"].append(dict(brief(i), owner=claimed[i.number]))
         elif i.number in pr_closing:
             out["held"].append(dict(brief(i), reason="pull request open"))
-        elif has(i, "needs:owner"):
-            out["needs_owner"].append(brief(i))
         elif i.blocked_by:
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
         elif night and session(i):
