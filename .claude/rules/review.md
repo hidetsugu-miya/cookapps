@@ -121,7 +121,8 @@ When the first round fails, fix the blocking findings and, in the same fix, the 
 The second-round reviewers get the whole diff of that fix, the non-blocking fixes included.
 When a round passes, fix nothing more: push with the non-blocking findings (Medium and Low) that are left, in a session and in a night run alike (at the owner's instruction, 2026-11-19; #1012. It replaces the part of the instructions of 2026-10-29 and of 2026-11-12, #485, that had them fixed after the pass and sent through `range-check.sh`: in the night runs of 2026-11-13 to 2026-11-19, 3 of 5 ran CI and E2E once more for a Low fix after the pass, which added 5.0 to 11.2 minutes, and the run that left its Low alone added none).
 A non-blocking finding that first appears in the second round or later is left the same way.
-List each finding that was not fixed (its ID, `path:line` and a one-line gist) in the completion report, and in the hand-over of a night run. Do not ask the owner.
+List each finding that was not fixed (its ID, `path:line` and a one-line gist) in the completion report. A night run's completion report stays in its local log (`.claude/nightly/ship-{date}.log`), so the list is kept there.
+In the hand-over of a night run write only how many were left, never their IDs, locations or gists: the hand-over Discussion is public, and review findings stay local (`issues.md`, "Reach main only through a pull request with `Closes #n`"). Do not ask the owner.
 Decline a finding that does not serve the goal in the first-round fix, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
 When a finding has several ways to fix it, choose the recommended one and state it in the completion report.
 
@@ -131,6 +132,7 @@ Good: round 1 passes with a Low -> push, and list the Low in the completion repo
 Good: round 2 finds a new Low -> pass -> push, and list the Low in the completion report
 Bad:  round 1 fails with a High and a Low, and the Low is left unfixed
 Bad:  pass -> fix the Low -> run-e2e.sh again -> push
+Bad:  a night run writes the ID, `path:line` and gist of a security Low in the hand-over Discussion (write the count only)
 Bad:  pass -> push with the Low left, and ask the owner whether to fix it
 ```
 
