@@ -23,7 +23,7 @@ The `claude -p` calls of M-8, S-2 and A-9 go through the Claude Code CLI, which 
 
 ## A-32 Skills tab
 
-The settings screen has a tab 「スキル」, right of 「Claude」 (A-3), with one card of the same name. It makes, changes and deletes the skills of #127: the instructions the owner writes once for the Claude of the screens that talk to it (S-4, S-7). The files and the four commands (`skill_list`, `skill_get`, `skill_save`, `skill_delete`) are in `src-tauri/src/skills.rs` and `requirements/constraints.md` ("Claude and skills"); the frontend is `ts/skill-settings.ts`, which draws what Rust answers and sends what the form holds. Rust checks every text and answers a refusal in Japanese (`skills::check`). No help text is on the card (`frontend.md`).
+The settings screen has a tab 「スキル」, right of 「Claude」 (A-3), with one card of the same name. It makes, changes and deletes the skills of #127: the instructions the owner writes once for the Claude of the screens that talk to it (S-4, S-7; the Claude of both is a Claude Code pane since #734 and #735, which is given no skill yet: A-36, S-4). The files and the four commands (`skill_list`, `skill_get`, `skill_save`, `skill_delete`) are in `src-tauri/src/skills.rs` and `requirements/constraints.md` ("Claude and skills"); the frontend is `ts/skill-settings.ts`, which draws what Rust answers and sends what the form holds. Rust checks every text and answers a refusal in Japanese (`skills::check`). No help text is on the card (`frontend.md`).
 
 Why. The owner asked for a place in the settings to make, change and delete skills, with the list at the left and the edit field at the right (2026-11, issue #340, from #127; Discussion #123), and to change the instructions in a talk with Claude (#345, below).
 

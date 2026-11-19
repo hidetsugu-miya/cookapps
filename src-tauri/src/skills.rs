@@ -8,7 +8,7 @@
 //! a file saved before the rename has `cookapps-display-name` and `cookapps-screens` instead: they are read as the new keys are, and the next save writes the new ones only.
 //! The body is the instructions.
 //! The name is the folder's, and it is checked before any path is made of it (`validate_name`), so a name never points outside `skills/`.
-//! This file reads and writes only: nothing here calls Claude. `plugin_for` is what a call of a skill asks (S-4, S-7): it gives the folder for `--plugin-dir` only for a saved skill that the screen of the call may use.
+//! This file reads and writes only: nothing here calls Claude. `plugin_for` is what a Claude Code pane that is given a skill asks (A-36, `claude_code_start`): it gives the folder for `--plugin-dir` only for a saved skill that the screen of the pane may use. `tsunagiai-mcp` reads and saves the skills with `list_skills`, `read_skill` and `save_skill` (A-32, #345).
 
 use std::{
     path::{Path, PathBuf},

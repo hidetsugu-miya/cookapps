@@ -590,7 +590,6 @@ fn mail_prompt(today: &str, boundary: &str) -> String {
 
 /// The arguments of a summary call. No tools and no MCP servers are given to the model, so a message cannot make it act,
 /// and no settings are read (an empty `--setting-sources`), so no hook of the user's or the project's sees the message.
-/// A call of a skill adds a plugin folder (`skill_call`), which `skills::plugin_for` makes for that call from the one skill's name, description and text only: it holds no hook, no MCP server and no other skill, so the same holds.
 fn claude_args(system_prompt: &str, schema: &str, settings: ModelSettings) -> Vec<String> {
     [
         "-p",
