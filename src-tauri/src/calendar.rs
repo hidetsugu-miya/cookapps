@@ -7,8 +7,8 @@ use std::{
 };
 
 use chrono::{
-    DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveTime, SecondsFormat,
-    TimeZone, Timelike, Utc,
+    DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime,
+    SecondsFormat, TimeZone, Timelike, Utc,
 };
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -24,6 +24,7 @@ use crate::{
     disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
     mail_send::valid_address,
+    screen_bridge::Fields,
 };
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
@@ -1540,6 +1541,52 @@ fn check_times(event: &NewEvent) -> Result<(Value, Value), String> {
             json!({"dateTime": text(end)}),
         ))
     }
+}
+
+/// The most candidates of `calendar_show_slots` (C-6, #1063): the screen bridge writes at most 8 fields in one go.
+pub const MAX_SLOTS: usize = 8;
+
+/// One end of a candidate: exactly `YYYY-MM-DDTHH:MM` (the month, the day, the hour and the minute with two digits) and a time that exists. `n` is the number of the candidate, from 1.
+fn slot_time(n: usize, what: &str, text: &str) -> Result<NaiveDateTime, String> {
+    let shaped = text.len() == 16
+        && text.bytes().enumerate().all(|(i, b)| match i {
+            4 | 7 => b == b'-',
+            10 => b == b'T',
+            13 => b == b':',
+            _ => b.is_ascii_digit(),
+        });
+    shaped
+        .then(|| NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M").ok())
+        .flatten()
+        .ok_or_else(|| {
+            format!(
+                "候補{n}の{what}の日時が正しくありません: {}（\"YYYY-MM-DDTHH:MM\" の形で、実在する日時にしてください）",
+                shown_text(text)
+            )
+        })
+}
+
+/// The candidates of free time that `calendar_show_slots` draws on the week (C-6, #1063), as the fields `slot1` to `slot{n}` of the screen `calendar-slots`, each `start/end` (`YYYY-MM-DDTHH:MM`, this Mac's time). `slots` are (start, end) pairs. It takes 1 to `MAX_SLOTS` candidates, each ending after it starts and on the same day; one wrong candidate refuses them all, so the screen is given nothing.
+pub fn slot_fields(slots: &[(&str, &str)]) -> Result<Fields, String> {
+    if slots.is_empty() || slots.len() > MAX_SLOTS {
+        return Err(format!(
+            "候補は 1 件から {MAX_SLOTS} 件までです（{} 件）",
+            slots.len()
+        ));
+    }
+    let mut fields = Fields::new();
+    for (i, (start, end)) in slots.iter().enumerate() {
+        let n = i + 1;
+        let (from, to) = (slot_time(n, "開始", start)?, slot_time(n, "終了", end)?);
+        if to <= from {
+            return Err(format!("候補{n}は終了が開始より後になっていません"));
+        }
+        if to.date() != from.date() {
+            return Err(format!("候補{n}は同じ日の中で終わらせてください"));
+        }
+        fields.insert(format!("slot{n}"), format!("{start}/{end}"));
+    }
+    Ok(fields)
 }
 
 /// The query parameters of a request.
@@ -3138,6 +3185,120 @@ mod tests {
             created.meet_url.as_deref(),
             Some("https://meet.google.com/abc-defg-hij")
         );
+    }
+
+    fn pairs<'a>(slots: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+        slots.to_vec()
+    }
+
+    #[test]
+    fn candidates_of_free_time_become_the_fields_slot1_to_slot8() {
+        let fields = slot_fields(&pairs(&[
+            ("2026-11-19T10:00", "2026-11-19T12:00"),
+            ("2026-11-20T13:30", "2026-11-20T14:15"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            fields.into_iter().collect::<Vec<_>>(),
+            [
+                (
+                    "slot1".to_owned(),
+                    "2026-11-19T10:00/2026-11-19T12:00".to_owned()
+                ),
+                (
+                    "slot2".to_owned(),
+                    "2026-11-20T13:30/2026-11-20T14:15".to_owned()
+                ),
+            ]
+        );
+        let eight = vec![("2026-11-19T10:00", "2026-11-19T11:00"); MAX_SLOTS];
+        assert_eq!(slot_fields(&eight).unwrap().len(), 8);
+        assert!(slot_fields(&pairs(&[("2026-02-28T00:00", "2026-02-28T23:59")])).is_ok());
+        assert!(slot_fields(&pairs(&[("2028-02-29T09:00", "2028-02-29T10:00")])).is_ok());
+    }
+
+    #[test]
+    fn one_to_eight_candidates_are_taken() {
+        for count in [0, MAX_SLOTS + 1] {
+            let slots = vec![("2026-11-19T10:00", "2026-11-19T11:00"); count];
+            let error = slot_fields(&slots).unwrap_err();
+            assert!(error.contains("1 件から 8 件"), "{error}");
+            assert!(error.contains(&format!("{count} 件")), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_time_must_be_exactly_the_shape_and_exist() {
+        for bad in [
+            "",
+            "2026-11-19 10:00",
+            "2026-11-19T10:00:00",
+            "2026-11-19T10:00Z",
+            "2026-11-19T1:00",
+            "2026-1-19T10:00",
+            "26-11-19T10:00",
+            " 2026-11-19T10:00",
+            "+026-11-19T10:00",
+            "2026/11/19T10:00",
+            "2026-11-19t10:00",
+            "２０２６-11-19T10:00",
+            "2026-02-30T10:00",
+            "2027-02-29T10:00",
+            "2026-13-01T10:00",
+            "2026-11-19T24:00",
+            "2026-11-19T10:60",
+        ] {
+            let start = slot_fields(&pairs(&[(bad, "2026-11-19T12:00")])).unwrap_err();
+            assert!(
+                start.contains("候補1の開始の日時が正しくありません"),
+                "{bad}: {start}"
+            );
+            let end = slot_fields(&pairs(&[("2026-11-19T10:00", bad)])).unwrap_err();
+            assert!(
+                end.contains("候補1の終了の日時が正しくありません"),
+                "{bad}: {end}"
+            );
+        }
+        // The second candidate is the one named.
+        let error = slot_fields(&pairs(&[
+            ("2026-11-19T10:00", "2026-11-19T11:00"),
+            ("2026-11-19T10:00", "tomorrow"),
+        ]))
+        .unwrap_err();
+        assert!(error.contains("候補2の終了"), "{error}");
+        // A long text is cut in the message.
+        let long = "x".repeat(500);
+        let error = slot_fields(&pairs(&[(&long, "2026-11-19T12:00")])).unwrap_err();
+        assert!(error.len() < 400, "{error}");
+    }
+
+    #[test]
+    fn a_candidate_ends_after_it_starts_and_on_the_same_day() {
+        for (start, end) in [
+            ("2026-11-19T10:00", "2026-11-19T10:00"),
+            ("2026-11-19T12:00", "2026-11-19T10:00"),
+            ("2026-11-20T10:00", "2026-11-19T12:00"),
+        ] {
+            let error = slot_fields(&pairs(&[(start, end)])).unwrap_err();
+            assert!(error.contains("候補1は終了が開始より後"), "{error}");
+        }
+        for (start, end) in [
+            ("2026-11-19T23:00", "2026-11-20T00:30"),
+            ("2026-11-19T10:00", "2026-11-21T10:00"),
+            ("2026-12-31T22:00", "2027-01-01T01:00"),
+        ] {
+            let error = slot_fields(&pairs(&[(start, end)])).unwrap_err();
+            assert!(
+                error.contains("候補1は同じ日の中で終わらせてください"),
+                "{error}"
+            );
+        }
+        // Nothing is given to the screen when one candidate is wrong.
+        assert!(slot_fields(&pairs(&[
+            ("2026-11-19T10:00", "2026-11-19T11:00"),
+            ("2026-11-19T12:00", "2026-11-19T11:00"),
+        ]))
+        .is_err());
     }
 
     #[test]

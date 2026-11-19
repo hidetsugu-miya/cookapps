@@ -5,6 +5,7 @@ import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
 import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
 import { initCalendarClaude } from "./calendar-claude.js";
+import { drawSlots } from "./calendar-slots.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
 import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
@@ -216,8 +217,9 @@ function renderWeek(w: Week) {
   setRelogin("calendar", w.needsLogin, (a) => `${a} はカレンダーを読むため再ログインが必要です`, addAccount);
   // A detail open on an event of the old draw follows it into this one.
   endEvents();
-  // The same for a form of C-5 that is open.
+  // The same for a form of C-5 that is open, and for the candidates of free time (C-6).
   redrawDraft(w.weekStart);
+  drawSlots(w.weekStart);
   refreshPopup();
   if (!calScrolled) {
     // Two hours before now at the top (11:00 shows from 9:00); a little less keeps the hour label whole.

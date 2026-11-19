@@ -282,6 +282,11 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #cal-bar .icon-btn:hover:not(:disabled) { background: var(--hover); }
 #cal-bar .list-toggle { margin-right: 8px; }
 /* C-6: the ✳ at the right end of the bar, filled while the pane is open; the pane is a column at the right of the week, under the bar, a share of the frame between 30% and 45% (the divider of ts/split.ts holds the same range). */
+/* C-6 (#1063): the chip of the candidates in the bar, and the frames in the week: dashed, in --dot, and deaf to the pointer, so a press on the free place under one still makes an event (C-5). */
+#cal-slots-chip { margin-left: 8px; }
+#cal-slots-clear { margin: 0; padding: 0 2px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.cal-slot { position: absolute; z-index: 1; left: 1px; right: 1px; top: calc(var(--hour) * var(--s) / 60); height: calc(var(--hour) * var(--d) / 60 - 1px); box-sizing: border-box; overflow: hidden; border: 2px dashed var(--dot); border-radius: 4px; background: color-mix(in srgb, var(--dot) 7%, transparent); pointer-events: none; }
+.cal-slot-label { padding: 1px 4px; color: var(--dot); font-size: calc(11px * var(--fs)); font-weight: 600; line-height: 1.3; white-space: nowrap; }
 #cal-bar-claude { margin-left: auto; color: var(--claude); }
 #cal-bar-claude[aria-pressed="true"], #cal-bar-claude[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 #cal-claude { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
@@ -306,7 +311,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .cal-side-item input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--c); cursor: pointer; }
 .cal-side-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .cal-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#cal-heading { margin: 0 0 0 8px; font-size: calc(20px * var(--fs)); font-weight: 600; }
+#cal-heading { flex: 0 1 auto; margin: 0 0 0 8px; font-size: calc(20px * var(--fs)); font-weight: 600; }
 #cal-title { padding: 2px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
 #cal-title:hover, #cal-title[aria-expanded="true"] { background: var(--hover); }
 #cal-title:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
