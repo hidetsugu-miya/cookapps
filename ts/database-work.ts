@@ -5,17 +5,19 @@ import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
+import { canEditCell, cellKey, changesOf, type EditState, markable, originalText } from "./database-edit.js";
 import { gridNode } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
-import { CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
+import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, RELOAD_SVG } from "./icons.js";
 import { copyText } from "./view.js";
 
-// The page of records that was asked for last. `data` stays while the next page is read, and is none after an error.
+// The page of records that was asked for last. `data` stays while the next page is read, and is none after an error. `edit` is what the page has gathered to write (D-10); a screen that cannot write gives none, and its records tab has no control to write.
 export interface RecordsState {
   page: number;
   loading: boolean;
   error: string | null;
   data: DatabaseRecords | null;
+  edit?: EditState;
 }
 
 // The structure that was asked for last. `data` is none while it is read and after an error.
@@ -92,10 +94,25 @@ export interface WorkActions {
   runSql: () => void;
   // Opens the table of a row of the table list, as a press on its row in the tree does.
   openTable: (table: string) => void;
+  edit: EditActions;
 }
 
-// What the body of a table or of a SQL tab asks of its screen.
-export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql">;
+// What the records tab does with what it gathers (D-10).
+export interface EditActions {
+  // Keeps the text a cell was rewritten to (the text it had before takes the rewrite back).
+  cell: (row: number, column: number, text: string) => void;
+  // Presses a row: it alone is selected, or, with `add`, it is added to or taken from the selected ones.
+  select: (row: number, add: boolean) => void;
+  // − marks the selected rows to be deleted.
+  markDelete: () => void;
+  // ✓ writes what was gathered, in one call.
+  apply: () => void;
+  // ✗ takes all of it back.
+  revert: () => void;
+}
+
+// What the body of a table or of a SQL tab asks of its screen; `edit` is the screen's that can write.
+export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql"> & { edit?: EditActions };
 
 // The tabs of a table, in order. The body of the selected one is drawn in `drawDatabaseWork`, where the body of a tab that is added goes.
 const TABS = [
@@ -113,6 +130,8 @@ const DATABASE_TABS = [
 const STRUCTURE_COLUMNS = ["名前", "型", "NULL", "キー", "既定値", "注釈"];
 
 let drawn = "";
+// Which grid the pane drew last: the same one drawn again (a rewrite makes the grid again, D-10) keeps its scroll position.
+let drawnGrid = "";
 
 function tableNode(state: WorkState, actions: WorkActions) {
   const table = tag("table", "database-tables");
@@ -222,41 +241,74 @@ function copyButton(data: { columns: unknown[]; tsv: string } | null, loading: b
   });
 }
 
-// The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page.
+// The grid of the records tab with what it gathers (D-10): its cells, the marked rows and the pressed ones are drawn from `edit`, and it is made again for each draw, as a rewrite changes it.
+function editGridNode(data: DatabaseRecords, edit: EditState, actions: EditActions, sizes: string) {
+  return gridNode(data.columns, data.rows, sizes, {
+    editable: (row, i) => !edit.applying && canEditCell(data, row, i),
+    rewritten: (row, i) => edit.cells[cellKey(row, i)],
+    startText: (row, i) => edit.cells[cellKey(row, i)] ?? originalText(data, row, i),
+    deleted: (row) => edit.deleted.includes(row),
+    selected: (row) => edit.selected.includes(row),
+    select: actions.select,
+    commit: actions.cell,
+  });
+}
+
+// The records tab: the page as a grid, and under it the reload, the copy and the range with the estimated rows at the left, and at the right the first, previous, number, next and last page. A screen that writes (D-10) has − ✓ ✗ after the copy and the number of changes after the range; while something is gathered the page cannot be changed or read again.
 function recordsNode(records: RecordsState, actions: TabActions, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
+  const edit = records.edit !== undefined && actions.edit !== undefined ? { state: records.edit, actions: actions.edit } : null;
   if (records.error !== null) scroll.append(note(records.error, true));
   else if (records.data !== null && records.data.columns.length > 0) {
     const { data } = records;
-    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows, sizes)));
+    scroll.append(edit ? editGridNode(data, edit.state, edit.actions, sizes) : gridOf(data, () => gridNode(data.columns, data.rows, sizes)));
   }
   const pager = tag("div", "database-pager");
   const range = tag("span", "database-range", records.loading ? "読み込み中…" : (records.data?.summary ?? ""));
   range.setAttribute("role", "status");
-  const { loading, page } = records;
+  const changes = edit && records.data ? changesOf(records.data, edit.state).length : 0;
+  // What is gathered, or on its way to be written, keeps the page where it is.
+  const held = records.loading || changes > 0 || edit?.state.applying === true;
+  const { page } = records;
   const lastPage = records.data?.lastPage ?? null;
   const input = tag("input", "database-page-input");
   input.type = "text";
   input.inputMode = "numeric";
   input.value = String(page + 1);
-  input.readOnly = loading;
+  input.readOnly = held;
   input.spellcheck = false;
   input.dataset.key = "page";
   input.setAttribute("aria-label", "ページ番号");
   onEnter(input, () => {
-    if (!loading) actions.pageInput(input.value);
+    if (!held) actions.pageInput(input.value);
   });
   const nav = tag("div", "database-pager-nav");
   nav.append(
-    iconButton("first", "最初のページ", PAGE_FIRST_SVG, loading || page === 0, () => actions.page(0)),
-    iconButton("prev", "前のページ", CHEVRON_LEFT_SVG, loading || page === 0, () => actions.page(page - 1)),
+    iconButton("first", "最初のページ", PAGE_FIRST_SVG, held || page === 0, () => actions.page(0)),
+    iconButton("prev", "前のページ", CHEVRON_LEFT_SVG, held || page === 0, () => actions.page(page - 1)),
     input,
     tag("span", "database-pages", records.data?.pages ?? ""),
-    iconButton("next", "次のページ", CHEVRON_SVG, loading || !records.data?.hasMore, () => actions.page(page + 1)),
-    iconButton("last", "最後のページ", PAGE_LAST_SVG, loading || lastPage === null || page >= lastPage, () => actions.page(lastPage ?? page)),
+    iconButton("next", "次のページ", CHEVRON_SVG, held || !records.data?.hasMore, () => actions.page(page + 1)),
+    iconButton("last", "最後のページ", PAGE_LAST_SVG, held || lastPage === null || page >= lastPage, () => actions.page(lastPage ?? page)),
   );
-  pager.append(iconButton("reload", "再読み込み", RELOAD_SVG, loading, () => actions.page(page)), copyButton(records.data, loading), range, nav);
+  pager.append(iconButton("reload", "再読み込み", RELOAD_SVG, held, () => actions.page(page)), copyButton(records.data, records.loading));
+  if (edit) {
+    const { data } = records;
+    const busy = records.loading || edit.state.applying;
+    pager.append(
+      iconButton("remove", "選んだ行を削除", MINUS_SVG, busy || data === null || markable(data, edit.state).length === 0, edit.actions.markDelete),
+      iconButton("apply", "変更を確定", CHECK_SVG, busy || changes === 0, edit.actions.apply),
+      iconButton("revert", "変更を取り消す", CLOSE_SVG, busy || changes === 0, edit.actions.revert),
+    );
+  }
+  pager.append(range);
+  if (changes > 0) {
+    const count = tag("span", "database-changes", `変更 ${changes} 件`);
+    count.setAttribute("role", "status");
+    pager.append(count);
+  }
+  pager.append(nav);
   box.append(scroll, pager);
   return box;
 }
@@ -366,6 +418,10 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   if (state === null) return box.replaceChildren();
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
+  const scroller = box.querySelector<HTMLElement>(".database-records-scroll");
+  const grid = state.table === null ? "" : [state.connection, state.database, state.table, state.tab, state.records?.page].join("\0");
+  const scrolled = scroller !== null && grid === drawnGrid ? ([scroller.scrollTop, scroller.scrollLeft] as const) : null;
+  drawnGrid = grid;
   const nodes: Node[] = [];
   // The one SQL result of a connection and a database is shared by the tab of the database and the tab SQL of each of its tables, so its column widths are named by the three alone (D-4).
   const sqlSizes = [state.connection, state.database, "sql"].join("\0");
@@ -379,6 +435,8 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
     else if (state.tables.length > 0) nodes.push(tableNode(state, actions));
   }
   box.replaceChildren(...nodes);
+  const kept = box.querySelector<HTMLElement>(".database-records-scroll");
+  if (scrolled !== null && kept !== null) [kept.scrollTop, kept.scrollLeft] = scrolled;
   if (focused) {
     const again = (inStrip ? strip : box).querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`);
     again?.focus({ preventScroll: true });

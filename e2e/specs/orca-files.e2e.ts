@@ -3943,6 +3943,10 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-database-tab .database-range")).toHaveText("1–1 行目");
     await expect(dbRow("p1/d/shop/t/orders")).toHaveAttribute("aria-pressed", "true");
     expect(await count("#orca-database [placeholder]")).toBe(0);
+    // The records of this tab are read only: none of the buttons that write (D-10), and no field in a cell.
+    expect(await count('.orca-database-tab [data-key="remove"], .orca-database-tab [data-key="apply"], .orca-database-tab [data-key="revert"]')).toBe(0);
+    await $(".orca-database-tab .database-grid tbody tr:first-child td:nth-child(2)").doubleClick();
+    expect(await count(".orca-database-tab .database-cell input")).toBe(0);
   });
 
   it("opens a table that is open already by selecting its tab and reading its first page again, and another table as another tab (A-43)", async () => {

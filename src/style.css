@@ -2128,6 +2128,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-records-scroll { flex: 1; min-height: 0; overflow: auto; }
 .database-pager { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 12px; }
 .database-range { margin-right: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* D-10: the number of changes that the records tab has gathered, after the range. */
+.database-range:has(+ .database-changes) { margin-right: 0; }
+.database-changes { margin-right: auto; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .database-pager .text-btn:disabled { opacity: .4; cursor: default; }
 .database-pager .text-btn:disabled:hover { background: var(--surface); }
 .database-pager .icon-btn { flex: none; width: 28px; height: 28px; color: var(--ink-soft); }
@@ -2150,6 +2153,12 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .database-cell[data-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .database-cell[data-kind="null"], .database-cell[data-kind="binary"] { color: var(--muted); font-style: italic; }
+/* D-10: a pressed row, a cell that was rewritten (the accent on the soft color), a row marked to be deleted (struck through, in the danger color), and the field of a cell that is being rewritten. */
+.database-grid tr.selected td { background: var(--hover); }
+.database-grid td.changed { background: var(--soft); color: var(--accent); }
+.database-grid tr.deleted td { color: var(--danger); text-decoration: line-through; }
+.database-cell-input { box-sizing: border-box; width: 100%; min-width: 8em; margin: -3px 0; padding: 2px 6px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; }
+.database-cell-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* D-1: the edit pane of a connection takes the place of the work pane: its header has the title and the buttons, and under it are the fields. */
 #database-edit { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 #database-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }

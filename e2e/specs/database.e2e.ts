@@ -1224,6 +1224,9 @@ describe("database: tree", () => {
       expect(labels).toEqual([
         ["再読み込み", ""],
         ["一覧をコピー", ""],
+        ["選んだ行を削除", ""],
+        ["変更を確定", ""],
+        ["変更を取り消す", ""],
         ["最初のページ", ""],
         ["前のページ", ""],
         ["次のページ", ""],
@@ -1239,7 +1242,7 @@ describe("database: tree", () => {
     it("puts the reload, the copy and the range at the left of the footer and the page buttons, the number and the pages at the right, the buttons having an icon", async () => {
       await openTable();
       const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *, #database-work .database-pager-nav > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
-      expect(order).toEqual(["reload", "copy", "database-range", "database-pager-nav", "first", "prev", "page", "database-pages", "next", "last"]);
+      expect(order).toEqual(["reload", "copy", "remove", "apply", "revert", "database-range", "database-pager-nav", "first", "prev", "page", "database-pages", "next", "last"]);
       const places = await browser.execute(() => {
         const left = (key: string) => document.querySelector(`#database-work [data-key="${key}"]`)!.getBoundingClientRect().left;
         const range = document.querySelector("#database-work .database-range")!.getBoundingClientRect();
@@ -1469,14 +1472,328 @@ describe("database: tree", () => {
       expect(await callsOf(command)).toEqual([]);
     });
 
-    it("has no control to add, edit or delete a row: only the tabs, the reload, the copy, the four page buttons and the page field", async () => {
+    it("has no control to add a row, and the page field is the only input while no cell is rewritten: the tabs, the reload, the copy, the three buttons of D-10 and the four page buttons", async () => {
       await openTable();
-      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", "", ""]);
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造", "SQL", "", "", "", "", "", "", "", "", ""]);
       expect(await count("#database-work input")).toBe(1);
       expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
       await $("#database-work .database-grid tbody tr:first-child td:nth-child(2)").doubleClick();
       expect(await count("#database-work input")).toBe(1);
       expect(await count("#database-work textarea, #database-work [contenteditable]")).toBe(0);
+    });
+
+    // D-10: rewrite cells and mark rows, gather them, and write them with ✓.
+    describe("edit the records", () => {
+      // The row 1 has a cut text and a binary cell; the row 2 a NULL; the row 3 cannot be changed (its key cell is not whole).
+      const edits = databaseRecords(
+        ["id", "name", "note", "avatar"],
+        [
+          [num("1"), databaseCell("Alice"), databaseCell(long), bin("バイナリ 16 B")],
+          [num("2"), databaseCell("Bob"), databaseNull, bin("バイナリ 1 B")],
+          [num("3"), databaseCell("Carol"), databaseCell("memo"), bin("バイナリ 1 B")],
+        ],
+        {
+          key: ["id"],
+          hasMore: true,
+          estimate: 1200,
+          lastPage: 11,
+          pages: "/ 約 12",
+          summary: "1–3 行目 / 約 1,200 行",
+          edits: [
+            { canChange: true, cells: [true, true, false, false] },
+            { canChange: true, cells: [true, true, true, false] },
+            { canChange: false, cells: [false, true, true, false] },
+          ],
+        },
+      );
+      const fresh = databaseRecords(["id", "name"], [[num("10"), databaseCell("Alicia")]], { key: ["id"], summary: "1–1 行目" });
+      const cell = (r: number, c: number) => $(`#database-work .database-grid tbody tr:nth-child(${r}) td:nth-child(${c})`);
+      const field = () => $("#database-work .database-cell input");
+      const changes = () => $("#database-work .database-changes");
+      const popup = () => $('.pop[role="alertdialog"]');
+      const colorOf = (r: number, c: number) => browser.execute((rr, cc) => getComputedStyle(document.querySelector(`#database-work .database-grid tbody tr:nth-child(${rr}) td:nth-child(${cc})`)!).color, r, c);
+      async function startEdit(r: number, c: number) {
+        await cell(r, c).doubleClick();
+        await field().waitForExist();
+      }
+      async function rewrite(r: number, c: number, text: string) {
+        await startEdit(r, c);
+        await field().setValue(text);
+        await browser.keys("Enter");
+      }
+      // The table with the page that can be written, and ✓'s answer mocked.
+      async function openEdits() {
+        const calls = await openTable(edits);
+        const apply = await mock("database_apply", { inserted: 0, updated: 1, deleted: 1 });
+        return { calls, apply };
+      }
+
+      it("has − ✓ ✗ after the copy and the number of changes after the range, with the three off before anything is gathered", async () => {
+        await openEdits();
+        await expect(button("remove")).toBeDisabled();
+        await expect(button("apply")).toBeDisabled();
+        await expect(button("revert")).toBeDisabled();
+        await expect(changes()).not.toExist();
+        await cell(2, 1).click();
+        await expect(button("remove")).toBeEnabled();
+        await rewrite(1, 2, "Alicia");
+        await expect(changes()).toHaveText("変更 1 件");
+        const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
+        expect(order).toEqual(["reload", "copy", "remove", "apply", "revert", "database-range", "database-changes", "database-pager-nav"]);
+        const places = await browser.execute(() => {
+          const left = (q: string) => document.querySelector(q)!.getBoundingClientRect().left;
+          return [left('#database-work [data-key="copy"]') < left('#database-work [data-key="remove"]'), left("#database-work .database-range") < left("#database-work .database-changes"), left("#database-work .database-changes") < left("#database-work .database-pager-nav")];
+        });
+        expect(places).toEqual([true, true, true]);
+      });
+
+      it("turns a cell into a field with its text on a double press, keeps the new text on Enter in another color, and sends nothing", async () => {
+        const { apply } = await openEdits();
+        const before = await colorOf(1, 2);
+        await startEdit(1, 2);
+        expect(await field().getValue()).toBe("Alice");
+        await field().setValue("Alicia");
+        await browser.keys("Enter");
+        await expect(cell(1, 2)).toHaveText("Alicia");
+        await expect(cell(1, 2)).toHaveElementClass("changed");
+        expect(await colorOf(1, 2)).not.toBe(before);
+        expect(await colorOf(1, 3)).toBe(before);
+        expect(await count("#database-work .database-cell input")).toBe(0);
+        await expect(changes()).toHaveText("変更 1 件");
+        expect(await callsOf(apply)).toEqual([]);
+      });
+
+      it("gives the cell back as it was on Escape, and keeps the text when the field is left", async () => {
+        await openEdits();
+        await startEdit(1, 2);
+        await field().setValue("Alicia");
+        await browser.keys("Escape");
+        await expect(cell(1, 2)).toHaveText("Alice");
+        expect(await count("#database-work .database-cell input")).toBe(0);
+        await expect(changes()).not.toExist();
+        await startEdit(1, 2);
+        await field().setValue("Alicia");
+        await $("#database-work .database-range").click();
+        await expect(cell(1, 2)).toHaveText("Alicia");
+        await expect(changes()).toHaveText("変更 1 件");
+      });
+
+      it("takes a rewrite back when the text is typed back, and starts a NULL as the empty text that stays NULL", async () => {
+        await openEdits();
+        await rewrite(1, 2, "Alicia");
+        await expect(changes()).toHaveText("変更 1 件");
+        await rewrite(1, 2, "Alice");
+        await expect(changes()).not.toExist();
+        await expect(cell(1, 2)).not.toHaveElementClass("changed");
+        await startEdit(2, 3);
+        expect(await field().getValue()).toBe("");
+        await browser.keys("Enter");
+        await expect(cell(2, 3)).toHaveText("NULL");
+        await expect(changes()).not.toExist();
+        await rewrite(2, 3, "memo");
+        await expect(cell(2, 3)).toHaveText("memo");
+        expect(await cell(2, 3).getAttribute("data-kind")).toBe("text");
+      });
+
+      it("opens no field on a cell that cannot be written: a cut text, binary, a row that cannot be changed, and any cell of a table with no key", async () => {
+        await openEdits();
+        for (const [r, c] of [[1, 3], [1, 4], [3, 1], [3, 2], [3, 3]]) {
+          await cell(r, c).doubleClick();
+          expect(await count("#database-work .database-cell input")).toBe(0);
+        }
+        await expect(changes()).not.toExist();
+        await openTable();
+        for (const c of [1, 2, 3]) {
+          await cell(1, c).doubleClick();
+          expect(await count("#database-work .database-cell input")).toBe(0);
+        }
+      });
+
+      it("marks the pressed rows that can be deleted with −, struck through in another color, and takes the press off", async () => {
+        const { apply } = await openEdits();
+        await cell(2, 1).click();
+        await expect($("#database-work tbody tr:nth-child(2)")).toHaveElementClass("selected");
+        await browser.execute(() => document.querySelector("#database-work tbody tr:nth-child(1) td")!.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true })));
+        await expect($("#database-work tbody tr:nth-child(1)")).toHaveElementClass("selected");
+        await button("remove").click();
+        for (const r of [1, 2]) await expect($(`#database-work tbody tr:nth-child(${r})`)).toHaveElementClass("deleted");
+        await expect($("#database-work tbody tr:nth-child(3)")).not.toHaveElementClass("deleted");
+        expect(await browser.execute(() => getComputedStyle(document.querySelector("#database-work tbody tr:nth-child(2) td")!).textDecorationLine)).toBe("line-through");
+        expect(await colorOf(2, 2)).not.toBe(await colorOf(3, 2));
+        await expect(changes()).toHaveText("変更 2 件");
+        await expect(button("remove")).toBeDisabled();
+        expect(await callsOf(apply)).toEqual([]);
+        await cell(2, 2).doubleClick();
+        expect(await count("#database-work .database-cell input")).toBe(0);
+      });
+
+      it("keeps − off for a row that cannot be changed and for a table with no key", async () => {
+        await openEdits();
+        await cell(3, 1).click();
+        await expect($("#database-work tbody tr:nth-child(3)")).toHaveElementClass("selected");
+        await expect(button("remove")).toBeDisabled();
+        await openTable();
+        await cell(1, 1).click();
+        await expect(button("remove")).toBeDisabled();
+      });
+
+      it("calls database_apply on ✓ with the changes in order, a marked row only deleted, and the key as the row was, then reads the page again", async () => {
+        const { apply } = await openEdits();
+        await rewrite(1, 1, "10");
+        await rewrite(1, 2, "Alicia");
+        await rewrite(2, 2, "Robert");
+        await cell(2, 1).click();
+        await button("remove").click();
+        await expect(changes()).toHaveText("変更 2 件");
+        const records = await mock("database_records", fresh);
+        await button("apply").click();
+        expect(await waitForCalls(apply)).toEqual([
+          {
+            id: "p1",
+            database: "shop",
+            table: "users",
+            changes: [
+              {
+                kind: "update",
+                key: [{ column: "id", value: "1" }],
+                values: [
+                  { column: "id", value: "10" },
+                  { column: "name", value: "Alicia" },
+                ],
+              },
+              { kind: "delete", key: [{ column: "id", value: "2" }] },
+            ],
+          },
+        ]);
+        expect(await waitForCalls(records)).toEqual([read(0, 1200)]);
+        await expect(cell(1, 2)).toHaveText("Alicia");
+        await expect(changes()).not.toExist();
+        await expect(button("apply")).toBeDisabled();
+      });
+
+      it("keeps everything off while ✓ is on its way, and keeps the page where it is", async () => {
+        const { apply } = await openEdits();
+        await rewrite(1, 2, "Alicia");
+        await mock("database_apply", holds);
+        await button("apply").click();
+        await waitForCalls(apply);
+        for (const key of ["remove", "apply", "revert"]) await expect(button(key)).toBeDisabled();
+        await cell(2, 2).doubleClick();
+        expect(await count("#database-work .database-cell input")).toBe(0);
+        await mock("database_records", fresh);
+        await release("database_apply", { inserted: 0, updated: 1, deleted: 0 });
+        await expect(cell(1, 2)).toHaveText("Alicia");
+        await waitForCalls("database_records");
+      });
+
+      it("shows the refusal of ✓ on a card and keeps every change, so that ✓ can be pressed again", async () => {
+        const { calls } = await openEdits();
+        const failing = await mock("database_apply", rejects("1 件目の更新で、対象の行が 0 行ありました。変更はすべて取り消しました"));
+        await rewrite(1, 2, "Alicia");
+        await button("apply").click();
+        await waitForCalls(failing);
+        await expect($(CARD)).toHaveText("1 件目の更新で、対象の行が 0 行ありました。変更はすべて取り消しました");
+        await expect(cell(1, 2)).toHaveText("Alicia");
+        await expect(changes()).toHaveText("変更 1 件");
+        await expect(button("apply")).toBeEnabled();
+        expect(await callsOf(calls)).toEqual([]);
+        const again = await mock("database_apply", { inserted: 0, updated: 1, deleted: 0 });
+        await mock("database_records", fresh);
+        await button("apply").click();
+        expect(await waitForCalls(again)).toHaveLength(1);
+      });
+
+      it("takes everything gathered back on ✗, and calls nothing", async () => {
+        const { apply } = await openEdits();
+        await rewrite(1, 2, "Alicia");
+        await cell(2, 1).click();
+        await button("remove").click();
+        await expect(changes()).toHaveText("変更 2 件");
+        await button("revert").click();
+        await expect(cell(1, 2)).toHaveText("Alice");
+        await expect(cell(1, 2)).not.toHaveElementClass("changed");
+        await expect($("#database-work tbody tr:nth-child(2)")).not.toHaveElementClass("deleted");
+        await expect(changes()).not.toExist();
+        for (const key of ["remove", "apply", "revert"]) await expect(button(key)).toBeDisabled();
+        expect(await callsOf(apply)).toEqual([]);
+      });
+
+      it("stops the page buttons, the reload and the page field while something is gathered, and starts them again when it is not", async () => {
+        const { calls } = await openEdits();
+        for (const key of ["reload", "next", "last"]) await expect(button(key)).toBeEnabled();
+        await rewrite(1, 2, "Alicia");
+        for (const key of ["reload", "first", "prev", "next", "last"]) await expect(button(key)).toBeDisabled();
+        await expect(pageInput()).toHaveElementProperty("readOnly", true);
+        await pageInput().click();
+        await browser.keys("Enter");
+        expect(await callsOf(calls)).toEqual([]);
+        await button("revert").click();
+        for (const key of ["reload", "next", "last"]) await expect(button(key)).toBeEnabled();
+        await expect(pageInput()).toHaveElementProperty("readOnly", false);
+      });
+
+      it("asks before another table is opened, drops the changes on 捨てる and keeps them on キャンセル", async () => {
+        await openEdits();
+        await rewrite(1, 2, "Alicia");
+        const other = await mock("database_records", page0);
+        await row("p1/d/shop/t/orders").click();
+        await expect(popup()).toBeDisplayed();
+        await expect($('.pop[role="alertdialog"] p')).toHaveText("確定していない 1 件の変更は、データベースに送られていません。移ると、すべて消えます。");
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        await expect(popup()).not.toExist();
+        expect(await callsOf(other)).toEqual([]);
+        await expect($("#database-work h3")).toHaveText("shop.users");
+        await expect(changes()).toHaveText("変更 1 件");
+        await row("p1/d/shop/t/orders").click();
+        await $('.pop[role="alertdialog"] .text-btn.danger').click();
+        expect(await waitForCalls(other)).toEqual([{ ...read(0), table: "orders" }]);
+        await expect($("#database-work h3")).toHaveText("shop.orders");
+        await $('#database-work-tabs [data-key="open-p1/d/shop/t/users"]').click();
+        await expect(cell(1, 2)).toHaveText("Alice");
+        await expect(changes()).not.toExist();
+      });
+
+      it("asks before the same table is read again by a press on its row, the tab オブジェクト, the database row, a close of its tab, and asks nothing with nothing gathered", async () => {
+        await openEdits();
+        await rewrite(1, 2, "Alicia");
+        const again = await mock("database_records", edits);
+        await row("p1/d/shop/t/users").click();
+        await expect(popup()).toBeDisplayed();
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        expect(await callsOf(again)).toEqual([]);
+        await $('#database-work-tabs [data-key="open-objects"]').click();
+        await expect(popup()).toBeDisplayed();
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        await row("p1/d/shop").click();
+        await expect(popup()).toBeDisplayed();
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        await $('#database-work-tabs [data-key="close-p1/d/shop/t/users"]').click();
+        await expect(popup()).toBeDisplayed();
+        await expect($("#database-work h3")).toHaveText("shop.users");
+        await $('.pop[role="alertdialog"] .text-btn.danger').click();
+        await expect($("#database-work h3")).toHaveText("shop");
+        expect(await count("#database-work-tabs .database-open-item")).toBe(1);
+        await row("p1/d/shop/t/users").click();
+        await waitForCalls(again);
+        await expect(popup()).not.toExist();
+      });
+
+      it("asks before another screen is shown, stays on the database screen on キャンセル and leaves on 捨てる", async () => {
+        await openEdits();
+        await rewrite(1, 2, "Alicia");
+        await $("#nav-mail").click();
+        await expect(popup()).toBeDisplayed();
+        await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+        await expect($("#database")).toBeDisplayed();
+        await expect(changes()).toHaveText("変更 1 件");
+        await $("#nav-mail").click();
+        await $('.pop[role="alertdialog"] .text-btn.danger').click();
+        await expect($("#database")).not.toBeDisplayed();
+        await $("#nav-database").click();
+        await expect($("#database")).toBeDisplayed();
+        await expect(cell(1, 2)).toHaveText("Alice");
+        await expect(changes()).not.toExist();
+      });
     });
 
     it("goes back to the table list on a press on the database, and the next press on a table opens the records again", async () => {

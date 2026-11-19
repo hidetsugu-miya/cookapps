@@ -5,13 +5,14 @@ import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
+import { changesOf, cellKey, emptyEdit, type EditState, markable, originalText } from "./database-edit.js";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
-import { drawDatabaseWork, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, type EditActions, focusSqlField, type RecordsState, type SqlState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { confirmDelete } from "./hint.js";
+import { confirmDelete, confirmDiscardChanges } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { initSplit } from "./split.js";
@@ -45,6 +46,8 @@ interface TableTab {
   table: string;
   tab: string;
   records: RecordsState | null;
+  // What the records have gathered to write and not sent (D-10). It is empty when a read starts, and only the tab that is selected holds any: leaving it asks first.
+  edit: EditState;
   structure: StructureState | null;
 }
 
@@ -148,7 +151,7 @@ function workState(): WorkState | null {
     databaseTab,
     table: mine ? mine.table : null,
     tab: mine ? mine.tab : "records",
-    records: mine?.records ? { page: mine.records.page, loading: mine.records.loading, error: mine.records.error, data: mine.records.data } : null,
+    records: mine?.records ? { page: mine.records.page, loading: mine.records.loading, error: mine.records.error, data: mine.records.data, edit: mine.edit } : null,
     sql: sqlState(),
     structure: mine?.structure ? { loading: mine.structure.loading, error: mine.structure.error, data: mine.structure.data } : null,
   };
@@ -302,6 +305,7 @@ async function readRecords(t: TableTab, page: number, typed?: string) {
   const { id, database, table } = t;
   const mine: RecordsState = { page, loading: true, error: null, data: t.records?.data ?? null };
   t.records = mine;
+  t.edit = emptyEdit();
   draw();
   try {
     mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null, ...(typed === undefined ? {} : { typed }) });
@@ -365,12 +369,97 @@ async function runSql() {
   draw();
 }
 
+// The number of changes that the selected table has gathered and not sent (D-10).
+function gathered(t: TableTab | null): number {
+  const data = t?.records?.data;
+  return t && data ? changesOf(data, t.edit).length : 0;
+}
+
+// Runs `go` at once, or, when it leaves a table that has gathered changes (`affects`), after the owner agrees to drop them (D-10). The confirmation opens under the tab of that table.
+function leaving(go: () => void, affects: (t: TableTab) => boolean = () => true) {
+  const t = active;
+  const n = gathered(t);
+  if (t === null || n === 0 || !affects(t)) return go();
+  const anchor = document.querySelector(`#database-work-tabs [data-key="open-${CSS.escape(t.key)}"]`) ?? $("database-work");
+  confirmDiscardChanges(anchor, n, () => {
+    t.edit = emptyEdit();
+    go();
+  });
+}
+
+// The number of changes gathered, for the sidebar's buttons: leaving the screen asks too (D-10).
+export const databaseChanges = () => gathered(active);
+
+export function discardDatabaseChanges() {
+  if (active) active.edit = emptyEdit();
+  draw();
+}
+
+// ✓: writes what was gathered with one call, then reads the page again. A refusal shows its words on a card and keeps everything gathered.
+async function applyChanges() {
+  const t = active;
+  const data = t?.records?.data;
+  if (!t || !data || t.edit.applying) return;
+  const changes = changesOf(data, t.edit);
+  if (changes.length === 0) return;
+  const { id, database, table } = t;
+  const mine = t.edit;
+  mine.applying = true;
+  draw();
+  try {
+    await invoke("database_apply", { id, database, table, changes });
+  } catch (e) {
+    mine.applying = false;
+    showFailure("database", e);
+    // A stream that broke closes the connection: its tree closes and says why.
+    if ((await dropClosed()).includes(id)) connections.set(id, { ...emptyConnection(), expanded: true, error: String(e) });
+    draw();
+    return;
+  }
+  // The tab was closed while the write was on its way: there is nothing to read again.
+  if (openTabs.includes(t)) await readRecords(t, t.records?.page ?? 0);
+}
+
+const editActions: EditActions = {
+  cell: (row, column, text) => {
+    const data = active?.records?.data;
+    if (!active || !data) return;
+    const key = cellKey(row, column);
+    if (text === originalText(data, row, column)) delete active.edit.cells[key];
+    else active.edit.cells[key] = text;
+    draw();
+  },
+  select: (row, add) => {
+    if (!active) return;
+    const { selected } = active.edit;
+    if (!add) active.edit.selected = [row];
+    else active.edit.selected = selected.includes(row) ? selected.filter((r) => r !== row) : [...selected, row];
+    draw();
+  },
+  markDelete: () => {
+    const data = active?.records?.data;
+    if (!active || !data) return;
+    const rows = markable(data, active.edit);
+    active.edit.deleted = [...active.edit.deleted, ...rows].sort((a, b) => a - b);
+    active.edit.selected = [];
+    draw();
+  },
+  apply: () => void applyChanges(),
+  revert: () => {
+    if (!active) return;
+    active.edit = emptyEdit();
+    draw();
+  },
+};
+
 const workActions: WorkActions = {
+  edit: editActions,
+  // What is gathered keeps the page where it is (D-10).
   page: (page) => {
-    if (active?.records) readRecords(active, page);
+    if (active?.records && gathered(active) === 0) readRecords(active, page);
   },
   pageInput: (text) => {
-    if (active?.records) readRecords(active, active.records.page, text);
+    if (active?.records && gathered(active) === 0) readRecords(active, active.records.page, text);
   },
   // The table stays: only the tab changes. The records are kept as they are, and the structure is read at every press of its tab.
   tab: (id) => {
@@ -383,21 +472,30 @@ const workActions: WorkActions = {
   openTab: (key) => {
     const t = key === null ? null : openTabs.find((o) => o.key === key);
     if (t === undefined || t === active) return;
-    if (t === null) {
-      if (active === null) return;
-      selected = { id: active.id, database: active.database, table: null };
-      databaseTab = "tables";
-    } else {
-      selected = { id: t.id, database: t.database, table: t.table };
-    }
-    active = t;
-    draw();
+    leaving(
+      () => {
+        if (t === null) {
+          if (active === null) return;
+          selected = { id: active.id, database: active.database, table: null };
+          databaseTab = "tables";
+        } else {
+          selected = { id: t.id, database: t.database, table: t.table };
+        }
+        active = t;
+        draw();
+      },
+    );
   },
   // The tab closes with what it held; when it was the selected one, オブジェクト is selected, with the database of the table.
   closeOpenTab: (key) => {
     const t = openTabs.find((o) => o.key === key);
-    if (t) dropTabs((o) => o === t);
-    draw();
+    leaving(
+      () => {
+        if (t) dropTabs((o) => o === t);
+        draw();
+      },
+      (a) => a.key === key,
+    );
   },
   databaseTab: (id) => {
     if (id === databaseTab) return;
@@ -417,7 +515,8 @@ const workActions: WorkActions = {
   },
 };
 
-const actions: SideActions = {
+// The presses of the tree, as they are; `actions` below asks first when one leaves a table that has gathered changes (D-10).
+const treeActions: SideActions = {
   // A row that is closed opens (and is read again); one that is open closes and stays connected; one that failed tries again; one that is being read waits.
   pressConnection: (profile) => {
     selected = { id: profile.id, database: null, table: null };
@@ -450,7 +549,7 @@ const actions: SideActions = {
     const key = tabKey(profile.id, database, table);
     let t = openTabs.find((o) => o.key === key);
     if (!t) {
-      t = { key, id: profile.id, database, table, tab: "records", records: null, structure: null };
+      t = { key, id: profile.id, database, table, tab: "records", records: null, edit: emptyEdit(), structure: null };
       openTabs.push(t);
     }
     t.tab = "records";
@@ -490,6 +589,24 @@ const actions: SideActions = {
     closing.delete(profile.id);
   },
   remove,
+};
+
+const actions: SideActions = {
+  ...treeActions,
+  pressConnection: (profile) => leaving(() => treeActions.pressConnection(profile)),
+  pressDatabase: (profile, name) => leaving(() => treeActions.pressDatabase(profile, name)),
+  pressTable: (profile, database, table) => leaving(() => treeActions.pressTable(profile, database, table)),
+  newQuery: (profile, database) => leaving(() => treeActions.newQuery?.(profile, database)),
+  closeDatabase: (profile, database) =>
+    leaving(
+      () => treeActions.closeDatabase(profile, database),
+      (t) => t.id === profile.id && t.database === database,
+    ),
+  disconnect: (profile) =>
+    leaving(
+      () => void treeActions.disconnect(profile),
+      (t) => t.id === profile.id,
+    ),
 };
 
 // Reads the list at an interval while the screen is shown, with or without an edit pane (#866). It stops at the first tick after the screen is left, and `showDatabase` starts it again; nothing is read while the window is hidden.

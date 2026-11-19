@@ -99,6 +99,11 @@ export function confirmRevert(button: Element, name: string, folder: boolean, fr
   confirmPop(button, `${name} の変更を元に戻す`, "変更を元に戻しますか？", body, "元に戻す", onConfirm, " pop-confirm");
 }
 
+// The confirmation before the changes of a table that were not confirmed with ✓ are dropped, when the screen leaves the table (D-10): `count` is how many changes there are.
+export function confirmDiscardChanges(button: Element, count: number, onConfirm: () => void) {
+  confirmPop(button, "変更を捨てる", "変更を捨てますか？", `確定していない ${count} 件の変更は、データベースに送られていません。移ると、すべて消えます。`, "捨てる", onConfirm, " pop-confirm");
+}
+
 // The confirmation before several files and folders are deleted for good at once (A-18): `count` is how many rows are selected.
 export function confirmDeleteMany(button: Element, count: number, onConfirm: () => void) {
   confirmPop(button, `${count} 件を削除`, "削除しますか？", `${count} 件を完全に削除します。元に戻せません。`, "削除", onConfirm, " pop-confirm");
