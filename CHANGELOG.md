@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.88.3
+
+T-7: Todo 画面の右の Claude のペインを、右上の Claude のアイコンで開け閉めできるようにした（#1055）。閉じているあいだは「Claude に相談しますか？」と「相談する」だけを出し、Claude Code は動かない。開くと Claude Code が起動し、閉じると終わる。画面を開いたときは閉じている。
+
 ## v0.88.2
 
 T-7: Todo 画面を開いただけで、右の Claude のペインの Claude Code が起動し、頼んでいないのに返事をしていたのを直した（#1052）。ペインを押すか、右端の Claude のアイコンか「やり直す」を押したときに初めて起動する。
