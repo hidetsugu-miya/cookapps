@@ -39,6 +39,7 @@ pub mod orca_panes;
 pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod screen_bridge;
 pub mod side_menu;
 pub mod skills;
 pub mod slack;
@@ -243,6 +244,7 @@ pub fn run() {
         .manage(database::script::Scripts::default())
         .manage(database::session::Sessions::default())
         .manage(claude_code::ClaudeCode::default())
+        .manage(screen_bridge::Pending::default())
         .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
@@ -256,6 +258,8 @@ pub fn run() {
                     if let Err(e) = formation::migrate_folder(&dir) {
                         gmail::log_failure("formation_migrate", "-", e);
                     }
+                    // The socket through which `tsunagiai-mcp` reads and writes the fields of the screens (A-36, #731).
+                    screen_bridge::start(app.handle().clone(), dir);
                 }
                 Err(e) => {
                     gmail::log_failure("config_migrate", "-", e.to_string());
@@ -475,6 +479,7 @@ pub fn run() {
             claude_code::claude_code_input,
             claude_code::claude_code_resize,
             claude_code::claude_code_close,
+            screen_bridge::screen_bridge_answer,
             formation::formation_children,
             formation::formation_environments,
             formation::formation_orchestrator,

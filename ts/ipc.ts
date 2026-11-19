@@ -59,6 +59,7 @@ import type { Comment } from "./bindings/Comment";
 import type { MonthGrid } from "./bindings/MonthGrid";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
+import type { ScreenAnswer } from "./bindings/ScreenAnswer";
 import type { Skill } from "./bindings/Skill";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
@@ -363,6 +364,8 @@ export interface Commands {
   claude_code_resize: { args: { id: string; viewport: OrcaViewport }; result: null };
   // A-36: ends the process of the pane `id` that the start `launch` (its answer) made, and what it started; a process of a later start stays.
   claude_code_close: { args: { id: string; launch: number }; result: null };
+  // A-36 (#731): the screen's answer to the ask `id` of the event "screen-bridge-ask" (the fields it holds for a read, `ok` for a write, or an error). An answer that comes after Rust stopped waiting is dropped.
+  screen_bridge_answer: { args: { id: number; answer: ScreenAnswer }; result: null };
   // A-37: the children of the formation `name`, in the order of `formations/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
   // A-41: the decision page that waits on the child `child` of the formation `name` (the child's `pendingPage` is set), checked again and with its evidence resolved now: a formation of a saved environment has its PC's server do it. A failure carries the message: the violations of the page, one on each line, or why it could not be read.
