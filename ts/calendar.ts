@@ -4,6 +4,7 @@ import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
 import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
+import { initCalendarClaude } from "./calendar-claude.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
 import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
@@ -331,6 +332,7 @@ const moveWeek = (date: string) => {
 export function initCalendar() {
   initCalendarSide(choiceChanged);
   initCalendarMonth(moveWeek);
+  initCalendarClaude();
   // A saved event: the week is read again, which draws it.
   initCalendarCreate(() => loadCalendar());
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));

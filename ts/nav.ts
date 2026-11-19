@@ -2,6 +2,7 @@
 import { closePopup, renderGoogleCard } from "./accounts.js";
 import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
+import { hideCalendarClaude, syncCalendarClaude } from "./calendar-claude.js";
 import { closeCreate } from "./calendar-create.js";
 import { closeDetail } from "./calendar-detail.js";
 import { databaseChanges, discardDatabaseChanges, showDatabase } from "./database.js";
@@ -94,6 +95,8 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   closeDatabaseForm();
   // The terminal of the Todo screen's Claude pane is hidden while another screen is shown (its process goes on).
   if (name !== "todo") hideTodoClaude();
+  // The same for the Claude pane of the calendar screen.
+  if (name !== "calendar") hideCalendarClaude();
   // The same for the Claude pane of the Slack compose screen, which is left by every screen the sidebar shows.
   hideSlackComposeClaude();
   if (name !== "orca") {
@@ -105,6 +108,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   syncTrays();
   if (name === "calendar") {
     showCalendar();
+    syncCalendarClaude();
   } else if (name === "todo") {
     show("todo");
     syncTodoClaude();
