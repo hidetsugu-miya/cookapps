@@ -5,9 +5,30 @@ import { $, composing, tag } from "./dom.js";
 export type Kind = "to" | "cc" | "bcc";
 const KINDS: Kind[] = ["to", "cc", "bcc"];
 
+// The addresses of a text: each one ends at a comma, a semicolon or a line break that is not inside double quotes or angle brackets (`"Doe, John" <john@example.com>` is one), and blank ones are left out.
+function addressesOf(text: string) {
+  const found: string[] = [];
+  let current = "";
+  let quoted = false;
+  let angled = false;
+  for (const c of text) {
+    if (c === '"') quoted = !quoted;
+    else if (!quoted && c === "<") angled = true;
+    else if (!quoted && c === ">") angled = false;
+    if (!quoted && !angled && (c === "," || c === ";" || c === "\n")) {
+      found.push(current);
+      current = "";
+    } else current += c;
+  }
+  found.push(current);
+  return found.map((a) => a.trim()).filter(Boolean);
+}
+
 // The rows whose elements have the ids `{prefix}-{kind}-field` and `{prefix}-{kind}-input`, and for Cc and Bcc `{prefix}-{kind}-row` and `{prefix}-{kind}-open`.
 export function recipientRows(prefix: string) {
   const people: Record<Kind, Recipient[]> = { to: [], cc: [], bcc: [] };
+  // The label of each address that a chip showed (the name of the person), kept so that a write that replaced the chips can be taken back with the same labels.
+  const labels = new Map<string, string>();
   // Cc and Bcc show once they were opened or hold someone.
   const opened = { cc: false, bcc: false };
   const input = (kind: Kind) => $<HTMLInputElement>(`${prefix}-${kind}-input`);
@@ -50,6 +71,7 @@ export function recipientRows(prefix: string) {
 
   // To and Cc are set; Bcc is left as it is.
   function fill(to: Recipient[], cc: Recipient[]) {
+    for (const p of [...to, ...cc]) labels.set(p.mailbox, p.label);
     people.to = [...to];
     people.cc = [...cc];
     for (const kind of KINDS) drawChips(kind);
@@ -58,6 +80,12 @@ export function recipientRows(prefix: string) {
 
   return {
     fill,
+    // Replaces the chips of one row with the addresses of `text` (separated by commas, semicolons or line breaks outside quotes and angle brackets; blank ones are left out), as Claude Code writes them (A-36). An address that a chip showed keeps its label (so the way back of a write finds the chips as they were). The address typed in the field stays.
+    set(kind: Kind, text: string) {
+      people[kind] = addressesOf(text).map((a) => ({ label: labels.get(a) ?? a, mailbox: a }));
+      drawChips(kind);
+      syncRows();
+    },
     // The rows as they are for a new mail: To and Cc as given, no Bcc, nothing typed, and Cc and Bcc closed.
     reset(to: Recipient[], cc: Recipient[]) {
       people.bcc = [];

@@ -8,7 +8,7 @@ html, body { height: 100%; }
 /* A-35: the height of the footer, which the pane of the unread also stops at. */
 :root { --footer-h: 36px; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
-#mail-header, #inbox-header, #new-mail-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#mail-header, #inbox-header, #new-mail-header, #mail-area, #mail-side { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -98,8 +98,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #mail-tools .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #mail-tools .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 /* A-28: the failures at the bottom right (ts/error-card.ts). The newest card is on top, and each stays until its × is pressed. The first child's auto margin puts the stack at the bottom while it fits, and lets it scroll from the newest card when it does not. They stand above the toast (--toast-bottom) and the footer. */
 #error-cards { position: fixed; right: 16px; bottom: calc(var(--toast-bottom, 24px) + 52px); z-index: 16; box-sizing: border-box; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 160px); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; pointer-events: none; }
 #error-cards > :first-child { margin-top: auto; }
@@ -1731,12 +1731,23 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail has it on the right of the screen (40% at first, a third to a half; the divider of ts/split.ts); the Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */
+/* M-10, M-11: the mail screen is the column of the headers and the body at the left, and the right side (the Claude Code pane or the pane to Orca, switched by the two icons of its first row) at the right, from the top of the window to the bottom, so that the bottom of the reply field and of the band of a new mail is the bottom of the pane. The side is shown while a thread or a new mail is. */
+#mail-screen { flex: 1; min-width: 0; min-height: 0; display: flex; }
+#mail-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #mail-area { flex: 1; min-height: 0; display: flex; }
 #main { min-width: 0; }
-#thread-actions .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+#mail-side { display: flex; flex-direction: column; min-width: 400px; }
+#mail-tools { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 16px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#mail-tools .icon-btn { color: #444746; border-radius: 50%; }
+#mail-tools .icon-btn:hover:not(:disabled) { background: var(--hover); }
+#mail-tool-claude { color: var(--claude); }
+#mail-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+#mail-claude { flex: 1; min-height: 0; }
+#mail-claude .chat-head, #mail-handoff .ho-head { box-sizing: border-box; height: 48px; }
+#mail-claude-term { flex: 1; min-height: 0; }
+#mail-handoff { flex: 1; }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
-/* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
-#mail-handoff { min-width: 400px; }
+/* The mail's side is 40% wide at first, at least 400px; the Todo's right side (T-7) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
 #todo-claude { flex: 1; min-height: 0; }
 /* T-7: the pane is closed at first and shows the question; open, the terminal fills what is left of the pane's height. */

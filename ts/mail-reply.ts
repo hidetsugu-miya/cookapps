@@ -3,6 +3,7 @@ import type { ReplyChoices } from "./bindings/ReplyChoices";
 import { $ } from "./dom.js";
 import { applySync } from "./inbox.js";
 import { invoke } from "./ipc.js";
+import { addDraftSide, clearUndo, type DraftSide, refreshUndo } from "./mail-draft.js";
 import { recipientRows } from "./mail-recipients.js";
 import { createRichEditor } from "./rich-editor.js";
 import { showFailure } from "./error-card.js";
@@ -32,6 +33,8 @@ let session = 0;
 const recipients = recipientRows("mail-reply");
 // Reads the thread again after a reply went out.
 let reload: (target: ReplyTarget) => Promise<void>;
+// The open thread as Claude Code reads it (ts/thread.ts).
+let threadData: () => Promise<string>;
 
 // The text of the reply: the editor takes the place of #mail-reply-body (initReply), and the text is its Markdown.
 const editor = createRichEditor({
@@ -52,6 +55,8 @@ function syncSend() {
     waiting = wait;
     editor.setBusy(wait);
   }
+  // A change of the text by hand makes the way back of Claude Code's writes unusable (M-10).
+  refreshUndo();
 }
 
 // To and Cc are the kind of reply's; Bcc is left as it is.
@@ -83,6 +88,7 @@ export function openReply() {
 function discard() {
   clear();
   $("mail-reply").hidden = true;
+  clearUndo(side);
 }
 
 // The field is empty and hidden: no thread is open.
@@ -93,6 +99,7 @@ export function resetReply() {
   filled = null;
   clear();
   $("mail-reply").hidden = true;
+  clearUndo(side);
 }
 
 // Binds the field to `thread`, with the recipients Rust worked out; it stays hidden until the reply button is pressed, and stays shown when it is. Drawn again for the same thread (Gmail answered with a change), it keeps the text and the recipients already there.
@@ -143,8 +150,40 @@ async function send() {
   }
 }
 
-export function initReply(reloadThread: (target: ReplyTarget) => Promise<void>) {
+// The fields as Claude Code reads and writes them (A-36, ts/mail-draft.ts). The reply is shown by a write, as the reply button shows it, but the cursor stays where it was; the subject is the thread's and cannot be written.
+const side: DraftSide = {
+  undoId: "mail-reply-undo",
+  rootId: "mail-reply",
+  isOpen: () => target !== null && !$("thread").hidden,
+  thread: () => threadData(),
+  read: () => ({
+    to: recipients.mailboxes("to").join(", "),
+    cc: recipients.mailboxes("cc").join(", "),
+    bcc: recipients.mailboxes("bcc").join(", "),
+    subject: target?.subject ?? "",
+    body: editor.ready() && !editor.blank() ? editor.markdown() : "",
+  }),
+  settle: () => recipients.commitAll(),
+  busy: () => sending,
+  async write(texts) {
+    if (texts.subject !== undefined) throw new Error("返信の件名は、スレッドの件名のままで、書けません");
+    $("mail-reply").hidden = false;
+    try {
+      await editor.ensure();
+    } catch (e) {
+      throw new Error(`エディターを読み込めませんでした: ${e}`);
+    }
+    if (target === null) throw new Error("スレッドが開いていません");
+    for (const kind of ["to", "cc", "bcc"] as const) if (texts[kind] !== undefined) recipients.set(kind, texts[kind]);
+    if (texts.body !== undefined) editor.set(texts.body);
+    syncSend();
+  },
+};
+
+export function initReply(reloadThread: (target: ReplyTarget) => Promise<void>, thread: () => Promise<string>) {
   reload = reloadThread;
+  threadData = thread;
+  addDraftSide(side);
   mode().onchange = () => fill(mode().value as Mode);
   recipients.init();
   $("mail-reply-body").append(editor.el);

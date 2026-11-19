@@ -371,7 +371,7 @@ describe("orca", () => {
     await expect($("#thread-subject")).toHaveText("請求書の件");
     // The pane of the thread reads the list when it opens, and that read finds the selected session done.
     const overview = await mock("orca_overview", orcaOverview([finished("example-app"), working("example-api")], worktrees()));
-    await $("#thread-orca").click();
+    await $("#mail-tool-orca").click();
     await waitForCalls(overview);
     await expectCount(1);
     await $("#nav-orca").click();

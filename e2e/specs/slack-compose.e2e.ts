@@ -4,6 +4,13 @@ import {
 import type { SlackAction } from "../../ts/bindings/SlackAction";
 import type { Target } from "../../ts/bindings/Target";
 
+// The starts of this screen's Claude Code pane: the open mail has its own pane (M-10), which starts one process of its own when the thread is opened.
+const starts = async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-compose") as unknown[];
+const waitForStarts = async (n = 1) => {
+  await browser.waitUntil(async () => (await starts()).length >= n, { timeoutMsg: `claude_code_start of slack-compose was not called ${n} times` });
+  return starts();
+};
+
 const body = () => $("#slack-body");
 const previewBox = () => $("#slack-preview");
 const post = () => $("#slack-post");
@@ -192,7 +199,7 @@ describe("slack compose screen", () => {
 
   it("keeps the draft when the mode is switched, and keeps the process of Claude Code running", async () => {
     await openCompose();
-    await waitForCalls("claude_code_start");
+    await waitForStarts();
     const close = await mock("claude_code_close", null);
     // Claude mode: the owner edits the original message and the cards at the right of the terminal.
     await chooseGeneral();
@@ -214,7 +221,7 @@ describe("slack compose screen", () => {
     await expect(written(2)).toHaveValue("補足です");
     // Hiding and showing the terminal started nothing and ended nothing.
     await browser.pause(500);
-    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect((await starts()).length).toBe(1);
     expect(await callsOf(close)).toEqual([]);
   });
 
@@ -745,7 +752,7 @@ describe("slack compose screen", () => {
 describe("slack compose screen: Claude Code", () => {
   it("starts Claude Code in the terminal with the tools of tsunagiai-mcp only and a first instruction that tells the work and the tools, with nothing of the mail", async () => {
     await openCompose();
-    const [start] = await waitForCalls("claude_code_start");
+    const [start] = await waitForStarts();
     expect(start).toMatchObject({ id: "slack-compose", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     // It says that this is the work of making the text for Slack and posting it, and names the tools; the mail's text and the subject are read through the tools.
@@ -760,7 +767,7 @@ describe("slack compose screen: Claude Code", () => {
 
   it("starts the process once, and keeps it while the mode is switched and while the screen is left and opened again for the same mail", async () => {
     await openCompose();
-    await waitForCalls("claude_code_start");
+    await waitForStarts();
     const close = await mock("claude_code_close", null);
     await manual();
     await claudeMode();
@@ -771,32 +778,35 @@ describe("slack compose screen: Claude Code", () => {
     await $("#nav-mail").click();
     await expect($(pane)).not.toBeDisplayed();
     await browser.pause(500);
-    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect((await starts()).length).toBe(1);
     expect(await callsOf(close)).toEqual([]);
   });
 
   it("ends the process and starts a new one for the draft of another mail, and not before it is opened", async () => {
     await openCompose();
-    await waitForCalls("claude_code_start");
+    await waitForStarts();
     const close = await mock("claude_code_close", null);
+    // The open mail's own pane (M-10) ends its process for another mail; this screen's does not end before its own draft is opened.
+    const closed = async () => ((await callsOf(close)) as { id: string; launch: number }[]).filter((c) => c.id === "slack-compose");
     await openOtherMail("Second unread", "Another text");
     await browser.pause(300);
-    expect(await callsOf(close)).toEqual([]);
+    expect(await closed()).toEqual([]);
     await pressSlack();
-    expect(await waitForCalls(close)).toEqual([{ id: "slack-compose", launch: 1 }]);
-    const starts = await waitForCalls("claude_code_start", 2);
-    expect(starts[1]).toMatchObject({ id: "slack-compose", builtinTools: false, skill: null, prompt: (starts[0] as { prompt: string }).prompt });
+    await browser.waitUntil(async () => (await closed()).length > 0, { timeoutMsg: "the process of slack-compose was not closed" });
+    expect(await closed()).toEqual([{ id: "slack-compose", launch: 1 }]);
+    const started = await waitForStarts(2);
+    expect(started[1]).toMatchObject({ id: "slack-compose", builtinTools: false, skill: null, prompt: (started[0] as { prompt: string }).prompt });
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
   });
 
   it("ends the process and starts a new one with やり直す", async () => {
     await openCompose();
-    await waitForCalls("claude_code_start");
+    await waitForStarts();
     const close = await mock("claude_code_close", null);
     await $("#slack-compose-restart").click();
     expect(await waitForCalls(close)).toEqual([{ id: "slack-compose", launch: 1 }]);
-    const starts = await waitForCalls("claude_code_start", 2);
-    expect(starts).toHaveLength(2);
+    const started = await waitForStarts(2);
+    expect(started).toHaveLength(2);
     await expect($("#slack-compose-restart")).toBeEnabled();
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
   });

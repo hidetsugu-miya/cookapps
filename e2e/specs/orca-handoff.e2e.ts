@@ -19,7 +19,7 @@ const bootOrca = (fixtures: Record<string, unknown> = {}) =>
 
 // ---- the three screens ----
 
-const MAIL = { pane: "#mail-handoff", button: "#thread-orca" };
+const MAIL = { pane: "#mail-handoff", button: "#mail-tool-orca" };
 const TODO = { pane: "#todo-handoff", button: "#todo-orca-open" };
 const SLACK = { pane: "#st-orca", button: "#reply-tab-orca" };
 type Screen = typeof MAIL;
@@ -110,7 +110,7 @@ async function write(screen: Screen, text: string, summary: HandoffSummary = han
 }
 
 describe("orca handoff", () => {
-  it("opens from the icon of the row above the mail's subject, with its destinations, the card and the empty instruction", async () => {
+  it("opens from the Orca icon of the right side's first row, with its destinations, the card and the empty instruction", async () => {
     await openMail();
     await expect($(MAIL.button)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
@@ -119,6 +119,9 @@ describe("orca handoff", () => {
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "true");
     await expect($(MAIL.pane)).toBeDisplayed();
     expect(await textsOf(`${MAIL.pane} .ho-title`)).toEqual(["Orca に渡す"]);
+    // The Claude pane gives way to it, and the two icons say which is shown.
+    await expect($("#mail-tool-claude")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#mail-claude")).not.toBeDisplayed();
     // The row of operations is in the area left of the pane, whole.
     expect(
       await browser.execute(() => {
@@ -129,7 +132,7 @@ describe("orca handoff", () => {
     ).toEqual({ inMain: true, lastInRow: true });
     // The divider reuses split.ts: a separator for the width of the pane.
     await expect($("#mail-split")).toHaveAttribute("role", "separator");
-    await expect($("#mail-split")).toHaveAttribute("aria-label", "Orca の幅");
+    await expect($("#mail-split")).toHaveAttribute("aria-label", "右のペインの幅");
     await listRead(MAIL);
     // The chips of a new session run destination, project, worktree (no project chosen yet, so the worktree waits), and no running session is listed.
     expect(await textsOf(`${MAIL.pane} .ho-new button:not([hidden])`)).toEqual(["このマシン", "プロジェクトを選ぶ", "default"]);
@@ -153,6 +156,8 @@ describe("orca handoff", () => {
     await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
     await expect($(MAIL.pane)).not.toBeDisplayed();
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
+    await expect($("#mail-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#mail-claude")).toBeDisplayed();
   });
 
   it("lays the form out from the top down, with the instruction in the frame of the composer: one line high, the selects at the left and the round arrow at the right", async () => {
@@ -164,7 +169,7 @@ describe("orca handoff", () => {
         const r = document.querySelector(`${pane} ${selector}`)!.getBoundingClientRect();
         return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
       };
-      const area = document.getElementById("mail-area")!.getBoundingClientRect();
+      const area = document.getElementById("mail-screen")!.getBoundingClientRect();
       return { chips: rect(".ho-new"), card: rect(".ho-card"), frame: rect(".composer"), width: document.querySelector(pane)!.getBoundingClientRect().width / area.width };
     }, MAIL.pane);
     // Chips, then the card, then the frame of the field.
