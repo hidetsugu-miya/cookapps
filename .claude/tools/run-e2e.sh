@@ -7,7 +7,7 @@
 #        run-e2e.sh --only {spec の名前} [checkout のパス]  e2e/specs/{名前}.e2e.ts を 1 つのアプリだけで流す。落ちた spec を直るまで回すための入口（.claude/rules/e2e.md）。
 #          記録は書かず（作業ツリーが汚れていてもよい）、出力は only-{名前}.log に残す。記録の代わりにはならないので、通ったら引数なしで 1 回回す。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
-# node_modules が無ければ、先に npm ci する（ログに入る）。
+# node_modules が無いか package-lock.json と食い違っていれば、先に ensure-deps.sh で npm ci する（ログに入る）。
 set -uo pipefail
 only=""
 if [ "${1:-}" = "--only" ]; then
@@ -26,7 +26,7 @@ if [ -n "$only" ]; then
   [ -f "e2e/specs/$only.e2e.ts" ] || { echo "e2e/specs/$only.e2e.ts がありません" >&2; exit 2; }
   mkdir -p "$main/.claude/e2e" || exit 2
   log="$main/.claude/e2e/only-$only.log"
-  { [ -d node_modules ] || mise exec -- npm ci; } >"$log" 2>&1 \
+  "$here/ensure-deps.sh" "$root" >"$log" 2>&1 \
     && mise exec -- npm run e2e:build >>"$log" 2>&1 && E2E_ONLY="$only" mise exec -- npm run e2e >>"$log" 2>&1
   code=$?
   [ "$code" -ne 0 ] && tail -n 40 "$log" >&2
@@ -41,8 +41,8 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 
 mkdir -p "$main/.claude/e2e" || exit 2
 log="$main/.claude/e2e/$sha.log"
-# node_modules は追跡されないので、後から git worktree add した worktree には無い。無ければ npm ci する。
-{ [ -d node_modules ] || mise exec -- npm ci; } >"$log" 2>&1 \
+# node_modules は追跡されないので、後から git worktree add した worktree には無く、main の checkout のものは fast-forward のたびに古くなる。ensure-deps.sh が揃える。
+"$here/ensure-deps.sh" "$root" >"$log" 2>&1 \
   && mise exec -- npm run e2e:build >>"$log" 2>&1
 code=$?
 # e2e:build の後は、wdio がアプリを動かすだけで cargo を使わないので、CI（cargo clippy と cargo test）を同時に回せる。

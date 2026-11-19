@@ -3,7 +3,7 @@
 # 各検査の出力は .claude/ci/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。検査は最初の失敗で止まる。
 # 使い方: run-ci.sh [checkout のパス]（省略時はカレント）。終了コードは検査の結果。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
-# node_modules が無ければ、先に npm ci する（ログに入る）。
+# node_modules が無いか package-lock.json と食い違っていれば、先に ensure-deps.sh で npm ci する（ログに入る）。
 set -uo pipefail
 cd "${1:-.}" || exit 2
 root=$(git rev-parse --show-toplevel) && cd "$root" || exit 2
@@ -20,11 +20,9 @@ gates="$main/.claude/ci/$sha.$$.gates"
 : >"$log" && : >"$gates" || exit 2
 trap 'rm -f "$gates"' EXIT
 
-# node_modules は追跡されないので、後から git worktree add した worktree には無い。無ければ npm ci する。
-if [ ! -d node_modules ]; then
-  echo "=== npm ci" >>"$log"
-  mise exec -- npm ci >>"$log" 2>&1 || { tail -n 40 "$log" >&2; exit 2; }
-fi
+# node_modules は追跡されないので、後から git worktree add した worktree には無く、main の checkout のものは fast-forward のたびに古くなる。ensure-deps.sh が揃える。
+echo "=== ensure-deps" >>"$log"
+"$(cd "$(dirname "$0")" && pwd)/ensure-deps.sh" "$root" >>"$log" 2>&1 || { tail -n 40 "$log" >&2; exit 2; }
 
 failed=""
 # gate <名前> <コマンド...>: 最初の失敗以降は走らせない。名前、秒数、合否を $gates に 1 行の JSON で足す。
