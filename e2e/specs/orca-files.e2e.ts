@@ -2213,7 +2213,8 @@ describe("orca: files and editor (A-18)", () => {
     await pickItem("変更を元に戻す");
     await pressedOnce("元に戻す");
     await waitForCalls(revert);
-    await expect($(CARD)).toHaveText("Orca がエラーを返しました（merge）");
+    // A card stays until it is closed (A-28), so the card of the first refusal is still under the new one.
+    expect(await textsOf(CARD)).toEqual(["Orca がエラーを返しました（merge）", "Orca がエラーを返しました（locked）"]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
   });
 
