@@ -653,13 +653,14 @@ fn project_key_of(worktree: &Value) -> Option<String> {
     }
 }
 
-/// The first line of a text from outside that has text, its control characters replaced by spaces and cut to `LINE_LIMIT` characters: it is shown as text, never as markup.
+/// The first line of a text from outside that has text, its control characters replaced by spaces, its hidden characters (zero-width, bidirectional formatting and tag ones, `orca_handoff::without_hidden`) taken out and cut to `LINE_LIMIT` characters: it is shown as text, never as markup.
 fn plain_line(text: &str) -> String {
-    first_line(text)
+    let spaced: String = first_line(text)
         .unwrap_or_default()
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
-        .collect::<String>()
+        .collect();
+    crate::orca_handoff::without_hidden(&spaced)
         .trim()
         .to_owned()
 }
@@ -2996,6 +2997,15 @@ mod tests {
         // An agent with no tool at all has none.
         let bare = agent("tabA:leaf1", "working");
         assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].shell, None);
+    }
+
+    #[test]
+    fn a_line_from_outside_loses_its_hidden_characters() {
+        assert_eq!(
+            plain_line("a\u{200b}b\u{202e}c\u{2066}d\u{2069}e\u{2060}f\u{feff}g\u{e0041}h\u{7}i"),
+            "abcdefgh i"
+        );
+        assert_eq!(plain_line("\u{200b}\u{202e}"), "");
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! A port that something answers on before the script is run is an error, and the script is not run.
 //! The script is ready when a TCP connection to `{host}:{TSUNAGIAI_PORT}` succeeds. It fails when the script ends before that (an exit code of 0 too), when it is not ready in two minutes,
 //! and, once it was ready, when it ends: the connection is then closed. The error holds the last lines of the script's standard error.
-//! While it is awaited, the lines of its standard output and standard error go to the caller (`OnLine`, `screen_line`: the control characters taken out, each cut short), and after it is ready nothing more is given on (the output is still read, so that the script never waits for a pipe).
+//! While it is awaited, the lines of its standard output and standard error go to the caller (`OnLine`, `screen_line`: the control and hidden characters taken out, each cut short; a line is read up to 4,096 bytes and the rest of it is dropped), and after it is ready nothing more is given on (the output is still read, so that the script never waits for a pipe).
 //! The script runs in a process group of its own, which is sent SIGTERM when the connection is closed and the app exits, and SIGKILL when it is still there after a few seconds.
 //!
 //! `start` takes the folder for the script file as a `&Path`, so that `tsunagiai-mcp` can start a script the same way. `Scripts` keeps the scripts that are open for the app (`lib.rs`).
@@ -40,6 +40,8 @@ pub const PORT_ENV: &str = "TSUNAGIAI_PORT";
 /// The name that the variable had before the app was renamed. It is given the same value, so that a saved script that reads it keeps working.
 pub const OLD_PORT_ENV: &str = "COOKAPPS_PORT";
 const SCRIPT_FILE: &str = "script";
+/// The most bytes of one line of the output that are kept; the rest of a longer line is dropped up to its line feed, so that an output with no line feed never grows a buffer.
+const LINE_MAX: usize = 4096;
 /// How many of the last lines of the standard error an error shows.
 const TAIL_LINES: usize = 5;
 /// How often the port is tried while the script is not ready.
@@ -97,14 +99,14 @@ fn with_shebang(body: &str) -> String {
 /// It is called with a line that `screen_line` made, never an empty one.
 pub type OnLine = Arc<dyn Fn(String) + Send + Sync>;
 
-/// What a line of the output is on the screen: the control characters taken out (a tab becomes a space) and the line cut to `shorten`'s length; none when no text is left.
+/// What a line of the output is on the screen: the control characters taken out (a tab becomes a space), the hidden characters too (zero-width, bidirectional formatting and tag characters, the ones A-9 takes out of a card), and the line cut to `shorten`'s length; none when no text is left.
 fn screen_line(raw: &str) -> Option<String> {
     let text: String = raw
         .chars()
         .map(|c| if c == '\t' { ' ' } else { c })
         .filter(|c| !c.is_control())
         .collect();
-    let text = shorten(&text);
+    let text = shorten(&crate::orca_handoff::without_hidden(&text));
     (!text.is_empty()).then_some(text)
 }
 
@@ -253,15 +255,29 @@ async fn spawn(command: &mut Command) -> std::io::Result<Child> {
 }
 
 /// Reads `stream` to its end, line by line, and gives each to `each`. Text that is not UTF-8 is read with replacement characters.
+/// A line keeps its first `LINE_MAX` bytes: the rest of it is read and dropped up to its line feed, so an output with no line feed holds no more than `LINE_MAX` bytes.
 async fn read_lines<R: AsyncRead + Unpin>(stream: R, mut each: impl FnMut(&str)) {
     let mut reader = BufReader::new(stream);
     let mut line = Vec::new();
     loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line).await {
-            Ok(0) | Err(_) => return,
-            Ok(_) => each(&String::from_utf8_lossy(&line)),
+        let (used, ended) = match reader.fill_buf().await {
+            Ok(buf) if !buf.is_empty() => {
+                let feed = buf.iter().position(|&b| b == b'\n');
+                let used = feed.map_or(buf.len(), |at| at + 1);
+                let room = LINE_MAX.saturating_sub(line.len());
+                line.extend_from_slice(&buf[..used.min(room)]);
+                (used, feed.is_some())
+            }
+            _ => break,
+        };
+        reader.consume(used);
+        if ended {
+            each(&String::from_utf8_lossy(&line));
+            line.clear();
         }
+    }
+    if !line.is_empty() {
+        each(&String::from_utf8_lossy(&line));
     }
 }
 
@@ -729,6 +745,55 @@ mod tests {
         let long = screen_line(&"x".repeat(1000)).unwrap();
         assert_eq!(long.chars().count(), 301);
         assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn a_line_of_the_output_loses_its_hidden_characters() {
+        // Zero-width, bidirectional formatting, word joiner, BOM and tag characters (the ones A-9 takes out of a card) do not reach the screen.
+        assert_eq!(
+            screen_line("a\u{200b}b\u{202e}c\u{2066}d\u{2069}e\u{2060}f\u{feff}g\u{e0041}h")
+                .as_deref(),
+            Some("abcdefgh")
+        );
+        assert_eq!(screen_line("\u{200b}\u{202e}\u{feff}\n"), None);
+    }
+
+    async fn lines_of(output: &[u8]) -> Vec<String> {
+        let mut got = Vec::new();
+        read_lines(output, |text| got.push(text.to_owned())).await;
+        got
+    }
+
+    #[tokio::test]
+    async fn the_output_is_read_line_by_line_to_its_end() {
+        assert_eq!(
+            lines_of(b"a\nb\r\n\n\nlast").await,
+            ["a\n", "b\r\n", "\n", "\n", "last"]
+        );
+        assert!(lines_of(b"").await.is_empty());
+        let bytes = [b"caf".as_slice(), &[0xff], b"\n"].concat();
+        assert_eq!(lines_of(&bytes).await, ["caf\u{fffd}\n"]);
+    }
+
+    #[tokio::test]
+    async fn a_line_longer_than_the_limit_is_cut_and_the_rest_of_it_is_skipped() {
+        let mut output = Vec::new();
+        output.extend_from_slice(b"before\n");
+        output.extend(std::iter::repeat_n(b'x', LINE_MAX * 3 + 17));
+        output.extend_from_slice(b"\nafter\n");
+        let got = lines_of(&output).await;
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], "before\n");
+        assert_eq!(got[1], "x".repeat(LINE_MAX));
+        assert_eq!(got[2], "after\n");
+        // A line of exactly the limit with its line feed, and a long last line with none.
+        let mut exact = vec![b'y'; LINE_MAX - 1];
+        exact.push(b'\n');
+        exact.extend(std::iter::repeat_n(b'z', LINE_MAX * 2));
+        let got = lines_of(&exact).await;
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].len(), LINE_MAX);
+        assert_eq!(got[1], "z".repeat(LINE_MAX));
     }
 
     #[test]
