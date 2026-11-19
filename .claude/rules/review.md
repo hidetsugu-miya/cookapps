@@ -2,20 +2,20 @@
 
 ## Roles
 
-### Reviewers find, release-verifier decides, `range-check.sh` checks the range of a Low fix, and `pre-git.sh` gates
+### Reviewers find, release-verifier decides, `range-check.sh` checks the range of a fix of a merged version's non-blocking findings, and `pre-git.sh` gates
 
 Reviewers (security, performance, code) find and rate findings, and edit nothing.
 release-verifier decides whether a finding is real and whether it stops the release, checks the CI and E2E records with `check-ci.sh` and `check-e2e.sh`, and writes the pass record of a reviewed HEAD.
-It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only, and whoever fixes one confirms it then.
-`range-check.sh` is the mechanical check of a fix of non-blocking findings made after a pass: it does for that range what release-verifier did, with no launch, and writes the pass record when the check passes ("Send the fixes for non-blocking findings…" below; at the owner's instruction, 2026-11-18; #932: the range check passed 15 times in 15, and never changed a result. It replaces the instruction of 2026-10-29, which had release-verifier do it).
+It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only, and stay unfixed after the pass ("Fix blocking findings inside the review…" below).
+`range-check.sh` is the mechanical check of a fix that holds only the non-blocking findings of an already merged version: it does for that range what release-verifier did, with no launch, and writes the pass record when the check passes ("Fix only the non-blocking findings of a merged version…" below; at the owner's instruction, 2026-11-18; #932: the range check passed 15 times in 15, and never changed a result. It replaces the instruction of 2026-10-29, which had release-verifier do it).
 `pre-git.sh` is the mechanical gate: it checks the CI, E2E and pass records of HEAD, runs none of the checks itself, and never judges a finding.
 Without this split, the reviewers and the verifier both checked whether a finding was fixed, and the verifier read the code for every Low.
 
 ```text
 Good: a reviewer reports a finding -> release-verifier reads the code and rates it -> pre-git.sh checks the record
-Good: Low fixed after the pass -> range-check.sh checks the diff against the list of findings -> pre-git.sh checks the record
+Good: a fix of a merged version's Lows -> range-check.sh checks the diff against the list of findings -> pre-git.sh checks the record
 Bad:  the reviewer and release-verifier both check in round 2 that the same finding is fixed
-Bad:  launch release-verifier only to check that a Low fix stays inside the files of the findings
+Bad:  launch release-verifier only to check that a fix of a merged version's Lows stays inside the files of the findings
 ```
 
 ## Flow
@@ -108,49 +108,52 @@ release-verifier rates again, by those definitions, each finding it read, and it
 On 2026-11-03 a third round stopped for a High that was rare, small in harm and already in main, because the definition had only the kind of finding and not its harm.
 
 ```text
-Good: a message over 10,000 characters is cut with no note, as main already does -> Low, fixed after the pass
+Good: a message over 10,000 characters is cut with no note, as main already does -> Low, left as it is after the pass
 Bad:  the same finding -> High, because any spec gap is High
 ```
 
 ## What to fix
 
-### Fix blocking findings inside the review, and non-blocking findings with them or after the pass
+### Fix blocking findings inside the review, and leave non-blocking findings alone after the pass
 
 The blocking ones are security Critical and High, performance High, and code review High.
 When the first round fails, fix the blocking findings and, in the same fix, the non-blocking findings (Medium and Low) that serve the goal of the change, and send the fix to the next round (at the owner's instruction, 2026-11-12; #485. It replaces the instruction of 2026-10-29, "do not fix non-blocking findings during the review", which cost a second pass of the same files after the verdict).
 The second-round reviewers get the whole diff of that fix, the non-blocking fixes included.
-When the first round passes, nothing is sent back: after release-verifier passes, and before the push, fix the non-blocking findings that serve the goal of the change. Do not ask the owner.
-A non-blocking finding that first appears in the second round or later is fixed after the pass, so that the next round's range does not grow.
-Decline a finding that does not serve the goal, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
+When a round passes, fix nothing more: push with the non-blocking findings (Medium and Low) that are left, in a session and in a night run alike (at the owner's instruction, 2026-11-19; #1012. It replaces the part of the instructions of 2026-10-29 and of 2026-11-12, #485, that had them fixed after the pass and sent through `range-check.sh`: in the night runs of 2026-11-13 to 2026-11-19, 3 of 5 ran CI and E2E once more for a Low fix after the pass, which added 5.0 to 11.2 minutes, and the run that left its Low alone added none).
+A non-blocking finding that first appears in the second round or later is left the same way.
+List each finding that was not fixed (its ID, `path:line` and a one-line gist) in the completion report, and in the hand-over of a night run. Do not ask the owner.
+Decline a finding that does not serve the goal in the first-round fix, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
 When a finding has several ways to fix it, choose the recommended one and state it in the completion report.
 
 ```text
 Good: High and Low found in round 1 -> fix both in one commit -> round 2 reads the whole fix -> pass -> push
-Good: round 1 passes with a Low -> fix Low after the pass -> range check -> push
-Good: round 2 finds a new Low -> pass -> fix Low -> range check -> push
-Bad:  round 1 fails with a High and a Low, and the Low is left for after the pass
-Bad:  pass -> push with Low left, and ask the owner whether to fix it
+Good: round 1 passes with a Low -> push, and list the Low in the completion report
+Good: round 2 finds a new Low -> pass -> push, and list the Low in the completion report
+Bad:  round 1 fails with a High and a Low, and the Low is left unfixed
+Bad:  pass -> fix the Low -> run-e2e.sh again -> push
+Bad:  pass -> push with the Low left, and ask the owner whether to fix it
 ```
 
-### Send the fixes for non-blocking findings through the next round when the round failed, and through the range check when it passed
+### Fix only the non-blocking findings of a merged version with the range check
 
-A fix made after a pass is not sent through the reviewers, and release-verifier is not launched.
+A pull request that holds only fixes of non-blocking findings of an already merged version is not sent through the reviewers, and release-verifier is not launched.
+It is made on purpose, from the findings that earlier completion reports listed. A finding of the branch under review is not fixed this way ("Fix blocking findings inside the review…" above).
 Write the fixed findings in a file, one to a line, each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
 A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
-Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh {passed HEAD} {list file}` by the main checkout's path, from the worktree (`worktree.md`).
+Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh origin/main {list file}` by the main checkout's path, from the worktree (`worktree.md`).
+The passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main.
 `range-check.sh` stops, with the reason on stderr and exit 1, unless all of these hold: the working tree is clean, the passed commit has a pass record or is `origin/main` or its ancestor, it is an ancestor of HEAD and not HEAD, HEAD has passing CI and E2E records (`check-ci.sh`, `check-e2e.sh`), and every path of `git diff --name-only --no-renames {passed HEAD} HEAD` appears in the list. It prints each path outside the list, and that diff goes through the first-round flow. It does not review the content of the findings.
 When all hold, it writes the pass record for the new HEAD with `.claude/hooks/record-review.sh`.
-Put the fixes in the same pull request.
-A pull request that fixes only non-blocking findings of an already merged version also passes with only the range check: the passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main (`range-check.sh origin/main {list file}`; at the owner's instruction, 2026-10-29).
 A fix made inside a failed round is not this: it is part of the blocking fix, and the second round reads it.
-At the owner's instruction (2026-10-29). Running a review for every small fix produced too many reviews.
+At the owner's instruction (2026-10-29). Running a review for every small fix produced too many reviews. Since 2026-11-19 (#1012) it serves only a merged version's findings, because a pass is no longer followed by a fix on the same branch.
 The check of the pass record (`pre-git.sh`) stays. The writers are release-verifier and `range-check.sh` alone, so that no other command can let a change through.
 
 ```text
-Good: after a1b2c3d passed, fix Low and commit -> run-e2e.sh -> `range-check.sh a1b2c3d findings.txt` -> pass record -> push
-Bad:  after a pass, fix Low and run the performance and code reviews again
-Bad:  after a pass, fix Low and launch release-verifier to check the range
-Bad:  add a new feature to a Low fix and push with only the range check (a path outside the list stops it)
+Good: the completion report of a merged version listed a Low -> a new branch fixes it, and commits -> run-e2e.sh -> `range-check.sh origin/main findings.txt` -> pass record -> push
+Bad:  fix the Low of a merged version and run the performance and code reviews again
+Bad:  fix the Low of a merged version and launch release-verifier to check the range
+Bad:  fix a Low of the branch that just passed, and run `range-check.sh {passed HEAD} {list file}` (leave it, and list it in the completion report)
+Bad:  add a new feature to a fix of a merged version's Lows and push with only the range check (a path outside the list stops it)
 ```
 
 ### Keep fixes to the minimum at the finding's location
@@ -174,12 +177,13 @@ Bad:  start run-ci.sh after the reviewers have read the code, and fix its failur
 
 ### Rerun CI and E2E every time a commit is added
 
-A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`) before handing it to release-verifier, or to `range-check.sh` for a Low fix after a pass.
+A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`) before handing it to release-verifier, or to `range-check.sh` for a fix of a merged version's findings.
 The records are per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
 
 ```text
-Good: pass -> fix Low and commit -> run-e2e.sh (its CI beside wdio) -> range-check.sh -> push
-Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
+Good: round 1 fails -> fix the High and the Low in one commit -> run-e2e.sh (its CI beside wdio) with the second-round review -> release-verifier
+Good: a merged version's Low fixed and committed -> run-e2e.sh (its CI beside wdio) -> range-check.sh origin/main -> push
+Bad:  after a fix of a Low, push with the previous HEAD's CI or E2E record
 ```
 
 ## Release-only commits
