@@ -6,7 +6,7 @@
 
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
 The one exception is the launchd job that the owner registered, which runs once a day, at 00:30: `nightly.sh ship` runs `ship` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; once a day since 2026-11-07, at 05:00 since 2026-11-07, at 00:30 since 2026-11-08; Discussion #160).
-Do not start an issue with `needs:owner`: a product decision is still open.
+An issue is made only after its decisions are made ("Finish a design, layout or spec discussion with the owner before making the issue" below), so it is ready to implement.
 Invoking `ship` is that instruction: it implements the open issues in the order of the plan, up to 20 points in one run, one after another in a worktree of its own (at the owner's instruction, 2026-11-09; Discussion #293; the worktree of its own, 2026-11-19; #1006).
 
 ```text
@@ -119,26 +119,28 @@ Good: #150 loses the saved Todo on a failed sync -> importance:high, with "デ�
 Bad:  #150 loses data, and no importance label is put, so the owner is not told that the Release PR is urgent
 ```
 
-### Use `needs:owner` only for a product decision
+### Finish a design, layout or spec discussion with the owner before making the issue
 
-`needs:owner` is for a product decision left open, such as a 決めること section; the owner removes it.
-Keep state out of labels: an open pull request and the Release PR already show it.
-
-```text
-Good: the issue has 決めること -> needs:owner, and nothing starts
-Bad:  add status:doing and status:merged, and keep them in step with the pull request
-```
-
-### Record a design or layout discussion in an issue with `needs:owner` when it starts
-
-When you put options to the owner and a discussion begins (layout options, design choices), write it in an issue with `needs:owner` (at the owner's instruction, 2026-11-09; it was a Discussion in Ideas before, at the owner's instruction, 2026-11-06).
-Write the background, what was investigated, the options and the URL of the artifact in the body of the issue.
-When the owner decides, comment the decision on the issue, and update the body.
+Hold the discussion in the session, with the owner, and use an Artifact to show the options (layout options, design choices, spec choices). Make the issue when the owner has decided (at the owner's instruction, 2026-11-19; #1035. It replaces the issue with a label that was made when the discussion began, of 2026-11-09, which replaced a Discussion in Ideas, of 2026-11-06).
+Do not make an issue in the middle of a discussion, and put no label on an issue for an open decision: the issue is a decision that can be implemented at once.
+Write in the body of the issue the background, what was investigated, the options, the URL of the artifact and the decision, so that the reason for the choice can be found on GitHub later.
 The repository is public, so keep personal information out (`publishing.md`).
 
 ```text
-Good: two layouts are put to the owner -> an issue with needs:owner holding both and the artifact URL -> the owner picks A -> a "decision" comment on the issue
-Bad:  two layouts are put to the owner in the conversation only, and the reason for the choice cannot be found on GitHub later
+Good: two layouts are put to the owner in the session with an artifact -> the owner picks A -> the issue is made with both options, the artifact URL and "A" as the decision
+Bad:  two layouts are put to the owner, and the issue is made before the owner has picked one
+Bad:  two layouts are put to the owner in the conversation only, and the issue does not record the options or the reason for the choice
+```
+
+### Take an issue out of the run when a decision is missing, and ask the owner
+
+When `ship` meets, while it implements an issue, a product decision that the issue does not settle, it puts no label on the issue: it takes the issue out of the run and asks the owner (at the owner's instruction, 2026-11-19; #1035). In a session it asks at once, in the session. In the night run, which has no one to answer, the hand-over names the issue and the question, and the next run leaves the issue alone until the owner answers (`ship` step 7.2).
+Keep state out of labels: an open pull request and the Release PR already show it.
+
+```text
+Good: #41 needs a choice that its body does not make -> the run drops the issue and asks the owner, with no label
+Bad:  add a label to say that the owner must decide, and keep it in step with the answer
+Bad:  add status:doing and status:merged, and keep them in step with the pull request
 ```
 
 ## Pull requests
