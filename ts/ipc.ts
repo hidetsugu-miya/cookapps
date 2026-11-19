@@ -67,6 +67,8 @@ import type { Skill } from "./bindings/Skill";
 import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { NewEvent } from "./bindings/NewEvent";
+import type { JiraSettings } from "./bindings/JiraSettings";
+import type { JiraUser } from "./bindings/JiraUser";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
@@ -235,6 +237,12 @@ export interface Commands {
   notion_connect: { args: undefined; result: NotionAccount };
   // Revokes the grant at Notion and drops its token and entry.
   notion_disconnect: { args: { workspaceId: string }; result: null };
+  // J-1: the saved site and email address of the Jira connection, and whether a token is kept; the token is never returned. Asks Jira nothing.
+  jira_settings: { args: undefined; result: JiraSettings };
+  // J-1: saves the connection (an empty token keeps the stored one); answers what is saved.
+  jira_save: { args: { site: string; email: string; token: string }; result: JiraSettings };
+  // J-1: asks the site who the credential of the form is (an empty token takes the stored one); saves nothing.
+  jira_test: { args: { site: string; email: string; token: string }; result: JiraUser };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   slack_link: { args: { url: string }; result: Target };
   // What a post of the mail starts out as (plain text); the user edits it on the compose screen.

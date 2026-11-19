@@ -14,7 +14,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "開発"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -1407,14 +1407,140 @@ describe("settings: the PCs with the server of the orchestration (the Orca tab)"
   });
 });
 
-describe("settings: the Orca tab has no card of the target (A-6)", () => {
-  it("has the cards of the terminal colors, the editor, Ghostty's settings and the PCs with the server, and none of the target", async () => {
+describe("settings: the 開発 tab (the tab `orca`) has no card of the target (A-6)", () => {
+  it("has the cards of the terminal colors, the editor, Ghostty's settings, the PCs with the server and the Jira connection, and none of the target", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("orca");
     await expect($("#settings-panel-orca")).toBeDisplayed();
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続"]);
     expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
+  });
+});
+
+// J-1 (#868): the card of the Jira connection in the 開発 tab.
+describe("settings: Jira connection (the 開発 tab, J-1)", () => {
+  const saved = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true };
+  const user = { displayName: "Example User", emailAddress: "me@example.com" };
+
+  async function openJira(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await waitForCalls("jira_settings");
+  }
+  const fill = async (site: string, email: string, token: string) => {
+    await $("#jira-site").setValue(site);
+    await $("#jira-email").setValue(email);
+    await $("#jira-token").setValue(token);
+  };
+
+  it("is named 開発 on the tab, and reads the saved connection only once the tab is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, jira_settings: saved });
+    await $("#nav-settings").click();
+    expect(await callsOf("jira_settings")).toHaveLength(0);
+    await openTab("orca");
+    await expect($("#settings-tab-orca")).toHaveText("開発");
+    await waitForCalls("jira_settings");
+    await expect($("#jira-site")).toHaveValue(saved.site);
+    await expect($("#jira-email")).toHaveValue(saved.email);
+    await expect($("#jira-token")).toHaveValue("");
+    await expect($("#jira-token")).toHaveAttribute("type", "password");
+  });
+
+  it("has a header row with the hint, the state row and a form with the three fields and the two buttons", async () => {
+    await openJira({ jira_settings: saved });
+    expect(await count("#settings-panel-orca > .card:last-child .card-head .logo.orca")).toBe(1);
+    await expect($("#jira-help")).toHaveAttribute("aria-label", "Jira 接続の説明");
+    await expect($("#jira-items .item-name")).toHaveText("Jira");
+    await expect($("#jira-items .status.ok")).toHaveText("保存済み");
+    await expect($("#jira-items .item-meta")).toHaveText(saved.site);
+    expect(await textsOf("#jira-form .text-btn")).toEqual(["保存", "接続を試す"]);
+    await expect($("#jira-site")).toHaveAttribute("aria-label", "サイトの URL");
+    await expect($("#jira-email")).toHaveAttribute("aria-label", "メールアドレス");
+    await expect($("#jira-token")).toHaveAttribute("aria-label", "API トークン");
+  });
+
+  it("says 未設定 until a site and a token are saved", async () => {
+    await openJira();
+    await expect($("#jira-items .status.off")).toHaveText("未設定");
+  });
+
+  it("calls jira_save with the three fields from 保存, empties the token field and draws what was saved", async () => {
+    await openJira();
+    const save = await mock("jira_save", saved);
+    await fill("https://example.atlassian.net", "me@example.com", "tok-1");
+    await $("#jira-form .text-btn.primary").click();
+    expect(await waitForCalls(save)).toEqual([{ site: "https://example.atlassian.net", email: "me@example.com", token: "tok-1" }]);
+    await expect($("#jira-items .status.ok")).toHaveText("保存済み");
+    await expect($("#jira-token")).toHaveValue("");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("sends an empty email as it is, for a Bearer token", async () => {
+    await openJira();
+    const save = await mock("jira_save", { ...saved, email: "" });
+    await fill("https://example.atlassian.net", "", "tok-2");
+    await $("#jira-form .text-btn.primary").click();
+    expect(await waitForCalls(save)).toEqual([{ site: "https://example.atlassian.net", email: "", token: "tok-2" }]);
+  });
+
+  it("shows the words of a refused save on a card, and keeps the form", async () => {
+    await openJira();
+    const reason = "サイトの URL は https://{名前}.atlassian.net の形で入力してください";
+    await mock("jira_save", rejects(reason));
+    await fill("https://example.com", "", "tok-3");
+    await $("#jira-form .text-btn.primary").click();
+    await expect($(CARD)).toHaveText(reason);
+    await expect($("#jira-site")).toHaveValue("https://example.com");
+    await expect($("#jira-items .status.off")).toHaveText("未設定");
+  });
+
+  it("calls jira_test with the form's values from 接続を試す, keeps the button off while it waits, and says who it found", async () => {
+    await openJira({ jira_settings: saved });
+    const test = await mock("jira_test", holds);
+    await $("#jira-token").setValue("tok-4");
+    await $("#jira-test").click();
+    expect(await waitForCalls(test)).toEqual([{ site: saved.site, email: saved.email, token: "tok-4" }]);
+    await expect($("#jira-test")).toBeDisabled();
+    await release(test, user);
+    await expect($("#jira-items .status.ok")).toHaveText("接続できました");
+    await expect($("#jira-items .item-meta")).toHaveText("Example User ・ me@example.com");
+    await expect($("#jira-test")).toBeEnabled();
+    await expect($("#jira-token")).toHaveValue("");
+    expect(await callsOf("jira_save")).toEqual([]);
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("sends an empty token to try the stored one", async () => {
+    await openJira({ jira_settings: saved });
+    const test = await mock("jira_test", user);
+    await $("#jira-test").click();
+    expect(await waitForCalls(test)).toEqual([{ site: saved.site, email: saved.email, token: "" }]);
+  });
+
+  it("shows the words of a failed test on a card and the state 接続できません", async () => {
+    await openJira({ jira_settings: saved });
+    const reason = "Jira が認証を拒否しました（401）";
+    await mock("jira_test", rejects(reason));
+    await $("#jira-test").click();
+    await expect($(CARD)).toHaveText(reason);
+    await expect($("#jira-items .status.warn")).toHaveText("接続できません");
+    await expect($("#jira-test")).toBeEnabled();
+  });
+
+  it("writes the words to the log, with no card, when the saved connection cannot be read", async () => {
+    await openJira({ jira_settings: rejects("jira-settings.json を読めません") });
+    await waitForLog("jira-settings.json を読めません");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("opens a hint that says how the email address decides the authentication, and that the token stays in the keychain", async () => {
+    await openJira();
+    await $("#jira-help").click();
+    await expect($("#jira-help")).toHaveAttribute("aria-expanded", "true");
+    await expect($('[role="dialog"][aria-label="Jira 接続"]')).toHaveText(expect.stringContaining("Bearer"));
+    await expect($('[role="dialog"][aria-label="Jira 接続"]')).toHaveText(expect.stringContaining("トークンは OS の資格情報の保管場所"));
   });
 });
 
@@ -1440,7 +1566,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
 
   it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
     expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });

@@ -1791,7 +1791,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
       "「dev-server」のつなぎAIの設定フォルダに、GitHub Release から、このアプリと同じ版の tsunagiai-mcp を置きます",
       "tsunagiai-mcp は、その PC でサーバーとして待ち受けます（ポート 47823）",
       "最初に、その PC の画面でファイアウォールの「許可」を押してください",
-      "同意は、設定の Orca タブで PC ごとに取り消せます",
+      "同意は、設定の開発タブで PC ごとに取り消せます",
     ]);
     expect(await textsOf(".formation-consent-pop .text-btn")).toEqual(["やめる", "同意する"]);
     expect(await callsOf("formation_consents")).toHaveLength(1);

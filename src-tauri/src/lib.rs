@@ -19,6 +19,7 @@ pub mod gmail;
 pub mod identity;
 pub mod image_senders;
 pub mod images;
+pub mod jira;
 mod keychain;
 pub mod lsp;
 pub mod mail_address;
@@ -312,6 +313,9 @@ pub fn run() {
             todoist::todoist_connected,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
+            jira::jira_settings,
+            jira::jira_save,
+            jira::jira_test,
             todoist::todoist_add,
             todoist::todoist_add_subtask,
             todoist::todoist_task_from_mail,
