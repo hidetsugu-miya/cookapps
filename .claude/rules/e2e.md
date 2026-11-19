@@ -160,7 +160,7 @@ Bad:  add a capability without measuring, or leave an app at 300 seconds because
 
 `run-e2e.sh --only {spec name}` (for example `--only inbox`) runs `e2e/specs/{name}.e2e.ts` in one app, builds first (`e2e:build`), and writes no record: it works on a dirty tree, and its output goes to `.claude/e2e/only-{name}.log` (at the owner's instruction, 2026-11-12; #485).
 It sets `E2E_ONLY`, which `wdio.conf.ts` reads to cut the capabilities down to one that names that spec. The specs are not passed with `--spec`, so the spec does not run in several apps.
-Use it to run a spec that a feature changed or added, and a spec that failed in the Release PR's `run-e2e.sh`, until it passes; for a failure at the Release PR, the fix goes through its own `fix/` pull request and `run-e2e.sh` runs again when the Release PR is prepared again (`.claude/skills/release/SKILL.md`). It is not a record, and `pre-git.sh` does not accept it.
+Use it to run a spec that a feature changed or added, and a spec that failed in the Release PR's `run-e2e.sh`: first to tell a chance failure from a defect (a spec that passes alone is read for how it failed, and the full run is repeated once on the same HEAD when no code needs a fix), then until it passes; for a defect at the Release PR, the fix goes through its own `fix/` pull request and `run-e2e.sh` runs again when the Release PR is prepared again (`.claude/skills/release/SKILL.md`). It is not a record, and `pre-git.sh` does not accept it.
 
 ```sh
 .claude/tools/run-e2e.sh --only todo-prompt   # one app, one spec, no record

@@ -78,7 +78,6 @@ Bad:  second round -> relaunch all three reviewers to check that their findings 
 ### After three rounds with a blocking finding left, redesign instead of patching
 
 A third failure means the design is the problem, not the next line to fix (at the owner's instruction, 2026-11-03).
-A failure of CI alone, with no blocking finding from the reviewers, does not count as a round.
 Stop fixing finding by finding, and do this without asking the owner:
 1. Gather every finding of every round, blocking and not, and name what they have in common.
 2. Redesign what they touch against the goal the owner asked for, keeping that goal as it is.
@@ -169,7 +168,7 @@ A rebuilt diff produces new findings in the second round.
 
 Run `.claude/tools/run-ci.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; it writes the CI record (`testing.md`). E2E is not run for a feature's HEAD (`e2e.md`, #1023).
 release-verifier and `pre-git.sh` call `.claude/tools/check-ci.sh`, which requires a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`) with the version of that commit. Without it, release-verifier fails. The E2E record is asked only of `release/next` ("Let a release-only commit keep the pass" below, `e2e.md`).
-Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when the record of HEAD is missing.
+Reviewers cannot run the static checks and the unit tests by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when the CI record of HEAD is missing.
 
 ```text
 Good: commit -> run-ci.sh and the reviewers together -> fix High -> run-ci.sh and the second-round review together -> release-verifier -> pass
