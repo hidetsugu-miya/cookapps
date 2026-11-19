@@ -70,7 +70,6 @@ import type { UnreadChannel } from "../ts/bindings/UnreadChannel";
 import type { TimelineReply } from "../ts/bindings/TimelineReply";
 import type { UnreadReplies } from "../ts/bindings/UnreadReplies";
 import type { Todo } from "../ts/bindings/Todo";
-import type { TodoDraftEdit } from "../ts/bindings/TodoDraftEdit";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
@@ -556,18 +555,6 @@ export const logLine = (time: string, level: LogEntry["level"], source: string, 
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
-
-// What `claude_edit_todo_draft` answers when Claude proposes a shorter name for `slackSummary` and leaves the description alone.
-export const todoDraftEdit: TodoDraftEdit = {
-  reply: "名前を短くします",
-  content: "Reply to vendor",
-  description: null,
-  contentDiff: [
-    { kind: "del", text: "Reply to the vendor" },
-    { kind: "ins", text: "Reply to vendor" },
-  ],
-  descriptionDiff: [],
-};
 
 // What `slack_preview` answers for the thread of `threadDetail("First unread", "Hello from Alice", …)`: the post as it starts out in the compose screen.
 export const slackPreview = "*First unread*\nAlice <alice@example.com> ・ 2026/11/3 9:00\n\nHello from Alice";

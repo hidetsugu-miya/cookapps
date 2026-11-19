@@ -54,6 +54,7 @@ pub const RULES: Rules = Rules {
         "calendar-slots",
         "calendar-form",
         "todo-prompt",
+        "todo-draft",
     ],
     changes: &["todo", "calendar", "calendar-shown"],
     wait: Duration::from_secs(5),
@@ -639,7 +640,8 @@ mod tests {
                 "slack-compose",
                 "calendar-slots",
                 "calendar-form",
-                "todo-prompt"
+                "todo-prompt",
+                "todo-draft"
             ]
         );
         // The candidates of free time (C-6, #1063): a read and a write, no post.

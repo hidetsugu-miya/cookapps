@@ -1,4 +1,4 @@
-// The conversation with Claude that edits a text, shared by the Slack thread (S-7), the Todo draft page (S-18) and the Slack screen's Claude pane (S-24):
+// The conversation with Claude that edits a text, shared by the Slack thread (S-7) and the Slack screen's Claude pane (S-24):
 // the log with its diff cards, the request field that grows with its text, and the clear button. A proposal is applied to the owner's text, and the owner decides what to do with it.
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";

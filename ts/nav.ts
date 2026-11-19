@@ -16,6 +16,7 @@ import { showSlackList } from "./slack-list.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { fetchOpenComments } from "./todo-comments.js";
 import { hideSlackComposeClaude } from "./slack-compose-claude.js";
+import { hideDraftClaude, syncDraftClaude } from "./todo-draft.js";
 import { hidePromptClaude } from "./todo-prompt.js";
 import { hideTodoClaude, syncTodoClaude } from "./todo-claude.js";
 import { todoState } from "./todo-data.js";
@@ -95,7 +96,11 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   closeCreate();
   closeDatabaseForm();
   // The terminal of the Todo screen's Claude pane is hidden while another screen is shown (its process goes on).
-  if (name !== "todo") hideTodoClaude();
+  if (name !== "todo") {
+    hideTodoClaude();
+    // The same for the pane of the page of a Todo draft (S-18), which the Todo screen holds.
+    hideDraftClaude();
+  }
   // The same for the Claude pane of the calendar screen.
   if (name !== "calendar") hideCalendarClaude();
   // The same for the Claude pane of the Slack compose screen, which is left by every screen the sidebar shows.
@@ -115,6 +120,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   } else if (name === "todo") {
     show("todo");
     syncTodoClaude();
+    syncDraftClaude();
     if (todoState.kept) renderTodo();
     fetchOpenComments();
     // The backend keeps the completed tasks of the last load; they are fetched again only while `doneStale` is set (until a load has fetched from Todoist).

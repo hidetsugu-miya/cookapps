@@ -372,7 +372,6 @@ pub fn run() {
             claude::claude_todo_prompt_reset,
             claude::claude_model_settings,
             claude::claude_model_settings_save,
-            claude::claude_edit_todo_draft,
             claude::claude_summarize_handoff,
             claude::claude_chat_slack,
             claude::claude_chat_thread,

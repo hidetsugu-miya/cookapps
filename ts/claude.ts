@@ -15,7 +15,6 @@ import { itemRow } from "./settings.js";
 import { refreshSlackClaude } from "./slack-claude.js";
 import { refreshSlackThread } from "./slack-thread.js";
 import { updateAddMode } from "./todo-add.js";
-import { refreshDraftChat } from "./todo-draft.js";
 import { promptRow } from "./todo-prompt.js";
 import { logError, showFailure } from "./error-card.js";
 import { setClaudeReady } from "./view.js";
@@ -173,7 +172,6 @@ function applyClaude(next: Claude | null) {
   redrawConnection();
   updateAddMode();
   refreshSlackThread();
-  refreshDraftChat();
   refreshSlackClaude();
 }
 
@@ -239,10 +237,9 @@ function modelBlock() {
 
 // The two selects of a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
 // The Slack thread's pane (the Slack thread conversation) has them in the frame of the field (composer.ts).
-// The Todo draft page's pane (S-18) has them for the Slack summary's purpose; the page is not always open, so a slot that is not in the page is skipped.
 // The Slack screen's Claude pane (S-24) has them for the Slack conversation's purpose.
 // The pane of A-9 has them in the frame of its field for the summary of a handoff.
-const MODEL_SLOTS: [string, Purpose][] = [["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["slack-claude-model", "slackChat"], ["handoff-model", "orcaHandoff"]];
+const MODEL_SLOTS: [string, Purpose][] = [["reply-model", "slackReply"], ["slack-claude-model", "slackChat"], ["handoff-model", "orcaHandoff"]];
 
 // The pane of A-9 is drawn in the mail, the Todo and the Slack thread at once, each with a slot of the same id, so every element of the id is drawn, not the first one `$` finds.
 function redrawModelSlot(id: string, onlyEmpty = false) {

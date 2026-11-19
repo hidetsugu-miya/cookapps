@@ -107,7 +107,6 @@ import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { ThreadRefresh } from "./bindings/ThreadRefresh";
 import type { Todo } from "./bindings/Todo";
-import type { TodoDraftEdit } from "./bindings/TodoDraftEdit";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { UpdateMode } from "./bindings/UpdateMode";
@@ -303,9 +302,6 @@ export interface Commands {
   claude_todo_prompt: { args: undefined; result: TodoPrompt };
   claude_todo_prompt_save: { args: { body: string }; result: TodoPrompt };
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
-  // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
-  // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
-  claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
   // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent to Claude: Rust only checks it with the content against the limit of the prompt, before the call. The model and effort are those of `orcaHandoff`. Nothing is saved.
   claude_summarize_handoff: { args: { context: HandoffContext; instruction: string }; result: HandoffSummary };
   // S-24: Claude's answer on the Slack screen: a short reply, and the draft of a post when the request asked for one (`draft` is null otherwise). Nothing is posted.

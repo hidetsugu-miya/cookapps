@@ -7,6 +7,8 @@ const term = "#todo-claude-term";
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
 // The pane is closed at first and shows the question; 相談する opens it and starts the process.
 const startByPress = () => press($("#todo-claude-open"));
+// The ids of the panes that `command` (claude_code_start or claude_code_close) was called for, in order: the page of a draft has its own pane (S-18).
+const ids = async (command: string) => ((await callsOf(command)) as { id: string }[]).map((c) => c.id);
 // The commands of the old conversation, which the pane calls no more, and the commands that make a Todoist task: the pane starts a terminal and calls none of them.
 const notCalled = ["claude_chat_todo", "todoist_add", "todoist_add_task", "todoist_add_subtask", "todoist_update", "todoist_set_done", "todoist_add_from_slack", "todoist_delete", "todoist_move", "orca_stream_terminal", "orca_terminal_read"];
 
@@ -165,12 +167,13 @@ describe("todo Claude pane", () => {
     await $("#todo-list li.task").click();
     await expect($("#todo-back")).toBeDisplayed();
     await $("#todo-back").click();
-    // The page of a draft has a Claude pane of its own (S-18): this one and its icons go, and the process stays.
+    // The page of a draft has a Claude pane of its own (S-18, its own process `todo-draft`): this one and its icons go, and this process stays.
     await mock("todoist_summarize_slack", slackSummary);
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await $("#todo-draft").waitForExist();
     await expect($(pane)).not.toBeDisplayed();
+    await browser.waitUntil(async () => (await ids("claude_code_start")).includes("todo-draft"));
     await $("#todo-back").click();
     await expect($(pane)).toBeDisplayed();
     await $("#nav-mail").click();
@@ -178,8 +181,9 @@ describe("todo Claude pane", () => {
     await $("#nav-todo").click();
     await expect($(pane)).toBeDisplayed();
     await browser.pause(500);
-    expect((await callsOf("claude_code_start")).length).toBe(1);
-    expect(await callsOf("claude_code_close")).toEqual([]);
+    // Only the draft's process was ended, with its page; this one was started once and never ended.
+    expect(await ids("claude_code_start")).toEqual(["todo-claude", "todo-draft"]);
+    expect(await ids("claude_code_close")).toEqual(["todo-draft"]);
   });
 
   it("starts no process while the token form is shown", async () => {
