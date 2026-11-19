@@ -2839,6 +2839,7 @@ describe("database: tree", () => {
       const command = await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
+      expect(await callsOf(command)).toEqual([ran()]);
       await add().click();
       expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop", "無題 @shop"]);
       expect(await selectedTabs()).toEqual(["無題 @shop"]);
@@ -2854,12 +2855,12 @@ describe("database: tree", () => {
       await openTab("query-2").click();
       await expect(input()).toHaveValue("SELECT 2");
       await expect(range()).toHaveText("");
-      await mock("database_sql", databaseSqlResult(["n"], [[databaseCell("2", "number")]], "1 行 / 1 ms"));
+      const second = await mock("database_sql", databaseSqlResult(["n"], [[databaseCell("2", "number")]], "1 行 / 1 ms"));
       await run().click();
       await expect(range()).toHaveText("1 行 / 1 ms");
       await openTab("query-1").click();
       await expect(range()).toHaveText("2 行 / 12 ms");
-      expect(await callsOf(command)).toEqual([ran()]);
+      expect(await callsOf(second)).toEqual([ran("SELECT 2")]);
     });
 
     it("keeps a query when the table list or the tab of a table is selected and comes back to it, calling nothing", async () => {
