@@ -1,0 +1,4 @@
+{
+  "name": "preview",
+  "description": "Teaches Claude Code to open an HTML file it wrote as a preview tab in the development screen of the app (the tool preview_open of tsunagiai-mcp)."
+}

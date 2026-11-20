@@ -1,4 +1,5 @@
 //! A-41: the files of `src-tauri/formation/` that are embedded in the binary at build time (`build.rs`), and how they are written.
+//! `PREVIEW_PLUGIN` (A-45) is the plugin of `src-tauri/preview-plugin/`, which `preview_plugin` writes with `ensure_plugin`.
 //! `LEADER_SKILL` is the leader's skill `feature-dev`, written into the folder of the orchestrator of each formation (`claude_code::write_formation_files`).
 //! `PLUGIN` is the plugin `feature-dev` (the unit procedures and the agents), written into `formation-plugin/` of the config folder before a child is launched (`formation::launch`) unless the folder already holds this very plugin, and given to the child's `claude` with `--plugin-dir`.
 //! Each list is `(path relative to its folder with "/", contents)`.
@@ -45,15 +46,21 @@ fn holds_plugin(dir: &Path, files: &[(&str, &str)], mark: &str) -> bool {
         })
 }
 
-/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path. A folder that already holds this plugin (`holds_plugin`) is left as it is: a child's launch does not write 55 files again, and the other children that read the folder never see it replaced.
+/// Makes `dir` hold `plugin`, as a whole, with its mark. A folder that already holds this plugin (`holds_plugin`) is left as it is: a launch does not write the files again, and the others that read the folder never see it replaced.
+pub(crate) fn ensure_plugin(dir: &Path, plugin: &[(&str, &str)]) -> Result<(), String> {
+    let mark = plugin_mark(plugin);
+    if !holds_plugin(dir, plugin, &mark) {
+        let mut files = plugin.to_vec();
+        files.push((MARK_FILE, &mark));
+        replace_dir(dir, &files)?;
+    }
+    Ok(())
+}
+
+/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path (`ensure_plugin`: a child's launch does not write 55 files again).
 pub fn write_plugin(config: &Path) -> Result<PathBuf, String> {
     let dir = plugin_dir(config);
-    let mark = plugin_mark(PLUGIN);
-    if !holds_plugin(&dir, PLUGIN, &mark) {
-        let mut files = PLUGIN.to_vec();
-        files.push((MARK_FILE, &mark));
-        replace_dir(&dir, &files)?;
-    }
+    ensure_plugin(&dir, PLUGIN)?;
     Ok(dir)
 }
 

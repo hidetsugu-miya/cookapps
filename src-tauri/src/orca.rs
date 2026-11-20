@@ -953,16 +953,11 @@ fn is_stale(out: &str) -> bool {
         .is_ok_and(|doc| doc["ok"] == false && doc["error"]["code"] == "terminal_handle_stale")
 }
 
-/// The session a launch started: `result.outcome` (`{kind: "terminal", handle, paneKey}`).
-fn started_of(result: &Value) -> OrcaStarted {
-    let outcome = &result["outcome"];
+/// The session a launch started (A-6): the terminal `orca terminal create` made, its handle and its pane (`created_of`, `created_pane_key_of`), each `None` when the reply lacks it.
+fn launched_of(result: &Value) -> OrcaStarted {
     OrcaStarted {
-        pane_key: text_of(outcome, "paneKey")
-            .filter(|k| check_pane_key(k).is_ok())
-            .map(str::to_owned),
-        handle: text_of(outcome, "handle")
-            .filter(|h| check_handle(h).is_ok())
-            .map(str::to_owned),
+        pane_key: created_pane_key_of(result),
+        handle: created_of(result).handle,
     }
 }
 
@@ -1340,18 +1335,111 @@ pub(crate) fn screen_args(handle: &str, environment: Option<&str>) -> Vec<String
     )
 }
 
-/// Always Claude. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
-fn launch_args(path: &str, prompt: Option<&str>, environment: Option<&str>) -> Vec<String> {
-    let mut args = args_of(&["agent", "launch", "--agent", "claude"]);
+/// Always Claude (A-6, A-16): a terminal in the worktree that runs `command` (`claude_command`), as the terminal of a formation's child does (A-41), so that Orca lists it as a Claude session. No `--focus`: the screen selects the tab once the list holds it. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
+/// `orca agent launch` is not used: it passes nothing to `claude`, so the plugin of A-45 could not be given.
+fn launch_args(path: &str, command: &str, environment: Option<&str>) -> Vec<String> {
+    let mut args = args_of(&["terminal", "create", "--worktree"]);
     args.extend([
-        "--worktree".into(),
         format!("path:{path}"),
-        "--surface".into(),
-        "terminal".into(),
+        "--command".into(),
+        command.into(),
+        "--json".into(),
     ]);
-    args.extend(prompt.map(|text| format!("--prompt={text}")));
-    args.push("--json".into());
     with_environment(args, environment)
+}
+
+/// Where the plugin of A-45 is, for the command of a launch.
+enum PluginAt<'a> {
+    /// In this machine's config folder, which the app wrote.
+    Here(&'a Path),
+    /// In the config folder of the PC of a saved environment, which `tsunagiai-mcp --preview-plugin` of that PC writes when the command runs.
+    OnServer,
+}
+
+/// The script's first words: the first prompt is read from the file `f` that the app put in the worktree (`orca_attach::drop_prompt`), and the file is deleted at once. `set --` leaves `claude` the words `-- {prompt}` (after a `--`, so that the text is never read as an option), or nothing when there is no file or it is empty.
+const PROMPT_WORDS: &str =
+    "set --; if [ -n \"$f\" ]; then p=$(cat \"$f\"); rm -f \"$f\"; [ -z \"$p\" ] || set -- -- \"$p\"; fi";
+
+/// A word of the command line that every login shell reads the same way: in single quotes (`claude_code::sh_quote`), and with no backslash, which fish reads inside single quotes as an escape (`\'` and `\\`), nor a control character. The words of the command line are fixed words and paths; the first prompt (text from outside: a summary of a mail, a message or a Todo) is never one of them.
+fn command_word(text: &str) -> Result<String, String> {
+    if text.contains('\\') || text.chars().any(char::is_control) {
+        return Err(format!(
+            "「{}」の中に、コマンドに入れられない文字（バックスラッシュか制御文字）があります",
+            text.escape_debug()
+        ));
+    }
+    Ok(crate::claude_code::sh_quote(text))
+}
+
+/// The command that is typed into the shell of the new terminal: `claude` with the plugin of A-45 (`--plugin-dir`) and, when there is one, the first instruction (`claude [prompt]`). The command line holds fixed words and paths only; the first instruction is in the file `prompt_file` of the PC that `claude` runs on, which the command reads and deletes (`PROMPT_WORDS`), so no shell reads it, whatever the login shell is (fish reads a backslash inside single quotes as an escape), and no limit of the length of a line holds it (a hand-over may be 100,000 characters).
+/// With no instruction on this machine the command is `claude --plugin-dir '{folder}'`, the folder's path in single quotes because it holds a space (`Application Support`). In every other case it is `sh -c '{script}' sh {file}` (on this machine with the folder after the file), as the orchestrator's is (`formation::orchestrator_command`): the script has no single quote and no backslash.
+/// On a saved environment's PC the command begins with `exec` and the script asks the `remote/tsunagiai-mcp` that the app put there (A-37) for the plugin's folder (`</dev/null`: a program of an older version that serves in place of printing would wait for the terminal's input), and starts `claude` with it; a PC without that program, or whose program cannot write the folder, starts `claude` with no plugin, as it did before the plugin.
+fn claude_command(plugin: PluginAt<'_>, prompt_file: Option<&str>) -> Result<String, String> {
+    let file = prompt_file.map(command_word).transpose()?;
+    match plugin {
+        PluginAt::Here(dir) => {
+            let dir = command_word(&dir.to_string_lossy())?;
+            let Some(file) = file else {
+                return Ok(format!("claude --plugin-dir {dir}"));
+            };
+            let script = format!(
+                "d=\"$1\"; f=\"$2\"; {PROMPT_WORDS}; exec claude --plugin-dir \"$d\" \"$@\""
+            );
+            Ok(format!(
+                "sh -c {} sh {dir} {file}",
+                crate::claude_code::sh_quote(&script)
+            ))
+        }
+        PluginAt::OnServer => {
+            let program = crate::formation_remote::program_path();
+            let flag = crate::preview_plugin::FLAG;
+            let script = format!(
+                "f=\"$1\"; {PROMPT_WORDS}; m=\"{program}\"; d=; [ ! -x \"$m\" ] || d=$(\"$m\" {flag} 2>/dev/null </dev/null); if [ -n \"$d\" ]; then exec claude --plugin-dir \"$d\" \"$@\"; else exec claude \"$@\"; fi"
+            );
+            Ok(format!(
+                "exec sh -c {} sh{}",
+                crate::claude_code::sh_quote(&script),
+                file.map(|file| format!(" {file}")).unwrap_or_default()
+            ))
+        }
+    }
+}
+
+/// The command of a launch for `environment` in the worktree at `path`: for this machine the plugin is written here first (the `tsunagiai-mcp` next to the app, `claude_code::checked_mcp_binary`), and a first prompt is put in a file of the worktree (`orca_attach::drop_prompt`), where it is read and deleted by the command. A failure of either is the error of the launch, before any terminal is made. Call it in a thread of `blocking`.
+fn launch_command(
+    path: &str,
+    prompt: Option<&str>,
+    environment: Option<&str>,
+) -> Result<String, String> {
+    let plugin_dir = match environment {
+        Some(_) => None,
+        None => {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let mcp = crate::claude_code::checked_mcp_binary(&exe)?;
+            Some(crate::preview_plugin::write_plugin(
+                &crate::identity::config_dir()?,
+                &mcp,
+            )?)
+        }
+    };
+    let prompt_file =
+        match prompt {
+            Some(text) => {
+                // The file's path is a word of the command line: refuse a worktree path that cannot be one before the file is put.
+                command_word(path)?;
+                let host_id = worktree_host(path, environment)?;
+                Some(tokio::runtime::Handle::current().block_on(
+                    crate::orca_attach::drop_prompt(path, &host_id, environment, text),
+                )?)
+            }
+            None => None,
+        };
+    claude_command(
+        plugin_dir
+            .as_deref()
+            .map_or(PluginAt::OnServer, PluginAt::Here),
+        prompt_file.as_deref(),
+    )
 }
 
 /// A plain terminal in the worktree (A-16): `terminal create` makes the tab and runs nothing in it. No `--focus`: the screen selects the tab once the list holds it.
@@ -1756,7 +1844,7 @@ fn read_lines(handle: &str, environment: Option<&str>) -> Result<Vec<String>, St
     }
 }
 
-/// Starts Claude in the worktree at `path`, with `prompt` as its first prompt when there is one (A-9; the Orca screen starts it with none).
+/// Starts Claude in the worktree at `path`, with `prompt` as its first prompt when there is one (A-9; the Orca screen starts it with none). The prompt goes in a file of the worktree that the command reads and deletes (`launch_command`), never into the command line.
 fn launch(
     path: &str,
     prompt: Option<&str>,
@@ -1771,7 +1859,8 @@ fn launch(
     } else {
         check_start(path, environment)?;
     }
-    write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
+    let command = launch_command(path, prompt, environment)?;
+    write(&launch_args(path, &command, environment)).map(|result| launched_of(&result))
 }
 
 /// Asks `ask` to add the folder as a Git repository, and, only when the answer says it is not one, asks once more with `--kind=folder`. Any other failure is Orca's own message and is not asked again.
@@ -4815,9 +4904,9 @@ mod tests {
 
     #[test]
     fn a_launch_reply_names_its_pane_and_terminal() {
-        let reply = json!({"outcome": {"kind": "terminal", "handle": "term_abc-1", "paneKey": "tab1:leaf2"}});
+        let reply = json!({"terminal": {"handle": "term_abc-1", "paneKey": "tab1:leaf2"}});
         assert_eq!(
-            started_of(&reply),
+            launched_of(&reply),
             OrcaStarted {
                 pane_key: Some("tab1:leaf2".into()),
                 handle: Some("term_abc-1".into())
@@ -4827,21 +4916,317 @@ mod tests {
         for odd in [
             Value::Null,
             json!({}),
-            json!({"outcome": "x"}),
-            json!({"outcome": {"paneKey": "", "handle": ""}}),
-            json!({"outcome": {"paneKey": "a b", "handle": "notterm"}}),
-            json!({"outcome": {"paneKey": 3, "handle": ["term_1"]}}),
+            json!({"terminal": "x"}),
+            json!({"outcome": {"paneKey": "t:l", "handle": "term_1"}}),
+            json!({"terminal": {"paneKey": "", "handle": ""}}),
+            json!({"terminal": {"paneKey": "a b", "handle": "notterm"}}),
+            json!({"terminal": {"paneKey": 3, "handle": ["term_1"]}}),
         ] {
-            assert_eq!(started_of(&odd), OrcaStarted::default(), "{odd}");
+            assert_eq!(launched_of(&odd), OrcaStarted::default(), "{odd}");
         }
-        let part = json!({"outcome": {"handle": "term_1"}});
-        assert_eq!(started_of(&part).pane_key, None);
-        assert_eq!(started_of(&part).handle.as_deref(), Some("term_1"));
-        let out = r#"{"ok": true, "result": {"outcome": {"kind": "terminal", "handle": "term_9", "paneKey": "t:l"}}}"#;
+        let part = json!({"terminal": {"handle": "term_1"}});
+        assert_eq!(launched_of(&part).pane_key, None);
+        assert_eq!(launched_of(&part).handle.as_deref(), Some("term_1"));
+        let out = r#"{"ok": true, "result": {"terminal": {"handle": "term_9", "paneKey": "t:l"}}}"#;
         assert_eq!(
-            started_of(&parse_output(out).unwrap()).pane_key.as_deref(),
+            launched_of(&parse_output(out).unwrap()).pane_key.as_deref(),
             Some("t:l")
         );
+    }
+
+    const DIR: &str = "/c/Application Support/jp.mysis.tsunagiai/preview-plugin";
+    const FILE: &str = "/w/example app/.orca/drops/prompt-0123.txt";
+
+    /// The script of a command `{head}'{script}' sh{words}`, with the head it must start with and the words it must end with.
+    fn script_of<'a>(command: &'a str, head: &str, words: &str) -> &'a str {
+        let rest = command.strip_prefix(head).expect(command);
+        rest.strip_suffix(words).expect(command)
+    }
+
+    #[test]
+    fn the_command_of_this_machine_holds_the_plugin_folder_and_the_prompt_file_and_never_the_prompt(
+    ) {
+        assert_eq!(
+            claude_command(PluginAt::Here(Path::new(DIR)), None).unwrap(),
+            "claude --plugin-dir '/c/Application Support/jp.mysis.tsunagiai/preview-plugin'"
+        );
+        let command = claude_command(PluginAt::Here(Path::new(DIR)), Some(FILE)).unwrap();
+        let script = script_of(
+            &command,
+            "sh -c '",
+            "' sh '/c/Application Support/jp.mysis.tsunagiai/preview-plugin' '/w/example app/.orca/drops/prompt-0123.txt'",
+        );
+        // The script is the same for every prompt, and holds no quote and no backslash, which fish reads differently.
+        assert!(!script.contains('\'') && !script.contains('\\'), "{script}");
+        assert!(script.contains("exec claude --plugin-dir"), "{script}");
+        // A quote in a path is closed, escaped and opened again, as every shell reads it.
+        assert_eq!(
+            claude_command(PluginAt::Here(Path::new("/c/it's/p")), None).unwrap(),
+            r"claude --plugin-dir '/c/it'\''s/p'"
+        );
+    }
+
+    #[test]
+    fn a_path_with_a_backslash_or_a_control_character_is_refused_because_fish_reads_it_differently()
+    {
+        for bad in ["/c/a\\b", "/c/a\\'b", "/c/a\nb", "/c/a\tb", "/c/a\u{1b}b"] {
+            assert!(
+                claude_command(PluginAt::Here(Path::new(bad)), None).is_err(),
+                "{bad:?}"
+            );
+            assert!(
+                claude_command(PluginAt::Here(Path::new(DIR)), Some(bad)).is_err(),
+                "{bad:?}"
+            );
+            assert!(
+                claude_command(PluginAt::OnServer, Some(bad)).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_command_of_a_saved_environment_asks_its_own_program_for_the_plugin_and_has_no_quote_inside_its_script(
+    ) {
+        let command = claude_command(PluginAt::OnServer, None).unwrap();
+        let script = script_of(&command, "exec sh -c '", "' sh");
+        assert!(!script.contains('\'') && !script.contains('\\'), "{script}");
+        assert!(
+            script.contains(
+                "m=\"$HOME/Library/Application Support/jp.mysis.tsunagiai/remote/tsunagiai-mcp\""
+            ),
+            "{script}"
+        );
+        // The program never reads the terminal: one of an older version serves in place of printing.
+        assert!(
+            script.contains("\"$m\" --preview-plugin 2>/dev/null </dev/null"),
+            "{script}"
+        );
+        // The file of the prompt follows the script as its argument, and no text of a prompt is in the line.
+        let with_file = claude_command(PluginAt::OnServer, Some(FILE)).unwrap();
+        assert_eq!(
+            with_file,
+            format!("{command} '/w/example app/.orca/drops/prompt-0123.txt'")
+        );
+    }
+
+    /// A temporary home that holds a fake `claude` (it prints each of its arguments and a NUL), the program of `remote/` when `server` is given, and a prompt file under a folder with a blank and a quote in its name when `prompt` is given.
+    struct Place {
+        root: PathBuf,
+        home: PathBuf,
+        bin: PathBuf,
+        file: PathBuf,
+        written: bool,
+    }
+
+    fn place(name: &str, server: Option<&str>, prompt: Option<&str>) -> Place {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "tsunagiai-orca-command-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, bin) = (root.join("home"), root.join("bin"));
+        let remote = home.join("Library/Application Support/jp.mysis.tsunagiai/remote");
+        let drops = root.join("it's a worktree/.orca/drops");
+        for dir in [&remote, &bin, &drops] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let script = |path: PathBuf, text: &str| {
+            std::fs::write(&path, text).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        script(
+            bin.join("claude"),
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done\n",
+        );
+        if let Some(body) = server {
+            script(
+                remote.join("tsunagiai-mcp"),
+                &format!("#!/bin/sh\n{body}\n"),
+            );
+        }
+        let file = drops.join("prompt-0123.txt");
+        if let Some(text) = prompt {
+            std::fs::write(&file, text).unwrap();
+        }
+        Place {
+            root,
+            home,
+            bin,
+            file,
+            written: prompt.is_some(),
+        }
+    }
+
+    /// The words that `claude` was started with when the shell `shell` was typed `command`. The terminal's input stays open while it runs, as a terminal's does, and the file of the prompt must be gone afterwards.
+    fn words_of(shell: &str, command: &str, place: &Place) -> Vec<String> {
+        use std::process::Stdio;
+        let mut child = Command::new(shell)
+            .args(["-c", command])
+            .env("HOME", &place.home)
+            .env("PATH", format!("{}:/usr/bin:/bin", place.bin.display()))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let terminal = child.stdin.take();
+        let out = child.wait_with_output().unwrap();
+        drop(terminal);
+        assert!(out.status.success(), "{shell}: {out:?}");
+        assert!(
+            !place.written || !place.file.exists(),
+            "{shell}: the file stays"
+        );
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .split_terminator('\0')
+            .map(|word| word.replace(&place.home.display().to_string(), "HOME"))
+            .collect()
+    }
+
+    /// The shells that are installed: a login shell can be any of them, and fish alone reads a backslash inside single quotes as an escape.
+    fn shells() -> Vec<&'static str> {
+        [
+            "/bin/sh",
+            "/bin/bash",
+            "/bin/zsh",
+            "/bin/dash",
+            "/opt/homebrew/bin/fish",
+            "/usr/local/bin/fish",
+            "/usr/bin/fish",
+        ]
+        .into_iter()
+        .filter(|shell| Path::new(shell).exists())
+        .collect()
+    }
+
+    /// A prompt with what a shell reads: quotes, `$`, a backslash before a quote and a backslash pair (which fish reads inside single quotes), a newline, a glob and a command substitution.
+    const NASTY: &str =
+        "it's \"a\" $HOME `date` $(date) \\n * ~ ; rm -rf /\n\\' ; touch /tmp/pwned ; echo '\\\\\nsecond line";
+
+    #[test]
+    fn the_shell_starts_claude_with_the_plugin_folder_and_the_prompt_read_from_its_file() {
+        for shell in shells() {
+            let place = place("here", None, Some(NASTY));
+            let file = place.file.display().to_string();
+            let command = claude_command(PluginAt::Here(Path::new(DIR)), Some(&file)).unwrap();
+            assert_eq!(
+                words_of(shell, &command, &place),
+                ["--plugin-dir", DIR, "--", NASTY],
+                "{shell}"
+            );
+            // A prompt that looks like an option is the word after `--`, and the text keeps its line breaks.
+            std::fs::write(&place.file, "--model x\nline 2\n").unwrap();
+            assert_eq!(
+                words_of(shell, &command, &place),
+                ["--plugin-dir", DIR, "--", "--model x\nline 2"],
+                "{shell}"
+            );
+            // A file that is missing or empty gives claude no prompt.
+            assert_eq!(
+                words_of(shell, &command, &place),
+                ["--plugin-dir", DIR],
+                "{shell}"
+            );
+            std::fs::write(&place.file, "").unwrap();
+            assert_eq!(
+                words_of(shell, &command, &place),
+                ["--plugin-dir", DIR],
+                "{shell}"
+            );
+            // With no prompt there is no file, and the command is `claude` alone.
+            let plain = claude_command(PluginAt::Here(Path::new(DIR)), None).unwrap();
+            assert_eq!(
+                words_of(shell, &plain, &place),
+                ["--plugin-dir", DIR],
+                "{shell}"
+            );
+            assert!(!Path::new("/tmp/pwned").exists());
+            std::fs::remove_dir_all(&place.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_shell_of_a_saved_environment_starts_claude_with_the_folder_its_program_printed_and_the_prompt_read_from_its_file(
+    ) {
+        let prints = "[ \"$1\" = --preview-plugin ] || exit 2; echo \"$HOME/Library/Application Support/jp.mysis.tsunagiai/preview-plugin\"";
+        let dir = "HOME/Library/Application Support/jp.mysis.tsunagiai/preview-plugin";
+        for shell in shells() {
+            let place = place("server", Some(prints), Some(NASTY));
+            let file = place.file.display().to_string();
+            assert_eq!(
+                words_of(
+                    shell,
+                    &claude_command(PluginAt::OnServer, Some(&file)).unwrap(),
+                    &place
+                ),
+                ["--plugin-dir", dir, "--", NASTY],
+                "{shell}"
+            );
+            assert_eq!(
+                words_of(
+                    shell,
+                    &claude_command(PluginAt::OnServer, None).unwrap(),
+                    &place
+                ),
+                ["--plugin-dir", dir],
+                "{shell}"
+            );
+            std::fs::remove_dir_all(&place.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_saved_environment_whose_program_is_missing_or_cannot_write_the_plugin_starts_claude_without_it(
+    ) {
+        for shell in shells() {
+            // No program on that PC.
+            let missing = place("missing", None, Some(NASTY));
+            let file = missing.file.display().to_string();
+            assert_eq!(
+                words_of(
+                    shell,
+                    &claude_command(PluginAt::OnServer, Some(&file)).unwrap(),
+                    &missing
+                ),
+                ["--", NASTY],
+                "{shell}"
+            );
+            assert!(words_of(
+                shell,
+                &claude_command(PluginAt::OnServer, None).unwrap(),
+                &missing
+            )
+            .is_empty());
+            std::fs::remove_dir_all(&missing.root).unwrap();
+            // A program that fails.
+            let fails = place("fails", Some("echo broken >&2; exit 1"), Some("go"));
+            let file = fails.file.display().to_string();
+            assert_eq!(
+                words_of(
+                    shell,
+                    &claude_command(PluginAt::OnServer, Some(&file)).unwrap(),
+                    &fails
+                ),
+                ["--", "go"],
+                "{shell}"
+            );
+            std::fs::remove_dir_all(&fails.root).unwrap();
+            // A program of an older version, which serves in place of printing and reads the terminal's input for ever: it gets none.
+            let serves = place("serves", Some("cat > /dev/null"), None);
+            assert!(
+                words_of(
+                    shell,
+                    &claude_command(PluginAt::OnServer, None).unwrap(),
+                    &serves
+                )
+                .is_empty(),
+                "{shell}"
+            );
+            std::fs::remove_dir_all(&serves.root).unwrap();
+        }
     }
 
     #[test]
@@ -4908,43 +5293,28 @@ mod tests {
                 "--environment=Studio"
             ]
         );
+        // A launch is a terminal that runs the command (A-6): no `agent launch`, so that `claude` can be given the plugin.
         assert_eq!(
-            launch_args("/work/a", Some("--surface chat"), None),
+            launch_args("/work/a", "claude --plugin-dir '/c/p'", None),
             [
-                "agent",
-                "launch",
-                "--agent",
-                "claude",
+                "terminal",
+                "create",
                 "--worktree",
                 "path:/work/a",
-                "--surface",
-                "terminal",
-                "--prompt=--surface chat",
+                "--command",
+                "claude --plugin-dir '/c/p'",
                 "--json"
             ]
         );
         assert_eq!(
-            launch_args("/work/a", Some("go"), Some("Studio"))
+            launch_args("/work/a", "claude", Some("Studio"))
                 .last()
                 .unwrap(),
             "--environment=Studio"
         );
-        // A session started from the Orca screen has no prompt (the CLI takes none then).
-        assert_eq!(
-            launch_args("/work/a", None, Some("Studio")),
-            [
-                "agent",
-                "launch",
-                "--agent",
-                "claude",
-                "--worktree",
-                "path:/work/a",
-                "--surface",
-                "terminal",
-                "--json",
-                "--environment=Studio"
-            ]
-        );
+        // A command that looks like an option stays the one argument that follows its flag.
+        let args = launch_args("/work/a", "--json", None);
+        assert_eq!(args[4..6], ["--command", "--json"]);
     }
 
     #[test]

@@ -375,6 +375,27 @@ fn prepare(name: &str, data: &str) -> Result<(String, bool, Vec<u8>), String> {
     Ok((placed_name(name, ext)?, ext.is_some(), bytes))
 }
 
+/// A-9: puts the first prompt of a launch in `.orca/drops/` of the worktree at `path` (one of the target's list, whose host is `host_id`) as a file `prompt-{random}.txt`, on this machine or on the PC of the saved environment `environment`, and gives the absolute path of the file. The launch's command reads the file and deletes it, so the text (which can come from a mail, a message or a Todo) is never typed into a shell. An SSH host takes no file (`check_host`).
+pub(crate) async fn drop_prompt(
+    path: &str,
+    host_id: &str,
+    environment: Option<&str>,
+    text: &str,
+) -> Result<String, String> {
+    check_host(host_id)?;
+    let random = random_hex()?;
+    let mut connection = Connection::open(environment.map(str::to_owned)).await?;
+    upload(
+        &mut connection,
+        path,
+        host_id,
+        &format!("prompt-{random}.txt"),
+        text.as_bytes(),
+        &random,
+    )
+    .await
+}
+
 /// A-10: puts the file `data` (base64) in `.orca/drops/` of the worktree at `path` (one of the target's list read just now) under `name` and answers what the screen types: the absolute path of the file, as `typed_text` writes it for an image and for any other file.
 /// `name` is a value from outside: it must be one file name (`check_name`), and the folder is fixed, so nothing is written outside it. Whether the file is an image is read from its bytes.
 #[tauri::command]

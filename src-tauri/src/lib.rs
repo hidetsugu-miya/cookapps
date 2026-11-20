@@ -43,6 +43,7 @@ pub mod orca_panes;
 pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod preview_plugin;
 pub mod screen_bridge;
 pub mod side_menu;
 pub mod skills;
@@ -425,6 +426,7 @@ pub fn run() {
             orca_files::orca_file_download,
             orca_preview::orca_file_open_in_browser,
             orca_preview::orca_file_preview_url,
+            orca_preview::orca_preview_check,
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,
             orca_files::orca_remote_branches,

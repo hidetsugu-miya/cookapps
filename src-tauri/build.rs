@@ -4,8 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The folders of `formation/` that are embedded in the binary (A-41), and the constant of each in the generated `formation_assets.rs`.
-const EMBEDDED: [(&str, &str); 2] = [("leader/feature-dev", "LEADER_SKILL"), ("plugin", "PLUGIN")];
+/// The folders of `src-tauri/` that are embedded in the binary (A-41 and A-45), and the constant of each in the generated `formation_assets.rs`.
+const EMBEDDED: [(&str, &str); 3] = [
+    ("formation/leader/feature-dev", "LEADER_SKILL"),
+    ("formation/plugin", "PLUGIN"),
+    ("preview-plugin", "PREVIEW_PLUGIN"),
+];
 
 fn main() {
     tauri_build::build();
@@ -15,7 +19,7 @@ fn main() {
 /// Writes `$OUT_DIR/formation_assets.rs`: for each folder of `EMBEDDED`, a list of `(relative path, contents)` of every file under it, in order of path.
 /// The folders and the files are `rerun-if-changed`, so a file that is added, changed or removed is in the next build.
 fn embed_formation_files() {
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default()).join("formation");
+    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
     let mut code = String::new();
     for (folder, constant) in EMBEDDED {
         let base = root.join(folder);

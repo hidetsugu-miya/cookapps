@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tokio::{
@@ -20,9 +21,11 @@ use tokio::{
 };
 
 use crate::{
+    formation_server::PushRequest,
     orca_attach::Rpc,
     orca_files::{cached_host_of, check_relative, fetch_into, host_of, stat_size, Sink, NOT_FOUND},
     orca_link::Connection,
+    screen_bridge::Fields,
 };
 
 /// The address the server listens on: this machine alone.
@@ -525,6 +528,101 @@ pub async fn orca_file_preview_url(
     preview_url(&path, &relative, environment.as_deref()).await
 }
 
+// ---- the request of Claude Code (A-45) ----
+
+/// The method of the push that a PC's `tsunagiai-mcp` gives the app to open the preview of an HTML file in a project's tab (#984), and the target of the screen bridge that does the same for the app of the PC the tool runs on. The tab is opened by the screen that takes them (#985).
+pub const OPEN_METHOD: &str = "preview.open";
+pub const OPEN_TARGET: &str = "preview-open";
+const NOT_HTML_PREVIEW: &str = "HTML のファイルだけをプレビューで開けます";
+const NOT_WORKTREE: &str = "worktree のパスは、制御文字のない / から始まる絶対パスにしてください";
+
+/// What a request to open a preview names: the worktree and the file in it. The environment is not in it: the app knows it from the connection a push came through (a saved environment), and a request of this PC's own is this machine's.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpenParams {
+    pub path: String,
+    pub relative: String,
+}
+
+/// The checks of the tool before anything is sent: the worktree is an absolute path with no control character (the app checks it against the list of the target, as for A-31), and the file is the one A-31 opens (`check_html`: inside the worktree, `.html`, no part that starts with `.`).
+fn check_open(path: &str, relative: &str) -> Result<(), String> {
+    if !path.starts_with('/')
+        || path.len() > crate::orca_files::MAX_PATH
+        || path.chars().any(char::is_control)
+    {
+        return Err(NOT_WORKTREE.into());
+    }
+    check_html(relative).map_err(|e| {
+        if e == NOT_HTML {
+            NOT_HTML_PREVIEW.into()
+        } else {
+            e
+        }
+    })
+}
+
+/// The push for a saved environment's PC: `preview.open` with the worktree and the file.
+pub fn open_push(path: &str, relative: &str) -> Result<PushRequest, String> {
+    check_open(path, relative)?;
+    Ok(PushRequest {
+        method: OPEN_METHOD.into(),
+        params: serde_json::to_value(OpenParams {
+            path: path.into(),
+            relative: relative.into(),
+        })
+        .map_err(|e| e.to_string())?,
+    })
+}
+
+/// The fields of the target `preview-open` for the app of this PC: the same two values.
+pub fn open_fields(path: &str, relative: &str) -> Result<Fields, String> {
+    check_open(path, relative)?;
+    Ok(Fields::from([
+        ("path".to_owned(), path.to_owned()),
+        ("relative".to_owned(), relative.to_owned()),
+    ]))
+}
+
+/// The field that carries the environment to the screen that takes the request. Only the app puts it there (a push's connection tells the environment); a client of the screen bridge may not write it, so that a request of this PC's own is this machine's.
+pub const OPEN_ENVIRONMENT: &str = "environment";
+const UNREADABLE_REQUEST: &str = "依頼を読めませんでした";
+
+/// What the app asks the screen when a push comes through the connection of the saved environment `environment` (#985): `None` when the push is not a request to open a preview, else the fields of the target `preview-open` (the same two values, checked again, and the environment), or the reason it is refused. The reason quotes nothing of the request: what the PC sent is data.
+pub fn open_fields_of_push(
+    request: &PushRequest,
+    environment: &str,
+) -> Option<Result<Fields, String>> {
+    if request.method != OPEN_METHOD {
+        return None;
+    }
+    Some(
+        serde_json::from_value::<OpenParams>(request.params.clone())
+            .map_err(|_| UNREADABLE_REQUEST.to_owned())
+            .and_then(|p| open_fields(&p.path, &p.relative))
+            .map(|mut fields| {
+                fields.insert(OPEN_ENVIRONMENT.to_owned(), environment.to_owned());
+                fields
+            }),
+    )
+}
+
+/// The check that the screen makes again when it takes a request to open a preview, which comes from outside the app (a Claude Code, through the push of a PC or the screen bridge): the file is the one A-31 opens, and the worktree is one of the target's list read just now (an SSH host is refused), as `preview_url` checks them. It starts no server and makes no address.
+#[tauri::command]
+pub async fn orca_preview_check(
+    path: String,
+    relative: String,
+    environment: Option<String>,
+) -> Result<(), String> {
+    check_open(&path, &relative)?;
+    host_of(&path, environment.as_deref()).await.map(|_| ())
+}
+
+/// The error of the tool when neither way worked: what the daemon of a saved environment's PC answered, and what the app of this PC answered. Both are fixed words of ours, never what a file or a request held.
+pub fn open_failed(pushed: &str, local: &str) -> String {
+    format!(
+        "プレビューを開けませんでした。保存した環境の PC のサーバー: {pushed}。この PC のつなぎAI: {local}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
@@ -793,6 +891,86 @@ mod tests {
         for bad in ["", "../a.html", "/a.html", "a//b.html", "a/./b.html"] {
             assert!(check_html(bad).is_err_and(|e| e != NOT_HTML), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_request_to_open_a_preview_holds_the_worktree_and_the_file_and_nothing_else() {
+        let wanted = json!({"path": "/w/app", "relative": "docs/a.html"});
+        let push = open_push("/w/app", "docs/a.html").unwrap();
+        assert_eq!(push.method, "preview.open");
+        assert_eq!(push.params, wanted);
+        assert_eq!(
+            serde_json::from_value::<OpenParams>(push.params).unwrap(),
+            OpenParams {
+                path: "/w/app".into(),
+                relative: "docs/a.html".into()
+            }
+        );
+        // The same two values go to the app of this PC through the screen bridge.
+        assert_eq!(
+            open_fields("/w/app", "docs/a.html").unwrap(),
+            std::collections::BTreeMap::from([
+                ("path".to_owned(), "/w/app".to_owned()),
+                ("relative".to_owned(), "docs/a.html".to_owned())
+            ])
+        );
+        assert_eq!(OPEN_TARGET, "preview-open");
+    }
+
+    #[test]
+    fn a_request_to_open_a_preview_is_checked_as_a_file_is_opened_in_the_browser() {
+        let good = "/Users/a/ws/app";
+        for relative in ["a.html", "docs/Report.HTML", "a b/あ.Html"] {
+            assert!(open_push(good, relative).is_ok(), "{relative}");
+            assert!(open_fields(good, relative).is_ok(), "{relative}");
+        }
+        // Not an HTML file, or a part that starts with `.`: the message says preview, not browser.
+        for relative in ["a.htm", "a.md", ".a.html", ".git/a.html", "a/.b/c.html"] {
+            assert_eq!(
+                open_push(good, relative).unwrap_err(),
+                NOT_HTML_PREVIEW,
+                "{relative}"
+            );
+            assert_eq!(
+                open_fields(good, relative).unwrap_err(),
+                NOT_HTML_PREVIEW,
+                "{relative}"
+            );
+        }
+        // A path out of the worktree is refused as A-18 refuses it.
+        for relative in ["", "../a.html", "/a.html", "a//b.html", "a/./b.html"] {
+            assert!(
+                open_push(good, relative).is_err_and(|e| e != NOT_HTML_PREVIEW),
+                "{relative:?}"
+            );
+        }
+        // The worktree is an absolute path with no control character, of 4096 bytes at most.
+        for path in ["", "w/app", "relative", "/w/a\nb", "/w/a\0b"] {
+            assert_eq!(
+                open_push(path, "a.html").unwrap_err(),
+                NOT_WORKTREE,
+                "{path:?}"
+            );
+            assert_eq!(
+                open_fields(path, "a.html").unwrap_err(),
+                NOT_WORKTREE,
+                "{path:?}"
+            );
+        }
+        let long = format!("/{}", "a".repeat(crate::orca_files::MAX_PATH - 1));
+        assert!(open_push(&long, "a.html").is_ok());
+        assert_eq!(
+            open_push(&format!("{long}a"), "a.html").unwrap_err(),
+            NOT_WORKTREE
+        );
+    }
+
+    #[test]
+    fn a_failed_open_says_what_each_way_answered() {
+        let text = open_failed("サーバーが動いていません", "つなぎAIが動いていません");
+        assert!(text.contains("サーバーが動いていません"), "{text}");
+        assert!(text.contains("つなぎAIが動いていません"), "{text}");
+        assert!(text.contains("プレビューを開けませんでした"), "{text}");
     }
 
     #[test]
