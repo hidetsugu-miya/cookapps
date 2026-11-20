@@ -1374,7 +1374,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 /* The name before the branch shrinks first, so that the branch button keeps a part of its text to press when the pane is narrow. */
 #orca-files-title > span { flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 /* A-25: the branch of the heading is a button that opens the list of branches under it. It cuts its own text with an ellipsis and is never replaced by one. */
-.orca-branch-btn { flex: 0 1 auto; min-width: 6ch; max-width: 100%; box-sizing: border-box; margin: 0 -4px; padding: 1px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-weight: inherit; cursor: pointer; }
+.orca-branch-btn { flex: 0 1 auto; min-width: 6ch; max-width: 100%; box-sizing: border-box; margin: 0 0 0 -4px; padding: 1px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-weight: inherit; cursor: pointer; }
 .orca-branch-btn:hover, .orca-branch-btn[aria-expanded="true"], .orca-branch-btn:focus-visible { background: var(--soft); outline: none; }
 .orca-dest-pop .orca-branch-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
 .orca-dest-pop .orca-branch-row span:first-child { min-width: 0; overflow-wrap: anywhere; font-size: inherit; color: inherit; }
