@@ -57,7 +57,7 @@ pub(crate) fn ensure_plugin(dir: &Path, plugin: &[(&str, &str)]) -> Result<(), S
     Ok(())
 }
 
-/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path (`ensure_plugin`: a child's launch does not write 55 files again).
+/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path (`ensure_plugin`: a child's launch does not write every file again).
 pub fn write_plugin(config: &Path) -> Result<PathBuf, String> {
     let dir = plugin_dir(config);
     ensure_plugin(&dir, PLUGIN)?;

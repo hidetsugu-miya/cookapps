@@ -308,7 +308,7 @@ fn mermaid_labels(src: &str) -> String {
         .join("\n")
 }
 
-/// The strings of the input JSON of a page that are text written for the user, in key order. What quotes or locates something is left out: the locations, the card identifiers, a `literal` block, the quoted lines of a `diff`, a fixed fact, and an option copied from the findings tool of a `review-decision` card.
+/// The strings of the input JSON of a page that are text written for the user, in key order. What quotes or locates something is left out: the locations, the card identifiers, a `literal` block, the quoted lines of a `diff`, the `sample` of an option, a fixed fact, and an option copied from the findings tool of a `review-decision` card.
 pub fn page_texts(value: &Value) -> Vec<String> {
     let mut texts = Vec::new();
     collect(value, false, &mut texts);
@@ -332,6 +332,8 @@ fn collect(value: &Value, review_decision: bool, out: &mut Vec<String>) {
                     || IDENTIFIER_KEYS.contains(&k)
                     || (kind == "literal" && k == "text")
                     || (kind == "diff" && QUOTE_KEYS.contains(&k))
+                    // The text of an option's sample is what the screen shows, copied as it is.
+                    || k == "sample"
                     // A fact's label.
                     || (k == "label" && has("value"))
                     || (k == "value" && FIXED_FACTS.contains(&label))
@@ -662,6 +664,22 @@ mod tests {
         sorted.sort();
         want.sort();
         assert_eq!(sorted, want);
+    }
+
+    #[test]
+    fn a_sample_text_is_what_the_screen_shows_and_is_not_checked() {
+        let page = json!({
+            "q": [{
+                "kind": "question", "title": "論点",
+                "options": [{
+                    "key": "A", "label": "選択肢",
+                    "sample": {"text": "画面に出る文字", "font_size": 14, "font_weight": 700, "color": "#2f5bd3"}
+                }]
+            }]
+        });
+        let got = page_texts(&page).join(" ");
+        assert!(!got.contains("画面に出る文字"), "a sample is quoted: {got}");
+        assert!(got.contains("選択肢"), "the label stays checked: {got}");
     }
 
     #[test]

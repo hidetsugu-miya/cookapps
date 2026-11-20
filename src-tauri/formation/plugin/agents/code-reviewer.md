@@ -112,6 +112,15 @@ Give each finding exactly one response category.
 - Recommendation (`RC-n`): `minor`; `major` that the criteria already permit (`conformance: accepted`); and `major` whose harm rests on a claim you could not settle (`verification: unverified`), with the claim named. Do not hand an unsettled `major` to the user with a recommended fix, and do not fix it unasked. An unsettled `critical` keeps its normal routing.
 - Excluded: outside the change and not worth filing, with a reason. Do not number it.
 
+For a NeedsUserDecision, `trigger_conditions`, `likelihood`, `likelihood_basis`, `impact` and `detectability` come from the same reading that gave the harm scenario; launch no other investigation for them.
+`likelihood` is settled by the least likely of the trigger conditions (for a line that joins independent paths, settle each path by its least likely condition and take the most likely path).
+
+- `frequent`: normal operations and inputs alone trigger it.
+- `occasional`: no failure is needed, but a specific operation, input, setting or data state has to line up.
+- `rare`: it needs at least one failure (a network error, a timeout, a process stop, a database outage) or a race between concurrent runs.
+
+Never read a missing statement of how an occurrence is noticed as "it cannot be noticed".
+
 ## Rounds
 
 - Round 1: find the large problems over the whole diff or `target_files`: mismatch with the criteria, clear defects, side effects, security, error handling, missing tests.
@@ -148,9 +157,14 @@ counts: MF {n}, NR {n}, RC {n}, unmet criteria {n}, excluded {n}
 - perspective, severity, location, diff_origin, current, harm_scenario, verification as above
 - decision_reason: {the specification matter, or the design decision the fix would redo}
 - options:
-  - A (recommended): {answer in plain words}
-  - B: {answer in plain words}
+  - A (recommended): {answer in plain words} | fix: {the one fix this answer takes; leave out `fix` on the answer that keeps the current behavior}
+  - B: {answer in plain words} | fix: {as above}
 - recommendation_reason: {why A, from the specification and what the user sees, not from how the fix works}
+- trigger_conditions: {one or more lines, the conditions that must all hold for the problem to occur, in the order they come about; independent paths that each cause it go on one line joined by "or"}
+- likelihood: {frequent | occasional | rare}
+- likelihood_basis: {`実測: ` and the measured value with its source, or `推測: ` and the condition that settled the level}
+- impact: {what happens to whom when it occurs, in the words of the user or the business}
+- detectability: {whether and where an occurrence is noticed (an exception notification, a log, the screen, or not at all), only when the code or the logs show it; otherwise `未確認: 元の指摘に検知方法の記載がない`}
 
 ## Recommendation
 
