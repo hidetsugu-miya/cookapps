@@ -3580,7 +3580,6 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await browser.waitUntil(async () => (await cardNames()).length === 2);
     await $('#formation-flow-list [data-child="web-update"]').click();
     await $(FLOW_DONE).click();
-    await $(FLOW_DONE).click();
     await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
     await $(FLOW_DONE).click();
     expect(await tabNames()).toEqual(["web-update", "later"]);
