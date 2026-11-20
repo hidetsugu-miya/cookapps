@@ -146,6 +146,9 @@ export const redrawOrca = () => draw();
 
 export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
+// The name a session row of the list shows (A-8): the git branch of the worktree the item is in, and the worktree's name (the right side of `worktreeLabel`) when it has no branch.
+const rowBranch = (item: { path: string; environment?: string | null; branch: string }) => mix.worktrees.find((w) => w.path === item.path && placeOf(w) === placeOf(item))?.gitBranch || item.branch;
+
 // How long ago `ms` was: running and waiting agents show the time since their state began ("2 分"), a done one how long ago it ended ("18 分前").
 export function elapsed(ms: number, now: number, done: boolean) {
   if (!ms) return "";
@@ -232,6 +235,8 @@ interface Tab {
   path: string;
   // The worktree's name, "{repo} ・ {branch}", which the heading of the file pane shows.
   where: string;
+  // The name a session row of the list shows (A-8): the git branch of its worktree, else the worktree's name (`rowBranch`). Only a Claude session and a plain terminal have one; the rest show `where`.
+  branch?: string;
   // Where the tab is: null for this machine, else the name of the saved environment. A terminal's comes from its row, a file's and a diff's from the project they were opened in.
   environment: string | null;
   // A file outside the worktree that a definition named (A-34): the tab has a lock, and the file is read only. `gem` marks one that is a Ruby file.
@@ -274,13 +279,13 @@ function childTabsOf(key: string): Tab[] {
   for (const r of mix.rows) {
     const child = r.projectKey === key && r.paneKey !== null ? childOfSession(r) : null;
     if (child === null || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r), child });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r), child });
   }
   for (const t of mix.terminals) {
     const child = t.projectKey === key ? childOfSession(t) : null;
     if (child === null) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t), child });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t), child });
   }
   return tabs;
 }
@@ -293,12 +298,12 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
@@ -448,18 +453,18 @@ function sessionNode(t: Tab, key: string) {
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
-  // The name of the worktree the session works in (the `where` of its tab); the title of the tab is the line of A-6.
-  const title = tag("span", "orca-session-title", t.where);
-  row.append(statusIcon(t.status, t.label), title);
-  // A launched child's session (A-8): the mark of a formation and its name, which only a child has.
+  // A launched child's session (A-8): the mark of its formation at the left of the name, which only a child has. The formation's name is its description and no text of the row.
   if (t.child !== undefined) {
     row.dataset.formation = t.child.formation;
     const mark = tag("span", "orca-session-formation");
     mark.title = `フォーメーション ${t.child.formation}`;
+    mark.setAttribute("role", "img");
+    mark.setAttribute("aria-label", `フォーメーション ${t.child.formation}`);
     mark.innerHTML = FORMATION_SVG;
-    mark.append(tag("span", "orca-session-formation-name", t.child.formation));
-    row.append(mark);
-  }
+    row.append(statusIcon(t.status, t.label), mark);
+  } else row.append(statusIcon(t.status, t.label));
+  // The branch of the worktree the session works in, else the worktree's name (the `branch` of its tab); the title of the tab is the line of A-6.
+  row.append(tag("span", "orca-session-title", t.branch ?? t.where));
   // The AI (the subagents) and the commands. A session runs at most one command (`shell`), so its number is 1.
   const counts = tag("span", "orca-session-counts");
   if (t.subagents > 0) counts.append(countNode("orca-session-subagents", ROBOT_SVG, t.subagents, `サブエージェント ${t.subagents} 件が作業中`));
@@ -631,7 +636,7 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, listedTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.subagents, t.agents, t.shell, t.environment, t.child?.formation ?? null, worksOpen.has(t.id)])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, t.child?.formation ?? null, worksOpen.has(t.id)])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.

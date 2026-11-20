@@ -3364,10 +3364,10 @@ describe("orchestration mode: the children's sessions in the projects", () => {
   const trees = () => [orcaWorktree("api", "main"), orcaWorktree("api", "child-a", { path: CHILD_PATH }), orcaWorktree("api", "other", { path: OTHER_PATH })];
   const overview = (rows = [ownRow(), childRow()], worktrees = trees()) => orcaOverview(rows, worktrees, { terminals: [childTerminal()] });
   const withChild = () => formationList([formationEntry("formation", { children: [listedChild("child-a", "working", { repo: "api", branch: "child-a", path: CHILD_PATH })], counts: { planned: 0, waiting: 0, working: 1, done: 0 } })]);
-  // The row of a session is the name of its worktree (A-8).
+  // The row of a session is the branch of its worktree (A-8).
   const sessionNames = () => textsOf("#orca-feed .orca-session .orca-session-title");
-  // The names of the formations on the rows of the sessions: only a child's session has one.
-  const formationMarks = () => textsOf("#orca-feed .orca-session .orca-session-formation-name");
+  // The marks of the formations on the rows of the sessions, by their `aria-label`: only a child's session has one, and the row draws no text of the formation's name.
+  const formationMarks = () => browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-session .orca-session-formation")].map((e) => e.getAttribute("aria-label")));
   // The project row has no count of its sessions (#1033): the counts are on the session rows.
   const numberCount = () => count(`${PROJECT} .orca-n`);
   const arrow = () => $('#orca-feed [data-key="arrow:proj_api"]');
@@ -3388,16 +3388,31 @@ describe("orchestration mode: the children's sessions in the projects", () => {
     await expect($('.menu[role="menu"]')).toBeDisplayed();
   }
 
-  it("draws the sessions of a child's worktree under its project after the owner's, with the mark and the name of the formation, and draws no count of sessions on the project row", async () => {
+  it("draws the sessions of a child's worktree under its project after the owner's, with the mark of the formation left of the branch, and draws no count of sessions on the project row", async () => {
     await openScreen({}, async () => (await formationMarks()).length === 2);
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ child-a", "api ・ child-a"]);
-    expect(await formationMarks()).toEqual(["formation", "formation"]);
+    expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);
+    expect(await formationMarks()).toEqual(["フォーメーション formation", "フォーメーション formation"]);
     expect(await numberCount()).toBe(0);
-    // The owner's session has no mark, and a child's has the mark of a formation (the same drawing as the heading of the list) and the name, after its worktree's name.
+    // The owner's session has no mark, and a child's has the mark of a formation (the same drawing as the heading of the list).
     expect(await count('#orca-feed [data-session="claude:tab_own:leaf_1"] .orca-session-formation')).toBe(0);
     expect(await count('#orca-feed [data-session="claude:tab_child:leaf_1"] .orca-session-formation svg')).toBe(1);
     expect(await browser.execute(() => document.querySelector('#orca-feed [data-session="claude:tab_child:leaf_1"] .orca-session-formation svg')!.innerHTML === document.querySelector("#orca-formations .orca-list-head svg")!.innerHTML)).toBe(true);
     expect(await count('#orca-feed [data-session="orca:term_child_sh"] .orca-session-formation')).toBe(1);
+  });
+
+  it("puts the mark between the status icon and the branch, and gives the name of the formation to the mark's aria-label and tooltip and to no text of the row", async () => {
+    await openScreen({}, async () => (await formationMarks()).length === 2);
+    const row = await browser.execute(() => {
+      const row = document.querySelector<HTMLElement>('#orca-feed [data-session="claude:tab_child:leaf_1"]')!;
+      const r = (s: string) => row.querySelector(s)!.getBoundingClientRect();
+      const mark = row.querySelector<HTMLElement>(".orca-session-formation")!;
+      return { icon: r(".orca-ic").right, mark: [r(".orca-session-formation").left, r(".orca-session-formation").right], title: r(".orca-session-title").left, role: mark.getAttribute("role"), label: mark.getAttribute("aria-label"), tooltip: mark.title, text: row.textContent, formation: row.dataset.formation };
+    });
+    expect(row.mark[0]).toBeGreaterThanOrEqual(row.icon);
+    expect(row.mark[1]).toBeLessThanOrEqual(row.title);
+    expect(row).toMatchObject({ role: "img", label: "フォーメーション formation", tooltip: "フォーメーション formation", formation: "formation" });
+    expect(row.text).toContain("child-a");
+    expect(row.text).not.toContain("formation");
   });
 
   it("selects the formation and shows the child's tab when the session of a child in the project is pressed, and leaves the project's work pane as it was", async () => {
@@ -3421,12 +3436,12 @@ describe("orchestration mode: the children's sessions in the projects", () => {
 
   it("draws every session of the project when no child of the record is in its worktrees", async () => {
     await openScreen({ formation_list: formationList([formationEntry("formation")]) }, async () => (await sessionNames()).length === 3);
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ child-a", "api ・ child-a"]);
+    expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);
     expect(await formationMarks()).toEqual([]);
     // A child whose worktree is not the path of any row leaves every session as it is, and so does the same path on another PC.
     await mock("formation_list", formationList([formationEntry("formation", { children: [listedChild("c", "working", { path: "/work/elsewhere" }), listedChild("d", "working", { path: CHILD_PATH, environment: "dev-server" })] })]));
     await browser.waitUntil(async () => (await count(".formation-row-count")) === 1);
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ child-a", "api ・ child-a"]);
+    expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);
     expect(await formationMarks()).toEqual([]);
   });
 
@@ -3434,7 +3449,7 @@ describe("orchestration mode: the children's sessions in the projects", () => {
     await openScreen({}, async () => (await formationMarks()).length === 2);
     await mock("formation_list", formationList([formationEntry("formation")]));
     await browser.waitUntil(async () => (await formationMarks()).length === 0, { timeout: 15_000 });
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ child-a", "api ・ child-a"]);
+    expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);
   });
 
   it("keeps the folder of a child that works in a folder that was there, and the owner's session in it, and marks only the child's own sessions", async () => {
@@ -3444,7 +3459,7 @@ describe("orchestration mode: the children's sessions in the projects", () => {
     const inOwnFolder = orcaOverview([ownRow(), childRow({ path: MAIN_PATH, branch: "main" })], [orcaWorktree("api", "main"), orcaWorktree("api", "other", { path: OTHER_PATH })], { terminals: [orcaTerminal("api", "zsh", { path: MAIN_PATH, handle: "term_own_sh" }), orcaTerminal("api", "codex", { path: MAIN_PATH, handle: "term_codex" })] });
     await openScreen({ orca_overview: inOwnFolder, formation_list: kept });
     await browser.waitUntil(async () => (await formationMarks()).length === 2);
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ main", "api ・ main", "api ・ main"]);
+    expect(await sessionNames()).toEqual(["main", "main", "main", "main"]);
     expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].map((e) => e.dataset.session))).toEqual(["claude:tab_own:leaf_1", "orca:term_own_sh", "claude:tab_child:leaf_1", "orca:term_codex"]);
     expect(await count('#orca-feed [data-session="claude:tab_own:leaf_1"] .orca-session-formation, #orca-feed [data-session="orca:term_own_sh"] .orca-session-formation')).toBe(0);
     // The work pane has the owner's tabs only, and the folder stays among the worktrees of the plus.
@@ -3461,10 +3476,10 @@ describe("orchestration mode: the children's sessions in the projects", () => {
     // Its own session is done and the child's works: the project is opened for the child's work, as for any session's.
     await openScreen({ orca_overview: overview([ownRow({ group: "done" }), childRow()]) }, async () => (await formationMarks()).length === 2);
     await expect(arrow()).toHaveAttribute("aria-expanded", "true");
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ child-a", "api ・ child-a"]);
+    expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);
     await openScreen({ orca_overview: overview([childRow()], trees()) }, async () => (await formationMarks()).length === 2);
     expect(await count('#orca-feed [data-key^="arrow:"]')).toBe(1);
-    expect(await sessionNames()).toEqual(["api ・ child-a", "api ・ child-a"]);
+    expect(await sessionNames()).toEqual(["child-a", "child-a"]);
     expect(await numberCount()).toBe(0);
   });
 
@@ -3472,7 +3487,7 @@ describe("orchestration mode: the children's sessions in the projects", () => {
     await openScreen({ orca_overview: overview([ownRow(), childRow({ group: "waiting" })]) }, async () => (await formationMarks()).length === 2);
     await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（確認待ち 1 件、作業中 1 件）");
     await expect($("#nav-orca .nav-count")).toHaveText("1");
-    expect(await sessionNames()).toEqual(["api ・ main", "api ・ child-a", "api ・ child-a"]);
+    expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);
   });
 
   it("offers no child's worktree in the dialog of the plus, and offers the others of the project", async () => {
