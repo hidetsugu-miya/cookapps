@@ -3495,7 +3495,7 @@ describe("orchestration mode: the children's sessions in the projects", () => {
   });
 });
 
-// A-37 (#1113): the cards of the done children in the flow pane are left out until the chip 「完了 N」 of its heading is pressed; the tabs stay.
+// A-37 (#1113, #1117): the cards and the tabs of the done children are left out until the chip 「完了 N」 of the flow pane's heading is pressed.
 describe("orchestration mode: the done children of the flow pane", () => {
   const chip = () => browser.execute((s) => ((e) => (e.hidden ? null : [e.textContent, e.getAttribute("aria-pressed")]))(document.querySelector<HTMLButtonElement>(s)!), FLOW_DONE);
   const tabNames = () => textsOf("#formation-tabs-mates .formation-tab-name");
@@ -3518,13 +3518,13 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await browser.waitUntil(async () => (await chip()) === null);
   });
 
-  it("leaves the done cards out at first, and keeps their tabs", async () => {
+  it("leaves the done cards and the done tabs out at first", async () => {
     await openFlow(done(), {}, true);
     await browser.waitUntil(async () => (await cardNames()).length === 2);
     expect(await cardNames()).toEqual(["web-update", "later"]);
     expect(await chip()).toEqual(["完了 2", "false"]);
-    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later"]);
-    expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(2);
+    expect(await tabNames()).toEqual(["web-update", "later"]);
+    expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(0);
   });
 
   it("shows the done cards in the order given with a press on the chip, in the colors of a pressed chip, and leaves them out with another press", async () => {
@@ -3537,38 +3537,86 @@ describe("orchestration mode: the done children of the flow pane", () => {
     expect(await styleOf(FLOW_DONE, "backgroundColor")).toBe(await resolved("--soft"));
     expect(await styleOf(FLOW_DONE, "backgroundColor")).not.toBe(unpressed);
     expect(await count("#formation-flow-list .formation-card-close")).toBe(2);
-    // The shown cards stay through a read.
+    // The tabs are in the strip with the cards, in the same order.
+    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later"]);
+    expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(2);
+    // The shown cards and tabs stay through a read.
     await mock("formation_children", [...done(), formationChild("new-one", "working")]);
     await browser.waitUntil(async () => (await cardNames()).length === 5);
+    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later", "new-one"]);
     await $(FLOW_DONE).click();
     expect(await cardNames()).toEqual(["web-update", "later", "new-one"]);
+    expect(await tabNames()).toEqual(["web-update", "later", "new-one"]);
     expect(await chip()).toEqual(["完了 2", "false"]);
     expect(await count("#formation-flow-list .formation-card-close")).toBe(0);
+    expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(0);
   });
 
-  it("keeps the selected done child's tab selected when its card is left out, and shows its card selected when the chip is pressed", async () => {
+  it("moves the selection to the leader's tab when the chip leaves out the selected done child's tab, and keeps it there when the chip is pressed again", async () => {
     await openFlow(done(), {}, true);
     await browser.waitUntil(async () => (await cardNames()).length === 2);
+    await $(FLOW_DONE).click();
     await $('#formation-tabs-mates [data-child="old-one"]').click();
     await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
-    await $('#formation-tabs-mates [data-child="old-one"]').waitForDisplayed();
-    expect(await cardNames()).toEqual(["web-update", "later"]);
-    await browser.waitUntil(async () => (await readHandles()).includes("term_old-one"));
-    // A read leaves the selection where it was, whether or not the card is drawn.
-    await mock("formation_children", [...done(), formationChild("new-one", "working")]);
-    await browser.waitUntil(async () => (await cardNames()).length === 3);
-    await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
-    expect(await count("#formation-flow-list [aria-pressed=\"true\"]")).toBe(0);
-    await $(FLOW_DONE).click();
     await expect($('#formation-flow-list [data-child="old-one"]')).toHaveAttribute("aria-pressed", "true");
-    await $(FLOW_DONE).click();
+    await browser.waitUntil(async () => (await readHandles()).includes("term_old-one"));
+    // A read leaves the selection where it was while the tab is drawn.
+    await mock("formation_children", [...done(), formationChild("new-one", "working")]);
+    await browser.waitUntil(async () => (await cardNames()).length === 5);
     await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
-    expect(await cardNames()).not.toContain("old-one");
+    await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["web-update", "later", "new-one"]);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    expect(await pressed("#formation-flow-root")).toBe("true");
+    await expect($("#formation-teammate-term")).not.toBeDisplayed();
+    await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later", "new-one"]);
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "false");
   });
 
-  it("closes a done child from its tab while its card is left out", async () => {
+  it("keeps the selection when the chip leaves out the tab of another done child", async () => {
     await openFlow(done(), {}, true);
     await browser.waitUntil(async () => (await cardNames()).length === 2);
+    await $('#formation-flow-list [data-child="web-update"]').click();
+    await $(FLOW_DONE).click();
+    await $(FLOW_DONE).click();
+    await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
+    await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["web-update", "later"]);
+    await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("leaves out the tab of a decision page with its child's tab, and shows it with it", async () => {
+    const page = { title: "要件の未決事項", atMs: MARK_AT };
+    await openFlow([formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working")], { formation_page_read: decisionPage() }, true);
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    expect(await tabNames()).toEqual(["web-update"]);
+    await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["req-login", "判断: 要件の未決事項", "web-update"]);
+    await $(PAGE_TAB).click();
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-page")).toBeDisplayed();
+    await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["web-update"]);
+    expect(await count(PAGE_TAB)).toBe(0);
+    await expect($("#formation-page")).not.toBeDisplayed();
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("presses the chip when a done child's row of the list is pressed, so that its tab is drawn", async () => {
+    const entry = formationEntry("formation", { children: [listedChild("old-one", "done")], counts: { planned: 0, waiting: 0, working: 0, done: 1 } });
+    await openList({ formation_list: formationList([entry]), formation_children: [formationChild("old-one", "done", { minutes: 40 }), formationChild("web-update", "working")] }, null);
+    await $(DONE_CHIP("formation")).click();
+    await $(CHILD("old-one")).click();
+    await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
+    expect(await chip()).toEqual(["完了 1", "true"]);
+  });
+
+  it("closes a done child from its tab while its card is drawn", async () => {
+    await openFlow(done(), {}, true);
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    await $(FLOW_DONE).click();
     const close = await mock("formation_close_child", { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null });
     await mock("formation_children", done().filter((c) => c.name !== "old-one"));
     await $('#formation-tabs-mates [data-close="old-one"]').click();
