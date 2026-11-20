@@ -97,6 +97,8 @@ export const timers = (periods: { orcaClock?: number; orcaMirror?: number; datab
 export async function boot(fixtures: Record<string, unknown> = {}) {
   // `refresh` returns once the reload is issued, so the old document may still say "complete": mark it and wait for a page without the mark.
   await browser.execute((data) => {
+    // The answers a decision page keeps in the browser (A-41) are not the next spec's.
+    for (const key of Object.keys(localStorage)) if (key.startsWith("fp-answers:")) localStorage.removeItem(key);
     sessionStorage.setItem("e2e-fixtures", JSON.stringify(data));
     (window as unknown as { __e2e_old_page__: boolean }).__e2e_old_page__ = true;
   }, fixtures);

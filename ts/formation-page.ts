@@ -1,4 +1,5 @@
 // The decision page of a child (A-41): what `formation_page_read` gives, drawn in the middle pane under the tab 「判断: {title}」 (formation-flow.ts). The page is the child's text, so everything goes in as `textContent` (formation-page-blocks.ts); nothing is read as HTML.
+// The page has a top bar with its sections and a bottom bar with the count of answers and the button that sends (formation-page-bars.ts), and a drawer on the right (formation-page-drawer.ts) that shows what a card, a change section or an entry folds and the file that a code name points at. What was entered is kept in the browser as it is entered and put back (formation-page-store.ts).
 // A card that asks has its choices as radios and a box for free text; an approval and a code review end with 「あなたの判定」, the owner's choice between approving and asking for a revision, and 「リーダーに送る」 hands what was chosen to `send` (the reply is made and sent in Rust, #923). The answers of the earlier reply (`previous_reply`) are read in Rust (`restored`), and the page starts from them. The screen keeps the verdict and a `fix` from contradicting each other and shows what an unanswered card will be sent as; what the answers mean is Rust's.
 import type { Card } from "./bindings/Card";
 import type { CardKind } from "./bindings/CardKind";
@@ -6,6 +7,7 @@ import type { CardOption } from "./bindings/CardOption";
 import type { Condition } from "./bindings/Condition";
 import type { DecisionPage } from "./bindings/DecisionPage";
 import type { DesignItem } from "./bindings/DesignItem";
+import type { FactContent } from "./bindings/FactContent";
 import type { Occurrence } from "./bindings/Occurrence";
 import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
@@ -13,7 +15,10 @@ import type { Sample } from "./bindings/Sample";
 import type { ScreenVerification } from "./bindings/ScreenVerification";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
-import { drawBlocks, drawEvidence, drawFactContent, drawImage, drawTable, fold, termed, useImages, useTerms } from "./formation-page-blocks.js";
+import { drawBars } from "./formation-page-bars.js";
+import { drawBlocks, drawEvidence, drawFactContent, drawImage, drawTable, evidenceButton, fold, termed, useImages, useTerms } from "./formation-page-blocks.js";
+import { createDrawer, foldButton, foldOpener, linkRefs, ownedBy, registerFold, useDrawer } from "./formation-page-drawer.js";
+import { entered, openStore, type Saved } from "./formation-page-store.js";
 import { invoke } from "./ipc.js";
 
 interface Choice {
@@ -54,6 +59,8 @@ const FIXED: Record<CardKind, Choice[]> = {
 };
 // The kinds whose free text sits in the row of `その他`; the others have a field of their own under the choices.
 const LETTERED = new Set<CardKind>(["question", "nr", "review-decision"]);
+// The kinds that cannot be sent without an answer (Rust refuses a page that has one of them unanswered).
+const REQUIRED = new Set<CardKind>(["question", "must-fix"]);
 const NOTE_LABEL: Partial<Record<CardKind, string>> = { "structural-proposal": "理由（却下・保留のとき）" };
 
 // The row that a page with `hold` adds to its `question` cards.
@@ -65,15 +72,22 @@ let cards = 0;
 // The verdict of a page and the writing of a revision, as chosen; `send` fails with the message when the reply could not be sent.
 type Send = (answers: PageAnswer[], verdict: PageVerdict | null, revision: string) => Promise<void>;
 
+// The key that the ids of the sections of the page being drawn start with, so that the pages held in the pane never share an id.
+let pageKey = "";
+
 export function drawPage(page: DecisionPage, formation: string, child: string, atMs: number, send: Send): HTMLElement {
   useImages((root, path) => invoke("formation_page_image", { name: formation, child, root, path }));
   useTerms(page.terms);
+  const drawer = createDrawer();
+  useDrawer(drawer);
+  pageKey = `fp-${child.replace(/[^\w-]/g, "_")}`;
+  const shell = tag("div", "fp-shell");
+  shell.dataset.child = child;
+  shell.dataset.at = String(atMs);
+  shell.dataset.kind = page.pageKind;
   const root = tag("article", "fp");
-  root.dataset.child = child;
-  root.dataset.at = String(atMs);
-  root.dataset.kind = page.pageKind;
   const top = tag("header", "fp-top");
-  top.append(tag("h2", "fp-title", page.title), tag("span", "fp-from", `${child} から`), tag("p", "fp-context", page.contextLabel));
+  top.append(tag("h2", "fp-title", page.title), tag("span", "fp-from", `${child} から`));
   root.append(top);
   if (page.pageKind === "code-review") {
     const pr = pullRequest(page);
@@ -89,15 +103,45 @@ export function drawPage(page: DecisionPage, formation: string, child: string, a
   if (reference !== null) root.append(reference);
   const verdict = page.pageKind === "open-questions" ? null : verdictBox(root, page);
   if (verdict !== null) root.append(verdict.node);
-  root.append(sender(root, send, verdict));
-  const restored = restore(root, page.restored);
-  if (restored !== null) top.after(restored);
-  return root;
+  const snapshot = (): Saved => ({ answers: answersOf(root), ...(verdict?.read() ?? { verdict: null, revision: "" }) });
+  const store = openStore(formation, child, page, shell, () => entered(snapshot()));
+  // What the owner entered before wins over the answers of the earlier reply.
+  const saved = store.read();
+  let notice: HTMLElement | null = null;
+  if (saved !== null) {
+    put(root, saved.answers);
+    verdict?.write(saved.verdict, saved.revision);
+    notice = noticeLine(root, "前回この画面で入力した回答を復元しました。");
+  } else if (page.restored.length > 0) {
+    put(root, page.restored);
+    notice = noticeLine(root, "前の返信文から回答を復元しました。");
+  }
+  if (notice !== null) top.after(notice);
+  const keep = () => store.keep(snapshot);
+  root.addEventListener("change", keep);
+  root.addEventListener("input", keep);
+  const scroll = tag("div", "fp-scroll");
+  scroll.append(root);
+  const toReply = () => {
+    const open = verdict !== null && verdict.read().verdict === null;
+    if (open) verdict.node.scrollIntoView({ block: "start" });
+    else shell.querySelector<HTMLElement>(".fp-send-btn")?.focus();
+  };
+  const bars = drawBars(scroll, root, page.contextLabel, sender(root, send, verdict, () => store.forget()), toReply);
+  shell.append(bars.top, scroll, bars.bottom, drawer.el);
+  linkRefs(shell, drawer);
+  return shell;
 }
 
-// The page starts from the answers of the earlier reply (the ones Rust read back from `previous_reply`): each choice, free text and mark of 仮置き is put in its card, and the line that says so stays until the owner changes something.
-function restore(root: HTMLElement, answers: PageAnswer[]): HTMLElement | null {
-  if (answers.length === 0) return null;
+// A line under the title that says where the answers were put back from; it stays until the owner changes something.
+function noticeLine(root: HTMLElement, text: string): HTMLElement {
+  const line = tag("p", "fp-muted fp-restored", text);
+  root.addEventListener("change", () => line.remove(), { once: true });
+  return line;
+}
+
+// Puts each answer in its card: the choice, the free text and the mark of 仮置き. Each card tells the page (the verdict, the counts) with a `change`.
+function put(root: HTMLElement, answers: PageAnswer[]) {
   for (const card of root.querySelectorAll<HTMLElement>(".fp-card")) {
     const answer = answers.find((a) => a.card === card.dataset.card);
     const box = card.querySelector<HTMLElement>(".fp-answer");
@@ -109,9 +153,6 @@ function restore(root: HTMLElement, answers: PageAnswer[]): HTMLElement | null {
     if (mark !== null) mark.checked = answer.provisional;
     box.dispatchEvent(new Event("change", { bubbles: true }));
   }
-  const line = tag("p", "fp-muted fp-restored", "前の返信文から回答を復元しました。");
-  root.addEventListener("change", () => line.remove(), { once: true });
-  return line;
 }
 
 // The answers of the page as chosen: for each card that asks, its number, the key of the choice (null when none), its free text and whether the owner put the answer in for now. What the answers mean is Rust's.
@@ -131,6 +172,8 @@ function answersOf(root: HTMLElement): PageAnswer[] {
 interface Verdict {
   node: HTMLElement;
   read: () => { verdict: PageVerdict | null; revision: string };
+  // Puts a choice and its writing back (what was kept in the browser).
+  write: (verdict: PageVerdict | null, revision: string) => void;
 }
 
 const VERDICT_LABELS: Record<DecisionPage["subject"], [string, string]> = {
@@ -154,7 +197,7 @@ function verdictBox(root: HTMLElement, page: DecisionPage): Verdict {
   const cardOf = new Map<string, Card>(
     [...page.needsUserDecision, ...page.residualMustFix, ...page.structuralProposals, ...(page.adr === null ? [] : [page.adr]), ...page.unmetCriteria].map((c) => [c.number, c]),
   );
-  const node = section("あなたの判定", "fp-verdict");
+  const node = section("あなたの判定", "fp-verdict", "verdict");
   const unit = approvalUnit(page);
   if (unit !== null) node.append(tag("p", "fp-p fp-unit", unit));
   const box = tag("fieldset", "fp-answer");
@@ -206,12 +249,18 @@ function verdictBox(root: HTMLElement, page: DecisionPage): Verdict {
       const verdict = approve.checked ? "approve" : revise.checked ? "revise" : null;
       return { verdict, revision: verdict === "revise" ? revision.value : "" };
     },
+    write: (verdict, text) => {
+      approve.checked = verdict === "approve";
+      revise.checked = verdict === "revise";
+      revision.value = text;
+      root.dispatchEvent(new Event("change"));
+    },
   };
 }
 
-// 「リーダーに送る」 and the reason a send failed. The button waits while the send is on its way, so that a second press sends nothing, and while a page that asks for a verdict has none chosen; after a send that went through the page is closed by its owner, and after one that failed the answers stay and the button can be pressed again.
-function sender(root: HTMLElement, send: Send, verdict: Verdict | null): HTMLElement {
-  const row = tag("footer", "fp-send");
+// 「リーダーに送る」 and the reason a send failed, in the bottom bar. The button waits while the send is on its way, so that a second press sends nothing, and while a page that asks for a verdict has none chosen; after a send that went through the page is closed by its owner (and what was kept in the browser is forgotten, `sent`), and after one that failed the answers stay and the button can be pressed again.
+function sender(root: HTMLElement, send: Send, verdict: Verdict | null, sent: () => void): HTMLElement {
+  const row = tag("div", "fp-send");
   const error = tag("p", "fp-error pending fail");
   error.setAttribute("role", "alert");
   error.hidden = true;
@@ -232,6 +281,7 @@ function sender(root: HTMLElement, send: Send, verdict: Verdict | null): HTMLEle
     try {
       const chosen = verdict?.read() ?? { verdict: null, revision: "" };
       await send(answersOf(root), chosen.verdict, chosen.revision);
+      sent();
     } catch (e) {
       error.textContent = String(e);
       error.hidden = false;
@@ -281,26 +331,29 @@ function isHttps(url: string): boolean {
   }
 }
 
-function section(heading: string, className = ""): HTMLElement {
+// A section of the page, with an id that its link in the top bar and `#{id}` take (`key` is stable, so the address of a section can be kept).
+function section(heading: string, className = "", key = ""): HTMLElement {
   const node = tag("section", `fp-section ${className}`.trim());
+  if (key !== "") node.id = `${pageKey}-${key}`;
   node.append(tag("h3", "fp-sec", heading));
   return node;
 }
 
 // 「何が変わるか」: the lead, and the change sections (folded on an approval, open on a code review).
 function changes(page: DecisionPage): HTMLElement {
-  const node = section("何が変わるか");
+  const node = section("何が変わるか", "", "changes");
   if (page.what !== null) node.append(termed("p", "fp-p", page.what));
   for (const change of page.changes) {
     const body = fold(change.heading, "fp-change", page.pageKind === "code-review");
-    body.append(...drawBlocks(change.blocks, !body.open));
+    // What a block of the section folds is a tab of the section's own in the drawer.
+    ownedBy(change.heading, () => body.append(...drawBlocks(change.blocks, !body.open)));
     node.append(body);
   }
   return node;
 }
 
 function risks(items: { title: string; text: string | null }[], evidence: Parameters<typeof drawEvidence>[0]): HTMLElement {
-  const node = section("リスク・リリース上の注意", "fp-risks");
+  const node = section("リスク・リリース上の注意", "fp-risks", "risks");
   const list = tag("ol", "fp-risk-list");
   for (const risk of items) {
     const li = tag("li");
@@ -309,11 +362,7 @@ function risks(items: { title: string; text: string | null }[], evidence: Parame
     list.append(li);
   }
   node.append(list);
-  if (evidence.length > 0) {
-    const more = fold("根拠を見る", "fp-more");
-    more.append(drawEvidence(evidence));
-    node.append(more);
-  }
+  if (evidence.length > 0) node.append(ownedBy("リスク・リリース上の注意", () => evidenceButton(evidence)));
   return node;
 }
 
@@ -330,7 +379,7 @@ function approvalUnit(page: DecisionPage): string | null {
 
 // 「承認の対象」: the groups of what the approval covers. A group that holds the design items keeps its heading and says where its items are (設計項目, above).
 function scope(page: DecisionPage): HTMLElement {
-  const node = section("承認の対象");
+  const node = section("承認の対象", "", "scope");
   for (const group of page.approvalScope) {
     node.append(tag("h4", "fp-h", group.heading));
     if (group.design) node.append(tag("p", "fp-muted", "上の「設計項目」に並べています。"));
@@ -339,9 +388,10 @@ function scope(page: DecisionPage): HTMLElement {
       row.append(tag("code", "fp-ev-path", item.ref ?? item.path ?? ""), termed("p", "fp-p", item.description));
       for (const extra of item.extras) row.append(tag("code", "fp-extra", extra));
       if (item.text !== null) {
-        const more = fold("中身を見る", "fp-more");
-        more.append(tag("pre", "fp-pre", item.text));
-        row.append(more);
+        const text = item.text;
+        // A node of a deliverable is drawn as the deliverable draws it, a Markdown file formatted, any other file as text.
+        const content: FactContent = item.ref !== null ? { type: "node", root: item.root, ref: item.ref, text } : { type: item.path?.toLowerCase().endsWith(".md") ? "markdown" : "text", root: item.root, path: item.path ?? "", text };
+        row.append(ownedBy(item.ref ?? item.path ?? "", () => foldOpener("中身", "中身を見る", (panel) => panel.append(drawFactContent(content, true)))));
       }
       node.append(row);
     }
@@ -353,15 +403,14 @@ function scope(page: DecisionPage): HTMLElement {
 
 // 「設計項目 {n} 件」: one row for each design item, with its id, its title (and the release it writes) and 「中身を見る」.
 function designItems(items: DesignItem[]): HTMLElement {
-  const node = section(`設計項目 ${items.length} 件`, "fp-design-items");
+  const node = section(`設計項目 ${items.length} 件`, "fp-design-items", "design-items");
   for (const item of items) {
     const row = tag("div", "fp-scope-item fp-design-item");
     row.dataset.design = item.id;
     row.append(tag("code", "fp-ev-path", item.id), tag("p", "fp-p", item.release === null ? item.title : `${item.title}（リリース ${item.release}）`));
     if (item.text !== null) {
-      const more = fold("中身を見る", "fp-more");
-      more.append(drawFactContent({ type: "node", root: item.root, ref: item.ref, text: item.text }, true));
-      row.append(more);
+      const text = item.text;
+      row.append(ownedBy(`${item.id} ${item.title}`, () => foldOpener("中身", "中身を見る", (panel) => panel.append(drawFactContent({ type: "node", root: item.root, ref: item.ref, text }, true)))));
     }
     node.append(row);
   }
@@ -370,7 +419,7 @@ function designItems(items: DesignItem[]): HTMLElement {
 
 // 「実装順序 {n} 件」: the repositories of the design in the order they are implemented, numbered from 1.
 function implementationOrder(order: string[]): HTMLElement {
-  const node = section(`実装順序 ${order.length} 件`, "fp-order");
+  const node = section(`実装順序 ${order.length} 件`, "fp-order", "order");
   const list = tag("ol", "fp-list");
   for (const repo of order) list.append(tag("li", "", repo));
   node.append(list);
@@ -398,8 +447,8 @@ function groups(page: DecisionPage): HTMLElement[] {
           ];
   const drawn = list
     .filter(([, cardsOf]) => cardsOf.length > 0)
-    .map(([heading, cardsOf]) => {
-      const node = section(`${heading} ${cardsOf.length} 件`, "fp-group");
+    .map(([heading, cardsOf], i) => {
+      const node = section(`${heading} ${cardsOf.length} 件`, "fp-group", `group-${i + 1}`);
       node.append(...cardsOf.map((card) => drawCard(card, page.unmetCriteria.filter((u) => u.cards.includes(card.number)), page)));
       return node;
     });
@@ -414,11 +463,11 @@ function verifications(cardsOf: Card[]): HTMLElement {
   const notRun = cardsOf.filter((c) => resultOf(c) === "not-run");
   const passed = cardsOf.filter((c) => resultOf(c) === "pass");
   const open = cardsOf.filter((c) => resultOf(c) !== "pass");
-  const node = section("画面の AI 検証", "fp-group fp-verifications");
+  const node = section("画面の AI 検証", "fp-group fp-verifications", "verifications");
   node.append(tag("p", "fp-p fp-verify-counts", open.length === 0 ? "すべて合格しました。回答は要りません。" : `不合格 ${failed.length} 件・未実施 ${notRun.length} 件・合格 ${passed.length} 件`));
   node.append(...open.map(drawVerification));
   if (passed.length > 0) {
-    const passFold = fold(`合格 ${passed.length} 件の内容を見る`, "fp-more fp-verify-pass");
+    const passFold = fold(`合格 ${passed.length} 件の内容を見る`, "fp-verify-pass");
     passFold.append(...passed.map(drawVerification));
     node.append(passFold);
   }
@@ -456,9 +505,7 @@ function drawVerification(card: Card): HTMLElement {
   if (v.capturedImage !== null) images.append(imageColumn("撮影画像", drawImage(v.capturedImage, true)));
   else if (v.missingReason !== null) images.append(imageColumn("撮影画像", tag("p", "fp-muted fp-missing", `未取得: ${v.missingReason}`)));
   if (images.childElementCount > 0) parts.push(images);
-  const more = fold("詳しく見る", "fp-more");
-  more.append(...parts);
-  node.append(more);
+  node.append(ownedBy(`${card.number} ${card.title}`, () => foldOpener("詳細", "詳しく見る", (panel) => panel.append(...parts))));
   return node;
 }
 
@@ -480,6 +527,14 @@ function drawCard(card: Card, causes: Card[], page: DecisionPage): HTMLElement {
   node.dataset.card = card.number;
   node.dataset.kind = card.kind;
   const asks = LETTERED.has(card.kind);
+  // A card with an answer form counts in the bottom bar; a `question` and a `must-fix` card must be answered, the others may be.
+  if (FIXED[card.kind].length > 0) {
+    node.dataset.form = "true";
+    node.dataset.required = String(REQUIRED.has(card.kind));
+    node.dataset.lettered = String(asks);
+    // 「次の未回答へ」 gives the card the focus; the next key press reaches its first choice.
+    node.tabIndex = -1;
+  }
   const head = tag("header", "fp-card-head");
   head.append(tag("span", "fp-number", card.number));
   if (asks) head.append(tag("span", "fp-asks", "聞きたいこと"));
@@ -505,13 +560,27 @@ function drawCard(card: Card, causes: Card[], page: DecisionPage): HTMLElement {
   }
   if (asks) node.append(tag("h4", "fp-h", "あなたの回答"));
   if (FIXED[card.kind].length > 0) node.append(answer(card, page));
-  const more = detail(card, blocks, asks);
+  const more = ownedBy(`${card.number} ${card.title}`, () => detail(card, blocks, asks));
   if (more !== null) node.append(more);
   return node;
 }
 
-// 「詳しく見る」: for a card with an occurrence, that block; then the scene of a card that does not ask, or the background of one that asks; the facts with 「中身を見る」; the rest of the blocks; the table of the conditions against the options, and the evidence.
+// 「詳しく見る」: a button that shows the card's folds in the drawer, as its tabs. 「詳細」: for a card with an occurrence, that block; then the scene of a card that does not ask, or the background of one that asks; the facts with 「中身を見る」; the rest of the blocks. 「根拠」: the table of the conditions against the options, and the evidence. A card that has nothing for 「詳細」 opens 「根拠」 alone.
 function detail(card: Card, blocks: Card["blocks"], asks: boolean): HTMLElement | null {
+  const hasDetail = card.occurrence !== null || (asks ? card.background !== null : card.scene !== null) || card.facts.length > 0 || blocks.length > 0;
+  const hasEvidence = card.conditions.length > 0 || card.evidence.length > 0;
+  if (!hasDetail && !hasEvidence) return null;
+  const first = hasDetail ? registerFold("詳細", (panel) => panel.append(...detailParts(card, blocks, asks))) : null;
+  const second = hasEvidence
+    ? registerFold("根拠", (panel) => {
+        if (card.conditions.length > 0) panel.append(conditionTable(card.conditions, card.options));
+        if (card.evidence.length > 0) panel.append(drawEvidence(card.evidence));
+      })
+    : null;
+  return foldButton((first ?? second) as NonNullable<typeof first>, "詳しく見る");
+}
+
+function detailParts(card: Card, blocks: Card["blocks"], asks: boolean): HTMLElement[] {
   const parts: HTMLElement[] = [];
   if (card.occurrence !== null) parts.push(...drawOccurrence(card.occurrence));
   if (!asks && card.scene !== null) parts.push(tag("h4", "fp-h", "具体的な場面"), termed("p", "fp-p fp-scene", card.scene));
@@ -521,21 +590,15 @@ function detail(card: Card, blocks: Card["blocks"], asks: boolean): HTMLElement 
     for (const fact of card.facts) {
       const value = termed("dd", "", fact.value);
       if (fact.content !== null) {
-        const content = fold("中身を見る", "fp-more fp-fact");
-        content.append(drawFactContent(fact.content, true));
-        value.append(content);
+        const content = fact.content;
+        value.append(foldOpener(`中身を見る: ${fact.value}`, "中身を見る", (panel) => panel.append(drawFactContent(content, true))));
       }
       facts.append(tag("dt", "", fact.label), value);
     }
     parts.push(facts);
   }
   parts.push(...drawBlocks(blocks, true));
-  if (card.conditions.length > 0) parts.push(conditionTable(card.conditions, card.options));
-  if (card.evidence.length > 0) parts.push(drawEvidence(card.evidence));
-  if (parts.length === 0) return null;
-  const more = fold("詳しく見る", "fp-more");
-  more.append(...parts);
-  return more;
+  return parts;
 }
 
 // 「発生条件」, 「発生頻度」 as a meter of three cells, 「影響」 and 「検知」.
@@ -692,7 +755,7 @@ function freeText(name: string): HTMLTextAreaElement {
   return text;
 }
 
-// 「参考」: what the owner may want to look at after the cards. On an approval: the decisions that wait for the business side, what settled, the questions that were withdrawn, the matters noticed outside the request and how the quality loop went; on a code review: where the implementation departed from the contract, the notices and the matters noticed. A section with nothing is left out.
+// 「参考」: what the owner may want to look at after the cards, under one heading, each matter a row that opens in place (closed at first) with its heading as an `h3` in the row. On an approval: the decisions that wait for the business side, what settled, the questions that were withdrawn, the matters noticed outside the request and how the quality loop went; on a code review: where the implementation departed from the contract, the notices and the matters noticed. A row with nothing is left out, and the page with no row has no 「参考」.
 function referenceOf(page: DecisionPage): HTMLElement | null {
   const parts: (HTMLElement | null)[] = [];
   if (page.pageKind === "approval") {
@@ -702,14 +765,16 @@ function referenceOf(page: DecisionPage): HTMLElement | null {
   }
   const drawn = parts.filter((part): part is HTMLElement => part !== null);
   if (drawn.length === 0) return null;
-  const node = fold("参考", "fp-reference");
+  const node = section("参考", "fp-reference", "reference");
   node.append(...drawn);
   return node;
 }
 
-function reference(heading: string, className: string): HTMLElement {
-  const node = tag("div", `fp-ref ${className}`);
-  node.append(tag("h4", "fp-h", heading));
+// A row of 「参考」: a fold that opens in place, whose summary holds the heading. `key` is the part of its id after the page's (`#{id}` opens it).
+function reference(heading: string, className: string, key: string): HTMLDetailsElement {
+  const node = fold("", `fp-ref ${className}`);
+  node.id = `${pageKey}-ref-${key}`;
+  node.querySelector("summary")?.append(tag("h3", "fp-h", heading));
   return node;
 }
 
@@ -717,7 +782,7 @@ function reference(heading: string, className: string): HTMLElement {
 function awaiting(page: DecisionPage): HTMLElement | null {
   const items = page.subject === "requirement" ? page.settledDecisions.filter((item) => item.provisional) : [];
   if (items.length === 0) return null;
-  const node = reference("ビジネス側の確認待ち", "fp-awaiting");
+  const node = reference("ビジネス側の確認待ち", "fp-awaiting", "awaiting");
   for (const item of items) node.append(settledRow(item, false));
   return node;
 }
@@ -727,14 +792,17 @@ function settledRow(item: SettledDecision, mark: boolean): HTMLElement {
   if (mark) row.dataset.provisional = "true";
   row.append(tag("code", "fp-ev-path", item.id), termed("p", "fp-p", item.decision), termed("p", "fp-muted", `理由: ${item.reason}`));
   if (mark) row.append(tag("p", "fp-muted", "仮置き（ビジネス側の確認待ち）"));
-  if (item.evidence.length > 0) row.append(drawEvidence(item.evidence));
+  if (item.evidence.length > 0) {
+    const evidence = item.evidence;
+    row.append(ownedBy(item.id, () => evidenceButton(evidence)));
+  }
   return row;
 }
 
 // 「決まったこと」: a decision that waits for the business side carries the line that says so (on a requirement only).
 function settled(page: DecisionPage): HTMLElement | null {
   if (page.settledDecisions.length === 0) return null;
-  const node = reference("決まったこと", "fp-settled-list");
+  const node = reference("決まったこと", "fp-settled-list", "settled");
   for (const item of page.settledDecisions) node.append(settledRow(item, item.provisional && page.subject === "requirement"));
   return node;
 }
@@ -742,7 +810,7 @@ function settled(page: DecisionPage): HTMLElement | null {
 // 「取り下げた質問」: the questions that the final deliverable already settles. They ask no answer.
 function withdrawn(items: DecisionPage["withdrawnNeedsUserDecision"]): HTMLElement | null {
   if (items.length === 0) return null;
-  const node = reference("取り下げた質問", "fp-withdrawn");
+  const node = reference("取り下げた質問", "fp-withdrawn", "withdrawn");
   for (const item of items) {
     const row = tag("div", "fp-settled");
     row.append(tag("code", "fp-ev-path", item.number), tag("p", "fp-p", item.title), termed("p", "fp-muted", `取り下げた理由: ${item.withdrawalReason}`));
@@ -754,15 +822,14 @@ function withdrawn(items: DecisionPage["withdrawnNeedsUserDecision"]): HTMLEleme
 // 「目標外の事柄」: what was noticed outside the request and not reflected. It has no answer form, and only what the owner names is fixed.
 function noticed(items: DecisionPage["noticed"]): HTMLElement | null {
   if (items.length === 0) return null;
-  const node = reference("目標外の事柄", "fp-noticed");
+  const node = reference("目標外の事柄", "fp-noticed", "noticed");
   node.append(tag("p", "fp-muted", "名指しで依頼したものだけ直します。"));
   for (const item of items) {
     const row = tag("div", "fp-settled");
     row.append(tag("h4", "fp-h", item.title), termed("p", "fp-p", item.text));
     if (item.evidence.length > 0) {
-      const more = fold("根拠を見る", "fp-more");
-      more.append(drawEvidence(item.evidence));
-      row.append(more);
+      const evidence = item.evidence;
+      row.append(ownedBy(item.title, () => evidenceButton(evidence)));
     }
     node.append(row);
   }
@@ -772,15 +839,15 @@ function noticed(items: DecisionPage["noticed"]): HTMLElement | null {
 // 「実装方針からの変更」: where the code departs from the contract of the unit.
 function deviations(page: DecisionPage): HTMLElement | null {
   if (page.policyDeviations.length === 0) return null;
-  const node = reference("実装方針からの変更", "fp-deviations");
-  node.append(...drawBlocks(page.policyDeviations, true));
+  const node = reference("実装方針からの変更", "fp-deviations", "deviations");
+  node.append(...ownedBy("実装方針からの変更", () => drawBlocks(page.policyDeviations, true)));
   return node;
 }
 
 // 「お知らせ」: the facts about the review, one line each.
 function notices(lines: string[]): HTMLElement | null {
   if (lines.length === 0) return null;
-  const node = reference("お知らせ", "fp-notices");
+  const node = reference("お知らせ", "fp-notices", "notices");
   for (const line of lines) node.append(termed("p", "fp-p", line));
   return node;
 }
@@ -788,7 +855,7 @@ function notices(lines: string[]): HTMLElement | null {
 function qualityLoop(page: DecisionPage): HTMLElement | null {
   const loop = page.qualityLoop;
   if (loop === null) return null;
-  const node = reference("品質チェックの結果", "fp-quality");
+  const node = reference("品質チェックの結果", "fp-quality", "quality");
   node.append(tag("p", "fp-p", `実施回数: ${loop.rounds} 回`));
   if (loop.fixCycles !== null) node.append(tag("p", "fp-p", `MustFix 修正: ${loop.fixCycles} 回`));
   node.append(tag("p", "fp-p", `解消した必ず直す指摘: ${loop.mustFixResolved} 件`));
