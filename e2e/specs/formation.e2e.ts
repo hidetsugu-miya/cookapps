@@ -3781,4 +3781,86 @@ describe("orchestration mode: the compact flow pane", () => {
     await expect($("#formation-flow-leader")).toBeDisplayed();
     expect(await visible("#formation-flow-arrow")).toBe(false);
   });
+
+  // #1087: the children that the leader told something and that have not answered. The look is checked by the computed colors, not by the text of the rules.
+  describe("a child that was told something", () => {
+    const told = (...names: string[]) => mock("formation_instructed", names);
+    const dotOf = (name: string) => `${ORB(name)} .formation-orb-dot`;
+    const kids = () => [formationChild("web-update", "working"), formationChild("batch-update", "working"), formationChild("review-codex", "working", { agent: "codex" }), formationChild("api-update", "done")];
+
+    it("fills the circle of the child in the color of its agent, Claude green and Codex blue, with white text, and leaves the others as they were", async () => {
+      await asCompact(kids(), { formation_instructed: ["batch-update", "review-codex", "api-update"] }, true);
+      await browser.waitUntil(async () => (await count('#formation-flow-orbs [data-instructed="true"]')) === 2);
+      await expect($(ORB("batch-update"))).toHaveAttribute("data-instructed", "true");
+      await expect($(ORB("review-codex"))).toHaveAttribute("data-instructed", "true");
+      expect(await ground(dotOf("batch-update"))).toBe(await resolvedGround("--accent"));
+      expect(await styleOf(dotOf("batch-update"), "color")).toBe(await resolved("--on-accent"));
+      expect(await ground(dotOf("review-codex"))).toBe("rgb(37, 84, 180)");
+      expect(await styleOf(dotOf("review-codex"), "color")).toBe(await resolved("--on-accent"));
+      // The others keep their ground; a done child is not colored although it is in the answer (its orb is shown after the chip).
+      expect(await ground(dotOf("web-update"))).not.toBe(await resolvedGround("--accent"));
+      await $(FLOW_DONE).click();
+      await expect($(ORB("api-update"))).not.toHaveAttribute("data-instructed", "true");
+      // It beats; the one that is not told something does not.
+      expect(await styleOf(dotOf("batch-update"), "animationName")).toBe("formation-orb-beat");
+      expect(await styleOf(dotOf("web-update"), "animationName")).not.toBe("formation-orb-beat");
+    });
+
+    it("puts the told children right under the arrow, newest first, and the others after them in the order of the cards", async () => {
+      await asCompact(kids(), {}, true);
+      expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+      await told("review-codex", "batch-update");
+      await browser.waitUntil(async () => (await orbNames())[0] === "review-codex");
+      expect(await orbNames()).toEqual(["review-codex", "batch-update", "web-update"]);
+      const [arrow, first] = [await rectOf("#formation-flow-arrow"), await rectOf("#formation-flow-orbs .formation-orb")];
+      expect(arrow.bottom).toBeLessThanOrEqual(first.top);
+      // The answer of the child takes it off, and the order is the cards' again.
+      await told();
+      await browser.waitUntil(async () => (await count('#formation-flow-orbs [data-instructed="true"]')) === 0);
+      expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+    });
+
+    it("slides the orbs that moved, and does not when the system asks for less motion", async () => {
+      await asCompact(kids(), {}, true);
+      // Every call of `animate` is counted from here.
+      await browser.execute(() => {
+        const w = window as unknown as { __slid__: number };
+        w.__slid__ = 0;
+        const animate = Element.prototype.animate;
+        Element.prototype.animate = function (this: Element, ...args: Parameters<Element["animate"]>) {
+          w.__slid__++;
+          return animate.apply(this, args);
+        };
+      });
+      await told("review-codex");
+      await browser.waitUntil(async () => (await orbNames())[0] === "review-codex");
+      const slid = await browser.execute(() => (window as unknown as { __slid__: number }).__slid__);
+      // The told one moved up by two places and the two above it down by one.
+      const reduced = await browser.execute(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      expect(slid).toBe(reduced ? 0 : 3);
+    });
+
+    it("reads it only in the compact view, with the formation's name", async () => {
+      await openFlow(kids(), { formation_instructed: ["batch-update"] });
+      await waitForCalls("formation_children", 2);
+      expect(await callsOf("formation_instructed")).toEqual([]);
+      await expect($(SIZE)).toHaveAttribute("aria-pressed", "false");
+      await $(SIZE).click();
+      const calls = await waitForCalls("formation_instructed", 1);
+      expect(calls[0]).toEqual({ name: "formation" });
+      await expect($(ORB("batch-update"))).toHaveAttribute("data-instructed", "true");
+      // Back in the standard view nothing is called any more.
+      await $(SIZE).click();
+      const after = (await callsOf("formation_instructed")).length;
+      await waitForCalls("formation_children", (await callsOf("formation_children")).length + 1);
+      expect((await callsOf("formation_instructed")).length).toBe(after);
+    });
+
+    it("keeps the children when the read of the told ones fails, and says why", async () => {
+      await asCompact(kids(), {}, true);
+      await mock("formation_instructed", rejects("記録を読めません"));
+      await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("").includes("記録を読めません"));
+      expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+    });
+  });
 });

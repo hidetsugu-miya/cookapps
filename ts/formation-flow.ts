@@ -2,7 +2,7 @@
 // The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117).
 // A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
-// The pane has two views, 「標準」 (the cards above) and 「コンパクト」 (78px wide: the leader as one orb, one arrow under it, and each child as one orb with its name under it; the card's content comes in a tip while the pointer or the focus is on an orb), switched by the button `#formation-flow-size` of the heading. The one chosen is kept in the page's `localStorage`, so it stays when the app starts again.
+// The pane has two views, 「標準」 (the cards above) and 「コンパクト」 (78px wide: the leader as one orb, one arrow under it, and each child as one orb with its name under it; the card's content comes in a tip while the pointer or the focus is on an orb), switched by the button `#formation-flow-size` of the heading. The one chosen is kept in the page's `localStorage`, so it stays when the app starts again. The compact view also reads `formation_instructed` with each read of the children (#1087): the children that the leader told something and that have not answered are colored and go up under the leader's orb, sliding there.
 // 「自動で追う」 is off when a formation is opened, so the middle pane stays on the leader, where the owner types; pressed on, it moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
@@ -21,6 +21,8 @@ import { elapsed, shownMs, streamsEnvironment } from "./orca.js";
 import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
 const READ_MS = 3000;
+// How long an orb takes to slide to its new place in the compact view.
+const GLIDE_MS = 450;
 // Where the view of the pane is kept: "1" is the compact one, anything else the standard one.
 const COMPACT_KEY = "formation-flow-compact";
 // The name of the owner of the terminals: what `showTerminals` and `hideTerminals` are told.
@@ -31,6 +33,8 @@ const LOCAL = "local";
 // The last read; a read that failed keeps it and says why in `failure`.
 let children: FormationChild[] = [];
 let failure: string | null = null;
+// The children that the leader told something and that have not answered (the last read of `formation_instructed`, newest first, #1087). Read only while the compact view is shown; the standard view has none.
+let instructed: string[] = [];
 // What a close told that is no failure: the branch that Orca kept for the commits no remote has. It stays until the next close or another formation, which a read of the children does not clear.
 let notice: string | null = null;
 // The children that have a terminal (the last read), the selected tab (the child's name; null is the leader's) and whether 「自動で追う」 is on (off at first and each time a formation is opened, in memory only).
@@ -86,9 +90,20 @@ async function read() {
     const name = currentFormation();
     // No formation is selected: there is no child to read.
     const got = name === null ? [] : await invoke("formation_children", { name });
+    // The compact view alone shows who was told something; a read of it that fails leaves the children read and says why.
+    let told: string[] = [];
+    let toldFailure: string | null = null;
+    if (compact && name !== null) {
+      try {
+        told = await invoke("formation_instructed", { name });
+      } catch (e) {
+        toldFailure = String(e);
+      }
+    }
     if (mine === epoch) {
       children = got;
-      failure = null;
+      instructed = told;
+      failure = toldFailure;
       picked = takeWanted();
     }
   } catch (e) {
@@ -142,6 +157,7 @@ function watch(next: "flow" | "list", ms: number) {
 export function switchFormation() {
   epoch++;
   children = [];
+  instructed = [];
   failure = null;
   notice = null;
   terms = [];
@@ -455,8 +471,14 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   return li;
 }
 
-// The order of the orbs of the compact view; the one place that decides it.
-const compactOrder = (list: FormationChild[]): FormationChild[] => list;
+// The children that are told something and have not answered (and are not done): the orbs that are colored and that go up.
+const isInstructed = (c: FormationChild) => c.state !== "done" && instructed.includes(c.name);
+
+// The order of the orbs of the compact view; the one place that decides it: the children that were told something first, the newest instruction first (the order of `instructed`), and under them the others in the order of the cards.
+const compactOrder = (list: FormationChild[]): FormationChild[] => {
+  const told = instructed.flatMap((name) => list.filter((c) => c.name === name && isInstructed(c)));
+  return [...told, ...list.filter((c) => !told.includes(c))];
+};
 
 // The orb of a child in the compact view: a circle with the first letter of its name, framed in the color of its state (a Codex child's has the blue ground and the tag 「cx」), and its name under it. It selects the child as its card does, and the card's content is its tip.
 function orb(c: FormationChild): HTMLLIElement {
@@ -467,6 +489,7 @@ function orb(c: FormationChild): HTMLLIElement {
   node.dataset.state = page === null ? c.state : "waiting";
   node.dataset.orb = c.name;
   if (page !== null) node.dataset.page = "true";
+  if (isInstructed(c)) node.dataset.instructed = "true";
   const codex = c.agent === "codex";
   if (codex) node.dataset.agent = c.agent;
   node.setAttribute("aria-label", codex ? `${c.name} (${c.agent})` : c.name);
@@ -640,7 +663,7 @@ function draw() {
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
   drawDoneChip();
-  const key = JSON.stringify([compact, selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null])]);
+  const key = JSON.stringify([compact, selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null]), instructed]);
   if (key === treeKey) return;
   treeKey = key;
   // The cards are drawn again in place: the scroll and the focus stay where they were.
@@ -651,6 +674,7 @@ function draw() {
   const box = compact ? orbs : list;
   const focused = focusSelector(body.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null);
   const shown = children.filter(isShown);
+  const before = compact ? orbTops() : new Map<string, number>();
   hideTip();
   if (compact) {
     list.replaceChildren();
@@ -661,6 +685,7 @@ function draw() {
   }
   $("formation-flow-arrow").toggleAttribute("hidden", shown.length === 0);
   body.scrollTop = top;
+  if (compact) glide(before);
   if (focused) box.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
   // A selection that moved (the follow moves it too) is brought into the view of the cards and the tabs; the focus stays where it was.
   const view = pageChild === null ? selected : `page:${pageChild}`;
@@ -668,6 +693,25 @@ function draw() {
     scrolledTo = view;
     box.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
     $("formation-tabs").querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }
+}
+
+// Where each orb of the compact view is now (the top of its `li`, by the child's name), to slide the orbs from there when they are drawn again in another order.
+function orbTops(): Map<string, number> {
+  const tops = new Map<string, number>();
+  for (const orb of $("formation-flow-orbs").querySelectorAll<HTMLElement>("[data-orb]")) tops.set(orb.dataset.orb!, orb.parentElement!.getBoundingClientRect().top);
+  return tops;
+}
+
+// The orbs that moved slide from where they were to where they are (FLIP); an orb that is new, or that did not move, does not. The slide is left out while the system asks for less motion.
+function glide(before: Map<string, number>) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  for (const orb of $("formation-flow-orbs").querySelectorAll<HTMLElement>("[data-orb]")) {
+    const from = before.get(orb.dataset.orb!);
+    if (from === undefined) continue;
+    const li = orb.parentElement!;
+    const moved = from - li.getBoundingClientRect().top;
+    if (moved !== 0) li.animate([{ transform: `translateY(${moved}px)` }, { transform: "translateY(0)" }], { duration: GLIDE_MS, easing: "ease-out" });
   }
 }
 
@@ -701,7 +745,10 @@ export function initFormationFlow() {
   $("formation-flow-size").onclick = () => {
     compact = !compact;
     saveCompact();
+    // The compact view reads who was told something, and the standard view forgets it.
+    if (!compact) instructed = [];
     draw();
+    if (compact && watching === "flow") void read();
   };
   $("formation-flow-done").onclick = () => {
     const formation = currentFormation() ?? "";

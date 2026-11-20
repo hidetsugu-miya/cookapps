@@ -143,6 +143,8 @@ const answers = {
   claude_code_close: null,
   // A-37: no children yet.
   formation_children: [],
+  // A-37 (#1087): no child is waiting for an answer to an instruction.
+  formation_instructed: [],
   formation_delete: { deleted: true, kept: [], preserved: [] },
   formation_close_child: { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null },
   // A-37: one formation, `formation`, with no project and no child (no row is selected until one is pressed).

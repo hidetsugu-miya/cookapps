@@ -1210,7 +1210,7 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp summary:focus-visible, .fp-choice-label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 760px) { .fp-before-after { grid-template-columns: minmax(0, 1fr); } }
 /* The right pane, "流れ", is 260px wide, with the leader's card on top and the children's cards under it, a line at their left joining them to it. Its compact view (`data-compact="true"`) is 78px wide, as the sidebar is: see below. */
-:root { --codex-bg: #e6edfb; --codex-fg: #1d3f8a; }
+:root { --codex-bg: #e6edfb; --codex-fg: #1d3f8a; --codex-hot: #2554b4; }
 #formation-flow { flex: none; width: 260px; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
 #formation-flow-head { gap: 10px; padding: 0 12px 0 16px; }
 #formation-flow-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
@@ -1280,13 +1280,18 @@ button.formation-orb { cursor: pointer; }
 .formation-orb[data-state="planned"] .formation-orb-dot { border-style: dashed; border-color: var(--chip-line); background: transparent; color: var(--muted); }
 .formation-orb[data-state="planned"] .formation-orb-name { color: var(--muted); }
 .formation-orb[data-agent="codex"] .formation-orb-dot { background: var(--codex-bg); color: var(--codex-fg); }
+/* A child that the leader told something and that has not answered (#1087): its circle is filled in the color of its agent, with white text, and beats; it is also the one that goes up under the leader's orb. */
+.formation-orb[data-instructed="true"] { --hot: var(--accent); }
+.formation-orb[data-instructed="true"][data-agent="codex"] { --hot: var(--codex-hot); }
+.formation-orb[data-instructed="true"] .formation-orb-dot { border-color: var(--hot); background: var(--hot); color: var(--on-accent); animation: formation-orb-beat 1.4s ease-in-out infinite; }
+@keyframes formation-orb-beat { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hot) 50%, transparent); } 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--hot) 0%, transparent); } }
 .formation-orb-cx { position: absolute; right: -9px; bottom: -5px; padding: 0 4px; border-radius: 7px; background: var(--codex-fg); color: var(--on-accent); font-family: var(--ff-base); font-size: calc(9px * var(--fs)); font-weight: 700; line-height: 13px; }
 .formation-orb[aria-busy="true"] { opacity: .5; }
 .formation-orb[aria-pressed="true"] .formation-orb-dot { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
 button.formation-orb:focus-visible .formation-orb-dot { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* The tip of an orb: the content of the card, with the frame and the shadow of a floating window. */
 #formation-flow-tip { position: fixed; z-index: 10; width: 240px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { .formation-arrow-line { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .formation-arrow-line, .formation-orb[data-instructed="true"] .formation-orb-dot { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 15% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }
