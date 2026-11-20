@@ -4,7 +4,7 @@
 //! The pieces, from the bottom up.
 //! - The frame: XSalsa20-Poly1305 under a key for each direction, with a nonce that is the direction and a counter, so that a replayed, reordered or reused frame does not open.
 //! - The handshake: each side sends an ephemeral public key, and the keys are derived from the DH of the ephemeral keys and the DH of the two pinned (static) keys together with the transcript, so that one who does not know its static key cannot derive them.
-//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `messages.read`, `page.read`, `page.answer`, `subscribe`, `stop`).
+//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `messages.read`, `asked.read`, `asked.clear`, `page.read`, `page.answer`, `subscribe`, `stop`).
 //! - The pushes (#983): `subscribe` turns the connection into one that the daemon pushes requests through, so the PC can ask something of the app without a port on the app's PC. `Hub` is the daemon's end (`Hub::push`, fed by `push.sock` of `remote/`, which a `tsunagiai-mcp` of that PC reaches with `push_to_daemon`), `Pushes` is the app's end.
 //! - The server (`serve`, the daemon of `--serve`) and the client (`Client`), which the app uses.
 //!
@@ -45,7 +45,7 @@ use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
 
 use crate::{
     formation::{self, Child, CHILDREN_FILE},
-    formation_message,
+    formation_ask, formation_message,
     formation_page::{self, DecisionPage, PageRecord},
 };
 
@@ -383,6 +383,12 @@ struct AnswerParams {
 }
 
 #[derive(Deserialize)]
+struct AskedClearParams {
+    formation: String,
+    at: u64,
+}
+
+#[derive(Deserialize)]
 struct DropParams {
     formation: String,
     names: Vec<String>,
@@ -526,6 +532,24 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
                 return Reply::error(&e);
             }
             Reply::ok(json!({"messages": formation_message::read(config, &params.formation)}))
+        }
+        "asked.read" => {
+            let Ok(params) = serde_json::from_value::<PagesParams>(request.params) else {
+                return bad_params();
+            };
+            if let Err(e) = formation::check_name(&params.formation) {
+                return Reply::error(&e);
+            }
+            Reply::ok(json!({"at": formation_ask::read(config, &params.formation)}))
+        }
+        "asked.clear" => {
+            let Ok(params) = serde_json::from_value::<AskedClearParams>(request.params) else {
+                return bad_params();
+            };
+            match formation_ask::clear_if(config, &params.formation, params.at) {
+                Ok(cleared) => Reply::ok(json!({"cleared": cleared})),
+                Err(e) => Reply::error(&e),
+            }
         }
         "page.read" => {
             let Ok(params) = serde_json::from_value::<PageParams>(request.params) else {
@@ -1060,6 +1084,30 @@ impl Client {
             .await?;
         serde_json::from_value(result["messages"].clone())
             .map_err(|_| "サーバーの答えの形式が正しくありません".to_owned())
+    }
+
+    /// The time of the mark that the leader of `formation` asked the owner a question (#1105, `asked-owner.json`); none when there is none.
+    pub async fn asked_read(&mut self, formation: &str) -> Result<Option<u64>, String> {
+        let result = self
+            .call("asked.read", json!({"formation": formation}))
+            .await?;
+        match &result["at"] {
+            Value::Null => Ok(None),
+            at => at
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| "サーバーの答えの形式が正しくありません".to_owned()),
+        }
+    }
+
+    /// Takes the mark of `formation` away when it has the time `at`; whether it did.
+    pub async fn asked_clear(&mut self, formation: &str, at: u64) -> Result<bool, String> {
+        let result = self
+            .call("asked.clear", json!({"formation": formation, "at": at}))
+            .await?;
+        result["cleared"]
+            .as_bool()
+            .ok_or_else(|| "サーバーの答えの形式が正しくありません".to_owned())
     }
 
     /// The page that waits on `child`, checked and with its evidence resolved on that PC (A-41). A refusal is the violations, one on each line.
@@ -2058,6 +2106,51 @@ mod tests {
     }
 
     #[test]
+    fn the_mark_of_a_question_is_read_and_cleared_by_name_and_time() {
+        let config = temp_dir("api-asked");
+        let none = call(&config, "asked.read", json!({"formation": "api-work"}));
+        assert_eq!(none.body, json!({"ok": true, "result": {"at": null}}));
+        formation_ask::mark(&config, "api-work", 7).unwrap();
+        let read = call(&config, "asked.read", json!({"formation": "api-work"}));
+        assert_eq!(read.body["result"]["at"], 7);
+        // A mark of another time stays.
+        let other = call(
+            &config,
+            "asked.clear",
+            json!({"formation": "api-work", "at": 6}),
+        );
+        assert_eq!(other.body["result"]["cleared"], false);
+        assert_eq!(formation_ask::read(&config, "api-work"), Some(7));
+        let clear = call(
+            &config,
+            "asked.clear",
+            json!({"formation": "api-work", "at": 7}),
+        );
+        assert_eq!(clear.body["result"]["cleared"], true);
+        assert_eq!(formation_ask::read(&config, "api-work"), None);
+        // A name that leaves the folder, and arguments that do not fit, are refused.
+        assert_eq!(
+            call(&config, "asked.read", json!({"formation": "../x"})).body["ok"],
+            false
+        );
+        assert_eq!(
+            call(
+                &config,
+                "asked.clear",
+                json!({"formation": "../x", "at": 1})
+            )
+            .body["ok"],
+            false
+        );
+        assert_eq!(
+            call(&config, "asked.clear", json!({"formation": "api-work"})).body["ok"],
+            false
+        );
+        assert_eq!(call(&config, "asked.read", json!({})).body["ok"], false);
+        let _ = std::fs::remove_dir_all(&config);
+    }
+
+    #[test]
     fn the_messages_of_a_formation_are_read_by_name() {
         let config = temp_dir("api-messages");
         let none = call(&config, "messages.read", json!({"formation": "api-work"}));
@@ -2359,6 +2452,21 @@ mod tests {
         formation_message::append(&served.config, "api-work", &message).unwrap();
         assert_eq!(client.messages_read("api-work").await.unwrap(), [message]);
         assert!(client.messages_read("../x").await.is_err());
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_mark_of_a_question_is_read_and_cleared_over_the_socket() {
+        let served = served("net-asked").await;
+        let mut client = served.client().await;
+        assert_eq!(client.asked_read("api-work").await.unwrap(), None);
+        formation_ask::mark(&served.config, "api-work", 7).unwrap();
+        assert_eq!(client.asked_read("api-work").await.unwrap(), Some(7));
+        assert!(!client.asked_clear("api-work", 6).await.unwrap());
+        assert!(client.asked_clear("api-work", 7).await.unwrap());
+        assert_eq!(client.asked_read("api-work").await.unwrap(), None);
+        assert!(client.asked_read("../x").await.is_err());
         served.task.abort();
         std::fs::remove_dir_all(&served.config).unwrap();
     }

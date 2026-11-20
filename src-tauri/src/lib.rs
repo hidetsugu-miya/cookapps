@@ -9,6 +9,7 @@ pub mod database;
 mod disk_cache;
 pub mod fonts;
 pub mod formation;
+pub mod formation_ask;
 pub mod formation_assets;
 pub mod formation_message;
 pub mod formation_page;

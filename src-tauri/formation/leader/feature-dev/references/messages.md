@@ -46,14 +46,14 @@ When the `DONE` is the specification's and `{case root}/case.json` is gone, the 
 
 1. Research it first with your read tools: the documents, the code, the case root.
 2. When the sources settle it, send `ANSWER {unit}` with the answer and the source (a path and line).
-3. Ask the owner only when it is a product or specification judgment that the sources do not settle, or an operation that cannot be undone (a force push, a rewrite of history, a write to production data or services, publishing outside). Write the question in Japanese, in plain text: what you found, the options, and your recommendation. Then wait. When the owner answers in the terminal, send it on as `ANSWER {unit}`, word for word.
+3. Ask the owner only when it is a product or specification judgment that the sources do not settle, or an operation that cannot be undone (a force push, a rewrite of history, a write to production data or services, publishing outside). Call `formation_ask_owner` first, then write the question in Japanese, in plain text: what you found, the options, and your recommendation. Then wait. When the owner answers in the terminal, send it on as `ANSWER {unit}`, word for word.
 
 A decision of the case itself (a requirement question, a design choice, the acceptance of an implementation) does not come as a `QUESTION`: the child puts it on a decision page.
 
 ### A `QUESTION` that waits for the business side
 
 A `QUESTION requirement` whose first line says that the requirement waits for the business side's answers is a hold. Research cannot settle it, so skip steps 1 and 2.
-Tell the owner in Japanese the titles of the questions and the text for the business side, which follows `Text for the business side:` in the message (each line with its leading `> ` taken off), word for word, and wait.
+Call `formation_ask_owner` first, then tell the owner in Japanese the titles of the questions and the text for the business side, which follows `Text for the business side:` in the message (each line with its leading `> ` taken off), word for word, and wait.
 When the owner brings the business side's answers, or decides the questions themselves (option B), send them as `ANSWER requirement`, word for word. Never answer in the place of the owner or the business side.
 The same child is still waiting for that `ANSWER`, so do not launch another.
 
