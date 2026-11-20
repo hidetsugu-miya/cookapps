@@ -1,7 +1,8 @@
 // The Claude Code pane on the right of an open mail thread and of a new mail (M-10, M-11): Claude Code in a terminal (A-36, ts/claude-code.ts), with the tools of tsunagiai-mcp only (no built-in tools).
 // The right side's elements are in `index.html` (`mail-claude-term`, the host of the terminal, `mail-claude-restart`, and the two icons of `mail-tools`); thread.ts switches the side between this pane and the pane to Orca (A-9) and tells this module when it may be in view.
 // Claude Code reads the thread and the fields of the reply or of the new mail, and writes the fields, through the target "mail-draft" of ts/screen-bridge.ts (ts/mail-draft.ts). It never sends: only the owner's 「送信」 does.
-// The process goes on while the pane is hidden (the pane to Orca, the list, another screen); a thread or a new mail of another key ends it and starts a new one, and 「やり直す」 ends it and starts a new one.
+// The pane is closed at first and shows the question 「Claude に相談しますか？」 with 「相談する」; nothing starts while it is closed. The ✳ of the right side opens and closes it (the owner's decision of 2026-11-20, #1106, as the Todo's, T-7).
+// Open, the process goes on while the pane is hidden (the pane to Orca, the list, another screen); closing the pane, or a thread or a new mail of another key, ends it, and the next open starts a new one; 「やり直す」 ends it and starts a new one.
 import { claudeCodeStarted, closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 
@@ -28,15 +29,48 @@ export const addMailKey = (key: () => string | null) => void keys.push(key);
 // The key of the draft that the process belongs to.
 let held: string | null = null;
 
-// Shows the terminal while the pane is in view, and hides it (the process goes on) while it is not: the pane to Orca, the list, another screen, or the window is hidden. The first show starts Claude Code; the key of another draft ends the process first.
+// Whether the pane is open, in memory only. While it is closed no show, hide or visibilitychange starts anything, and a thread or a new mail is opened closed.
+let open = false;
+
+// Draws the two states: the question and the ✳ not pressed, or the heading and the terminal and the ✳ pressed. While the pane to Orca takes the place of the pane, the ✳ is not pressed.
+function drawMailClaude() {
+  $("mail-claude-ask").hidden = open;
+  $("mail-claude").querySelector<HTMLElement>(".chat-head")!.hidden = !open;
+  $("mail-claude-term").hidden = !open;
+  $("mail-tool-claude").setAttribute("aria-pressed", String(open && !$("mail-claude").hidden));
+}
+
+// While the pane is open, shows the terminal while the pane is in view, and hides it (the process goes on) while it is not: the pane to Orca, the list, another screen, or the window is hidden. A process that ended by itself is started anew by the next show.
+// A thread or a new mail of another key ends the process and closes the pane.
 export function syncMailClaude() {
   const host = $("mail-claude-term");
   const now = keys.map((key) => key()).find((key) => key !== null) ?? null;
+  // The talk was about the draft before: the process and what it started end, and the pane is closed again.
+  if (now !== null && held !== null && held !== now) closeMailClaude();
+  if (now !== null) held = now;
+  drawMailClaude();
+  if (!open) return;
   if (now === null || $("mail-claude").hidden || document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
-  // The talk was about the draft before: the process and what it started end, and this one starts a new one.
-  if (held !== null && held !== now) closeClaudeCode(ID, OWNER);
-  held = now;
   if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
+}
+
+// Opens the pane: shows the terminal, which starts the process and takes the keyboard because it is new.
+export function openMailClaude() {
+  open = true;
+  syncMailClaude();
+}
+
+// Closes the pane: ends the process and what it started; the next open starts a new one.
+function closeMailClaude() {
+  open = false;
+  closeClaudeCode(ID, OWNER);
+  drawMailClaude();
+}
+
+// The ✳ of the right side was pressed while the pane is shown.
+export function toggleMailClaude() {
+  if (open) closeMailClaude();
+  else openMailClaude();
 }
 
 export function initMailClaude() {
@@ -48,5 +82,6 @@ export function initMailClaude() {
     syncMailClaude();
     void claudeCodeStarted(ID).then(() => (restart.disabled = false));
   };
+  $("mail-claude-open").onclick = openMailClaude;
   document.addEventListener("visibilitychange", syncMailClaude);
 }
