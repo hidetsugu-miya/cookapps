@@ -6,10 +6,11 @@ import type { FactContent } from "./bindings/FactContent";
 import type { ImageRef } from "./bindings/ImageRef";
 import type { Term } from "./bindings/Term";
 import { tag } from "./dom.js";
+import { foldOpener, holdLines, holdWhole, paintPending, pending } from "./formation-page-drawer.js";
 import { drawNode, markdownBlock } from "./formation-page-node.js";
 import { loadMermaid } from "./vendor-load.js";
 
-// The fold of the page: `summary` is its label.
+// A fold that opens in the text (a reference row, a change section, the details of a choice): `summary` is its label. What the drawer shows instead is `foldOpener` of formation-page-drawer.ts.
 export function fold(summary: string, className: string, open = false): HTMLDetailsElement {
   const node = tag("details", className);
   node.open = open;
@@ -82,17 +83,14 @@ function drawBlock(block: Block, lazy: boolean): HTMLElement {
       }
       return wrap;
     }
-    case "folded": {
-      const node = fold(block.summary, "fp-folded");
-      node.append(...drawBlocks(block.blocks, true));
-      return node;
-    }
+    case "folded":
+      return foldOpener(block.summary, block.summary, (panel) => panel.append(...drawBlocks(block.blocks, true)));
     case "diagram":
       return drawDiagram(block.mermaid, block.caption, lazy);
     case "image":
       return drawImage(block, lazy);
     case "evidence":
-      return drawEvidence(block.items);
+      return evidenceButton(block.items);
   }
 }
 
@@ -186,19 +184,6 @@ function drawDiagram(source: string, caption: string | null, lazy: boolean): HTM
   return figure;
 }
 
-// The diagrams that wait for their fold to be opened.
-const pending = new WeakMap<HTMLElement, () => void>();
-
-// Draws the waiting diagrams of `root` that no closed fold hides.
-function paintPending(root: HTMLElement) {
-  for (const box of root.querySelectorAll<HTMLElement>(".fp-diagram-box[data-pending], .fp-image-box[data-pending]")) {
-    if (box.closest("details:not([open])") !== null) continue;
-    delete box.dataset.pending;
-    pending.get(box)?.();
-    pending.delete(box);
-  }
-}
-
 async function paintDiagram(source: string, box: HTMLElement, label: string) {
   const id = `fp-mermaid-${++diagrams}`;
   try {
@@ -221,6 +206,11 @@ async function paintDiagram(source: string, box: HTMLElement, label: string) {
   }
 }
 
+// 「根拠を見る」: the evidence in the drawer, as the tab 「根拠」 of the owner being drawn.
+export function evidenceButton(items: Evidence[]): HTMLButtonElement {
+  return foldOpener("根拠", "根拠を見る", (panel) => panel.append(drawEvidence(items)));
+}
+
 export function drawEvidence(items: Evidence[]): HTMLElement {
   const wrap = tag("div", "fp-evidence");
   for (const item of items) wrap.append(drawEvidenceItem(item));
@@ -241,6 +231,7 @@ function drawEvidenceItem(item: Evidence): HTMLElement {
   switch (item.type) {
     case "excerpt": {
       node.append(head(`${item.root}/${item.path}`, `${item.start}-${item.end} 行`, item.note));
+      holdLines([`${item.root}/${item.path}`, item.path], item.start, item.lines);
       const code = tag("div", "fp-code");
       const marked = new Set(item.highlight);
       item.lines.forEach((text, i) => {
@@ -351,8 +342,10 @@ export function drawFactContent(content: FactContent, lazy: boolean): HTMLElemen
     case "node":
       return drawNode(content.ref, content.text);
     case "markdown":
+      holdWhole([`${content.root}/${content.path}`, content.path], content.text);
       return markdownBlock(content.text);
     case "text":
+      holdWhole([`${content.root}/${content.path}`, content.path], content.text);
       return tag("pre", "fp-pre", content.text);
     case "image":
       return drawImage(content, lazy);
