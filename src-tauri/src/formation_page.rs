@@ -2984,6 +2984,13 @@ struct Pages {
     pages: Vec<PageRecord>,
 }
 
+/// `Pages` as it is read: each record on its own, so that one that does not convert is skipped.
+#[derive(Deserialize)]
+struct RawPages {
+    #[serde(default)]
+    pages: Vec<serde_json::Value>,
+}
+
 fn read_pages_strict(config: &Path, formation: &str) -> Result<Vec<PageRecord>, String> {
     let path = formation::dir(config, formation).join(PAGES_FILE);
     let text = match std::fs::read_to_string(&path) {
@@ -2991,8 +2998,14 @@ fn read_pages_strict(config: &Path, formation: &str) -> Result<Vec<PageRecord>, 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
     };
-    serde_json::from_str::<Pages>(&text)
-        .map(|pages| pages.pages)
+    // A record that no longer reads (a kind of page that was removed, say) is skipped, so that it does not make every other page of the formation unreadable; the next write drops it.
+    serde_json::from_str::<RawPages>(&text)
+        .map(|raw| {
+            raw.pages
+                .into_iter()
+                .filter_map(|page| serde_json::from_value(page).ok())
+                .collect()
+        })
         .map_err(|_| {
             format!(
                 "{} の形式が正しくありません。記録を上書きしないよう、何も書いていません",
@@ -4842,6 +4855,34 @@ mod tests {
         // An answered page cannot be read as the page that waits.
         mark_answered(&config, "api-work", "one", 700, 800).unwrap();
         assert!(waiting_page(&config, "api-work", "one").is_err());
+    }
+
+    #[test]
+    fn a_record_of_a_removed_kind_is_skipped_and_the_other_pages_still_read_and_write() {
+        let repo = repo("removed-kind");
+        let config = temp_dir("removed-kind-config");
+        formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
+        let old = json!({
+            "child": "old", "path": "/p", "title": "古い", "page_kind": "code-review",
+            "subject": "code", "at": 200
+        });
+        let valid = serde_json::to_value(record_of("one", 250)).unwrap();
+        write(
+            &formation::dir(&config, "api-work"),
+            PAGES_FILE,
+            &json!({"pages": [old, valid]}).to_string(),
+        );
+        let pages = read_pages(&config, "api-work");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].child, "one");
+        mark_answered(&config, "api-work", "one", 250, 500).unwrap();
+        put_page(&config, "api-work", record_of("two", 260)).unwrap();
+        let pages = read_pages(&config, "api-work");
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(|p| p.child != "old"));
+        // A file that is not a record list is still not written over.
+        write(&formation::dir(&config, "api-work"), PAGES_FILE, "[1]");
+        assert!(put_page(&config, "api-work", record_of("three", 300)).is_err());
     }
 
     #[test]
