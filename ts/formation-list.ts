@@ -38,11 +38,16 @@ let failure: string | null = null;
 let inflight: Promise<void> | null = null;
 // When the last read that worked ended (epoch milliseconds; 0: none yet).
 let readAt = 0;
-// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac. The sessions of the projects and the choices of a worktree leave them out (A-8, A-9, A-16).
-let childPlaces = new Set<string>();
-// The terminals of the children that work in a folder that was there (`created` false): that folder is the owner's too, so only these sessions leave the projects, `{environment}\nhandle\n{handle}` and `{environment}\npane\n{paneKey}`.
-let childSessions = new Set<string>();
-// Whether a read of the list has ended, with an answer or a failure: before it, the Orca list does not know which work is a child's.
+// A launched child: its formation and its name.
+export interface ChildRef {
+  formation: string;
+  child: string;
+}
+// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac, each with its child. The choices of a worktree leave them out (A-9, A-16), and the sessions in them are the children's rows of the projects (A-8).
+let childPlaces = new Map<string, ChildRef>();
+// The terminals of the children that work in a folder that was there (`created` false): that folder is the owner's too, so only these sessions are children's, `{environment}\nhandle\n{handle}` and `{environment}\npane\n{paneKey}`.
+let childSessions = new Map<string, ChildRef>();
+// Whether a read of the list has ended, with an answer or a failure: before it, the Orca list does not know which sessions are a child's.
 let settled = false;
 // How long a read stays fresh for the choices of a worktree; it is the period of the Orca list while the screen is shown.
 const FRESH_MS = 10_000;
@@ -69,22 +74,23 @@ const placeKey = (environment: string | null | undefined, path: string) => `${en
 // Whether the worktree at `path` on the PC `environment` (null or none: this Mac; else the saved environment's name) is one that tsunagiai made for a launched child, by the last read (A-37).
 export const isChildWorktree = (path: string, environment: string | null | undefined) => childPlaces.has(placeKey(environment, path));
 
-// Whether a row or a terminal of the Orca list is a launched child's session, by the last read: it is in a worktree made for a child, or it is the terminal of a child that works in a folder that was there (A-8, A-37).
-export const isChildSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }) =>
-  isChildWorktree(item.path, item.environment) ||
-  (item.handle != null && childSessions.has(placeKey(item.environment, `handle\n${item.handle}`))) ||
-  (item.paneKey != null && childSessions.has(placeKey(item.environment, `pane\n${item.paneKey}`)));
+// The launched child that a row or a terminal of the Orca list is the session of, by the last read, or null when it is the owner's: it is in a worktree made for a child, or it is the terminal of a child that works in a folder that was there (A-8, A-37).
+export const childOfSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }): ChildRef | null =>
+  childPlaces.get(placeKey(item.environment, item.path)) ??
+  (item.handle != null ? childSessions.get(placeKey(item.environment, `handle\n${item.handle}`)) : undefined) ??
+  (item.paneKey != null ? childSessions.get(placeKey(item.environment, `pane\n${item.paneKey}`)) : undefined) ??
+  null;
 
-// Whether a read of the list has ended: the Orca list takes work as the owner's only after it.
-export const childrenKnown = () => settled;
+// Whether a row or a terminal of the Orca list is a launched child's session (the work pane of a project leaves it out: the child's terminal is in the formation's screen).
+export const isChildSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }) => childOfSession(item) !== null;
 
-const differs = (a: Set<string>, b: Set<string>) => a.size !== b.size || [...a].some((k) => !b.has(k));
+const differs = (a: Map<string, ChildRef>, b: Map<string, ChildRef>) => a.size !== b.size || [...a].some(([k, v]) => b.get(k)?.formation !== v.formation || b.get(k)?.child !== v.child);
 
 // Holds the worktrees and the sessions of the children of `formations`; the screens that leave them out are drawn again when they changed.
 function holdChildren() {
-  const children = formations.flatMap((f) => f.children);
-  const next = new Set(children.filter((c) => c.created).map((c) => placeKey(c.environment, c.path)));
-  const nextSessions = new Set(children.filter((c) => !c.created).flatMap((c) => [placeKey(c.environment, `handle\n${c.handle}`), placeKey(c.environment, `pane\n${c.paneKey}`)]));
+  const children = formations.flatMap((f) => f.children.map((c) => ({ c, ref: { formation: f.name, child: c.name } })));
+  const next = new Map(children.filter(({ c }) => c.created).map(({ c, ref }): [string, ChildRef] => [placeKey(c.environment, c.path), ref]));
+  const nextSessions = new Map(children.filter(({ c }) => !c.created).flatMap(({ c, ref }): [string, ChildRef][] => [[placeKey(c.environment, `handle\n${c.handle}`), ref], [placeKey(c.environment, `pane\n${c.paneKey}`), ref]]));
   const changed = differs(next, childPlaces) || differs(nextSessions, childSessions);
   childPlaces = next;
   childSessions = nextSessions;
@@ -126,7 +132,7 @@ async function load() {
     failure = String(e);
     failed = true;
   }
-  // The first end of a read, whatever it answered: the Orca list is drawn again, because it took no work as the owner's before.
+  // The first end of a read, whatever it answered: the Orca list is drawn again, because it took every session as the owner's before.
   if ((read || failed) && !settled) {
     settled = true;
     redrawOrca();
@@ -204,6 +210,15 @@ function choose(name: string | null) {
   onChange(name);
 }
 
+// Selects the formation and shows the tab of its child: a child's row of this list, and a child's session in the list of the projects (A-8).
+export function openChild(formation: string, child: string) {
+  deleteFailure = null;
+  deleteNotice = null;
+  choose(formation);
+  onChild(child);
+  draw();
+}
+
 function row(f: FormationEntry): HTMLButtonElement {
   const node = tag("button", "formation-row");
   node.type = "button";
@@ -245,13 +260,7 @@ function childRow(f: FormationEntry, c: FormationListChild): HTMLButtonElement {
   const where = c.branch === "" ? c.repo : `${c.repo} ・ ${c.branch}`;
   text.append(span("formation-child-name", c.name), span("formation-child-where", where));
   node.append(statusIcon(STATUS_OF[c.state], STATE_LABELS[c.state]), text);
-  node.onclick = () => {
-    deleteFailure = null;
-    deleteNotice = null;
-    choose(f.name);
-    onChild(c.name);
-    draw();
-  };
+  node.onclick = () => openChild(f.name, c.name);
   return node;
 }
 

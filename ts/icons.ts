@@ -20,6 +20,8 @@ export const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><
 export const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');
 export const GRIP_SVG = svgOf('<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01"/>');
 export const CHEVRON_SVG = svgOf('<path d="M9 6l6 6-6 6"/>');
+// The mark of a formation: the one at the heading 「フォーメーション」 of the list of the development screen (index.html), and on the row of a child's session in a project.
+export const FORMATION_SVG = svgOf('<rect x="3" y="3" width="8" height="8" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect x="13" y="13" width="8" height="8" rx="2"/>');
 export const CHEVRON_LEFT_SVG = svgOf('<path d="M15 6l-6 6 6 6"/>');
 // D-4: the first and the last page (a chevron against a bar).
 export const PAGE_FIRST_SVG = svgOf('<path d="M6 5v14"/><path d="M17 6l-6 6 6 6"/>');
