@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostToolUse(Bash): issue の作成のあとは issue-plan の手順 1〜4 の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意の続行を、セッションに伝える。常に exit 0。
+# PostToolUse(Bash): issue の作成のあとは issue-plan の手順 1〜4 の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意とマージ、リリースの見届けの続行を、セッションに伝える。常に exit 0。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
 cmd=$(jq -r '.tool_input.command // empty')
@@ -26,7 +26,7 @@ if [ "$merge" -eq 1 ]; then
   rc=$?
   if [ "$rc" -eq 0 ]; then
     msgs+=("gh pr merge のあとに plan-release.py release を実行しました:"$'\n'"$out")
-    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます（release スキル（.claude/skills/release/SKILL.md）の手順 B）。リリースを待つ変更があれば、Release PR はオーナーに頼まれたセッションが用意します（release スキルの手順 A。なければ作り、あれば本文を更新します。マージするのはオーナーです）。")
+    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます（release スキル（.claude/skills/release/SKILL.md）の手順 B）。リリースを待つ変更があれば、このセッションが Release PR を用意し、E2E が通ったらそのままマージして、リリースを見届けます（release スキルの手順 A と B。なければ作り、あれば本文を更新します。オーナーのマージは待ちません）。マージが拒まれたとき、release の run がランナーやネットワーク以外の原因で失敗したときは、オーナーに理由を伝えます。")
   else
     msgs+=("gh pr merge のあとに plan-release.py release を実行しましたが、失敗しました（exit ${rc}）:"$'\n'"$out")
   fi

@@ -66,7 +66,7 @@ Bad:  #13 is 2,000 lines -> point:8
 
 `urgency:high` is put on an issue by the owner, or by an agent that follows the owner's instruction ("urgent", "top priority", "as soon as possible"). An agent never adds it on its own judgment (at the owner's instruction, 2026-11-06; Discussion #136).
 It replaces `release:now`, which is retired: nothing reads `release:now` any more.
-An urgent issue goes ahead of every issue that is not urgent. Its release still waits for the merge of the Release PR: the agent that prepares the Release PR in a session tells the owner at once with a push notification, because the owner merges it (at the owner's instruction, 2026-11-09; Discussion #293).
+An urgent issue goes ahead of every issue that is not urgent. Its release is no different from any other: the session that prepares the Release PR merges it as soon as it is ready, and sends no notification (at the owner's instruction, 2026-11-21; it replaces the push notification of 2026-11-09, Discussion #293).
 Urgency is about time; how much the issue matters is `importance:*`, which is a separate axis.
 
 ```text
@@ -93,11 +93,11 @@ Bad:  #40 has priority:1 and no importance label, and it goes ahead of an issue 
 
 `importance:high` and `importance:low` are put by whoever reads the issue first, with the reason as a one-line comment; no label means normal. Do not change a label the owner set (at the owner's instruction, 2026-11-06; Discussion #136).
 A bug that stops use or loses data is `importance:high`.
-Importance orders the issues within each level of urgency (the four tiers of "Order every issue" in the "Rules" of `.claude/skills/issue-plan/SKILL.md`), and a waiting bug with `importance:high` is told to the owner at once, as an urgent change is ("Keep one Release PR open while changes wait" in `.claude/skills/release/SKILL.md`).
+Importance orders the issues within each level of urgency (the four tiers of "Order every issue" in the "Rules" of `.claude/skills/issue-plan/SKILL.md`).
 
 ```text
 Good: #150 loses the saved Todo on a failed sync -> importance:high, with "データを失う" as the comment
-Bad:  #150 loses data, and no importance label is put, so the owner is not told that the Release PR is urgent
+Bad:  #150 loses data, and no importance label is put, so it is ordered among the issues of normal importance
 ```
 
 ### Finish a design, layout or spec discussion with the owner before making the issue

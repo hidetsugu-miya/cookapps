@@ -495,7 +495,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, claimed=None):
 def release_facts(issues, release_pr, last_tag):
     """The figures a run needs to prepare the Release PR.
     `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
-    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; a session tells the owner at once.
+    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; the session merges the Release PR as soon as it is ready either way.
     `minor`: a change adds a requirement ID (.claude/skills/release/SKILL.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
     changes = release_changes(issues)
     labels = (release_pr or {}).get("labels", [])

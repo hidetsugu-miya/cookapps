@@ -1,11 +1,11 @@
 ---
 name: ship
-description: Implements the open つなぎAI issues in the order of the plan, on one branch with one pull request (issues that touch no common file together, the others one after another), and prepares the Release PR, which the owner merges. Use on /ship and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
+description: Implements the open つなぎAI issues in the order of the plan, on one branch with one pull request (issues that touch no common file together, the others one after another), and prepares the Release PR, merges it and sees the release through. Use on /ship and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
 ---
 
 # ship
 
-One run takes the issues the owner names, or else the issues in the order of the plan, does them in a worktree of its own on one branch (issues that touch no common file at the same time), and merges one pull request that closes them all. It then prepares the Release PR, and the owner merges it (`.claude/skills/release/SKILL.md`; at the owner's instruction, 2026-11-19).
+One run takes the issues the owner names, or else the issues in the order of the plan, does them in a worktree of its own on one branch (issues that touch no common file at the same time), and merges one pull request that closes them all. It then prepares the Release PR (`.claude/skills/release/SKILL.md`; at the owner's instruction, 2026-11-19), merges it, and sees the release through (at the owner's instruction, 2026-11-21).
 The rules of a run are in "Rules" at the end of this file.
 The owner starts it in a session; nothing else starts it (at the owner's instruction, 2026-11-21; #1179: the scheduled night run of `ship` is removed, and the only scheduled run left is the X post of `.claude/skills/x-post/SKILL.md`).
 The issues the owner names may be of any units, in one pull request and one Release PR.
@@ -14,7 +14,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 ## Steps
 
-1. **Do what an earlier merge left.** Read `.claude/skills/release/SKILL.md` and do its Procedure B (`follow_up` and `tag_due` of `plan-release.py release` say what is left, from a Release PR that the owner merged).
+1. **Do what an earlier merge left.** Read `.claude/skills/release/SKILL.md` and do its Procedure B (`follow_up` and `tag_due` of `plan-release.py release` say what is left, from a Release PR that was merged: by an earlier run, or by the owner).
 2. **Reorder.** First run `dependabot-issues.sh`: it makes an issue for each open Dependabot pull request that has none ("Turn the open Dependabot pull requests into issues at the start of `ship`" in "Rules" at the end of this file), and prints the issue numbers. If it fails, tell the owner in the report (step 7) and go on with the reorder. Then do `issue-plan` as "To only reorder" (`plan-release.py unsplit --mine {numbers}`, step 3 for each issue it prints, then snapshot, `release-planner` with `mode: order`, apply). This splits and places the issues made outside a session too. `{numbers}` are the issues this session already has in hand (its own branch or pull request), and none at the start of a session. Launch `release-planner` here once, at the start of the run: `apply` saves the plan it accepts as `.claude/plan.json` of the main checkout, and step 3 reads it.
 3. **Pick the work.** Run `plan-release.py next --mine {numbers}`. `start` is the queue in the order of the plan, `in_progress` the issues in hand that are still open, and `claimed`, `held` and `blocked` are issues left out. `claimed` holds the issues that another session has claimed (the worktree that works on each is in `owner`, `worktree.md`): leave them alone. `held` is an issue an open pull request closes that is not in `{numbers}`: someone else's work, leave it alone.
    - `start` and `in_progress` are empty: report `claimed`, `held` and `blocked` with its blockers, and go to step 6.
@@ -39,11 +39,12 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
       - A fix of the first round holds the non-blocking findings that serve the goal too, and the second round reads all of it (`review.md`).
       - After the pass, fix no non-blocking finding (Medium and Low; also one that first appeared in the second round or later), and go on to 5.5 (at the owner's instruction, 2026-11-19; #1012). Keep the report-only findings of `release-verifier`'s reply, with their IDs and `path:line`, for the report of step 7 (`review.md`).
    5. Push, `gh pr create` with one `Closes #{n}` line for each issue, `post-checks.sh`, `gh pr merge --merge`, and fast-forward the main checkout (`worktree.md`, `issues.md`). The hook then runs `plan-release.py release`. Give the worktree back at step 7, after step 6: the Release PR has its own worktree.
-6. **Prepare the Release PR.** Read `.claude/skills/release/SKILL.md` and do its Procedure A: its input is the output of `plan-release.py release` that the hook printed after the merge of 5.5, and this run runs the command itself only when it merged nothing (it came here from step 3 or 4) or the hook said that it failed. Procedure A runs `run-e2e.sh` once on `release/next` before it pushes: this is the run's only E2E (at the owner's instruction, 2026-11-19; #1023). The owner merges the Release PR; the run does not.
+6. **Prepare the Release PR.** Read `.claude/skills/release/SKILL.md` and do its Procedure A: its input is the output of `plan-release.py release` that the hook printed after the merge of 5.5, and this run runs the command itself only when it merged nothing (it came here from step 3 or 4) or the hook said that it failed. Procedure A runs `run-e2e.sh` once on `release/next` before it pushes: this is the run's only E2E (at the owner's instruction, 2026-11-19; #1023). Procedure A then merges the Release PR and Procedure B sees the release through, in this run; the run does not wait for the owner to merge (at the owner's instruction, 2026-11-21).
    - Where Procedure A stops with nothing to prepare, or because another session has `release/next` (exit 3, which you tell the owner), prepare nothing.
-   - A Release PR whose E2E failed is handled as Procedure A says (a session tells the owner which specs failed and fixes them in a `fix/` pull request).
+   - A Release PR whose E2E failed is handled as Procedure A says (a session tells the owner which specs failed and fixes them in a `fix/` pull request), and is not merged.
+   - A merge of the Release PR that is refused is handled as Procedure A says: no other means, the owner is told the reason.
 7. **Report.** Give back the worktrees of this run, the run's own and the one of `release/next` when step 6 took it and Procedure A has not given it back yet, each with `use-worktree.sh --park` from inside it (it removes the worktree and the claims of its issues; it exits 3 when the worktree still holds unpushed work, which the report then lists, and the issues of that worktree stay claimed).
-   Then report the non-blocking findings that the review passed with and nobody fixed (ID, `path:line` and a one-line gist; `review.md`), what merged, what was released (the version and the result of the `release` run, when step 1 saw one through), what waits for the owner (the Release PR to merge), what was skipped and why, and the next issues from `plan-release.py next`.
+   Then report the non-blocking findings that the review passed with and nobody fixed (ID, `path:line` and a one-line gist; `review.md`), what merged, what was released (the version and the result of the `release` run, of this run's Release PR, or of an earlier merge that step 1 saw through), what waits for the owner (a question, a refused merge, a `release` run that failed for a cause other than the runner or the network), what was skipped and why, and the next issues from `plan-release.py next`.
 
 ## Orders for the implementer
 
@@ -62,7 +63,8 @@ Pass these to every `code-implementer` launch as `制約:`, word for word (at th
 - A force push or a history rewrite of a pushed branch: ask first. Dropping the unpushed commits of this run's own branch (5.2) is not a rewrite of history that anyone has.
 - A new product decision: step 5.2, not a stop of the whole run.
 - A Release PR whose E2E failed (`run-e2e.sh` of Procedure A, and the failed spec fails again alone or in a second full run): no push and no merge. Tell the owner which specs failed (`release` skill, Procedure A).
-- A `release` run that fails for a cause other than the runner or the network: no force, no bypass of the ruleset, no tag by hand over a failed check (`release` skill, Procedure B).
+- A `release` run that fails for a cause other than the runner or the network: no force, no bypass of the ruleset, no tag by hand over a failed check; tell the owner the cause (`release` skill, Procedure B).
+- A merge of the Release PR that is refused: no `--admin`, no bypass of the ruleset; tell the owner the reason (`release` skill, Procedure A).
 - Wait for a background command and a subagent by their completion notification, never by a scheduled wake-up (`ScheduleWakeup`). If a wake-up was scheduled anyway, cancel it before the report of step 7, so that it does not run another turn after the work is done.
 
 Do not widen the run: a request that arrives during it becomes an issue through `issue-plan`.
@@ -74,7 +76,7 @@ Do not widen the run: a request that arrives during it becomes an issue through 
 The run does all its issues in a worktree of its own (`worktree.md`), on one branch, as commits, and opens one pull request for them (`Closes #a` and `Closes #b` in its body); `review.md` runs once, on the range of that pull request (at the owner's instruction, 2026-11-09; Discussion #293).
 Issues whose files do not overlap are implemented at the same time, by `code-implementer` launches in one message, one commit for each issue; issues that overlap are implemented one after another (at the owner's instruction, 2026-11-12; #485). `run-ci.sh` runs on the HEAD of each such bundle, and the reviewers with `run-ci.sh` once, after the last implementation. The whole E2E is not run for the pull request: it runs once, when the Release PR is prepared (`.claude/skills/release/SKILL.md`; at the owner's instruction, 2026-11-19; #1023: GitHub's runner took about 13 minutes for a run, so E2E stays local and once per release; measured in #1021). A spec that a bundle added or changed is run alone with `run-e2e.sh --only` (`e2e.md`) until it passes.
 The issues the owner names may be of any units, in one pull request and one Release PR: `plan-release.py next` holds back no `point:8` issue and stops for no unit that waits.
-A run prepares the Release PR and leaves it for the owner to merge (at the owner's instruction, 2026-11-19).
+A run prepares the Release PR, merges it, and sees the release through; it does not leave the merge to the owner (at the owner's instruction, 2026-11-21; before it, a run left the Release PR for the owner to merge, 2026-11-19).
 A run leaves alone what another session may hold: a branch that is in use (`use-worktree.sh` says so), an issue that another session has claimed (`claimed` of `plan-release.py next`), and an issue that an open pull request closes, unless it is in `--mine` (`plan-release.py next --mine`).
 
 ```text
@@ -83,7 +85,8 @@ Good: the branch the run needs is checked out in another session's worktree -> t
 Good: a session has claimed #41 -> `next` lists it in `claimed`, and the run takes the next issue
 Good: the owner says "do #41 and #42 together" in a session -> one pull request closes both, and one Release PR carries them
 Bad:  the run runs `run-e2e.sh` after every issue, or on the branch of its pull request
-Bad:  a session merges the Release PR because the change is urgent, without the owner's word (it notifies the owner instead)
+Bad:  a run ends with the Release PR ready and waits for the owner to merge it
+Bad:  a run merges a Release PR whose E2E failed
 ```
 
 ### Turn the open Dependabot pull requests into issues at the start of `ship`
