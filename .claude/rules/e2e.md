@@ -108,6 +108,7 @@ Bad:  a feature of `app.emit` is called checked because its spec calls emitEvent
 
 `src-tauri/tauri.e2e.conf.json` sets the identifier to `jp.mysis.tsunagiai.e2e` and the window to `visible: false`.
 A build with the `e2e` feature replaces keyring with an in-memory mock, and on macOS it does not take the Dock or the focus.
+It never opens the default browser: the navigation check of the window (`navigation_plugin` in `lib.rs`) only stops a link that production would hand to the browser, and every command that opens one is answered by the JS mock.
 This keeps the everyday つなぎAI settings folder, keychain and screen out of it.
 
 ```sh
