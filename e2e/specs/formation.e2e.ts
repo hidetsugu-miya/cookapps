@@ -96,7 +96,7 @@ describe("development screen: orchestration", () => {
     expect(lefts[0]).toBeLessThan(lefts[1]);
     expect(lefts[1]).toBeLessThan(lefts[2]);
     await expect($("#formation-tab-leader-main .formation-tab-name")).toHaveText("リーダー");
-    await expect($("#formation-tab-leader-main .formation-tab-effort")).toHaveText("high");
+    expect(await count("#formation-tab-leader-main .formation-tab-effort")).toBe(0);
   });
 
   it("shows the work pane again when a project is pressed, and the formation is no longer selected", async () => {
@@ -246,6 +246,11 @@ const resolved = (name: string) =>
 const styleOf = (selector: string, property: "backgroundColor" | "borderRightColor" | "borderTopStyle" | "borderTopColor" | "borderLeftStyle" | "color" | "animationName") =>
   browser.execute((s, p) => getComputedStyle(document.querySelector(s)!)[p], selector, property);
 
+// A pseudo-element's computed style: the branch of a card is the `::before` of its `li`, and the colored trunk the `::after` of a working one.
+const pseudoOf = (selector: string, pseudo: "::before" | "::after", property: "backgroundColor" | "height" | "content") =>
+  browser.execute((sel, ps, prop) => getComputedStyle(document.querySelector(sel)!, ps)[prop], selector, pseudo, property);
+const FLOW_LI = (name: string) => `#formation-flow-list li[data-name="${name}"]`;
+
 const FLOW_DONE = "#formation-flow-done";
 
 // Presses the chip 「完了 N」 of the flow's heading unless it is pressed, so that the cards of the done children are drawn (#1113).
@@ -285,15 +290,15 @@ describe("orchestration mode: the flow pane", () => {
     expect(await browser.execute(() => document.getElementById("formation-flow")!.textContent!.includes("私"))).toBe(false);
   });
 
-  it("draws the children as cards in the order given, with the state, the time and the first line of the last reply", async () => {
+  it("draws the children as cards, working first, then waiting, then planned, and the done one last, with the state, the time and the first line of the last reply", async () => {
     await openFlow(mixed());
     await browser.waitUntil(async () => (await cardNames()).length === 5);
-    expect(await cardNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
-    expect(await cardStates()).toEqual(["完了", "承認待ち", "作業中", "予定", "予定"]);
+    expect(await cardNames()).toEqual(["batch-update", "web-update", "e2e-check", "summary", "api-update"]);
+    expect(await cardStates()).toEqual(["作業中", "承認待ち", "予定", "予定", "完了"]);
     // A done child shows how long ago it ended, the others how long their state has lasted; a planned child has no time.
-    expect(await textsOf("#formation-flow-list .formation-card-time")).toEqual(["25 分前", "1 分", "7 分"]);
-    expect(await textsOf("#formation-flow-list .formation-card-msg")).toEqual(["PR #12 を出しました。", "依存の衝突を無視して入れてよいか確認します。", "テストを実行しています。"]);
-    expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-list .formation-card")].map((c) => (c as HTMLElement).dataset.state))).toEqual(["done", "waiting", "working", "planned", "planned"]);
+    expect(await textsOf("#formation-flow-list .formation-card-time")).toEqual(["7 分", "1 分", "25 分前"]);
+    expect(await textsOf("#formation-flow-list .formation-card-msg")).toEqual(["テストを実行しています。", "依存の衝突を無視して入れてよいか確認します。", "PR #12 を出しました。"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-list .formation-card")].map((c) => (c as HTMLElement).dataset.state))).toEqual(["working", "waiting", "planned", "planned", "done"]);
   });
 
   it("colors the state with the colors of Orca", async () => {
@@ -339,12 +344,49 @@ describe("orchestration mode: the flow pane", () => {
       formationChild("e2e-check", "working", { minutes: 0, reply: "調べ始めました。" }),
       formationChild("summary", "planned"),
     ]);
-    await browser.waitUntil(async () => (await cardStates()).join() === "完了,承認待ち,作業中,作業中,予定");
-    expect(await cardNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    await browser.waitUntil(async () => (await cardStates()).join() === "作業中,作業中,承認待ち,予定,完了");
+    expect(await cardNames()).toEqual(["batch-update", "e2e-check", "web-update", "summary", "api-update"]);
     expect(await browser.execute(() => document.querySelectorAll("#formation-flow-list button.formation-card").length)).toBe(4);
-    // The tabs follow the cards: a tab that is pressed for each launched child, and a tab that is not for the planned one.
+    // The tabs are those of the launched children, 作業中 first, then 承認待ち, then the done one; the planned one has none.
     expect(await count('#formation-tabs-mates button[role="tab"]')).toBe(4);
-    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["batch-update", "e2e-check", "web-update", "api-update"]);
+  });
+
+  it("joins each card to the trunk by a branch, thick and in the working color for a working child and thin and gray for the others, and colors the trunk down to the last working child", async () => {
+    await openFlow([formationChild("web-update", "waiting"), formationChild("batch-update", "working"), formationChild("api-update", "working"), formationChild("e2e-check", "planned"), formationChild("old-one", "done")]);
+    await browser.waitUntil(async () => (await cardNames()).length === 5);
+    expect(await cardNames()).toEqual(["batch-update", "api-update", "web-update", "e2e-check", "old-one"]);
+    const working = await resolvedGround("--agent-working");
+    const gray = await resolvedGround("--chip-line");
+    for (const name of ["batch-update", "api-update"]) {
+      expect(await pseudoOf(FLOW_LI(name), "::before", "backgroundColor")).toBe(working);
+      expect(await pseudoOf(FLOW_LI(name), "::before", "height")).toBe("2.5px");
+      expect(await pseudoOf(FLOW_LI(name), "::after", "backgroundColor")).toBe(working);
+    }
+    for (const name of ["web-update", "e2e-check", "old-one"]) {
+      expect(await pseudoOf(FLOW_LI(name), "::before", "backgroundColor")).toBe(gray);
+      expect(await pseudoOf(FLOW_LI(name), "::before", "height")).toBe("1.5px");
+      expect(await pseudoOf(FLOW_LI(name), "::after", "content")).toBe("none");
+    }
+  });
+
+  it("draws the trunk and every branch gray while no child works", async () => {
+    await openFlow([formationChild("web-update", "waiting"), formationChild("e2e-check", "planned")]);
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    const gray = await resolvedGround("--chip-line");
+    for (const name of ["web-update", "e2e-check"]) {
+      expect(await pseudoOf(FLOW_LI(name), "::before", "backgroundColor")).toBe(gray);
+      expect(await pseudoOf(FLOW_LI(name), "::before", "height")).toBe("1.5px");
+      expect(await pseudoOf(FLOW_LI(name), "::after", "content")).toBe("none");
+    }
+  });
+
+  it("puts a child that a decision page waits for among the waiting ones, after the working ones", async () => {
+    const page = { title: "要件の未決事項", atMs: MARK_AT };
+    await openFlow([formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "waiting"), formationChild("batch-update", "working")], { formation_page_read: decisionPage() }, true);
+    await browser.waitUntil(async () => (await cardNames()).length === 3);
+    expect(await cardNames()).toEqual(["batch-update", "req-login", "web-update"]);
+    expect(await pseudoOf(FLOW_LI("req-login"), "::before", "backgroundColor")).toBe(await resolvedGround("--chip-line"));
   });
 
   it("draws a card again when the state or the reply changes, and leaves the others as they are", async () => {
@@ -357,9 +399,9 @@ describe("orchestration mode: the flow pane", () => {
       formationChild("e2e-check", "planned"),
       formationChild("summary", "planned"),
     ]);
-    await browser.waitUntil(async () => (await cardStates()).slice(0, 3).join() === "完了,作業中,承認待ち");
-    expect(await textsOf("#formation-flow-list .formation-card-msg")).toEqual(["PR #12 を出しました。", "続けています。", "実行してよいか確認します。"]);
-    expect(await textsOf("#formation-flow-list .formation-card-time")).toEqual(["25 分前", "1 分未満", "1 分未満"]);
+    await browser.waitUntil(async () => (await textsOf("#formation-flow-list .formation-card-msg"))[0] === "続けています。");
+    expect(await textsOf("#formation-flow-list .formation-card-msg")).toEqual(["続けています。", "実行してよいか確認します。", "PR #12 を出しました。"]);
+    expect(await textsOf("#formation-flow-list .formation-card-time")).toEqual(["1 分未満", "1 分未満", "25 分前"]);
   });
 
   it("keeps the pressed card, and moves the selection to the leader's tab when its child is gone", async () => {
@@ -594,11 +636,12 @@ describe("orchestration mode: the view of the flow", () => {
     expect(body.top).toBeGreaterThanOrEqual(head.bottom);
   });
 
-  it("puts a tab for each child in the header of the middle pane after the leader's, with the mark of its state and its effort", async () => {
+  it("puts the tabs of the children that work, then those that wait, then the done ones in the header of the middle pane after the leader's, with the mark of its state and no tag, and none for a planned one", async () => {
     await openSession(mixed());
-    expect(await textsOf("#formation-tabs .formation-tab-name")).toEqual(["リーダー", "api-update", "web-update", "batch-update", "e2e-check", "summary"]);
-    expect(await textsOf("#formation-tabs .formation-tab-effort")).toEqual(["high", "medium", "medium", "medium", "medium", "medium"]);
-    expect(await textsOf("#formation-tabs-mates .formation-tab-mark")).toEqual(["✓", "●", "◐", "○", "○"]);
+    expect(await textsOf("#formation-tabs .formation-tab-name")).toEqual(["リーダー", "batch-update", "web-update", "api-update"]);
+    expect(await count("#formation-tabs .formation-tab-effort")).toBe(0);
+    expect(await count('#formation-tabs-mates .formation-tab[data-state="planned"]')).toBe(0);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-mark")).toEqual(["◐", "●", "✓"]);
     expect(await browser.execute(() => document.getElementById("formation-tabs")!.getAttribute("role"))).toBe("tablist");
     const marks = (state: string) => `#formation-tabs-mates .formation-tab[data-state="${state}"] .formation-tab-mark`;
     expect(await styleOf(marks("done"), "color")).toBe(await resolved("--agent-done"));
@@ -611,23 +654,21 @@ describe("orchestration mode: the view of the flow", () => {
     expect(head.bottom).toBeLessThanOrEqual(term.top + 1);
   });
 
-  it("marks a Codex child by its agent in its tab, where a Claude Code child has its effort, and on its card", async () => {
+  it("marks a Codex child by its agent in its tab and on its card, and a Claude Code child has no tag", async () => {
     await openSession([formationChild("api-update", "working"), formationChild("review-codex", "working", { agent: "codex" })]);
-    expect(await textsOf("#formation-tabs-mates .formation-tab-effort")).toEqual(["medium", "codex"]);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-effort")).toEqual(["codex"]);
     expect(await textsOf("#formation-flow-list .formation-card-agent")).toEqual(["codex"]);
     expect(await textsOf("#formation-flow-list .formation-card-name")).toEqual(["api-update", "review-codex"]);
   });
 
-  it("draws a planned child's tab dashed and not pressed, and a done child's with a ✓ and a ×", async () => {
+  it("draws no tab for a planned child, and a done child's with a ✓ and a ×", async () => {
     await openSession([formationChild("a-update", "planned"), formationChild("b-update", "done"), formationChild("c-update", "done", { handle: null })]);
-    const planned = '#formation-tabs-mates .formation-tab[data-state="planned"]';
-    expect(await styleOf(planned, "borderTopStyle")).toBe("dashed");
-    expect(await browser.execute((s) => document.querySelector(`${s} .formation-tab-main`)!.tagName, planned)).toBe("SPAN");
-    expect(await count(`${planned} .formation-tab-close`)).toBe(0);
+    expect(await count('#formation-tabs-mates .formation-tab[data-state="planned"]')).toBe(0);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["b-update", "c-update"]);
     // A done child has the × beside its name, whether or not its terminal is still listed; a done child with no terminal is shown and not pressed.
     expect(await textsOf("#formation-tabs-mates .formation-tab-close")).toEqual(["×", "×"]);
     expect(await browser.execute(() => [...document.querySelectorAll("#formation-tabs-mates .formation-tab-close")].map((b) => b.getAttribute("aria-label")))).toEqual(["b-update を閉じる", "c-update を閉じる"]);
-    expect(await browser.execute(() => [...document.querySelectorAll("#formation-tabs-mates .formation-tab")].map((t) => t.querySelector(".formation-tab-main")!.tagName))).toEqual(["SPAN", "BUTTON", "SPAN"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-tabs-mates .formation-tab")].map((t) => t.querySelector(".formation-tab-main")!.tagName))).toEqual(["BUTTON", "SPAN"]);
     // The cards of the done children have it too, and the card of a child that works has none.
     expect(await count("#formation-flow-list .formation-card-close")).toBe(2);
   });
@@ -1064,7 +1105,7 @@ describe("orchestration mode: close a child from its card", () => {
     await ask("web-update");
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false, path: null }]);
-    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,e2e-check,summary,api-update");
     await expect(confirm()).not.toExist();
     // The selection goes to the next child, and the terminal of the closed one is read no more.
     await expect($('#formation-tabs-mates [data-child="batch-update"]')).toHaveAttribute("aria-selected", "true");
@@ -1084,7 +1125,7 @@ describe("orchestration mode: close a child from its card", () => {
     await expect(confirm()).not.toHaveText(expect.stringContaining("worktree とブランチを消します"));
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: false, path: null }]);
-    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,e2e-check,summary,api-update");
     await expect(confirm()).not.toExist();
     // A child that tsunagiai made has the words about the worktree and the branch.
     await ask("batch-update");
@@ -1098,7 +1139,7 @@ describe("orchestration mode: close a child from its card", () => {
     await ask("summary");
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "summary", force: false, path: null }]);
-    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,web-update,batch-update,e2e-check");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,web-update,e2e-check,api-update");
   });
 
   it("closes a done child with the × of its tab, after the same confirmation, and takes its tab and its card away", async () => {
@@ -1110,8 +1151,8 @@ describe("orchestration mode: close a child from its card", () => {
     expect(await callsOf(close)).toEqual([]);
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "api-update", force: false, path: null }]);
-    await browser.waitUntil(async () => (await cardNames()).join() === "web-update,batch-update,e2e-check,summary");
-    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["web-update", "batch-update", "e2e-check", "summary"]);
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,web-update,e2e-check,summary");
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["batch-update", "web-update"]);
   });
 
   it("closes a done child with the × of its card the same way, and a tab of a child that is not done has no ×", async () => {
@@ -1124,7 +1165,7 @@ describe("orchestration mode: close a child from its card", () => {
     await expect($('.pop[role="alertdialog"] h3')).toHaveText("api-update を削除しますか？");
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "api-update", force: false, path: null }]);
-    await browser.waitUntil(async () => (await cardNames()).join() === "web-update,batch-update,e2e-check,summary");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,web-update,e2e-check,summary");
   });
 
   it("asks for the force when git keeps the worktree of the child whose × was pressed, and keeps the tab", async () => {
@@ -1177,7 +1218,7 @@ describe("orchestration mode: close a child from its card", () => {
     await ask("web-update");
     await yes().click();
     await waitForCalls(close);
-    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,e2e-check,summary,api-update");
     await expect($("#formation-flow-error")).toHaveText(expect.stringContaining("「web-update」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（me/web-update）"));
     await mock("formation_close_child", gone);
     await ask("summary");
@@ -1198,7 +1239,7 @@ describe("orchestration mode: close a child from its card", () => {
     await mock("formation_children", without("web-update"));
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "web-update", force: true, path: "/w/web-update" }]);
-    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,e2e-check,summary,api-update");
     await expect(confirm()).not.toExist();
   });
 
@@ -1229,7 +1270,7 @@ describe("orchestration mode: close a child from its card", () => {
     expect(await callsOf(close)).toHaveLength(1);
     await mock("formation_children", without("web-update"));
     await release("formation_close_child", gone);
-    await browser.waitUntil(async () => (await cardNames()).join() === "api-update,batch-update,e2e-check,summary");
+    await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,e2e-check,summary,api-update");
   });
 });
 
@@ -2488,7 +2529,7 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect($(`${card} .formation-card`)).toHaveAttribute("data-state", "waiting");
     expect(await browser.execute((sel) => getComputedStyle(document.querySelector(sel)!).borderTopColor, `${card} .formation-card`)).toBe(await resolvedGround("--agent-question"));
     expect(await textsOf("#formation-flow-list .formation-card-open")).toEqual(["開く"]);
-    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["req-login", "判断: 要件の未決事項", "api-update"]);
+    expect(await textsOf("#formation-tabs-mates .formation-tab-name")).toEqual(["api-update", "req-login", "判断: 要件の未決事項"]);
     await expect($(PAGE_TAB)).toHaveAttribute("role", "tab");
     await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "false");
     // The page is read only when it is shown.
@@ -3424,7 +3465,7 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await browser.waitUntil(async () => (await cardNames()).length === 2);
     expect(await cardNames()).toEqual(["web-update", "later"]);
     expect(await chip()).toEqual(["完了 2", "false"]);
-    expect(await tabNames()).toEqual(["web-update", "later"]);
+    expect(await tabNames()).toEqual(["web-update"]);
     expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(0);
   });
 
@@ -3433,21 +3474,21 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await browser.waitUntil(async () => (await cardNames()).length === 2);
     const unpressed = await styleOf(FLOW_DONE, "backgroundColor");
     await $(FLOW_DONE).click();
-    expect(await cardNames()).toEqual(["api-update", "web-update", "old-one", "later"]);
+    expect(await cardNames()).toEqual(["web-update", "later", "api-update", "old-one"]);
     expect(await chip()).toEqual(["完了 2", "true"]);
     expect(await styleOf(FLOW_DONE, "backgroundColor")).toBe(await resolved("--soft"));
     expect(await styleOf(FLOW_DONE, "backgroundColor")).not.toBe(unpressed);
     expect(await count("#formation-flow-list .formation-card-close")).toBe(2);
-    // The tabs are in the strip with the cards, in the same order.
-    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later"]);
+    // The tabs are in the strip: 作業中 first, then the done ones, and none for the planned one.
+    expect(await tabNames()).toEqual(["web-update", "api-update", "old-one"]);
     expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(2);
     // The shown cards and tabs stay through a read.
     await mock("formation_children", [...done(), formationChild("new-one", "working")]);
     await browser.waitUntil(async () => (await cardNames()).length === 5);
-    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later", "new-one"]);
+    expect(await tabNames()).toEqual(["web-update", "new-one", "api-update", "old-one"]);
     await $(FLOW_DONE).click();
-    expect(await cardNames()).toEqual(["web-update", "later", "new-one"]);
-    expect(await tabNames()).toEqual(["web-update", "later", "new-one"]);
+    expect(await cardNames()).toEqual(["web-update", "new-one", "later"]);
+    expect(await tabNames()).toEqual(["web-update", "new-one"]);
     expect(await chip()).toEqual(["完了 2", "false"]);
     expect(await count("#formation-flow-list .formation-card-close")).toBe(0);
     expect(await count("#formation-tabs-mates .formation-tab-close")).toBe(0);
@@ -3466,12 +3507,12 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await browser.waitUntil(async () => (await cardNames()).length === 5);
     await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
     await $(FLOW_DONE).click();
-    expect(await tabNames()).toEqual(["web-update", "later", "new-one"]);
+    expect(await tabNames()).toEqual(["web-update", "new-one"]);
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
     expect(await pressed("#formation-flow-root")).toBe("true");
     await expect($("#formation-teammate-term")).not.toBeDisplayed();
     await $(FLOW_DONE).click();
-    expect(await tabNames()).toEqual(["api-update", "web-update", "old-one", "later", "new-one"]);
+    expect(await tabNames()).toEqual(["web-update", "new-one", "api-update", "old-one"]);
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
     await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "false");
   });
@@ -3483,25 +3524,55 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await $(FLOW_DONE).click();
     await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
     await $(FLOW_DONE).click();
-    expect(await tabNames()).toEqual(["web-update", "later"]);
+    expect(await tabNames()).toEqual(["web-update"]);
     await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
   });
 
-  it("leaves out the tab of a decision page with its child's tab, and shows it with it", async () => {
+  it("leaves out the tab of a decision page with its child's tab, and shows it with it, once no decision page waits", async () => {
     const page = { title: "要件の未決事項", atMs: MARK_AT };
-    await openFlow([formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working")], { formation_page_read: decisionPage() }, true);
+    await openFlow([formationChild("req-login", "done", { minutes: 5, pendingPage: null }), formationChild("web-update", "working")], { formation_page_read: decisionPage() }, true);
     await browser.waitUntil(async () => (await cardNames()).length === 1);
     expect(await tabNames()).toEqual(["web-update"]);
     await $(FLOW_DONE).click();
-    expect(await tabNames()).toEqual(["req-login", "判断: 要件の未決事項", "web-update"]);
+    expect(await tabNames()).toEqual(["web-update", "req-login"]);
+    // The decision page is drawn with its child while the chip is pressed, and stays when it is pressed again (#1125).
+    await mock("formation_children", [formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working")]);
+    await browser.waitUntil(async () => (await count(PAGE_TAB)) === 1);
+    expect(await tabNames()).toEqual(["web-update", "req-login", "判断: 要件の未決事項"]);
     await $(PAGE_TAB).click();
     await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
     await expect($("#formation-page")).toBeDisplayed();
     await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["web-update", "req-login", "判断: 要件の未決事項"]);
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    // The page is answered: its mark is gone, and the done child is left out again.
+    await mock("formation_children", [formationChild("req-login", "done", { minutes: 5, pendingPage: null }), formationChild("web-update", "working")]);
+    await browser.waitUntil(async () => (await count(PAGE_TAB)) === 0);
     expect(await tabNames()).toEqual(["web-update"]);
-    expect(await count(PAGE_TAB)).toBe(0);
     await expect($("#formation-page")).not.toBeDisplayed();
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("draws the card, the 開く and the tabs of a done child that a decision page waits for with no press on the chip, and does not count it", async () => {
+    const page = { title: "要件の未決事項", atMs: MARK_AT };
+    const children = () => [formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working"), formationChild("old-one", "done", { minutes: 40 })];
+    await openFlow(children(), { formation_page_read: decisionPage() }, true);
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    expect(await cardNames()).toEqual(["web-update", "req-login"]);
+    expect(await tabNames()).toEqual(["web-update", "req-login", "判断: 要件の未決事項"]);
+    expect(await chip()).toEqual(["完了 1", "false"]);
+    await expect($('#formation-flow-list [data-name="req-login"] .formation-card-open')).toBeDisplayed();
+    await $('#formation-flow-list [data-name="req-login"] .formation-card-open').click();
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-page")).toBeDisplayed();
+    // Pressed, the chip shows the other done child too, and the number stays.
+    await $(FLOW_DONE).click();
+    expect(await cardNames()).toEqual(["web-update", "req-login", "old-one"]);
+    expect(await chip()).toEqual(["完了 1", "true"]);
+    // With no other done child the chip is not drawn.
+    await mock("formation_children", [children()[0], children()[1]]);
+    await browser.waitUntil(async () => (await chip()) === null);
+    expect(await cardNames()).toEqual(["web-update", "req-login"]);
   });
 
   it("presses the chip when a done child's row of the list is pressed, so that its tab is drawn", async () => {
@@ -3524,7 +3595,7 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     expect((await waitForCalls(close))[0]).toMatchObject({ formation: "formation", name: "old-one" });
     await browser.waitUntil(async () => (await chip())?.[0] === "完了 1");
-    expect(await tabNames()).toEqual(["api-update", "web-update", "later"]);
+    expect(await tabNames()).toEqual(["web-update", "api-update"]);
   });
 
   it("opens and closes apart from the chip of the same formation's row in the list", async () => {
@@ -3612,13 +3683,13 @@ describe("orchestration mode: the compact flow pane", () => {
     expect(leader.bottom).toBeLessThanOrEqual(arrow.top);
     expect(arrow.bottom).toBeLessThanOrEqual(first.top);
     // Each child is one orb of 36px, with its name under it, in the order of the cards (the done one is left out until its chip is pressed).
-    expect(await orbNames()).toEqual(["web-update", "batch-update", "e2e-check", "summary"]);
+    expect(await orbNames()).toEqual(["batch-update", "web-update", "e2e-check", "summary"]);
     expect(await widthOf("#formation-flow-orbs .formation-orb-dot")).toBe(36);
     expect(await count("#formation-flow-orbs .formation-orb-dot")).toBe(4);
     const [dot, name] = [await rectOf("#formation-flow-orbs .formation-orb-dot"), await rectOf("#formation-flow-orbs .formation-orb-name")];
     expect(dot.bottom).toBeLessThanOrEqual(name.top);
-    expect(await textsOf("#formation-flow-orbs .formation-orb-dot")).toEqual(["W", "B", "E", "S"]);
-    expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-orbs .formation-orb")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["waiting", "working", "planned", "planned"]);
+    expect(await textsOf("#formation-flow-orbs .formation-orb-dot")).toEqual(["B", "W", "E", "S"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-orbs .formation-orb")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["working", "waiting", "planned", "planned"]);
   });
 
   it("flows the dashes of the arrow", async () => {
@@ -3738,7 +3809,7 @@ describe("orchestration mode: the compact flow pane", () => {
     expect(await orbNames()).not.toContain("api-update");
     await $(FLOW_DONE).click();
     await expect($(FLOW_DONE)).toHaveAttribute("aria-pressed", "true");
-    expect(await orbNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    expect(await orbNames()).toEqual(["batch-update", "web-update", "e2e-check", "summary", "api-update"]);
     await expect($(ORB("api-update"))).toHaveAttribute("data-state", "done");
     // The tabs follow the chip, as in the standard view.
     expect(await count('#formation-tabs-mates [data-child="api-update"]')).toBe(1);
@@ -3764,7 +3835,7 @@ describe("orchestration mode: the compact flow pane", () => {
     expect(await storedView()).toBe("0");
     expect(await widthOf("#formation-flow")).toBe(260);
     await expect($("#formation-flow-root")).toBeDisplayed();
-    expect(await cardNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    expect(await cardNames()).toEqual(["batch-update", "web-update", "e2e-check", "summary", "api-update"]);
     await openFlow(mixed());
     await expect($(SIZE)).toHaveAttribute("aria-pressed", "false");
     expect(await widthOf("#formation-flow")).toBe(260);
@@ -3818,6 +3889,18 @@ describe("orchestration mode: the compact flow pane", () => {
       await told();
       await browser.waitUntil(async () => (await count('#formation-flow-orbs [data-instructed="true"]')) === 0);
       expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+    });
+
+    it("puts the others after the told ones in the order of the cards: working, waiting, planned, and the done one once its chip is pressed", async () => {
+      const list = () => [formationChild("plan-one", "planned"), formationChild("wait-one", "waiting"), formationChild("work-one", "working"), formationChild("work-two", "working"), formationChild("done-one", "done")];
+      await asCompact(list(), {}, true);
+      expect(await orbNames()).toEqual(["work-one", "work-two", "wait-one", "plan-one"]);
+      await $(FLOW_DONE).click();
+      await browser.waitUntil(async () => (await orbNames()).length === 5);
+      expect(await orbNames()).toEqual(["work-one", "work-two", "wait-one", "plan-one", "done-one"]);
+      await told("wait-one");
+      await browser.waitUntil(async () => (await orbNames())[0] === "wait-one");
+      expect(await orbNames()).toEqual(["wait-one", "work-one", "work-two", "plan-one", "done-one"]);
     });
 
     it("slides the orbs that moved, and does not when the system asks for less motion", async () => {

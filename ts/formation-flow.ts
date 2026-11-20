@@ -1,5 +1,5 @@
-// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×, and none while the chip 「完了 N」 of the flow pane is not pressed). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
-// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117).
+// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then the tabs of the children: 作業中 first and 承認待ち after it (a child that a decision page waits for is one), each in the order `formation_children` gives, and none for a planned one; a done one has a ✓ and a ×, comes last, and has no tab while the chip 「完了 N」 of the flow pane is not pressed, unless a decision page waits for it, #1125). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
+// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117); a done child that a decision page waits for is drawn without the chip (#1125).
 // A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
 // The pane has two views, 「標準」 (the cards above) and 「コンパクト」 (78px wide: the leader as one orb, one arrow under it, and each child as one orb with its name under it; the card's content comes in a tip while the pointer or the focus is on an orb), switched by the button `#formation-flow-size` of the heading. The one chosen is kept in the page's `localStorage`, so it stays when the app starts again. The compact view also reads `formation_instructed` with each read of the children (#1087): the children that the leader told something and that have not answered are colored and go up under the leader's orb, sliding there.
@@ -302,8 +302,8 @@ function syncSelection() {
   if (pageChild !== null && !hasPage(pageChild)) pageChild = null;
   if (follow) selected = followTarget(terms, selected) ?? selected;
   if (selected !== null && !terms.some((c) => c.name === selected)) selected = null;
-  // A done child whose tab is left out (the chip is not pressed) is not the selection: the leader's tab is. Its page tab goes with it.
-  const left = (name: string) => children.some((c) => c.name === name && !isShown(c));
+  // A child whose tab is left out (a planned one, or a done one while the chip is not pressed) is not the selection: the leader's tab is. Its page tab goes with it.
+  const left = (name: string) => children.some((c) => c.name === name && !isTabShown(c));
   if (selected !== null && left(selected)) selected = null;
   if (pageChild !== null && left(pageChild)) pageChild = null;
   const handles = new Set(terms.map((c) => c.handle));
@@ -422,8 +422,6 @@ function focusSelector(el: HTMLElement | null): string | undefined {
 }
 
 const MARKS: Record<FormationState, string> = { working: "◐", waiting: "●", done: "✓", planned: "○" };
-// The effort a child is started with (the leader's is high, A-37).
-const EFFORT = "medium";
 
 // What a card says of a child, in its two rows: the name (with the agent of a Codex one and the time) and the state (with the last words, or the title of its decision page). The tip of an orb of the compact view says the same.
 function cardRows(c: FormationChild, now: number) {
@@ -474,10 +472,10 @@ function card(c: FormationChild, now: number): HTMLLIElement {
 // The children that are told something and have not answered (and are not done): the orbs that are colored and that go up.
 const isInstructed = (c: FormationChild) => c.state !== "done" && instructed.includes(c.name);
 
-// The order of the orbs of the compact view; the one place that decides it: the children that were told something first, the newest instruction first (the order of `instructed`), and under them the others in the order of the cards.
+// The order of the orbs of the compact view; the one place that decides it: the children that were told something first, the newest instruction first (the order of `instructed`), and under them the others in the order of the cards (`flowOrder`).
 const compactOrder = (list: FormationChild[]): FormationChild[] => {
   const told = instructed.flatMap((name) => list.filter((c) => c.name === name && isInstructed(c)));
-  return [...told, ...list.filter((c) => !told.includes(c))];
+  return [...told, ...flowOrder(list.filter((c) => !told.includes(c)))];
 };
 
 // The orb of a child in the compact view: a circle with the first letter of its name, framed in the color of its state (a Codex child's has the blue ground and the tag 「cx」), and its name under it. It selects the child as its card does, and the card's content is its tip.
@@ -567,7 +565,7 @@ function closeButton(c: FormationChild, anchor: Element, className: string): HTM
   return button;
 }
 
-// The tab of a child: the mark of its state, its name and its effort; a done one has a × too. Only a child with a terminal is a button; a planned child, and a done one whose terminal is gone, are shown and not pressed.
+// The tab of a child: the mark of its state and its name, and the tag 「codex」 for a Codex child; a done one has a × too. Only a child with a terminal is a button; a done one whose terminal is gone is shown and not pressed.
 function tab(c: FormationChild): HTMLSpanElement {
   const wrap = tag("span", "formation-tab");
   wrap.dataset.state = c.state;
@@ -575,8 +573,7 @@ function tab(c: FormationChild): HTMLSpanElement {
   const mark = span("formation-tab-mark", MARKS[c.state]);
   mark.setAttribute("aria-hidden", "true");
   const name = span("formation-tab-name", c.name);
-  // A Codex child has no effort: its chip names the agent instead.
-  const label = [mark, name, span("formation-tab-effort", c.agent === "codex" ? c.agent : EFFORT)];
+  const label = c.agent === "codex" ? [mark, name, span("formation-tab-effort", c.agent)] : [mark, name];
   if (c.handle !== null) {
     const main = tag("button", "formation-tab-main");
     main.type = "button";
@@ -617,7 +614,7 @@ function pageTab(c: FormationChild): HTMLSpanElement {
 // The tabs of the children, drawn again in place only when what they show changed; the leader's tab is always there.
 function drawTabs() {
   $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null && pageChild === null));
-  const shown = children.filter(isShown);
+  const shown = flowOrder(children.filter(isTabShown));
   const key = JSON.stringify([selected, pageChild, [...closing], shown.map((c) => [c.name, c.state, c.handle !== null, c.agent, c.pendingPage?.title ?? null])]);
   if (key === tabsKey) return;
   tabsKey = key;
@@ -629,13 +626,23 @@ function drawTabs() {
 
 const showDone = () => doneShown.has(currentFormation() ?? "");
 
-// Whether the card and the tab of `c` are drawn: a done child's only while the chip 「完了 N」 is pressed.
-const isShown = (c: FormationChild) => c.state !== "done" || showDone();
+// The order of the cards, the orbs and the tabs, the one place that decides it: 作業中 first, then 承認待ち (a child that a decision page waits for is one too), then 予定, then the done ones that are shown; the order of the read stays inside each.
+const flowRank = (c: FormationChild) => (c.pendingPage !== null ? 1 : c.state === "working" ? 0 : c.state === "waiting" ? 1 : c.state === "planned" ? 2 : 3);
+function flowOrder(list: FormationChild[]): FormationChild[] {
+  return list.map((c, i) => ({ c, i })).sort((a, b) => flowRank(a.c) - flowRank(b.c) || a.i - b.i).map(({ c }) => c);
+}
+
+// The tabs of the children, in `flowOrder`. A planned child has no tab.
+const isTabShown = (c: FormationChild) => c.state !== "planned" && isShown(c);
+
+// Whether the card and the tab of `c` are drawn: a done child's only while the chip 「完了 N」 is pressed, unless a decision page waits for the owner (#1125).
+const isShown = (c: FormationChild) => c.state !== "done" || c.pendingPage !== null || showDone();
 
 // The chip 「完了 N」 in the heading: none while no child is done; pressed, the cards and the tabs of the done children are shown.
 function drawDoneChip() {
   const chip = $("formation-flow-done");
-  const done = children.filter((c) => c.state === "done").length;
+  // Only the done children that the chip leaves out: one that a decision page waits for is drawn without it.
+  const done = children.filter((c) => c.state === "done" && c.pendingPage === null).length;
   chip.hidden = done === 0;
   // The compact view has the room of a short chip: the mark and the number, with the words as its name.
   chip.textContent = compact ? `✓${done}` : `完了 ${done}`;
@@ -681,7 +688,7 @@ function draw() {
     orbs.replaceChildren(...compactOrder(shown).map(orb));
   } else {
     orbs.replaceChildren();
-    list.replaceChildren(...shown.map((c) => card(c, now)));
+    list.replaceChildren(...flowOrder(shown).map((c) => card(c, now)));
   }
   $("formation-flow-arrow").toggleAttribute("hidden", shown.length === 0);
   body.scrollTop = top;
