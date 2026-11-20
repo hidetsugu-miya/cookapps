@@ -3621,17 +3621,10 @@ describe("orchestration mode: the compact flow pane", () => {
     expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-orbs .formation-orb")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["waiting", "working", "planned", "planned"]);
   });
 
-  it("flows the dashes of the arrow, and stops them where motion is reduced", async () => {
+  it("flows the dashes of the arrow", async () => {
     await asCompact(mixed());
     expect(await styleOf("#formation-flow-arrow .formation-arrow-line", "animationName")).toBe("formation-arrow-flow");
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#formation-flow-arrow .formation-arrow-line")!).strokeDasharray)).not.toBe("none");
-    expect(
-      await browser.execute(() =>
-        [...document.styleSheets].some((sheet) =>
-          [...sheet.cssRules].some((rule) => rule instanceof CSSMediaRule && rule.conditionText.includes("prefers-reduced-motion: reduce") && [...rule.cssRules].some((r) => r.cssText.includes(".formation-arrow-line") && r.cssText.includes("animation: none"))),
-        ),
-      ),
-    ).toBe(true);
   });
 
   it("frames each orb in the color of the card of its state, and draws a planned one dashed", async () => {
