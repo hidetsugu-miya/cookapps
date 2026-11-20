@@ -1,6 +1,7 @@
 // The blocks and the evidence of a decision page (A-41, formation-page.ts): what a child wrote in its page and what Rust read for it. The text is the child's, so every text goes in as `textContent`; nothing is read as HTML. The one exception is the SVG that Mermaid draws (`securityLevel: "strict"`), which goes through DOMPurify's SVG profile.
 import type { Block } from "./bindings/Block";
 import type { Evidence } from "./bindings/Evidence";
+import type { ImageRef } from "./bindings/ImageRef";
 import { tag } from "./dom.js";
 import { loadMermaid } from "./vendor-load.js";
 
@@ -55,6 +56,8 @@ function drawBlock(block: Block, lazy: boolean): HTMLElement {
     }
     case "diagram":
       return drawDiagram(block.mermaid, block.caption, lazy);
+    case "image":
+      return drawImage(block, lazy);
     case "evidence":
       return drawEvidence(block.items);
   }
@@ -83,6 +86,54 @@ function drawTable(header: string[], rows: { text: string; changed: boolean }[][
   return wrap;
 }
 
+// How the images of the page being drawn are read: `drawPage` sets it before it draws, and every image takes it when it is drawn.
+type ImageLoader = (root: string, path: string) => Promise<string>;
+let imageLoader: ImageLoader | null = null;
+
+export function useImages(load: ImageLoader) {
+  imageLoader = load;
+}
+
+// An image of the page (an `image` block, and later the images of the cards and their options): the file is read when the image is drawn, or, inside a fold that is closed, when the fold is first opened. It is shown 400px wide at most, with its caption and a button that widens it to the width of the body and back. A file that cannot be read or shown leaves the reason in its place.
+export function drawImage(image: ImageRef, lazy: boolean): HTMLElement {
+  const load = imageLoader;
+  const figure = tag("figure", "fp-image");
+  const box = tag("div", "fp-image-box");
+  const zoom = tag("button", "fp-image-zoom", "拡大する");
+  zoom.type = "button";
+  zoom.hidden = true;
+  zoom.onclick = () => {
+    const wide = figure.dataset.wide !== "true";
+    figure.dataset.wide = String(wide);
+    zoom.textContent = wide ? "縮小する" : "拡大する";
+  };
+  figure.append(box, tag("figcaption", "", image.caption), zoom);
+  const fail = (reason: string) => {
+    zoom.hidden = true;
+    box.replaceChildren(tag("p", "fp-image-error", `画像を読めません（${image.root}/${image.path}）: ${reason}`));
+  };
+  const paint = async () => {
+    try {
+      if (load === null) throw new Error("画像の読み込み元が決まっていません");
+      const picture = tag("img");
+      picture.alt = image.caption;
+      picture.onerror = () => fail("画像として表示できません");
+      picture.onload = () => {
+        zoom.hidden = false;
+      };
+      picture.src = await load(image.root, image.path);
+      box.replaceChildren(picture);
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
+  };
+  if (lazy) {
+    box.dataset.pending = "true";
+    pending.set(box, () => void paint());
+  } else void paint();
+  return figure;
+}
+
 // The number of the diagrams drawn, so that each SVG has an id of its own.
 let diagrams = 0;
 const darkScheme = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -107,7 +158,7 @@ const pending = new WeakMap<HTMLElement, () => void>();
 
 // Draws the waiting diagrams of `root` that no closed fold hides.
 function paintPending(root: HTMLElement) {
-  for (const box of root.querySelectorAll<HTMLElement>(".fp-diagram-box[data-pending]")) {
+  for (const box of root.querySelectorAll<HTMLElement>(".fp-diagram-box[data-pending], .fp-image-box[data-pending]")) {
     if (box.closest("details:not([open])") !== null) continue;
     delete box.dataset.pending;
     pending.get(box)?.();

@@ -8,7 +8,7 @@ import type { PageVerdict } from "./bindings/PageVerdict";
 import type { ScopeGroup } from "./bindings/ScopeGroup";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
-import { drawBlocks, drawEvidence, fold } from "./formation-page-blocks.js";
+import { drawBlocks, drawEvidence, fold, useImages } from "./formation-page-blocks.js";
 import { invoke } from "./ipc.js";
 
 interface Choice {
@@ -56,7 +56,8 @@ let cards = 0;
 // The verdict of a page and the writing of a revision, as chosen; `send` fails with the message when the reply could not be sent.
 type Send = (answers: PageAnswer[], verdict: PageVerdict | null, revision: string) => Promise<void>;
 
-export function drawPage(page: DecisionPage, child: string, atMs: number, send: Send): HTMLElement {
+export function drawPage(page: DecisionPage, formation: string, child: string, atMs: number, send: Send): HTMLElement {
+  useImages((root, path) => invoke("formation_page_image", { name: formation, child, root, path }));
   const root = tag("article", "fp");
   root.dataset.child = child;
   root.dataset.at = String(atMs);

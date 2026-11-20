@@ -4,7 +4,7 @@
 //! The pieces, from the bottom up.
 //! - The frame: XSalsa20-Poly1305 under a key for each direction, with a nonce that is the direction and a counter, so that a replayed, reordered or reused frame does not open.
 //! - The handshake: each side sends an ephemeral public key, and the keys are derived from the DH of the ephemeral keys and the DH of the two pinned (static) keys together with the transcript, so that one who does not know its static key cannot derive them.
-//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `messages.read`, `asked.read`, `asked.clear`, `page.read`, `page.answer`, `subscribe`, `stop`).
+//! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `messages.read`, `asked.read`, `asked.clear`, `page.read`, `image.read`, `page.answer`, `subscribe`, `stop`).
 //! - The pushes (#983): `subscribe` turns the connection into one that the daemon pushes requests through, so the PC can ask something of the app without a port on the app's PC. `Hub` is the daemon's end (`Hub::push`, fed by `push.sock` of `remote/`, which a `tsunagiai-mcp` of that PC reaches with `push_to_daemon`), `Pushes` is the app's end.
 //! - The server (`serve`, the daemon of `--serve`) and the client (`Client`), which the app uses.
 //!
@@ -45,7 +45,7 @@ use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
 
 use crate::{
     formation::{self, Child, CHILDREN_FILE},
-    formation_ask, formation_message,
+    formation_ask, formation_image, formation_message,
     formation_page::{self, DecisionPage, PageRecord},
 };
 
@@ -375,6 +375,16 @@ struct PageParams {
     light: bool,
 }
 
+/// `image.read`: the chunk of an image of the page of `child` from `offset` (bytes), `CHUNK` at most; the reply says the whole size, so that the client asks again until it has it.
+#[derive(Deserialize)]
+struct ImageParams {
+    formation: String,
+    child: String,
+    root: String,
+    path: String,
+    offset: usize,
+}
+
 #[derive(Deserialize)]
 struct AnswerParams {
     formation: String,
@@ -562,6 +572,25 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
                 !params.light,
             ) {
                 Ok((page, at)) => Reply::ok(json!({"page": page, "at": at})),
+                Err(e) => Reply::error(&e),
+            }
+        }
+        "image.read" => {
+            let Ok(params) = serde_json::from_value::<ImageParams>(request.params) else {
+                return bad_params();
+            };
+            match formation_page::image_here(
+                config,
+                &params.formation,
+                &params.child,
+                &params.root,
+                &params.path,
+            ) {
+                Ok(image) => Reply::ok(json!({
+                    "mime": image.mime,
+                    "total": image.bytes.len(),
+                    "data": STANDARD.encode(formation_image::chunk(&image, params.offset)),
+                })),
                 Err(e) => Reply::error(&e),
             }
         }
@@ -1137,6 +1166,44 @@ impl Client {
         let bad = || "サーバーの答えの形式が正しくありません".to_owned();
         let page = serde_json::from_value(result["page"].clone()).map_err(|_| bad())?;
         Ok((page, result["at"].as_u64().ok_or_else(bad)?))
+    }
+
+    /// An image of the page of `child` as a `data:` URI (A-41, #1153): the file `path` of the page's root `root` on that PC, asked for chunk by chunk (a frame is 1 MiB) until the whole of it is here. A type that is no image type is refused, so the URI can be nothing else.
+    pub async fn image_read(
+        &mut self,
+        formation: &str,
+        child: &str,
+        root: &str,
+        path: &str,
+    ) -> Result<String, String> {
+        let bad = || "サーバーの答えの形式が正しくありません".to_owned();
+        let mut bytes: Vec<u8> = Vec::new();
+        loop {
+            let result = self
+                .call(
+                    "image.read",
+                    json!({"formation": formation, "child": child, "root": root, "path": path, "offset": bytes.len()}),
+                )
+                .await?;
+            let mime = result["mime"]
+                .as_str()
+                .filter(|mime| formation_image::MIMES.contains(mime))
+                .ok_or_else(bad)?;
+            let total = result["total"].as_u64().ok_or_else(bad)?;
+            if total > formation_image::IMAGE_LIMIT as u64 {
+                return Err(bad());
+            }
+            let part = STANDARD
+                .decode(result["data"].as_str().ok_or_else(bad)?)
+                .map_err(|_| bad())?;
+            bytes.extend_from_slice(&part);
+            if bytes.len() as u64 >= total {
+                return Ok(formation_image::data_uri(mime, &bytes));
+            }
+            if part.is_empty() {
+                return Err(bad());
+            }
+        }
     }
 
     /// Marks the page of `child` recorded at `at` as answered on that PC, so that it no longer waits (#923). A page that was replaced or is answered already is refused with the reason.
@@ -2211,6 +2278,17 @@ mod tests {
             json!({"formation": "api-work", "child": "../x"}),
         );
         assert_eq!(bad.body["ok"], false);
+        // An image of a page is asked for by its place and the offset; with no offset, or for a child with no page waiting, it is refused before Orca is asked.
+        let image = |params: Value| call(&config, "image.read", params);
+        let place = json!({"formation": "api-work", "child": "two", "root": "deliverables", "path": "a.png"});
+        assert_eq!(image(place.clone()).body["ok"], false);
+        let mut with_offset = place;
+        with_offset["offset"] = json!(0);
+        let missing = image(with_offset.clone());
+        assert_eq!(missing.body["ok"], false);
+        assert!(missing.body["error"].as_str().unwrap().contains("two"));
+        with_offset["child"] = json!("../x");
+        assert_eq!(image(with_offset).body["ok"], false);
         std::fs::remove_dir_all(&config).unwrap();
     }
 

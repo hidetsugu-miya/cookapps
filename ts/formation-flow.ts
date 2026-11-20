@@ -252,7 +252,7 @@ async function loadPage(formation: string, name: string, atMs: number) {
   try {
     const page = await invoke("formation_page_read", { name: formation, child: name });
     if (pages.get(name) !== state) return;
-    state.el = drawPage(page, name, atMs, (answers, verdict, revision) => answerPage(formation, name, atMs, answers, verdict, revision));
+    state.el = drawPage(page, formation, name, atMs, (answers, verdict, revision) => answerPage(formation, name, atMs, answers, verdict, revision));
   } catch (e) {
     if (pages.get(name) !== state) return;
     state.error = String(e);

@@ -1068,7 +1068,7 @@ button.status:hover { filter: brightness(.95); }
 .formation-row { display: flex; align-items: center; gap: 10px; flex: 1 1 0; min-width: 0; min-height: 36px; box-sizing: border-box; padding: 0 10px 0 32px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .formation-row[aria-pressed="true"] { font-weight: 600; }
 .formation-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The ring before the name: gray; while the leader waits for input (#915) it is filled orange with a pale ring around it, and a label stands at the right end of the row. */
+/* The ring before the name: gray; while the leader waits for input (#915) it is filled orange with a pale ring around it, and a label stands at the right end of the row; the row of a child that a decision page waits for has the label too (#1151). */
 .formation-row-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 3px; border: 1.5px solid var(--muted); border-radius: 50%; }
 .formation-row[data-waiting="true"] .formation-row-dot { border-color: var(--agent-question); background: var(--agent-question); box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-question) 25%, var(--surface)); }
 .formation-row-waiting { flex: none; margin-left: auto; padding: 2px 7px; border-radius: 10px; background: color-mix(in srgb, var(--agent-question) 14%, var(--surface)); color: color-mix(in srgb, var(--agent-question) 75%, #000); font-size: calc(11px * var(--fs)); font-weight: 600; }
@@ -1163,6 +1163,15 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-diagram-box { overflow-x: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .fp-diagram-box svg { width: 100%; max-width: 100%; height: auto; fill: initial; stroke: none; stroke-width: initial; }
 .fp-diagram figcaption { color: var(--muted); font-size: calc(13px * var(--fs)); }
+.fp-image { margin: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.fp-image-box { max-width: 100%; }
+.fp-image-box img { display: block; max-width: min(100%, 400px); height: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.fp-image[data-wide="true"] { align-items: stretch; }
+.fp-image[data-wide="true"] .fp-image-box img { width: 100%; max-width: 100%; }
+.fp-image figcaption { color: var(--muted); font-size: calc(13px * var(--fs)); }
+.fp-image-zoom { align-self: flex-start; padding: 2px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--accent-text); font: inherit; font-size: calc(13px * var(--fs)); cursor: pointer; }
+.fp-image-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fp-image-error { margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--danger); font-size: calc(13px * var(--fs)); }
 .fp-diagram-source, .fp-pre { margin: 0; padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 8px; background: var(--code); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); white-space: pre-wrap; }
 .fp-diagram-box[data-drawn="true"] .fp-diagram-source { display: none; }
 .fp-evidence { display: flex; flex-direction: column; gap: 10px; }

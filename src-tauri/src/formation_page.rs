@@ -8,7 +8,7 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::{mpsc, Mutex, PoisonError},
+    sync::{mpsc, Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -21,6 +21,7 @@ use crate::{
     accounts,
     auth::config_dir,
     formation::{self, Child, Refusal, LOCAL},
+    formation_image,
     formation_server::Client,
     orca,
     orca_files::check_relative,
@@ -203,6 +204,16 @@ pub struct TableCell {
     pub changed: bool,
 }
 
+/// An image of the page: a file of a root, with the words that describe it. The file is not in the page; the screen reads it when it draws it (`formation_page_image`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct ImageRef {
+    pub root: String,
+    pub path: String,
+    pub caption: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -240,6 +251,7 @@ pub enum Block {
         mermaid: String,
         caption: Option<String>,
     },
+    Image(ImageRef),
     Evidence {
         items: Vec<Evidence>,
     },
@@ -517,7 +529,7 @@ impl Allowed {
 }
 
 /// A file of `root` (a real path), by a clean relative path: its real path, which stays inside `root` whatever links lie on the way.
-fn locate(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub(crate) fn locate(root: &Path, relative: &str) -> Result<PathBuf, String> {
     check_clean(relative)?;
     let real = std::fs::canonicalize(root.join(relative)).map_err(|_| "ファイルがありません")?;
     let inner = real
@@ -528,7 +540,7 @@ fn locate(root: &Path, relative: &str) -> Result<PathBuf, String> {
 }
 
 /// The bytes of a regular file, at most `limit`.
-fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let meta = std::fs::metadata(path).map_err(|_| "ファイルを読めません")?;
     if !meta.is_file() {
         return Err("ファイルではありません".into());
@@ -977,6 +989,31 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// An image `{root, path, caption}` of `map` (its keys are checked by the caller): the root is one of the page's, the path is clean and names an image by its extension, and, when the page is resolved, the file is there and fits (`formation_image::check`). The caption is the words that describe it.
+    fn image_ref(&mut self, map: &Object, path: &str) -> Option<ImageRef> {
+        let root = self.root_of(map, path);
+        let file = self.text(map, "path", path, true);
+        let caption = self.text(map, "caption", path, true);
+        let ((name, root), file, caption) = (root?, file?, caption?);
+        let at = format!("{path}.path");
+        if let Err(message) = check_clean(&file).and_then(|()| formation_image::require_mime(&file))
+        {
+            self.bad(&at, message);
+            return None;
+        }
+        if self.resolve {
+            if let Err(message) = formation_image::check(&root, &file) {
+                self.bad(&at, message);
+                return None;
+            }
+        }
+        Some(ImageRef {
+            root: name,
+            path: file,
+            caption,
+        })
+    }
+
     // -- evidence --
 
     fn evidence_list(&mut self, value: &Value, path: &str) -> Vec<Evidence> {
@@ -1360,6 +1397,10 @@ impl<'a> Walk<'a> {
                 }
                 Some(Block::Diagram { mermaid, caption })
             }
+            "image" => {
+                let map = self.keys(value, path, &["type", "root", "path", "caption"])?;
+                self.image_ref(map, path).map(Block::Image)
+            }
             "evidence" => {
                 let map = self.keys(value, path, &["type", "items"])?;
                 self.some(map, "items", path)?;
@@ -1369,7 +1410,7 @@ impl<'a> Walk<'a> {
             _ => {
                 self.bad(
                     &format!("{path}.type"),
-                    "paragraph、heading、list、callout、table、before-after、folded、diagram、evidence のどれかにしてください",
+                    "paragraph、heading、list、callout、table、before-after、folded、diagram、image、evidence のどれかにしてください",
                 );
                 None
             }
@@ -2374,6 +2415,88 @@ pub async fn formation_page_read(
     .await?
 }
 
+// ---- the images of a page ----
+
+/// The image `path` of the root `root` of the page that waits on `child`, prepared for the screen. The page is checked again (its cards alone, no evidence is read), so a root is one of its roots, which `Allowed` has held to the repositories of this PC; the path is then held inside the root as every path of a page is.
+pub fn image_with(
+    config: &Path,
+    formation: &str,
+    child: &str,
+    root: &str,
+    path: &str,
+    allowed: &Allowed,
+) -> Result<Arc<formation_image::Prepared>, String> {
+    let (page, worktree) = waiting_page(config, formation, child)?;
+    let loaded = load_input(&page.path, &worktree, allowed).map_err(|v| violations_text(&v))?;
+    let dir = loaded
+        .roots
+        .get(root)
+        .ok_or_else(|| format!("roots にない名前です: {root}"))?;
+    formation_image::file(Path::new(dir), path)
+}
+
+/// `image_with` for the repositories of this PC (`image.read` of the server, and the read of a formation of this Mac).
+pub fn image_here(
+    config: &Path,
+    formation: &str,
+    child: &str,
+    root: &str,
+    path: &str,
+) -> Result<Arc<formation_image::Prepared>, String> {
+    let allowed = allowed_here().map_err(|r| formation::refusal_text(&r))?;
+    image_with(config, formation, child, root, path, &allowed)
+}
+
+/// An image of the page of `child` as a `data:` URI: read here for a formation of this Mac, and through the server of its PC for a formation of a saved environment (the file is on that PC).
+fn image_for_screen(
+    config: &Path,
+    formation: &str,
+    child: &str,
+    root: &str,
+    path: &str,
+    open: &impl AsyncFn(&str) -> Result<Client, String>,
+) -> Result<String, String> {
+    formation::check_name(formation)?;
+    let (environment, started) = formation::formation_home(config, formation);
+    if environment == LOCAL {
+        let image = image_here(config, formation, child, root, path)?;
+        return Ok(formation_image::data_uri(image.mime, &image.bytes));
+    }
+    if !started {
+        return Err(format!("「{child}」に判断待ちのページはありません"));
+    }
+    formation::on_pc(
+        &environment,
+        open,
+        formation::PC_RECORD_WAIT,
+        async |client| client.image_read(formation, child, root, path).await,
+    )
+}
+
+/// An image of the decision page that waits on the child `child` of the formation `name`, as a `data:` URI (A-41, #1153): the file `path` of the page's root `root`, made smaller when it is over 3 MiB. The page holds only the name of the file, and the screen asks for each image when it draws it. A failure carries the reason, which the screen shows in the image's place.
+#[tauri::command]
+pub async fn formation_page_image(
+    app: tauri::AppHandle,
+    name: String,
+    child: String,
+    root: String,
+    path: String,
+) -> Result<String, String> {
+    let dir = config_dir(&app)?;
+    let version = app.package_info().version.to_string();
+    orca::blocking(move || {
+        image_for_screen(
+            &dir,
+            &name,
+            &child,
+            &root,
+            &path,
+            &formation::pc_connect(&dir, &version, true),
+        )
+    })
+    .await?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2691,7 +2814,7 @@ mod tests {
         let repo = repo("blocks");
         let mut value = approval(&repo);
         value["changes"] = json!([{"heading": "h", "blocks": [
-            {"type": "image", "root": "repo", "path": "a.png", "caption": "c"},
+            {"type": "video", "root": "repo", "path": "a.mp4", "caption": "c"},
             {"type": "diagram", "mermaid": "pie\n \"a\": 1"},
             {"type": "list", "items": []},
             {"type": "evidence", "items": [{"type": "current", "note": "n", "excerpts": []}]}
@@ -3634,6 +3757,194 @@ mod tests {
         mark_pending(&mut rows, &children, &[record_of("one", 300)]);
         assert_eq!(rows[0].pending_page.as_ref().unwrap().at_ms, 300);
         assert_eq!(rows[1].pending_page, None);
+    }
+
+    // -- images --
+
+    /// A page of one change with the blocks `blocks`.
+    fn page_with_blocks(repo: &Repo, blocks: Value) -> Value {
+        let mut value = approval(repo);
+        value["changes"] = json!([{"heading": "h", "blocks": blocks}]);
+        value
+    }
+
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xa7, 0x35, 0x81, 0x84, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    fn write_bytes(dir: &Path, relative: &str, bytes: &[u8]) {
+        let path = dir.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn an_image_block_is_accepted_with_its_file_left_out_of_the_page() {
+        let repo = repo("image-accept");
+        write_bytes(&repo.dir, ".feature-dev/current/ui/a.PNG", PNG_1X1);
+        write_bytes(
+            &repo.dir,
+            "shots/b.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+        );
+        let value = page_with_blocks(
+            &repo,
+            json!([
+                {"type": "image", "path": "ui/a.PNG", "caption": "いまの画面"},
+                {"type": "image", "root": "repo", "path": "shots/b.svg", "caption": "図"},
+                {"type": "folded", "summary": "s", "blocks": [
+                    {"type": "image", "root": "repo", "path": "shots/b.svg", "caption": "中の図"}
+                ]}
+            ]),
+        );
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(
+            page.changes[0].blocks[0],
+            Block::Image(ImageRef {
+                root: "deliverables".into(),
+                path: "ui/a.PNG".into(),
+                caption: "いまの画面".into(),
+            })
+        );
+        let json = serde_json::to_value(&page.changes[0].blocks[1]).unwrap();
+        assert_eq!(
+            json,
+            json!({"type": "image", "root": "repo", "path": "shots/b.svg", "caption": "図"})
+        );
+        let Block::Folded { blocks, .. } = &page.changes[0].blocks[2] else {
+            panic!("a folded block");
+        };
+        assert!(matches!(blocks[0], Block::Image(_)));
+        // The page that is read for its cards alone checks the shape and touches no file.
+        let mut gone = value.clone();
+        gone["changes"][0]["blocks"][0]["path"] = json!("ui/none.png");
+        assert!(build_input(&gone, &repo.allowed()).is_ok());
+        assert_eq!(
+            paths(&violations(&gone, &repo)),
+            ["$.changes[0].blocks[0].path"]
+        );
+    }
+
+    #[test]
+    fn an_image_that_is_no_image_or_outside_the_boundary_or_too_large_is_refused() {
+        let repo = repo("image-refuse");
+        let outside = temp_dir("image-outside");
+        write_bytes(&outside, "secret.png", PNG_1X1);
+        write_bytes(&repo.dir, ".feature-dev/current/ui/a.png", PNG_1X1);
+        write_bytes(&repo.dir, ".feature-dev/current/ui/notes.txt", b"text");
+        write_bytes(&repo.dir, ".git/hooks/x.png", PNG_1X1);
+        write_bytes(&repo.dir, ".env.png", PNG_1X1);
+        write_bytes(
+            &repo.dir,
+            "big.png",
+            &vec![7; formation_image::IMAGE_LIMIT + 1],
+        );
+        write_bytes(
+            &repo.dir,
+            "big.svg",
+            &vec![b' '; formation_image::IMAGE_LIMIT + 1],
+        );
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.join("secret.png"), repo.dir.join("link.png")).unwrap();
+        let blocks = json!([
+            {"type": "image", "path": "ui/a.png", "caption": "ok"},
+            {"type": "image", "path": "ui/notes.txt", "caption": "c"},
+            {"type": "image", "path": "../a.png", "caption": "c"},
+            {"type": "image", "root": "repo", "path": ".git/hooks/x.png", "caption": "c"},
+            {"type": "image", "root": "repo", "path": ".env.png", "caption": "c"},
+            {"type": "image", "root": "repo", "path": "link.png", "caption": "c"},
+            {"type": "image", "root": "repo", "path": "big.png", "caption": "c"},
+            {"type": "image", "root": "repo", "path": "big.svg", "caption": "c"},
+            {"type": "image", "root": "nowhere", "path": "a.png", "caption": "c"},
+            {"type": "image", "path": "ui/a.png"},
+            {"type": "image", "path": "ui/a.png", "caption": " "},
+            {"type": "image", "path": "ui", "caption": "c"},
+            {"type": "image", "path": "ui/a.png", "caption": "c", "alt": "x"}
+        ]);
+        let found = violations(&page_with_blocks(&repo, blocks), &repo);
+        let expected = [
+            "$.changes[0].blocks[1].path",
+            "$.changes[0].blocks[2].path",
+            "$.changes[0].blocks[3].path",
+            "$.changes[0].blocks[4].path",
+            "$.changes[0].blocks[5].path",
+            "$.changes[0].blocks[6].path",
+            "$.changes[0].blocks[7].path",
+            "$.changes[0].blocks[8].root",
+            "$.changes[0].blocks[9].caption",
+            "$.changes[0].blocks[10].caption",
+            "$.changes[0].blocks[11].path",
+            "$.changes[0].blocks[12].alt",
+        ];
+        #[cfg(unix)]
+        assert_eq!(paths(&found), expected);
+        #[cfg(not(unix))]
+        assert!(!found.is_empty());
+        assert!(found
+            .iter()
+            .any(|v| v.path.ends_with("blocks[6].path") && v.message.contains("大きすぎます")));
+    }
+
+    #[test]
+    fn the_image_of_a_waiting_page_is_read_inside_its_roots_only() {
+        let repo = repo("image-read");
+        let config = temp_dir("image-read-config");
+        formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
+        write_bytes(&repo.dir, ".feature-dev/current/ui/a.png", PNG_1X1);
+        write_bytes(&repo.dir, ".feature-dev/current/ui/notes.txt", b"text");
+        let value = page_with_blocks(
+            &repo,
+            json!([{"type": "image", "path": "ui/a.png", "caption": "c"}]),
+        );
+        write(
+            &repo.dir,
+            ".feature-dev/current/records/page-01.json",
+            &value.to_string(),
+        );
+        let given = repo
+            .dir
+            .join(".feature-dev/current/records/page-01.json")
+            .to_string_lossy()
+            .into_owned();
+        let read = |root: &str, path: &str| {
+            image_with(&config, "api-work", "one", root, path, &repo.allowed())
+        };
+        assert!(
+            read("deliverables", "ui/a.png").is_err(),
+            "nothing waits yet"
+        );
+        record_with(
+            &config,
+            "api-work",
+            "one",
+            &given,
+            &repo.allowed(),
+            500,
+            &Gate::off(),
+        )
+        .unwrap();
+        let image = read("deliverables", "ui/a.png").unwrap();
+        assert_eq!((image.mime, image.bytes.as_slice()), ("image/png", PNG_1X1));
+        assert!(read("repo", "src/main.rs").is_err(), "not an image");
+        assert!(read("deliverables", "ui/notes.txt").is_err());
+        assert!(read("deliverables", "../../src/main.rs").is_err());
+        assert!(read("deliverables", "ui/none.png").is_err());
+        assert!(read("elsewhere", "ui/a.png")
+            .unwrap_err()
+            .contains("roots にない"));
+        assert!(image_with(
+            &config,
+            "api-work",
+            "stranger",
+            "deliverables",
+            "ui/a.png",
+            &repo.allowed()
+        )
+        .is_err());
     }
 
     // -- the read of the screen --
