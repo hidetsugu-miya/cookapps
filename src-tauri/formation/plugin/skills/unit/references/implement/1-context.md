@@ -61,7 +61,11 @@ Its parts:
 4. `## Scope`: `scope.includes` and `scope.excludes` of each DESIGN item, with the files they list (read them with `jq` and copy the files list).
 5. `## Constraints`: the repository's rules and commands that bind this work (step 2), and the `reopen` record's reason, quoted as data.
 6. `## Screen checks`: each `user_confirmations` element and each `operation_checks` element, as the location of its DESIGN item. They are verified on the real screen by `feature-dev:code-verifier` after the gate (Stage 4, [goal-verification](goal-verification.md)). They are not run by you.
-7. `## Not checked here`: each `formal_verification` element. It is not run by you. It goes to the owner on the page (Stage 6).
+7. `## Formal verification`: each `formal_verification` element of each DESIGN item (the promise, what breaks, the target and the bound). `feature-dev:formal-verifier` checks them after Stage 2 ([formal-verification](formal-verification.md)). They are not run by you.
+
+   ```sh
+   jq -r --argjson ids "$ids" '.designs[] | select(.id as $i | $ids | index($i)) | .id as $id | (.formal_verification // [])[] | "- \($id): \(.property)\n  - harm: \(.harm)\n  - target: \(.target)\n  - bound: \(.bound)"' "$d"
+   ```
 
 The contract is a record of the unit: it is committed with the case root (Stage 5).
 

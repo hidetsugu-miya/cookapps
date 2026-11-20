@@ -2,6 +2,7 @@
 
 Review the change with `feature-dev:code-reviewer`, fix what must be fixed with `feature-dev:code-implementer`, and repeat, up to three rounds.
 The change is not committed yet, or it holds commits of an earlier session: the review looks at the whole difference from the point where the child left the base branch.
+The formal checks under `verification/formal/` and the fixes that [formal-verification](formal-verification.md) made are part of that difference.
 
 ## What you keep
 

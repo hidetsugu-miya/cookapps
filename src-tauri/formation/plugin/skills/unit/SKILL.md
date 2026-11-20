@@ -79,6 +79,7 @@ Every `{...}` in the references is a value you fill in, never text to type as it
   - `feature-dev:requirement-reviewer`, `feature-dev:design-reviewer`, `feature-dev:code-reviewer` (opus): review a requirement, a design, and a change.
   - `feature-dev:ci-verifier` (haiku): runs the aggregate check of the repository and judges it.
   - `feature-dev:code-verifier` (opus): brings each screen state or operation of an implementation up on the real screen of the repository's own app, saves a capture of it and judges it against its viewpoint. It fixes nothing.
+  - `feature-dev:formal-verifier` (opus): writes and runs the formal checks of an implementation's promises under `verification/formal/` (model checking, a code-level verifier, generated inputs), proves that each check can fail, and returns one outcome per promise. It edits only `verification/formal/`, and fixes no code.
   - `feature-dev:design-prototyper` (opus): runs execution-only branches of a design question and returns a verdict.
   - `feature-dev:prose-polisher` (opus): polishes prose.
 - Say what you did to the owner in Japanese. Deliverables keep the language of their schema.

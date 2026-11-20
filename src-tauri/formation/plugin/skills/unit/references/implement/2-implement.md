@@ -49,7 +49,13 @@ When it must stay (a change the criteria cannot be met without), keep it in a li
 ## Verification the agent does
 
 The agent runs targeted tests and lint for the files it changed, and measures coverage.
-It does not run the aggregate check, and it does not bring a screen up. Stage 4 does both: the aggregate check, then the goal verification of the screens.
+It does not run the aggregate check, it does not bring a screen up, and it runs no formal check. Stage 4 runs the aggregate check, then the formal checks again where later changes touch them, then the goal verification of the screens.
 When a verification line says `unidentified` for a kind the repository has, find the command in the repository's documents and launch the agent again with it.
+
+## Formal verification
+
+Run "Running a cycle" of [formal-verification](formal-verification.md) once the implementation is done.
+It checks the promises of the `formal_verification` elements of the unit's DESIGN items, keeps the existing checks under `verification/formal/` in step with the changed code, and fixes a bug it finds (at most 3 fixes).
+Its paths join the staging set, and [Stage 3](3-review-loop.md) reviews the fixes and the checks with the implementation.
 
 Then go to [Stage 3](3-review-loop.md).

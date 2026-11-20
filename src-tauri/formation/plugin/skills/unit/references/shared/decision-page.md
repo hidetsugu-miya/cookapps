@@ -150,6 +150,17 @@ It presents the verification of one screen state or one operation against its vi
 
 A card without `steps` carries `reference_image`, `captured_image`, or both.
 
+#### The formal-verification results
+
+A formal verification of an implementation ([formal-verification](../implement/formal-verification.md)) reaches the `code-review` page in four forms, and each is numbered with `FV`:
+
+- `FV-{n}`: a `review-must-fix` card in `residual_must_fix`, one for each result that is `bug` or `blocked`, numbered from 1 in the order of the results. `title` is the property, `scene` is its `harm`, and `summary` says what was checked and why it is open. Its facts are `検出元` (`形式検証（{tool}）`) and `未解消の理由` (for a `bug`, that the fixes did not remove the counterexample, or that no fix ran; for a `blocked`, the reason and the steps to install the tool). Its `blocks` hold the counterexample as a `list` of its states in order, each with the code it maps to as `path:line`, or, for a `blocked`, a `paragraph` with the reason. The recommendation is `fix` or `accept`, with its reason, as on any `review-must-fix` card.
+- `FV-bound-{m}`: a noticed matter for each check whose bound was lowered to follow the code. Its text gives the property and `{old limit} -> {new limit}`.
+- `FV-scope-{m}`: a noticed matter for each path that the verifier changed outside `verification/formal/`.
+- `FV-unrun-{m}`: a noticed matter for each property that was not checked, because the session resumed after the check should have run. Its text says so.
+
+The noticed matters have no answer. The owner's reply to an `FV-{n}` card is read like that of any `review-must-fix` card.
+
 ### Facts by kind
 
 Facts, with these labels, in this order:

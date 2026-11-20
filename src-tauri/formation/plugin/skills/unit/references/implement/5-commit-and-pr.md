@@ -7,7 +7,7 @@ Commit the code on the child branch, push it, open the child pull request, and c
 
 Skip this step when the paths of the staging set are already committed (the gate of Stage 4 ran on a commit).
 
-1. Check the folder: `git -C "{folder}" status --porcelain` shows the paths of the staging set (the `changed_paths` and `generated_paths` of every launch of the implementer) and nothing that you do not know. A path that is not in the staging set and not in the work that was there before you came (Stage 1, step 5) is a stray file of the change: ask `feature-dev:code-implementer` to settle it, as in Stage 4, "tree_mutated". Sensitive files (credentials, `.env`, keys) never go into a commit: leave them out and say so in the summary.
+1. Check the folder: `git -C "{folder}" status --porcelain` shows the paths of the staging set (the `changed_paths` and `generated_paths` of every launch of the implementer, and the `changed_paths` of `feature-dev:formal-verifier`) and nothing that you do not know. A path that is not in the staging set and not in the work that was there before you came (Stage 1, step 5) is a stray file of the change: ask `feature-dev:code-implementer` to settle it, as in Stage 4, "tree_mutated". Sensitive files (credentials, `.env`, keys) never go into a commit: leave them out and say so in the summary.
 2. Stage each path of the staging set by name:
 
    ```sh

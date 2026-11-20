@@ -54,7 +54,7 @@ An empty file to start from:
 | `test_policy` | enum | `tdd` or `direct`. |
 | `user_confirmations` | array of `{screen_state, screenshot, state_setup}` | The screen states the owner confirms against a screenshot (`screenshot` is a path relative to the case root). `state_setup` is text or `null` when the screen shows the state on opening. Empty for an item with no `ui_spec`. |
 | `operation_checks` | array, optional | `{acceptance, state_setup, steps, expected}`: operations performed on the real screen to confirm an `acceptance` element that involves a screen operation. `acceptance` equals one element of this item's `acceptance`; `steps` is an array of text. |
-| `formal_verification` | array, optional | `{property, harm, target, bound}` (all text): promises that are checked formally after the implementation. |
+| `formal_verification` | array, optional | `{property, harm, target, bound}` (all text): promises that are checked formally after the implementation by `feature-dev:formal-verifier` (`target` is a repository-relative file or folder of the item's repository, which becomes the `target_paths` of the check's manifest; `bound` is the limit the check covers, in the words of the domain). |
 | `key_decisions` | md | The reasoning: rationale, rejected alternatives, trade-offs. |
 | `decisions` | array of decision | The options and recommendations of this item. |
 | `extra_materials`, `inapplicable_materials` | as in the requirement | Materials of this item alone, and related materials that do not apply. |
