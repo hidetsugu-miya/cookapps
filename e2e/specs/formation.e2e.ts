@@ -3421,6 +3421,12 @@ describe("orchestration mode: the children's worktrees in the projects", () => {
     await mock("orca_overview", orcaOverview([childRow(), ownRow(), ...rows.slice(1)], worktrees));
     await browser.waitUntil(async () => (await keys())[0] === "proj_api", { timeout: 15_000 });
     expect(await keys()).toEqual(["proj_api", "proj_web", "proj_docs", "stopped-toggle"]);
+    // An own session that asks a question has not stopped either: the project stays where the read listed it.
+    await mock("orca_overview", orcaOverview([childRow(), ...rows.slice(1)], worktrees));
+    await browser.waitUntil(async () => (await keys())[0] === "proj_web", { timeout: 15_000 });
+    await mock("orca_overview", orcaOverview([childRow(), ownRow({ group: "waiting" }), ...rows.slice(1)], worktrees));
+    await browser.waitUntil(async () => (await keys())[0] === "proj_api", { timeout: 15_000 });
+    expect(await keys()).toEqual(["proj_api", "proj_web", "proj_docs", "stopped-toggle"]);
   });
 
   it("draws every session of the project when no child of the record is in its worktrees", async () => {
