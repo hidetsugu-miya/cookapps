@@ -2,10 +2,12 @@
 // The right pane, "流れ", is a column of cards: the decision pages that wait, the leader's card, and under it the children's cards: 作業中 first and 承認待ち after it, and then the planned ones. A card is a tab's twin: pressing it opens and selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113).
 // A decision page that waits (`pendingPage`, A-41) has a card of its own at the top of the column, apart from the children's, under the line 「判断待ち N」: 「判断: {title}」, the child's name and 「開く」, and a line under the group. Pressing the card (or its orb in the compact view) opens the page's tab, 「判断: {title}」, and shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
+// The standard view reads the messages between the leader and the children (`formation_messages`, on the clock of the children) and draws the talk (#1085): the child whose latest message with the leader is newer than `TALK_MS` has its branch drawn as an arrow in the direction of that message, and its card pulses and says who talks to whom; the others, once they have talked, keep the last line and its time. The compact view reads `formation_instructed` instead.
 // The pane has two views, 「標準」 (the cards above) and 「コンパクト」 (78px wide: the pages that wait as orbs, the leader as one orb, one arrow under it, and each child as one orb with its name under it; the card's content comes in a tip while the pointer or the focus is on an orb), switched by the button `#formation-flow-size` of the heading. The one chosen is kept in the page's `localStorage`, so it stays when the app starts again. The compact view also reads `formation_instructed` with each read of the children (#1087): the children that the leader told something and that have not answered are colored and go up under the leader's orb, sliding there.
 // The middle pane stays on the leader's tab when a formation is opened, where the owner types. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
+import type { FormationMessage } from "./bindings/FormationMessage";
 import type { FormationState } from "./bindings/FormationState";
 import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
@@ -13,6 +15,7 @@ import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
 import { drawPage } from "./formation-page.js";
+import { pad2 } from "./format.js";
 import { confirmChildDelete, confirmChildForce } from "./hint.js";
 import { DELETE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -23,6 +26,8 @@ import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminal
 const READ_MS = 3000;
 // How long an orb takes to slide to its new place in the compact view.
 const GLIDE_MS = 450;
+// How long after its latest message a child is still talking with the leader: the card of a child whose latest message with the leader is newer than this is pulsing (#1085).
+const TALK_MS = 60_000;
 // Where the view of the pane is kept: "1" is the compact one, anything else the standard one.
 const COMPACT_KEY = "formation-flow-compact";
 // The name of the owner of the terminals: what `showTerminals` and `hideTerminals` are told.
@@ -35,6 +40,8 @@ let children: FormationChild[] = [];
 let failure: string | null = null;
 // The children that the leader told something and that have not answered (the last read of `formation_instructed`, newest first, #1087). Read only while the compact view is shown; the standard view has none.
 let instructed: string[] = [];
+// The messages between the leader and the children (the last read of `formation_messages`, oldest first, #1085). Read only while the standard view is shown; the compact view has `instructed`.
+let messages: FormationMessage[] = [];
 // What a close told that is no failure: the branch that Orca kept for the commits no remote has. It stays until the next close or another formation, which a read of the children does not clear.
 let notice: string | null = null;
 // The children that have a terminal (the last read), and the selected tab (the child's name; null is the leader's).
@@ -92,20 +99,23 @@ async function read() {
     const name = currentFormation();
     // No formation is selected: there is no child to read.
     const got = name === null ? [] : await invoke("formation_children", { name });
-    // The compact view alone shows who was told something; a read of it that fails leaves the children read and says why.
+    // The compact view shows who was told something, and the standard view who talks with whom; a read of either that fails leaves the children read and says why.
     let told: string[] = [];
-    let toldFailure: string | null = null;
-    if (compact && name !== null) {
+    let talked: FormationMessage[] = [];
+    let sideFailure: string | null = null;
+    if (name !== null) {
       try {
-        told = await invoke("formation_instructed", { name });
+        if (compact) told = await invoke("formation_instructed", { name });
+        else talked = await invoke("formation_messages", { name });
       } catch (e) {
-        toldFailure = String(e);
+        sideFailure = String(e);
       }
     }
     if (mine === epoch) {
       children = got;
       instructed = told;
-      failure = toldFailure;
+      messages = talked;
+      failure = sideFailure;
       picked = takeWanted();
     }
   } catch (e) {
@@ -158,6 +168,7 @@ export function switchFormation() {
   epoch++;
   children = [];
   instructed = [];
+  messages = [];
   failure = null;
   notice = null;
   terms = [];
@@ -443,6 +454,40 @@ function cardRows(c: FormationChild, now: number) {
   return { row, line, name };
 }
 
+// What the record says of a child's talk with the leader (#1085): the direction of its latest message with the leader (`out` is the leader's, `in` is the child's), whether that message is newer than `TALK_MS` (the child is talking now), and its first line and time. A message between two children is not counted. Null while there is none.
+interface Talk {
+  dir: "out" | "in";
+  live: boolean;
+  line: string;
+  atMs: number;
+}
+function talkOf(c: FormationChild, formation: string, now: number): Talk | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const out = m.from === formation && m.to === c.name;
+    if (!out && !(m.from === c.name && m.to === formation)) continue;
+    return { dir: out ? "out" : "in", live: now - m.atMs <= TALK_MS, line: m.line, atMs: m.atMs };
+  }
+  return null;
+}
+
+// The third row of a card that has a talk: while it is live, who talks to whom with three dots that blink; after it stopped, the last line (data from the sender, drawn as text) and its time.
+function talkRow(c: FormationChild, talk: Talk): HTMLElement {
+  const row = span("formation-card-row formation-card-talk", "");
+  row.dataset.dir = talk.dir;
+  if (talk.live) {
+    row.append(span("formation-talk-label", talk.dir === "out" ? `リーダー → ${c.name}` : `${c.name} → リーダー`));
+    const dots = span("formation-talk-dots", "");
+    dots.append(tag("i", "", "・"), tag("i", "", "・"), tag("i", "", "・"));
+    row.append(dots);
+    return row;
+  }
+  row.classList.add("formation-card-last");
+  const at = new Date(talk.atMs);
+  row.append(span("formation-card-last-line", talk.line), tag("time", "formation-card-time", `${pad2(at.getHours())}:${pad2(at.getMinutes())}`));
+  return row;
+}
+
 function card(c: FormationChild, now: number): HTMLLIElement {
   const li = tag("li");
   li.dataset.state = c.state;
@@ -452,6 +497,20 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   node.dataset.state = c.state;
   const { row, line, name } = cardRows(c, now);
   node.append(row, line);
+  if (c.agent === "codex") {
+    li.dataset.agent = c.agent;
+    node.dataset.agent = c.agent;
+  }
+  const talk = talkOf(c, currentFormation() ?? "", now);
+  if (talk) {
+    node.append(talkRow(c, talk));
+    if (talk.live) {
+      // The branch from the trunk becomes the arrow, and the frame pulses.
+      li.dataset.talk = talk.dir;
+      node.dataset.talk = talk.dir;
+      li.append(tag("span", "formation-talk"));
+    }
+  }
   // The menu and its confirmation are anchored on the name, which a redraw of the card does not touch while they are open.
   node.oncontextmenu = (e) => openCardMenu(c, name, e);
   if (closing.has(closingKey(currentFormation() ?? "", c.name))) node.setAttribute("aria-busy", "true");
@@ -688,6 +747,12 @@ function drawDoneChip() {
   chip.setAttribute("aria-pressed", String(showDone()));
 }
 
+// What of a child's talk the card draws, for the key that decides whether the cards are drawn again.
+function talkKey(c: FormationChild, now: number) {
+  const talk = talkOf(c, currentFormation() ?? "", now);
+  return talk === null ? [] : [talk.dir, talk.live, talk.line, talk.atMs];
+}
+
 function draw() {
   const now = Date.now();
   if (watching === "list") return;
@@ -708,7 +773,7 @@ function draw() {
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
   drawDoneChip();
-  const key = JSON.stringify([compact, selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null]), instructed]);
+  const key = JSON.stringify([compact, selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null, ...talkKey(c, now)]), instructed]);
   if (key === treeKey) return;
   treeKey = key;
   // The cards are drawn again in place: the scroll and the focus stay where they were.
@@ -796,10 +861,11 @@ export function initFormationFlow() {
   $("formation-flow-size").onclick = () => {
     compact = !compact;
     saveCompact();
-    // The compact view reads who was told something, and the standard view forgets it.
+    // The compact view reads who was told something and the standard view the messages, and each forgets what the other read.
     if (!compact) instructed = [];
+    else messages = [];
     draw();
-    if (compact && watching === "flow") void read();
+    if (watching === "flow") void read();
   };
   $("formation-flow-done").onclick = () => {
     const formation = currentFormation() ?? "";

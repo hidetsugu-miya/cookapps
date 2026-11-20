@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, verificationCard, waitForCalls, CARDS, CARD } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, verificationCard, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -5105,5 +5105,146 @@ describe("orchestration mode: the compact flow pane", () => {
       await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("").includes("記録を読めません"));
       expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
     });
+  });
+});
+
+// #1085: who the leader talks with, in the cards of the standard view.
+describe("orchestration mode: the talk of the leader and the children in the flow pane", () => {
+  const kids = () => [formationChild("req-login", "working"), formationChild("api-update", "working"), formationChild("review-codex", "working", { agent: "codex" })];
+  const LI = (name: string) => `#formation-flow-list li[data-name="${name}"]`;
+  const CARD_OF = (name: string) => `${LI(name)} .formation-card`;
+  const reduced = () => browser.execute(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const talking = () => count("#formation-flow-list li[data-talk]");
+
+  beforeEach(forgetView);
+  afterEach(forgetView);
+
+  it("draws an arrow from the trunk to the child the leader sent to, with the label, the blinking dots and a pulsing frame, and a thin gray branch to the others", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 5)] });
+    await browser.waitUntil(async () => (await talking()) === 1);
+    await expect($(LI("req-login"))).toHaveAttribute("data-talk", "out");
+    await expect($(CARD_OF("req-login"))).toHaveAttribute("data-talk", "out");
+    expect(await textsOf(`${CARD_OF("req-login")} .formation-talk-label`)).toEqual(["リーダー → req-login"]);
+    expect(await count(`${CARD_OF("req-login")} .formation-talk-dots i`)).toBe(3);
+    expect(await textsOf(`${CARD_OF("req-login")} .formation-talk-dots`)).toEqual(["・・・"]);
+    expect(await count(`${LI("req-login")} .formation-talk`)).toBe(1);
+    // The arrow takes the place of the thin branch; the others keep it.
+    expect(await pseudoOf(LI("req-login"), "::before", "backgroundColor")).toBe("rgba(0, 0, 0, 0)");
+    expect(await count(`${LI("api-update")} .formation-talk`)).toBe(0);
+    await expect($(LI("api-update"))).not.toHaveAttribute("data-talk");
+    expect(await count(`${CARD_OF("api-update")} .formation-card-talk`)).toBe(0);
+    expect(await pseudoOf(LI("api-update"), "::before", "backgroundColor")).not.toBe("rgba(0, 0, 0, 0)");
+    // The frame is in the accent color and the card pulses, the dashes flow, the dot runs and the dots blink; with less motion none of them moves.
+    expect(await styleOf(CARD_OF("req-login"), "borderTopColor")).toBe(await resolved("--accent"));
+    const names = await browser.execute(() => {
+      const one = (s: string, p?: string) => getComputedStyle(document.querySelector(s)!, p).animationName;
+      return [one('#formation-flow-list li[data-name="req-login"] .formation-card'), one("#formation-flow-list .formation-talk"), one("#formation-flow-list .formation-talk", "::before"), one("#formation-flow-list .formation-talk-dots i")];
+    });
+    expect(names).toEqual((await reduced()) ? ["none", "none", "none", "none"] : ["formation-card-pulse", "formation-talk-flow", "formation-talk-dot", "formation-talk-blink"]);
+    expect(await styleOf(CARD_OF("api-update"), "animationName")).toBe("none");
+  });
+
+  it("turns the arrow and the label round when the child answers", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 20), formationMessage("req-login", "formation", 5)] });
+    await browser.waitUntil(async () => (await talking()) === 1);
+    await expect($(LI("req-login"))).toHaveAttribute("data-talk", "in");
+    await expect($(CARD_OF("req-login"))).toHaveAttribute("data-talk", "in");
+    expect(await textsOf(`${CARD_OF("req-login")} .formation-talk-label`)).toEqual(["req-login → リーダー"]);
+    // The head of the arrow is at the trunk's end, the dot and the dashes run the other way.
+    const heads = await browser.execute(() => {
+      const arrow = document.querySelector("#formation-flow-list .formation-talk")!;
+      const after = getComputedStyle(arrow, "::after");
+      return [after.borderLeftWidth, after.borderRightWidth, getComputedStyle(arrow).animationDirection, getComputedStyle(arrow, "::before").animationDirection];
+    });
+    expect(heads).toEqual(["0px", "6px", "reverse", "reverse"]);
+  });
+
+  it("takes the direction of the latest message of each child alone, and does not count a message between two children", async () => {
+    await openFlow(kids(), {
+      formation_messages: [formationMessage("api-update", "formation", 30), formationMessage("formation", "api-update", 20), formationMessage("req-login", "api-update", 10), formationMessage("api-update", "req-login", 5)],
+    });
+    await browser.waitUntil(async () => (await talking()) === 1);
+    await expect($(LI("api-update"))).toHaveAttribute("data-talk", "out");
+    await expect($(LI("req-login"))).not.toHaveAttribute("data-talk");
+    expect(await count(`${CARD_OF("req-login")} .formation-card-talk`)).toBe(0);
+  });
+
+  it("stops the arrow and the pulse when the latest message is older than 60 seconds, and leaves its last line and its time on the card", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 70, "ログインの要件を確認してください")] });
+    await browser.waitUntil(async () => (await count(`${CARD_OF("req-login")} .formation-card-last`)) === 1);
+    expect(await talking()).toBe(0);
+    expect(await count("#formation-flow-list .formation-talk")).toBe(0);
+    expect(await count(`${CARD_OF("req-login")} .formation-talk-dots`)).toBe(0);
+    expect(await textsOf(`${CARD_OF("req-login")} .formation-card-last-line`)).toEqual(["ログインの要件を確認してください"]);
+    expect((await textsOf(`${CARD_OF("req-login")} .formation-card-last time`))[0]).toMatch(/^\d{2}:\d{2}$/);
+    expect(await styleOf(CARD_OF("req-login"), "animationName")).toBe("none");
+    expect(await pseudoOf(LI("req-login"), "::before", "backgroundColor")).not.toBe("rgba(0, 0, 0, 0)");
+    // A child with no message has no such row.
+    expect(await count(`${CARD_OF("api-update")} .formation-card-last`)).toBe(0);
+  });
+
+  it("stops by itself when the minute is over, and starts again with a newer message", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 52)] });
+    await browser.waitUntil(async () => (await talking()) === 1);
+    await browser.waitUntil(async () => (await talking()) === 0, { timeout: 15_000 });
+    await expect($(`${CARD_OF("req-login")} .formation-card-last`)).toBeDisplayed();
+    await mock("formation_messages", [formationMessage("formation", "req-login", 70), formationMessage("req-login", "formation", 1)]);
+    await browser.waitUntil(async () => (await talking()) === 1);
+    await expect($(LI("req-login"))).toHaveAttribute("data-talk", "in");
+  });
+
+  it("draws the line of a message as text, never as markup", async () => {
+    const line = '<img src="x" onerror="document.title=1"><b>太字</b>';
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 90, line)] });
+    await browser.waitUntil(async () => (await count(`${CARD_OF("req-login")} .formation-card-last`)) === 1);
+    expect(await textsOf(`${CARD_OF("req-login")} .formation-card-last-line`)).toEqual([line]);
+    expect(await count(`${CARD_OF("req-login")} .formation-card-last img, ${CARD_OF("req-login")} .formation-card-last b`)).toBe(0);
+  });
+
+  it("tells a Codex child by the pale blue ground, and by the blue of its frame while it talks", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "review-codex", 5)] });
+    await browser.waitUntil(async () => (await talking()) === 1);
+    await expect($(CARD_OF("review-codex"))).toHaveAttribute("data-agent", "codex");
+    await expect($(CARD_OF("req-login"))).not.toHaveAttribute("data-agent");
+    expect(await ground(CARD_OF("review-codex"))).toBe(await resolvedGround("--codex-bg"));
+    expect(await ground(CARD_OF("review-codex"))).toBe("rgb(230, 237, 251)");
+    expect(await styleOf(CARD_OF("review-codex"), "color")).toBe(await resolved("--codex-fg"));
+    expect(await styleOf(CARD_OF("review-codex"), "borderTopColor")).toBe("rgb(37, 84, 180)");
+    expect(await ground(CARD_OF("req-login"))).not.toBe("rgb(230, 237, 251)");
+    // The arrow is blue too, and a Codex child that is not talking has the ground alone.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector('#formation-flow-list li[data-name="review-codex"] .formation-talk')!).backgroundImage.includes("rgb(37, 84, 180)"))).toBe(true);
+    await mock("formation_messages", [formationMessage("formation", "review-codex", 90)]);
+    await browser.waitUntil(async () => (await talking()) === 0);
+    expect(await ground(CARD_OF("review-codex"))).toBe("rgb(230, 237, 251)");
+    expect(await styleOf(CARD_OF("review-codex"), "borderTopColor")).not.toBe("rgb(37, 84, 180)");
+  });
+
+  it("reads the messages with the formation's name on the clock of the children in the standard view only, and keeps the children when it fails", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 5)] });
+    const calls = await waitForCalls("formation_messages", 2);
+    expect(calls[0]).toEqual({ name: "formation" });
+    await mock("formation_messages", rejects("記録を読めません"));
+    await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("").includes("記録を読めません"));
+    expect(await cardNames()).toEqual(["req-login", "api-update", "review-codex"]);
+    await mock("formation_messages", []);
+    await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("") === "");
+    expect(await talking()).toBe(0);
+    // The compact view reads the told ones instead, and the view that comes back reads the messages again.
+    await $(SIZE).click();
+    await waitForCalls("formation_instructed", 1);
+    const before = (await callsOf("formation_messages")).length;
+    await browser.pause(WAIT * 2);
+    expect((await callsOf("formation_messages")).length).toBe(before);
+    await $(SIZE).click();
+    await waitForCalls("formation_messages", before + 1);
+  });
+
+  it("reads nothing while another screen is shown", async () => {
+    await openFlow(kids(), { formation_messages: [formationMessage("formation", "req-login", 5)] });
+    await waitForCalls("formation_messages", 1);
+    await $("#nav-mail").click();
+    const after = (await callsOf("formation_messages")).length;
+    await browser.pause(WAIT * 3);
+    expect((await callsOf("formation_messages")).length).toBe(after);
   });
 });
