@@ -145,6 +145,8 @@ const answers = {
   formation_children: [],
   // A-37 (#1087): no child is waiting for an answer to an instruction.
   formation_instructed: [],
+  // A-37 (#1085): no message between the leader and a child.
+  formation_messages: [],
   formation_delete: { deleted: true, kept: [], preserved: [] },
   formation_close_child: { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null },
   // A-37: one formation, `formation`, with no project and no child (no row is selected until one is pressed).

@@ -26,6 +26,7 @@ import type { FormationConsent } from "../ts/bindings/FormationConsent";
 import type { FormationEntry } from "../ts/bindings/FormationEntry";
 import type { FormationList } from "../ts/bindings/FormationList";
 import type { FormationListChild } from "../ts/bindings/FormationListChild";
+import type { FormationMessage } from "../ts/bindings/FormationMessage";
 import type { FormationState } from "../ts/bindings/FormationState";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
@@ -789,6 +790,9 @@ export const formationChild = (name: string, state: FormationState, extra: Parti
   const planned = state === "planned";
   return { name, repo: "example-api", branch: planned ? "" : `formation/${name}`, state, atMs: planned ? 0 : Date.now() - minutes * 60_000 - 5_000, reply: null, toolName: null, handle: planned ? null : `term_${name}`, environment: "local", agent: "claude", created: true, pendingPage: null, ...rest };
 };
+
+// A message between the leader and a child as `formation_messages` answers it (A-37, #1085). `seconds` is how long ago it was sent.
+export const formationMessage = (from: string, to: string, seconds: number, line = "続けてください"): FormationMessage => ({ from, to, atMs: Date.now() - seconds * 1000, line });
 
 // A decision page as `formation_page_read` answers it (A-41): an `open-questions` page with nothing on it, which `extra` fills in.
 export const decisionPage = (extra: Partial<DecisionPage> = {}): DecisionPage => ({
