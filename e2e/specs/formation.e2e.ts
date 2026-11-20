@@ -2741,9 +2741,66 @@ describe("orchestration mode: the decision page of a child", () => {
       ],
       evidence: [
         { type: "excerpt", root: "deliverables", path: "design.md", start: 10, end: 12, highlight: [11], note: "ここが要", lines: ["一行め", "二行め", "三行め"] },
-        { type: "diff", summary: "文言を変えた", name: "a.txt", before: ["古い"], after: ["新しい"], note: null },
-        { type: "git-diff", summary: "回数を直した", root: "api", path: "lock.rb", base: "main", head: null, note: null, diff: "@@ -1 +1 @@\n-LIMIT = 5\n+LIMIT = 10\n keep", truncated: true },
-        { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-01", note: null, text: JSON.stringify({ id: "DESIGN-01", steps: ["a", "b"], deep: { n: 1 } }, null, 2) },
+        {
+          type: "diff",
+          summary: "文言を変えた",
+          name: "a.txt",
+          before_source: "設計書（現行）",
+          after_source: "基本設計 DESIGN-01",
+          note: null,
+          rows: [
+            { kind: "hunk", left_no: null, left: "@@ -1,2 +1,3 @@", left_mark: null, right_no: null, right: null, right_mark: null },
+            { kind: "context", left_no: 1, left: "同じ", left_mark: null, right_no: 1, right: "同じ", right_mark: null },
+            { kind: "change", left_no: 2, left: "古い文言", left_mark: [0, 2], right_no: 2, right: "新しい文言", right_mark: [0, 3] },
+            { kind: "change", left_no: null, left: null, left_mark: null, right_no: 3, right: "足した行", right_mark: null },
+          ],
+        },
+        { type: "current", note: "変更後は基本設計で決めます", excerpts: [{ type: "excerpt", root: "deliverables", path: "now.md", start: 3, end: 4, highlight: [3], note: null, lines: ["今の一行", "今の二行"] }] },
+        {
+          type: "git-diff",
+          summary: "回数を直した",
+          root: "api",
+          path: "lock.rb",
+          base: "main",
+          head: null,
+          note: null,
+          truncated: true,
+          rows: [
+            { kind: "hunk", left_no: null, left: "@@ -1,2 +1,2 @@", left_mark: null, right_no: null, right: null, right_mark: null },
+            { kind: "change", left_no: 1, left: "LIMIT = 5", left_mark: [8, 9], right_no: 1, right: "LIMIT = 10", right_mark: [8, 10] },
+            { kind: "context", left_no: 2, left: "keep", left_mark: null, right_no: 2, right: "keep", right_mark: null },
+          ],
+        },
+        {
+          type: "node",
+          root: "deliverables",
+          ref: "design.json#/designs/DESIGN-01",
+          note: null,
+          text: JSON.stringify(
+            {
+              id: "DESIGN-01",
+              name: "認証の上限",
+              kind: "api",
+              repository: "api",
+              release: 1,
+              requirements: ["REQ-01"],
+              depends_on: [{ id: "DESIGN-02", reason: "順番" }],
+              purpose: "上限を決める",
+              approach: "**回数**を数える",
+              ui_spec: null,
+              scope: { includes: "- 認証", excludes: "なし" },
+              acceptance: ["5 回で止まる"],
+              test_policy: "単体",
+              user_confirmations: [],
+              key_decisions: "回数は定数にする",
+              decisions: [{ subject: "回数", recommended: "A", reason: "短い", options: [{ label: "5 回", description: "今のまま" }, { label: "10 回", description: "緩める" }], impact: ["api", "web"] }],
+              extra_materials: [],
+              inapplicable_materials: [{ name: "画面資料", reason: "画面はない" }],
+            },
+            null,
+            2,
+          ),
+        },
       ],
     });
     await openPage(decisionPage({ questions: [card] }));
@@ -2756,21 +2813,97 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf(`${more} .fp-facts dd`)).toEqual(["api/auth"]);
     expect(await textsOf(`${more} .fp-list li`)).toEqual(["一つめ", "二つめ"]);
     expect(await textsOf(`${more} .fp-callout`)).toEqual(["注意してください"]);
-    expect(await textsOf(`${more} .fp-table th`)).toEqual(["案", "回数"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-table td`)].map((e) => (e as HTMLElement).dataset.changed ?? ""), more)).toEqual(["", "true"]);
+    const blockTable = `${more} .fp-table:not(.fp-doc .fp-table)`;
+    expect(await textsOf(`${blockTable} th`)).toEqual(["案", "回数"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} td`)].map((e) => (e as HTMLElement).dataset.changed ?? ""), blockTable)).toEqual(["", "true"]);
     expect(await textsOf(`${more} > .fp-before-after .fp-side-caption`)).toEqual(["今", "直したあと"]);
     expect(await textsOf(`${more} .fp-folded > summary`)).toEqual(["詳しい理由"]);
     // An excerpt has the numbers of its lines, and marks the highlighted one.
-    expect(await textsOf(`${more} [data-evidence="excerpt"] .fp-ln`)).toEqual(["10", "11", "12"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} [data-evidence="excerpt"] .fp-line`)].map((e) => (e as HTMLElement).dataset.highlight ?? ""), more)).toEqual(["", "true", ""]);
-    expect(await textsOf(`${more} [data-evidence="excerpt"] .fp-ev-note`)).toEqual(["ここが要"]);
-    // A difference: the two sides, and a git diff with its added and removed lines marked.
-    expect(await textsOf(`${more} [data-evidence="diff"] .fp-side-caption`)).toEqual(["変更前", "変更後"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} [data-evidence="git-diff"] .fp-line`)].map((e) => (e as HTMLElement).dataset.kind), more)).toEqual(["hunk", "del", "ins", "ctx"]);
-    expect(await textsOf(`${more} [data-evidence="git-diff"] .fp-ev-range`)).toEqual(["main → 作業ツリー"]);
-    expect(await textsOf(`${more} [data-evidence="git-diff"] > .fp-ev-note`)).toEqual(["途中で切れています"]);
-    // A node is a tree of its values.
-    expect(await textsOf(`${more} [data-evidence="node"] .fp-leaf-value`)).toEqual(["DESIGN-01", "a", "b", "1"]);
+    const excerpt = `${more} .fp-evidence > [data-evidence="excerpt"]`;
+    expect(await textsOf(`${excerpt} .fp-ln`)).toEqual(["10", "11", "12"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-line`)].map((e) => (e as HTMLElement).dataset.highlight ?? ""), excerpt)).toEqual(["", "true", ""]);
+    expect(await textsOf(`${excerpt} .fp-ev-note`)).toEqual(["ここが要"]);
+    const kinds = (selector: string) => browser.execute((s) => [...document.querySelectorAll(s)].map((e) => (e as HTMLElement).dataset.kind), selector);
+    // A difference: its two sides side by side, the characters that changed marked, and where each side comes from.
+    const diff = `${more} [data-evidence="diff"]`;
+    expect(await textsOf(`${diff} > .fp-ev-summary`)).toEqual(["文言を変えた"]);
+    expect(await count(`${diff} .fp-diff-sides .fp-diff-row`)).toBe(3);
+    expect(await textsOf(`${diff} .fp-diff-sides .fp-diff-row .fp-ln`)).toEqual(["1", "1", "2", "2", "", "3"]);
+    expect(await textsOf(`${diff} .fp-diff-sides .fp-diff-row .fp-lc`)).toEqual(["同じ", "同じ", "古い文言", "新しい文言", "", "足した行"]);
+    expect(await kinds(`${diff} .fp-diff-sides .fp-diff-row .fp-line`)).toEqual(["ctx", "ctx", "del", "ins", "empty", "ins"]);
+    expect(await textsOf(`${diff} .fp-diff-sides .fp-diff-mark`)).toEqual(["古い", "新しい"]);
+    expect(await textsOf(`${diff} .fp-diff-sides > .fp-line[data-kind="hunk"]`)).toEqual(["@@ -1,2 +1,3 @@"]);
+    // The narrow view is one column: a line both share once, then the deletions of a run before its insertions.
+    expect(await kinds(`${diff} .fp-diff-column .fp-line`)).toEqual(["hunk", "ctx", "del", "ins", "ins"]);
+    expect(await textsOf(`${diff} > .fp-ev-note`)).toEqual(["変更前の出典: 設計書（現行）", "変更後の出典: 基本設計 DESIGN-01"]);
+    // What is there now, with the note of where the after-state is decided.
+    const current = `${more} [data-evidence="current"]`;
+    expect(await textsOf(`${current} > .fp-ev-summary`)).toEqual(["今のコード変更後は基本設計で決めます"]);
+    expect(await textsOf(`${current} .fp-badge`)).toEqual(["今のコード"]);
+    expect(await textsOf(`${current} [data-evidence="excerpt"] .fp-ln`)).toEqual(["3", "4"]);
+    // A git diff is drawn the same way, with the two revisions as its sources.
+    const git = `${more} [data-evidence="git-diff"]`;
+    expect(await kinds(`${git} .fp-diff-sides .fp-line`)).toEqual(["hunk", "del", "ins", "ctx", "ctx"]);
+    expect(await textsOf(`${git} .fp-diff-sides .fp-diff-mark`)).toEqual(["5", "10"]);
+    expect(await textsOf(`${git} .fp-ev-range`)).toEqual(["main → 作業ツリー"]);
+    expect(await textsOf(`${git} > .fp-ev-note`)).toEqual(["変更前の出典: api/lock.rb（main）", "変更後の出典: api/lock.rb（作業ツリー）", "途中で切れています"]);
+    // A node of design.json is drawn as the design item: its headings, its Markdown, its decision and its tables.
+    const node = `${more} [data-evidence="node"]`;
+    expect(await textsOf(`${node} .fp-doc > .fp-doc-title`)).toEqual(["DESIGN-01: 認証の上限"]);
+    expect(await textsOf(`${node} .fp-doc > .fp-muted`)).toEqual(["種別: api / 対象リポジトリ: api / リリース: 1 / 要件: REQ-01 / 依存先: DESIGN-02"]);
+    expect(await textsOf(`${node} .fp-doc-sub`)).toEqual(["目的", "アプローチ", "対象スコープ", "含む", "含まない", "完了条件", "テスト方針", "主要な設計判断", "選択肢と推奨案: 回数", "関連設計資料"]);
+    expect(await textsOf(`${node} .fp-md strong`)).toEqual(["回数"]);
+    expect(await textsOf(`${node} .fp-doc-block .fp-doc-list > li strong`)).toEqual(["(A) 5 回", "(B) 10 回"]);
+    expect(await textsOf(`${node} .fp-doc-block > .fp-doc-text`)).toEqual(["推奨案は (A) 5 回（採択）、推奨理由は次のとおり。", "選択肢:", "影響範囲: api（主区分） / web"]);
+    expect(await textsOf(`${node} .fp-table td`)).toEqual(["画面資料", "なし", "画面はない"]);
+  });
+
+  it("draws a node of requirement.json as the requirement, a shared material and an appendix, and any other node by its fields", async () => {
+    const node = (ref: string, value: unknown) => ({ type: "node" as const, root: "deliverables", ref, note: null, text: JSON.stringify(value, null, 2) });
+    const card = decisionCard("Q1", {
+      evidence: [
+        node("requirement.json#/requirements/REQ-01", {
+          id: "REQ-01",
+          name: "上限",
+          summary: "回数を決める",
+          expected_behaviors: ["5 回で止まる", "**10 回目**は通る"],
+          user_decisions: [{ id: "UD-01", title: "回数", body: "5 回にする", provisional: true }],
+          user_decision_refs: ["UD-09"],
+          related_appendices: [{ topic: "limits", role: "一覧" }],
+          extra_materials: [],
+          inapplicable_materials: [],
+        }),
+        node("requirement.json#/shared/limits", { topic: "limits", name: "上限の一覧", applies_to: [{ id: "REQ-01", role: "基準" }], body: "表です", user_decisions: [] }),
+        node("requirement.json#/appendices/limits", { topic: "limits", name: "上限の一覧", category: "集計", body: "- 五つ" }),
+        node("requirement.json#/requirements/REQ-01/user_decisions/UD-01", { id: "UD-01", title: "回数", body: "本文", provisional: false }),
+        node("requirement.json#/scope", { in_scope: "認証", design_scope: { api_contract: null }, list: ["a", "b"] }),
+      ],
+    });
+    await openPage(decisionPage({ questions: [card] }));
+    const more = '#formation-page [data-card="Q1"] .fp-more';
+    await $(`${more} > summary`).click();
+    const at = (n: number) => `${more} .fp-evidence > .fp-ev:nth-child(${n})`;
+    expect(await textsOf(`${at(1)} .fp-doc > .fp-doc-title`)).toEqual(["REQ-01: 上限"]);
+    expect(await textsOf(`${at(1)} .fp-doc-sub`)).toEqual(["概要", "期待される動作", "関連 User Decision", "UD-01: 回数 仮置き（ビジネス側の確認待ち）", "関連要件資料"]);
+    expect(await textsOf(`${at(1)} .fp-doc-li`)).toEqual(["5 回で止まる", "10 回目は通る"]);
+    expect(await textsOf(`${at(1)} .fp-md strong`)).toEqual(["10 回目"]);
+    expect(await textsOf(`${at(1)} .fp-provisional`)).toEqual(["仮置き（ビジネス側の確認待ち）"]);
+    expect(await textsOf(`${at(1)} .fp-doc > .fp-doc-list > li`)).toEqual(["5 回で止まる", "10 回目は通る", "UD-09"]);
+    expect(await textsOf(`${at(1)} .fp-table td`)).toEqual(["limits", "あり", "一覧"]);
+    expect(await textsOf(`${at(2)} .fp-doc-title`)).toEqual(["上限の一覧 limits"]);
+    expect(await textsOf(`${at(2)} .fp-table th`)).toEqual(["適用 REQ", "本 REQ での位置づけ"]);
+    expect(await textsOf(`${at(2)} .fp-table td`)).toEqual(["REQ-01", "基準"]);
+    expect(await textsOf(`${at(2)} .fp-doc-sub`)).toEqual(["適用対象", "内容"]);
+    expect(await textsOf(`${at(3)} .fp-doc-title`)).toEqual(["上限の一覧 limits"]);
+    expect(await textsOf(`${at(3)} .fp-muted`)).toEqual(["種別: 集計"]);
+    expect(await textsOf(`${at(3)} .fp-md li`)).toEqual(["五つ"]);
+    expect(await textsOf(`${at(4)} .fp-doc-sub`)).toEqual(["UD-01: 回数"]);
+    expect(await count(`${at(4)} .fp-provisional`)).toBe(0);
+    // A node with no template of its own is its fields: an object as names and values, an array as a list, nothing as 「未設定」.
+    expect(await textsOf(`${at(5)} .fp-doc-root > .fp-doc-fields > dt`)).toEqual(["in_scope", "design_scope", "list"]);
+    expect(await textsOf(`${at(5)} .fp-doc-fields .fp-doc-fields dt`)).toEqual(["api_contract"]);
+    expect(await textsOf(`${at(5)} .fp-missing`)).toEqual(["未設定"]);
+    expect(await textsOf(`${at(5)} .fp-doc-list > li`)).toEqual(["a", "b"]);
   });
 
   it("puts the text of a page in as text and never as HTML", async () => {
@@ -3087,14 +3220,14 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
   });
 
-  it("gives a fact its 「中身を見る」: a node as a tree, Markdown formatted, a file as text and an image as an image, and no raw HTML", async () => {
+  it("gives a fact its 「中身を見る」: a node as the deliverable draws it, Markdown formatted, a file as text and an image as an image, and no raw HTML", async () => {
     const card = decisionCard("Q1", {
       scene: "場面",
       options: [decisionOption("A", "案")],
       recommendation: "A",
       recommendationReason: "r",
       facts: [
-        { label: "設計", value: "第二の設計", content: { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-02", text: JSON.stringify({ id: "DESIGN-02", steps: ["a"] }, null, 2) } },
+        { label: "設計", value: "第二の設計", content: { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-02", text: JSON.stringify({ id: "DESIGN-02", name: "第二の設計", purpose: "目的の文" }, null, 2) } },
         { label: "メモ", value: "議事", content: { type: "markdown", root: "deliverables", path: "memo.md", text: "# 見出し\n\n- 一つめ\n- 二つめ\n\n[外へ](https://example.com/a) [中へ](../x.md) <img src=x onerror=\"document.title=1\"><b>raw</b>\n" } },
         { label: "ログ", value: "出力", content: { type: "text", root: "repo", path: "out.txt", text: "line 1\nline 2" } },
         { label: "画面", value: "いまの画面", content: { type: "image", root: "deliverables", path: "ui/now.png", caption: "いまの画面" } },
@@ -3112,7 +3245,8 @@ describe("orchestration mode: the decision page of a child", () => {
       expect(await folded(fact(n))).toBe(false);
       await $(`${fact(n)} > summary`).click();
     }
-    expect(await textsOf(`${fact(1)} .fp-leaf-value`)).toEqual(["DESIGN-02", "a"]);
+    expect(await textsOf(`${fact(1)} .fp-doc > .fp-doc-title`)).toEqual(["DESIGN-02: 第二の設計"]);
+    expect(await textsOf(`${fact(1)} .fp-md`)).toEqual(["目的の文"]);
     expect(await textsOf(`${fact(2)} h1`)).toEqual(["見出し"]);
     expect(await textsOf(`${fact(2)} li`)).toEqual(["一つめ", "二つめ"]);
     // A link to the web stays a link; one that is not http(s) is text only; raw HTML is no markup.

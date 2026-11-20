@@ -1,10 +1,12 @@
 // The blocks and the evidence of a decision page (A-41, formation-page.ts): what a child wrote in its page and what Rust read for it. The text is the child's, so every text goes in as `textContent`; nothing is read as HTML. The one exception is the SVG that Mermaid draws (`securityLevel: "strict"`), which goes through DOMPurify's SVG profile.
 import type { Block } from "./bindings/Block";
+import type { DiffRow } from "./bindings/DiffRow";
 import type { Evidence } from "./bindings/Evidence";
 import type { FactContent } from "./bindings/FactContent";
 import type { ImageRef } from "./bindings/ImageRef";
 import type { Term } from "./bindings/Term";
 import { tag } from "./dom.js";
+import { drawNode, markdownBlock } from "./formation-page-node.js";
 import { loadMermaid } from "./vendor-load.js";
 
 // The fold of the page: `summary` is its label.
@@ -252,99 +254,107 @@ function drawEvidenceItem(item: Evidence): HTMLElement {
       break;
     }
     case "diff": {
-      node.append(tag("p", "fp-ev-summary", item.summary), head(item.name, "", item.note));
-      const pair = tag("div", "fp-before-after");
-      for (const [lines, caption, side] of [
-        [item.before, "変更前", "before"],
-        [item.after, "変更後", "after"],
-      ] as const) {
-        const half = tag("div", "fp-side");
-        half.dataset.side = side;
-        const code = tag("div", "fp-code");
-        for (const text of lines) code.append(plainLine(text, side === "before" ? "del" : "ins"));
-        half.append(tag("div", "fp-side-caption", caption), code);
-        pair.append(half);
-      }
-      node.append(pair);
+      node.append(tag("p", "fp-ev-summary", item.summary), head(item.name, "", item.note), drawDiffRows(item.rows));
+      node.append(source("変更前の出典", item.before_source), source("変更後の出典", item.after_source));
+      break;
+    }
+    case "current": {
+      const note = tag("p", "fp-ev-summary");
+      note.append(tag("span", "fp-badge", "今のコード"), item.note);
+      node.append(note);
+      for (const excerpt of item.excerpts) node.append(drawEvidenceItem(excerpt));
       break;
     }
     case "git-diff": {
-      node.append(tag("p", "fp-ev-summary", item.summary), head(`${item.root}/${item.path}`, `${item.base} → ${item.head ?? "作業ツリー"}`, item.note));
-      const code = tag("div", "fp-code");
-      for (const text of item.diff.split("\n")) code.append(plainLine(text, diffKind(text)));
-      node.append(code);
+      node.append(tag("p", "fp-ev-summary", item.summary), head(`${item.root}/${item.path}`, `${item.base} → ${item.head ?? "作業ツリー"}`, item.note), drawDiffRows(item.rows));
+      const shown = item.root === "deliverables" ? item.path : `${item.root}/${item.path}`;
+      node.append(source("変更前の出典", `${shown}（${item.base}）`), source("変更後の出典", `${shown}（${item.head ?? "作業ツリー"}）`));
       if (item.truncated) node.append(tag("p", "fp-ev-note", "途中で切れています"));
       break;
     }
     case "node": {
       node.append(head(`${item.root}/${item.ref}`, "", item.note));
-      node.append(drawValue(item.text));
+      node.append(drawNode(item.ref, item.text));
       break;
     }
   }
   return node;
 }
 
-// The kind of a line of a unified diff, by its first characters.
-function diffKind(line: string): "ins" | "del" | "hunk" | "meta" | "ctx" {
-  if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ")) return "meta";
-  if (line.startsWith("@@")) return "hunk";
-  if (line.startsWith("+")) return "ins";
-  if (line.startsWith("-")) return "del";
-  return "ctx";
+function source(label: string, text: string): HTMLElement {
+  const node = tag("p", "fp-ev-note");
+  node.append(tag("strong", "", `${label}: `), text);
+  return node;
 }
 
-function plainLine(text: string, kind: string): HTMLElement {
-  const row = tag("div", "fp-line");
-  row.dataset.kind = kind;
-  row.append(tag("span", "fp-lc", text));
-  return row;
+// One line of a diff: its number and its text, with the characters between `mark` marked. A side that has no line there is an empty cell.
+function diffCell(no: number | null, text: string | null, mark: [number, number] | null, kind: "ins" | "del" | "ctx"): HTMLElement {
+  const cell = tag("div", "fp-line");
+  cell.dataset.kind = text === null ? "empty" : kind;
+  const body = tag("span", "fp-lc");
+  if (text !== null) {
+    if (mark === null) {
+      body.textContent = text;
+    } else {
+      const chars = Array.from(text);
+      body.append(chars.slice(0, mark[0]).join(""), tag("mark", "fp-diff-mark", chars.slice(mark[0], mark[1]).join("")), chars.slice(mark[1]).join(""));
+    }
+  }
+  cell.append(tag("span", "fp-ln", no === null ? "" : String(no)), body);
+  return cell;
 }
 
-// Markdown that a fact cites, as HTML. Raw HTML in it is not kept as markup, and a link that is not http(s) stays text only: the file is the child's, and the page draws only what Markdown itself makes (headings, lists, tables, code, emphasis, links).
-const MARKDOWN_SANITIZE = {
-  ALLOWED_TAGS: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "pre", "code", "em", "strong", "del", "blockquote", "hr", "br", "table", "thead", "tbody", "tr", "th", "td", "a"],
-  ALLOWED_ATTR: ["href", "start"],
-  ALLOWED_URI_REGEXP: /^https?:/i,
-  ALLOW_DATA_ATTR: false,
-};
+function diffHunk(text: string): HTMLElement {
+  const cell = tag("div", "fp-line");
+  cell.dataset.kind = "hunk";
+  cell.append(tag("span", "fp-lc", text));
+  return cell;
+}
 
-// What a fact cites, as 「中身を見る」 shows it: a node of a deliverable as its tree, a Markdown file formatted, any other file as text, an image as an image. `lazy` is for a fold that is closed.
+// A diff as the two sides of the change, side by side, and as one column when the page is narrow (the deletions of a run of changes, then its insertions).
+function drawDiffRows(rows: DiffRow[]): HTMLElement {
+  const wrap = tag("div", "fp-diff");
+  const sides = tag("div", "fp-code fp-diff-sides");
+  const column = tag("div", "fp-code fp-diff-column");
+  let run: DiffRow[] = [];
+  const flush = () => {
+    for (const row of run) if (row.left !== null) column.append(diffCell(row.left_no, row.left, row.left_mark, "del"));
+    for (const row of run) if (row.right !== null) column.append(diffCell(row.right_no, row.right, row.right_mark, "ins"));
+    run = [];
+  };
+  for (const row of rows) {
+    if (row.kind === "hunk") {
+      flush();
+      sides.append(diffHunk(row.left ?? ""));
+      column.append(diffHunk(row.left ?? ""));
+      continue;
+    }
+    const pair = tag("div", "fp-diff-row");
+    if (row.kind === "context") {
+      flush();
+      pair.append(diffCell(row.left_no, row.left, null, "ctx"), diffCell(row.right_no, row.right, null, "ctx"));
+      column.append(diffCell(row.right_no, row.right, null, "ctx"));
+    } else {
+      run.push(row);
+      pair.append(diffCell(row.left_no, row.left, row.left_mark, "del"), diffCell(row.right_no, row.right, row.right_mark, "ins"));
+    }
+    sides.append(pair);
+  }
+  flush();
+  wrap.append(sides, column);
+  return wrap;
+}
+
+// What a fact cites, as 「中身を見る」 shows it: a node of a deliverable as the deliverable draws it, a Markdown file formatted, any other file as text, an image as an image. `lazy` is for a fold that is closed.
 export function drawFactContent(content: FactContent, lazy: boolean): HTMLElement {
   switch (content.type) {
     case "node":
-      return drawValue(content.text);
-    case "markdown": {
-      const node = tag("div", "fp-md");
-      node.innerHTML = DOMPurify.sanitize(marked.parse(content.text), MARKDOWN_SANITIZE);
-      return node;
-    }
+      return drawNode(content.ref, content.text);
+    case "markdown":
+      return markdownBlock(content.text);
     case "text":
       return tag("pre", "fp-pre", content.text);
     case "image":
       return drawImage(content, lazy);
   }
-}
-
-// A node of a deliverable: its JSON as a tree of folds, or as the text it is when it is not JSON.
-function drawValue(text: string): HTMLElement {
-  try {
-    return tree(JSON.parse(text) as unknown, null, 0);
-  } catch {
-    return tag("pre", "fp-pre", text);
-  }
-}
-
-function tree(value: unknown, key: string | null, depth: number): HTMLElement {
-  if (typeof value === "object" && value !== null) {
-    const entries = Array.isArray(value) ? value.map((v, i) => [String(i), v] as const) : Object.entries(value);
-    const label = `${key === null ? "" : `${key} `}${Array.isArray(value) ? `[${entries.length}]` : `{${entries.length}}`}`;
-    const node = fold(label, "fp-tree", depth < 2);
-    for (const [k, v] of entries) node.append(tree(v, k, depth + 1));
-    return node;
-  }
-  const leaf = tag("div", "fp-leaf");
-  if (key !== null) leaf.append(tag("span", "fp-leaf-key", key));
-  leaf.append(tag("span", "fp-leaf-value", typeof value === "string" ? value : String(value)));
-  return leaf;
 }

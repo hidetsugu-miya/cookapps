@@ -499,14 +499,21 @@ pub enum Evidence {
         note: Option<String>,
         lines: Vec<String>,
     },
+    /// The lines `before` and `after` of the child, drawn as a change of `name` (`rows`: one hunk with full context), with where each side comes from.
     Diff {
         summary: String,
         name: String,
-        before: Vec<String>,
-        after: Vec<String>,
+        before_source: String,
+        after_source: String,
         note: Option<String>,
+        rows: Vec<DiffRow>,
     },
-    /// The output of `git diff {base} [{head}] -- {path}` in the repository of `root`; `truncated` when it was cut.
+    /// What the after-state is not yet decided to be: the present lines (`excerpts`, all of them `Excerpt`) and the note that says which stage decides it.
+    Current {
+        note: String,
+        excerpts: Vec<Evidence>,
+    },
+    /// The output of `git diff {base} [{head}] -- {path}` in the repository of `root`, as `rows`; `truncated` when it was cut.
     GitDiff {
         summary: String,
         root: String,
@@ -514,7 +521,7 @@ pub enum Evidence {
         base: String,
         head: Option<String>,
         note: Option<String>,
-        diff: String,
+        rows: Vec<DiffRow>,
         truncated: bool,
     },
     /// A node of a JSON file, as the pretty-printed JSON of its value.
@@ -527,14 +534,49 @@ pub enum Evidence {
     },
 }
 
+/// One row of a diff drawn side by side: a hunk header, a line both sides share, or a change (a line of the left side, one of the right side, or both).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct DiffRow {
+    pub kind: DiffRowKind,
+    pub left_no: Option<u32>,
+    /// The text of the left line, or of the hunk header.
+    pub left: Option<String>,
+    /// The characters (a start and an end, counted in characters) of the left line that the right one lacks, in a change that has both.
+    pub left_mark: Option<(u32, u32)>,
+    pub right_no: Option<u32>,
+    pub right: Option<String>,
+    pub right_mark: Option<(u32, u32)>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffRowKind {
+    Hunk,
+    Context,
+    Change,
+}
+
 impl Evidence {
     /// The bytes of the text that the evidence carries, which `Walk` adds up against `PAGE_LIMIT`.
     fn size(&self) -> usize {
         let lines = |lines: &[String]| lines.iter().map(|line| line.len() + 1).sum::<usize>();
+        let rows = |rows: &[DiffRow]| {
+            rows.iter()
+                .map(|row| {
+                    row.left.as_ref().map_or(0, String::len)
+                        + row.right.as_ref().map_or(0, String::len)
+                })
+                .sum::<usize>()
+        };
         match self {
             Self::Excerpt { lines: l, .. } => lines(l),
-            Self::Diff { before, after, .. } => lines(before) + lines(after),
-            Self::GitDiff { diff, .. } => diff.len(),
+            Self::Diff { rows: r, .. } | Self::GitDiff { rows: r, .. } => rows(r),
+            // The excerpts of a `current` item are added to the page as each is read.
+            Self::Current { .. } => 0,
             Self::Node { text, .. } => text.len(),
         }
     }
@@ -785,6 +827,156 @@ pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
         return Err(format!("大きすぎます（{} KiB まで）", limit / 1024));
     }
     Ok(bytes)
+}
+
+/// `before` to `after` as one unified-diff hunk with full context (`--- a/{name}`, `+++ b/{name}`), by an LCS line diff in which the deletions of a changed run come before its insertions.
+fn unified_diff(name: &str, before: &[String], after: &[String]) -> String {
+    let range = |n: usize| {
+        if n == 0 {
+            "0,0".to_owned()
+        } else {
+            format!("1,{n}")
+        }
+    };
+    let name = name.replace('\n', " ");
+    let mut out = format!(
+        "--- a/{name}\n+++ b/{name}\n@@ -{} +{} @@\n",
+        range(before.len()),
+        range(after.len())
+    );
+    // lcs[i][j]: the length of the longest common run of before[i..] and after[j..].
+    let mut lcs = vec![vec![0usize; after.len() + 1]; before.len() + 1];
+    for i in (0..before.len()).rev() {
+        for j in (0..after.len()).rev() {
+            lcs[i][j] = if before[i] == after[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < before.len() || j < after.len() {
+        if i < before.len() && j < after.len() && before[i] == after[j] {
+            out.push_str(&format!(" {}\n", before[i]));
+            (i, j) = (i + 1, j + 1);
+        } else if j == after.len() || (i < before.len() && lcs[i + 1][j] >= lcs[i][j + 1]) {
+            out.push_str(&format!("-{}\n", before[i]));
+            i += 1;
+        } else {
+            out.push_str(&format!("+{}\n", after[j]));
+            j += 1;
+        }
+    }
+    out
+}
+
+/// The numbers where a hunk header `@@ -{a},{b} +{c},{d} @@` starts on each side.
+fn hunk_starts(header: &str) -> (u32, u32) {
+    let number = |sign: char| {
+        header
+            .split_whitespace()
+            .find_map(|word| word.strip_prefix(sign))
+            .and_then(|range| range.split(',').next())
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(1)
+    };
+    (number('-'), number('+'))
+}
+
+/// A range of characters of a line, a start and an end.
+type Mark = Option<(u32, u32)>;
+
+/// The numbered lines of one side of a run of changes.
+type Numbered<'a> = Vec<(u32, &'a str)>;
+
+/// The characters of `left` and `right` between their common start and common end, as the two marks of a changed pair (none when nothing is shared or one side is the other).
+fn char_marks(left: &str, right: &str) -> (Mark, Mark) {
+    let (l, r): (Vec<char>, Vec<char>) = (left.chars().collect(), right.chars().collect());
+    let start = l.iter().zip(&r).take_while(|(a, b)| a == b).count();
+    let end = l[start..]
+        .iter()
+        .rev()
+        .zip(r[start..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if start + end == 0 {
+        return (None, None);
+    }
+    let mark = |chars: &[char]| {
+        let to = chars.len() - end;
+        (to > start).then_some((start as u32, to as u32))
+    };
+    (mark(&l), mark(&r))
+}
+
+/// The rows of the side-by-side view of a unified diff: the header lines of a file are left out, each hunk header is a row, a line both sides share is a row, and a run of deletions followed by insertions is paired line by line (a line with no partner stands alone). A line past the end of a hunk that git marks (`\ No newline`) is left out.
+fn diff_rows(diff: &str) -> Vec<DiffRow> {
+    fn flush(rows: &mut Vec<DiffRow>, deleted: &mut Numbered, added: &mut Numbered) {
+        for at in 0..deleted.len().max(added.len()) {
+            let (left, right) = (deleted.get(at), added.get(at));
+            let marks = match (left, right) {
+                (Some((_, l)), Some((_, r))) => char_marks(l, r),
+                _ => (None, None),
+            };
+            rows.push(DiffRow {
+                kind: DiffRowKind::Change,
+                left_no: left.map(|(n, _)| *n),
+                left: left.map(|(_, t)| (*t).to_owned()),
+                left_mark: marks.0,
+                right_no: right.map(|(n, _)| *n),
+                right: right.map(|(_, t)| (*t).to_owned()),
+                right_mark: marks.1,
+            });
+        }
+        deleted.clear();
+        added.clear();
+    }
+    let mut rows = Vec::new();
+    let (mut deleted, mut added): (Numbered, Numbered) = (Vec::new(), Vec::new());
+    let (mut left_no, mut right_no) = (0, 0);
+    let mut in_hunk = false;
+    for line in diff.split('\n') {
+        if line.starts_with("@@") {
+            flush(&mut rows, &mut deleted, &mut added);
+            (left_no, right_no) = hunk_starts(line);
+            in_hunk = true;
+            rows.push(DiffRow {
+                kind: DiffRowKind::Hunk,
+                left_no: None,
+                left: Some(line.to_owned()),
+                left_mark: None,
+                right_no: None,
+                right: None,
+                right_mark: None,
+            });
+        } else if line.starts_with("diff ") {
+            flush(&mut rows, &mut deleted, &mut added);
+            in_hunk = false;
+        } else if !in_hunk {
+            continue;
+        } else if let Some(text) = line.strip_prefix('-') {
+            deleted.push((left_no, text));
+            left_no += 1;
+        } else if let Some(text) = line.strip_prefix('+') {
+            added.push((right_no, text));
+            right_no += 1;
+        } else if let Some(text) = line.strip_prefix(' ') {
+            flush(&mut rows, &mut deleted, &mut added);
+            rows.push(DiffRow {
+                kind: DiffRowKind::Context,
+                left_no: Some(left_no),
+                left: Some(text.to_owned()),
+                left_mark: None,
+                right_no: Some(right_no),
+                right: Some(text.to_owned()),
+                right_mark: None,
+            });
+            (left_no, right_no) = (left_no + 1, right_no + 1);
+        }
+    }
+    flush(&mut rows, &mut deleted, &mut added);
+    rows
 }
 
 /// The lines of `text` as a decision page counts them: split on `\n` (a final line end makes no extra line), a trailing `\r` dropped.
@@ -1271,11 +1463,14 @@ impl<'a> Walk<'a> {
 
     fn evidence_item(&mut self, value: &Value, path: &str) -> Option<Evidence> {
         let kind = value.get("type").and_then(Value::as_str);
-        let known = matches!(kind, Some("excerpt" | "diff" | "git-diff" | "node"));
+        let known = matches!(
+            kind,
+            Some("excerpt" | "diff" | "current" | "git-diff" | "node")
+        );
         if !known {
             self.bad(
                 &format!("{path}.type"),
-                "excerpt、diff、git-diff、node のどれかにしてください",
+                "excerpt、diff、current、git-diff、node のどれかにしてください",
             );
             return None;
         }
@@ -1292,6 +1487,7 @@ impl<'a> Walk<'a> {
         let evidence = match kind {
             Some("excerpt") => self.excerpt(value, path),
             Some("diff") => self.diff(value, path),
+            Some("current") => self.current(value, path),
             Some("git-diff") => self.git_diff(value, path),
             _ => self.node(value, path),
         };
@@ -1409,31 +1605,76 @@ impl<'a> Walk<'a> {
         let map = self.keys(
             value,
             path,
-            &["type", "summary", "name", "before", "after", "note"],
+            &[
+                "type",
+                "summary",
+                "name",
+                "before",
+                "after",
+                "before_source",
+                "after_source",
+                "note",
+            ],
         )?;
         let summary = self.text(map, "summary", path, true);
         let name = self.text(map, "name", path, true);
+        let before_source = self.text(map, "before_source", path, true);
+        let after_source = self.text(map, "after_source", path, true);
         let note = self.text(map, "note", path, false);
         let before = self.diff_lines(map, "before", path);
         let after = self.diff_lines(map, "after", path);
+        let (before, after) = (before?, after?);
+        let name = name?;
         Some(Evidence::Diff {
             summary: summary?,
-            name: name?,
-            before: before?,
-            after: after?,
+            before_source: before_source?,
+            after_source: after_source?,
             note,
+            rows: diff_rows(&unified_diff(&name, &before, &after)),
+            name,
         })
     }
 
     fn diff_lines(&mut self, map: &Object, key: &str, path: &str) -> Option<Vec<String>> {
         self.array(map, key, path, true)?;
         let lines = self.strings(map, key, path, true);
+        let mut valid = true;
         for (at, line) in lines.iter().enumerate() {
             if line.contains('\n') {
                 self.bad(&format!("{path}.{key}[{at}]"), "改行を含められません");
+                valid = false;
             }
         }
-        Some(lines)
+        if lines.len() > EXCERPT_LINES as usize {
+            self.bad(
+                &format!("{path}.{key}"),
+                format!("一つの差分は {EXCERPT_LINES} 行までです"),
+            );
+            valid = false;
+        }
+        valid.then_some(lines)
+    }
+
+    fn current(&mut self, value: &Value, path: &str) -> Option<Evidence> {
+        let map = self.keys(value, path, &["type", "note", "excerpts"])?;
+        let note = self.text(map, "note", path, true);
+        let items = self.some(map, "excerpts", path);
+        let mut excerpts = Vec::new();
+        for (at, item) in items.into_iter().flatten().enumerate() {
+            let here = format!("{path}.excerpts[{at}]");
+            if item.get("type").is_some_and(|kind| kind != "excerpt") {
+                self.bad(&format!("{here}.type"), "excerpt にしてください");
+            } else if !self.over_budget(&here) {
+                if let Some(excerpt) = self.excerpt(item, &here) {
+                    self.resolved += excerpt.size();
+                    excerpts.push(excerpt);
+                }
+            }
+        }
+        Some(Evidence::Current {
+            note: note?,
+            excerpts,
+        })
     }
 
     fn git_diff(&mut self, value: &Value, path: &str) -> Option<Evidence> {
@@ -1478,7 +1719,7 @@ impl<'a> Walk<'a> {
                 base,
                 head,
                 note,
-                diff: String::new(),
+                rows: Vec::new(),
                 truncated: false,
             });
         }
@@ -1490,7 +1731,7 @@ impl<'a> Walk<'a> {
                 base,
                 head,
                 note,
-                diff,
+                rows: diff_rows(&diff),
                 truncated,
             }),
             Err(message) => {
@@ -3692,7 +3933,8 @@ mod tests {
                 {"type": "diagram", "mermaid": "\nflowchart TD\n  A --> B", "caption": "図"},
                 {"type": "evidence", "items": [
                     {"type": "excerpt", "root": "repo", "path": "src/main.rs", "start": 1, "end": 2, "highlight": [2], "note": "ここ"},
-                    {"type": "diff", "summary": "差", "name": "x", "before": ["a"], "after": ["b"]},
+                    {"type": "diff", "summary": "差", "name": "x", "before": ["a"], "after": ["b"], "before_source": "元", "after_source": "先"},
+                    {"type": "current", "note": "後で決める", "excerpts": [{"root": "repo", "path": "src/main.rs", "start": 1}]},
                     {"type": "git-diff", "summary": "差", "root": "repo", "path": "src/main.rs", "base": "HEAD~1", "head": "HEAD"},
                     {"type": "node", "root": "deliverables", "ref": "design.json#/designs/1"}
                 ]}
@@ -3729,10 +3971,17 @@ mod tests {
         };
         assert_eq!(lines, &["fn one() {}", "fn two2() {}"]);
         assert_eq!(highlight, &[2]);
-        let Evidence::Node { text, .. } = &items[3] else {
+        let Evidence::Node { text, .. } = &items[4] else {
             panic!("a node");
         };
         assert!(text.contains("second"));
+        let Evidence::Current { note, excerpts } = &items[2] else {
+            panic!("a current");
+        };
+        assert_eq!(note, "後で決める");
+        assert!(
+            matches!(&excerpts[..], [Evidence::Excerpt { lines, .. }] if lines == &["fn one() {}"])
+        );
     }
 
     // -- the contract --
@@ -3830,7 +4079,7 @@ mod tests {
             {"type": "video", "root": "repo", "path": "a.mp4", "caption": "c"},
             {"type": "diagram", "mermaid": "pie\n \"a\": 1"},
             {"type": "list", "items": []},
-            {"type": "evidence", "items": [{"type": "current", "note": "n", "excerpts": []}]}
+            {"type": "evidence", "items": [{"type": "table", "note": "n", "excerpts": []}]}
         ]}]);
         assert_eq!(
             paths(&violations(&value, &repo)),
@@ -4108,10 +4357,10 @@ mod tests {
             panic!("an excerpt");
         };
         assert!(lines.is_empty());
-        let Evidence::GitDiff { diff, .. } = &page.needs_user_decision[0].evidence[1] else {
+        let Evidence::GitDiff { rows, .. } = &page.needs_user_decision[0].evidence[1] else {
             panic!("a git diff");
         };
-        assert!(diff.is_empty());
+        assert!(rows.is_empty());
         assert!(page.approval_scope[0]
             .items
             .iter()
@@ -4213,7 +4462,7 @@ mod tests {
         ]);
         let page = build(&value, &repo.allowed()).unwrap();
         let Evidence::GitDiff {
-            diff,
+            rows,
             truncated,
             head,
             ..
@@ -4221,7 +4470,12 @@ mod tests {
         else {
             panic!("a git diff");
         };
-        assert!(diff.contains("-fn two() {}") && diff.contains("+fn two2() {}"));
+        let change = rows
+            .iter()
+            .find(|row| row.kind == DiffRowKind::Change)
+            .unwrap();
+        assert_eq!(change.left.as_deref(), Some("fn two() {}"));
+        assert_eq!(change.right.as_deref(), Some("fn two2() {}"));
         assert!(!truncated);
         assert_eq!(head.as_deref(), Some("HEAD"));
     }
@@ -4296,13 +4550,206 @@ mod tests {
         assert!(diff.starts_with("diff --git"));
     }
 
+    fn strs(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_diff_of_lines_is_one_hunk_of_paired_changes() {
+        let diff = unified_diff(
+            "a.txt",
+            &strs(&["one", "two", "three"]),
+            &strs(&["one", "2", "three", "four"]),
+        );
+        assert_eq!(
+            diff,
+            "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,4 @@\n one\n-two\n+2\n three\n+four\n"
+        );
+        let rows = diff_rows(&diff);
+        let kinds: Vec<_> = rows.iter().map(|row| row.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                DiffRowKind::Hunk,
+                DiffRowKind::Context,
+                DiffRowKind::Change,
+                DiffRowKind::Context,
+                DiffRowKind::Change
+            ]
+        );
+        assert_eq!(rows[0].left.as_deref(), Some("@@ -1,3 +1,4 @@"));
+        let pair = &rows[2];
+        assert_eq!((pair.left_no, pair.right_no), (Some(2), Some(2)));
+        assert_eq!(
+            (pair.left.as_deref(), pair.right.as_deref()),
+            (Some("two"), Some("2"))
+        );
+        // Nothing is shared by the two lines, so nothing is marked inside them.
+        assert_eq!((pair.left_mark, pair.right_mark), (None, None));
+        let added = &rows[4];
+        assert_eq!((added.left_no, added.left.as_deref()), (None, None));
+        assert_eq!(
+            (added.right_no, added.right.as_deref()),
+            (Some(4), Some("four"))
+        );
+        // Both sides empty: a hunk of no line at all.
+        assert_eq!(
+            unified_diff("n", &[], &[]),
+            "--- a/n\n+++ b/n\n@@ -0,0 +0,0 @@\n"
+        );
+    }
+
+    #[test]
+    fn a_changed_pair_marks_the_characters_between_what_it_shares() {
+        assert_eq!(
+            char_marks("LIMIT = 5;", "LIMIT = 10;"),
+            (Some((8, 9)), Some((8, 10)))
+        );
+        assert_eq!(char_marks("あいう", "あえう"), (Some((1, 2)), Some((1, 2))));
+        // A line that only grows has a mark on the longer side alone.
+        assert_eq!(char_marks("ab", "abc"), (None, Some((2, 3))));
+        assert_eq!(char_marks("x", "y"), (None, None));
+    }
+
+    #[test]
+    fn the_rows_of_a_git_diff_pair_a_run_of_deletions_with_its_insertions() {
+        let diff = "diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -3,4 +3,3 @@ fn x()\n a\n-b\n-c\n-d\n+B\n+C\n z\n\\ No newline at end of file\ndiff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -1 +1 @@\n-old\n+new\n";
+        let rows = diff_rows(diff);
+        let shape: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.kind,
+                    r.left_no,
+                    r.left.as_deref(),
+                    r.right_no,
+                    r.right.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (
+                    DiffRowKind::Hunk,
+                    None,
+                    Some("@@ -3,4 +3,3 @@ fn x()"),
+                    None,
+                    None
+                ),
+                (DiffRowKind::Context, Some(3), Some("a"), Some(3), Some("a")),
+                (DiffRowKind::Change, Some(4), Some("b"), Some(4), Some("B")),
+                (DiffRowKind::Change, Some(5), Some("c"), Some(5), Some("C")),
+                (DiffRowKind::Change, Some(6), Some("d"), None, None),
+                (DiffRowKind::Context, Some(7), Some("z"), Some(6), Some("z")),
+                (DiffRowKind::Hunk, None, Some("@@ -1 +1 @@"), None, None),
+                (
+                    DiffRowKind::Change,
+                    Some(1),
+                    Some("old"),
+                    Some(1),
+                    Some("new")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_diff_names_its_sources_and_is_read_into_rows() {
+        let repo = repo("diff-evidence");
+        let mut value = open_questions(&repo);
+        value["questions"][0]["evidence"] = json!([
+            {"type": "diff", "summary": "s", "name": "n", "before": ["a"], "after": ["b"]},
+            {"type": "diff", "summary": "s", "name": "n", "before": ["a"], "after": ["b"], "before_source": "x", "after_source": "y", "extra": 1},
+            {"type": "diff", "summary": "s", "name": "n", "before": ["a\nb"], "after": [], "before_source": "x", "after_source": "y"}
+        ]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            [
+                "$.questions[0].evidence[0].before_source",
+                "$.questions[0].evidence[0].after_source",
+                "$.questions[0].evidence[1].extra",
+                "$.questions[0].evidence[2].before[0]",
+            ]
+        );
+        value["questions"][0]["evidence"] = json!([
+            {"type": "diff", "summary": "s", "name": "n", "before": (0..401).map(|n| n.to_string()).collect::<Vec<_>>(), "after": [], "before_source": "x", "after_source": "y"},
+            {"type": "diff", "summary": "s", "name": "n", "before": ["a"], "after": ["b"], "before_source": "x（先頭）", "after_source": "y", "note": "n"}
+        ]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.questions[0].evidence[0].before"]
+        );
+        value["questions"][0]["evidence"] = json!([
+            {"type": "diff", "summary": "s", "name": "n", "before": ["a"], "after": ["b"], "before_source": "x（先頭）", "after_source": "y"}
+        ]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        let Evidence::Diff {
+            before_source,
+            after_source,
+            rows,
+            ..
+        } = &page.questions[0].evidence[0]
+        else {
+            panic!("a diff");
+        };
+        assert_eq!(
+            (before_source.as_str(), after_source.as_str()),
+            ("x（先頭）", "y")
+        );
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_current_item_holds_excerpts_with_a_note_that_says_where_the_after_state_is_decided() {
+        let repo = repo("current");
+        let mut value = open_questions(&repo);
+        value["questions"][0]["evidence"] = json!([
+            {"type": "current", "excerpts": [{"root": "repo", "path": "src/main.rs", "start": 1}]},
+            {"type": "current", "note": "n", "excerpts": []},
+            {"type": "current", "note": "n", "excerpts": [{"type": "diff", "root": "repo", "path": "src/main.rs", "start": 1}]},
+            {"type": "current", "note": "n", "excerpts": [{"root": "repo", "path": "src/none.rs", "start": 1}], "extra": 1}
+        ]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            [
+                "$.questions[0].evidence[0].note",
+                "$.questions[0].evidence[1].excerpts",
+                "$.questions[0].evidence[2].excerpts[0].type",
+                "$.questions[0].evidence[3].extra",
+                "$.questions[0].evidence[3].excerpts[0].path",
+            ]
+        );
+        value["questions"][0]["evidence"] = json!([
+            {"type": "current", "note": "変更後は基本設計で決めます", "excerpts": [
+                {"type": "excerpt", "root": "repo", "path": "src/main.rs", "start": 1, "highlight": [1]},
+                {"root": "repo", "path": "src/main.rs", "start": 2, "end": 3}
+            ]}
+        ]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        let Evidence::Current { note, excerpts } = &page.questions[0].evidence[0] else {
+            panic!("a current");
+        };
+        assert_eq!(note, "変更後は基本設計で決めます");
+        assert_eq!(excerpts.len(), 2);
+        assert!(
+            matches!(&excerpts[1], Evidence::Excerpt { start: 2, end: 3, lines, .. } if lines.len() == 2)
+        );
+        // For its cards alone the excerpts are there with no content.
+        let page = build_input(&value, &repo.allowed()).unwrap();
+        let Evidence::Current { excerpts, .. } = &page.questions[0].evidence[0] else {
+            panic!("a current");
+        };
+        assert!(matches!(&excerpts[0], Evidence::Excerpt { lines, .. } if lines.is_empty()));
+    }
+
     #[test]
     fn a_page_with_too_much_evidence_is_refused() {
         let repo = repo("many");
         let mut value = open_questions(&repo);
         value["questions"][0]["evidence"] = Value::Array(
             (0..=EVIDENCE_COUNT)
-                .map(|_| json!({"type": "diff", "summary": "s", "name": "n", "before": [], "after": []}))
+                .map(|_| json!({"type": "diff", "summary": "s", "name": "n", "before": [], "after": [], "before_source": "b", "after_source": "a"}))
                 .collect(),
         );
         let found = violations(&value, &repo);
@@ -4317,7 +4764,7 @@ mod tests {
         let mut value = open_questions(&repo);
         value["questions"][0]["evidence"] = Value::Array(
             (0..90)
-                .map(|_| json!({"type": "diff", "summary": "s", "name": "n", "before": [line], "after": []}))
+                .map(|_| json!({"type": "diff", "summary": "s", "name": "n", "before": [line], "after": [], "before_source": "b", "after_source": "a"}))
                 .collect(),
         );
         assert_eq!(paths(&violations(&value, &repo)), ["$"]);
