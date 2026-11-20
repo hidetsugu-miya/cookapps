@@ -28,7 +28,7 @@ The verdict, and what you do:
 | `status: passed`, `tree_mutated: true` | The check changed tracked files (a formatter, a generator). Do this once: launch `feature-dev:code-implementer` with `work_kind: initial`, whose only purpose is to settle each path in `mutated_paths`, either adopted into `changed_paths` or reverted, without implementing the unit again. Add the adopted paths to the staging set. Then run the gate again. A second mutation is a `BLOCKED` with the paths. |
 | `status: failed`, `failure_kind: none` (a failure of the code) | Fix it, below. |
 | `status: failed`, `failure_kind: environment` or `timeout` | The agent has already repaired and run again as far as it may. Send `BLOCKED` with `log_path`, `failure_summary` and `environment_fixes`, and stop. |
-| `status: undefined` | The repository defines no aggregate check. Go on, and say it on the page (Stage 6, the section `確認の状況`) and in the summary. |
+| `status: undefined` | The repository defines no aggregate check. Go on, and say it as a line of `notices` of the page ([decision-page](../shared/decision-page.md), "The state of the checks"; Stage 6) and in the summary. |
 
 ## 4. Fix a failure
 
@@ -37,7 +37,7 @@ Add its `changed_paths` and `generated_paths` to the staging set, then run the g
 A fix for a failed check is not reviewed again.
 After three fixes, send `BLOCKED` with `log_path` and `failure_summary`, and stop. The unit stays `受入待ち`, and the next launch starts again here ("Where to start" in the [README](README.md)).
 
-Keep from the last run: its `command`, `status`, and, when a coverage figure was printed, `coverage_line_percent`.
-They go to the page.
+Keep from the last run: its `command`, `status`, each `environment_fixes` entry of any run, and, when a coverage figure was printed, `coverage_line_percent`.
+They go to the page, as the lines of `notices` that Stage 6 writes.
 
 Then go to [Stage 5](5-commit-and-pr.md).

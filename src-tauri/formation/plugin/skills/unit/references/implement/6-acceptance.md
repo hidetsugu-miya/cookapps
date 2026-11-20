@@ -6,13 +6,17 @@ Ask the owner to accept the implementation on a decision page of kind `code-revi
 ## 1. Gather the material
 
 Read the ledger `{records}/ledger.md` and the last review reports. Present only what the owner has not decided yet: a finding whose status is `deferred`, `adopted`, `accepted`, `declined` or `fixed` is not a card.
-The page does not explain the change. The owner reads that in the child pull request, whose body Stage 5 wrote with every section it needs ("The body of the child pull request" in [branch-and-pr](../shared/branch-and-pr.md)): the page shows the pull request and what asks for an answer.
+The page does not explain the change. The owner reads that in the child pull request, whose body Stage 5 wrote with every section it needs ("The body of the child pull request" in [branch-and-pr](../shared/branch-and-pr.md)): the page shows the pull request, what asks for an answer, the results of the verification of the screens, and the state of the checks.
 
 | Page part | What goes in it |
 | --- | --- |
-| `residual_must_fix` (`review-must-fix` cards) | Each must-fix that is still `open` after the last fix, with `未解消の理由` (what the fix could not do, from the agent's `Interruption record`, or that the finding predates the change). Recommendation `fix` or `accept`, with the reason. |
-| `unmet_criteria` (`unmet-criterion` cards) | Each criterion the last review lists as unmet that is still unmet. |
-| `needs_user_decision` (`review-decision` cards) | Each `NR-n` that is `open`, with its options (the recommended one first as `A`) and `重要度`. |
+| `residual_must_fix` (`review-must-fix` cards) | Each must-fix that is still `open` after the last fix, with `検出元`, `未解消の理由` (what the fix could not do, from the agent's `Interruption record`, or that the finding predates the change) and, when it rests on an existing document, `既存の記録`. Recommendation `fix` or `accept`, with the reason. Each screen-verification result that is still `fail` after the last fix, and each result of a formal verification that is unsettled (`bug` or `blocked`, numbered `FV-n`), is one such card too. |
+| `unmet_criteria` (`unmet-criterion` cards) | Each criterion the last review lists as unmet that is still unmet, with the numbers of the findings that cause it in `cards`. |
+| `needs_user_decision` (`review-decision` cards) | Each `NR-n` that is `open`, with its `scene`, its `occurrence`, its options (the reviewer's own words, the recommended one first as `A`, each with the `fix` that choosing it hands to the implementation, when it changes the code), and the facts `重要度`, `検出元` and `既存の記録`. |
+| `screen_verifications` (`screen-verification` cards) | Each screen-verification result the unit holds, `SV-n` in the order the unit holds them, with its viewpoint, result, basis and images. A unit that ran none has none. |
+| `policy_deviations` | Blocks: each place where the code departs from `{contract}` (a minor change of the design baseline rule of the [glossary](../shared/glossary.md)), with its reason, and each fact found after the contract was written that the owner should know. |
+| `notices` | The state of the checks, as "The state of the checks" of [decision-page](../shared/decision-page.md) says: the aggregate check and the coverage figure, each `environment_fixes` entry, and the other facts about the review that you hold. |
+| `noticed` | Each open `RC-n` (title `RC-n`), and each out-of-goal change that stayed (Stage 2; title `OG-n`), with its reason. |
 | `pr` | `{url, note}`: the url of the child pull request, or `null` with the reason from Stage 5 (no commit that the base branch lacks, or `gh` could not run). |
 
 Write no `changes` and no `git-diff` evidence on this page: the changed code is read in the pull request.
@@ -21,7 +25,8 @@ When nothing is left to present (no card at all), the page still goes out: it as
 ## 2. Write the page
 
 Write it as [decision-page](../shared/decision-page.md) says: `page_kind` `code-review`, `subject` `code`, `context_label` (the kind of confirmation and the ticket), a `title`, and `what`: one to three sentences on what this implementation adds or changes.
-`roots`: `deliverables` is `{case root}`, and the `repo` of your element is `{folder}`, for the evidence that a card cites.
+`roots`: `deliverables` is `{case root}`, the `repo` of your element is `{folder}`, for the evidence that a card cites, and `screenshots` and `captures` for the images of a `screen-verification` card that lie under neither. `terms`: the words of the page that a reader outside the project cannot tell.
+Write the cards that ask (`review-decision`) with `scene`, `occurrence`, a `diagram` of the flow where it has two or more steps, and, where the options differ in how something looks, an `image` or a `sample` for each option, as [decision-page](../shared/decision-page.md) says.
 The file is `{records}/page-{nn}.json`, `nn` being one more than the last page of the unit.
 Polish the Japanese texts with `feature-dev:prose-polisher` before they are written, then send `PAGE {absolute path}` and stop.
 On `PAGE-REFUSED`, fix the page and send it again.
@@ -34,11 +39,14 @@ On `REPLY`, read it as "Reading the reply" of [decision-page](../shared/decision
 | --- | --- |
 | `review-must-fix`: `修正して再レビューする` | stays `open`, and joins the rework set |
 | `review-must-fix`: `現状で完了する`, or no block under the approve line | `accepted` |
-| `review-decision`: an option key | `adopted`. When the option changes the code, it joins the rework set |
+| `review-decision`: an option key | `adopted`. An option with a `fix` joins the rework set with that fix. An option without one keeps the current behavior: nothing to change |
 | `review-decision`: `今回は対応しない`, or no block under the approve line | `deferred` |
 | `review-decision`: `その他` | what its `補足` says, as an option or as a free request |
-| `RC-n` named in the free text (the owner reads the open ones in the body of the pull request) | `adopted`, and it joins the rework set |
+| `RC-n` named in the free text (the owner reads the open ones under 目標外の事柄 of the page and in the body of the pull request) | `adopted`, and it joins the rework set |
+| `OG-n` named in the free text | the change is reverted: it joins the rework set as a revert |
 | `RC-n` not named | `deferred` |
+| `OG-n` not named | stays as it is |
+| `screen-verification` cards, `unmet-criterion` cards, `notices` | no answer: nothing to put in the ledger |
 
 A number with a round mark (`MF-1-r2`; [decision-page](../shared/decision-page.md), step 6) names the finding `MF-1` of that round, the one in that round's `review-{nn}.md`: put its answer on that finding, and keep the ledger's own id as it is. The mark is only for the page.
 
