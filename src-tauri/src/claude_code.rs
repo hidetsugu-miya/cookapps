@@ -1765,6 +1765,7 @@ mod tests {
             "formation_launch",
             "formation_plan",
             "formation_close",
+            "formation_stop",
             "formation_environments",
             "formation_worktrees",
             "formation_files",
@@ -1788,6 +1789,7 @@ mod tests {
         }
         // A finished child stays until the owner closes it (#912).
         assert!(FORMATION_CLAUDE_MD.contains("明示して頼んだときだけ"));
+        assert!(!FORMATION_CLAUDE_MD.contains("codex のレビューの子"));
         assert!(!FORMATION_CLAUDE_MD.contains("閉じてかまいません"));
     }
 

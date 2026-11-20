@@ -43,8 +43,10 @@ export interface ChildRef {
   formation: string;
   child: string;
 }
-// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac, each with its child. The choices of a worktree leave them out (A-9, A-16), and the sessions in them are the children's rows of the projects (A-8).
+// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac, each with its child. The choices of a worktree leave them out (A-9, A-16), and the list of the projects draws no row for the sessions in them (A-8).
 let childPlaces = new Map<string, ChildRef>();
+// The folders of every launched child of the record, those that tsunagiai made and those that were there, `{environment}\n{path}` as `placeOf`: the project rows count the worktrees that the formations hold with them (A-8). The same folder may hold several children.
+let childFolders = new Map<string, ChildRef>();
 // The terminals of the children that work in a folder that was there (`created` false): that folder is the owner's too, so only these sessions are children's, `{environment}\nhandle\n{handle}` and `{environment}\npane\n{paneKey}`.
 let childSessions = new Map<string, ChildRef>();
 // Whether a read of the list has ended, with an answer or a failure: before it, the Orca list does not know which sessions are a child's.
@@ -63,8 +65,6 @@ let onRemoved: (name: string) => void = () => {};
 let onChild: (name: string) => void = () => {};
 // The formations whose children are folded away (in memory only); a formation shows its children until its arrow is pressed.
 const folded = new Set<string>();
-// The formations whose done children are shown (in memory only); they are left out until the chip 「完了 N」 of the row is pressed (#1112).
-const doneShown = new Set<string>();
 // The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
 const deleting = new Set<string>();
 let deleteFailure: string | null = null;
@@ -86,6 +86,9 @@ export const childOfSession = (item: { path: string; environment?: string | null
 // Whether a row or a terminal of the Orca list is a launched child's session (the work pane of a project leaves it out: the child's terminal is in the formation's screen).
 export const isChildSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }) => childOfSession(item) !== null;
 
+// Whether the worktree at `path` on the PC `environment` is a folder of a launched child of the record, made by tsunagiai or not, by the last read (A-8): the row of a project counts them.
+export const isChildFolder = (path: string, environment: string | null | undefined) => childFolders.has(placeKey(environment, path));
+
 const differs = (a: Map<string, ChildRef>, b: Map<string, ChildRef>) => a.size !== b.size || [...a].some(([k, v]) => b.get(k)?.formation !== v.formation || b.get(k)?.child !== v.child);
 
 // Holds the worktrees and the sessions of the children of `formations`; the screens that leave them out are drawn again when they changed.
@@ -93,9 +96,11 @@ function holdChildren() {
   const children = formations.flatMap((f) => f.children.map((c) => ({ c, ref: { formation: f.name, child: c.name } })));
   const next = new Map(children.filter(({ c }) => c.created).map(({ c, ref }): [string, ChildRef] => [placeKey(c.environment, c.path), ref]));
   const nextSessions = new Map(children.filter(({ c }) => !c.created).flatMap(({ c, ref }): [string, ChildRef][] => [[placeKey(c.environment, `handle\n${c.handle}`), ref], [placeKey(c.environment, `pane\n${c.paneKey}`), ref]]));
-  const changed = differs(next, childPlaces) || differs(nextSessions, childSessions);
+  const nextFolders = new Map(children.map(({ c, ref }): [string, ChildRef] => [placeKey(c.environment, c.path), ref]));
+  const changed = differs(next, childPlaces) || differs(nextSessions, childSessions) || differs(nextFolders, childFolders);
   childPlaces = next;
   childSessions = nextSessions;
+  childFolders = nextFolders;
   if (changed) redrawOrca();
 }
 
@@ -212,8 +217,8 @@ function choose(name: string | null) {
   onChange(name);
 }
 
-// Selects the formation and shows the tab of its child: a child's row of this list, and a child's session in the list of the projects (A-8).
-export function openChild(formation: string, child: string) {
+// Selects the formation and shows the tab of its child: a child's row of this list.
+function openChild(formation: string, child: string) {
   deleteFailure = null;
   deleteNotice = null;
   choose(formation);
@@ -221,7 +226,7 @@ export function openChild(formation: string, child: string) {
   draw();
 }
 
-// A line of the list: the row of a formation, a button, and at its right the chip of its done children and the number of its launched children, which are outside the button so that a button does not hold another (#1112).
+// A line of the list: the row of a formation, a button, and at its right the count of its done children and the number of its launched children, which are outside the button so that a button does not hold another (#1112).
 function row(f: FormationEntry, done: number): HTMLDivElement {
   const line = tag("div", "formation-line");
   const node = tag("button", "formation-row");
@@ -246,17 +251,10 @@ function row(f: FormationEntry, done: number): HTMLDivElement {
     node.append(span("formation-row-waiting", WAITING_LABEL));
   }
   line.append(node);
-  // The done children are left out of the list until this chip is pressed; none is drawn for a formation that has no done child.
+  // The number of the done children, the stopped ones too; it is only a count, and none is drawn for a formation that has no done child.
   if (done > 0) {
-    const chip = tag("button", "chip formation-done");
-    chip.type = "button";
+    const chip = span("chip formation-done-count", `完了 ${done}`);
     chip.dataset.doneFor = f.name;
-    chip.setAttribute("aria-pressed", String(doneShown.has(f.name)));
-    chip.textContent = `完了 ${done}`;
-    chip.onclick = () => {
-      if (!doneShown.delete(f.name)) doneShown.add(f.name);
-      draw();
-    };
     line.append(chip);
   }
   // The number of the launched children; none is drawn for a formation that has none. A press on it is a press on the row.
@@ -269,27 +267,33 @@ function row(f: FormationEntry, done: number): HTMLDivElement {
   return line;
 }
 
+// A done child that still has its terminal is waiting for the next instruction: the list draws it as 待機, with a gray ring in place of the state icon of a done one.
+const STANDBY_LABEL = "待機";
+const isStandby = (c: FormationListChild) => c.state === "done" && c.terminal;
+
 // A child of a formation: its state, its name and, under it, the project and the branch of its worktree. Pressing it selects the formation and shows the child's tab.
 function childRow(f: FormationEntry, c: FormationListChild): HTMLButtonElement {
   const node = tag("button", "formation-child");
   node.type = "button";
   node.dataset.childOf = f.name;
   node.dataset.child = c.name;
-  node.dataset.state = c.state;
+  const standby = isStandby(c);
+  node.dataset.state = standby ? "standby" : c.state;
   const text = tag("span", "formation-child-text");
   const where = c.branch === "" ? c.repo : `${c.repo} ・ ${c.branch}`;
   text.append(span("formation-child-name", c.name), span("formation-child-where", where));
-  node.append(statusIcon(STATUS_OF[c.state], STATE_LABELS[c.state]), text);
+  node.append(standby ? statusIcon("idle", STANDBY_LABEL) : statusIcon(STATUS_OF[c.state], STATE_LABELS[c.state]), text);
   node.onclick = () => openChild(f.name, c.name);
   return node;
 }
 
-// A formation with its children: a formation that has some has the arrow at the left of its row (the one of a project, A-8), and its children under it while it is open.
+// A formation with its children: a formation that has some to draw has the arrow at the left of its row (the one of a project, A-8), and its children under it while it is open. A done child with no terminal was stopped, and is not drawn (it is in the count of 「完了 N」 only).
 function item(f: FormationEntry): HTMLDivElement {
   const wrap = tag("div", "formation-item");
   const done = f.children.filter((c) => c.state === "done");
   wrap.append(row(f, done.length));
-  if (f.children.length === 0) return wrap;
+  const shown = f.children.filter((c) => c.state !== "done" || c.terminal);
+  if (shown.length === 0) return wrap;
   const open = !folded.has(f.name);
   const arrow = tag("button", "icon-btn orca-arrow");
   arrow.type = "button";
@@ -304,7 +308,7 @@ function item(f: FormationEntry): HTMLDivElement {
   wrap.append(arrow);
   if (open) {
     const list = tag("div", "formation-children");
-    list.append(...f.children.filter((c) => c.state !== "done" || doneShown.has(f.name)).map((c) => childRow(f, c)));
+    list.append(...shown.map((c) => childRow(f, c)));
     wrap.append(list);
   }
   return wrap;
@@ -317,12 +321,11 @@ function drawLeaderMark() {
   $("formation-tab-leader-mark").hidden = !waiting;
 }
 
-// The selector of the control of the list that has the focus, to give it the focus again after a redraw: a formation's row, a child's row, an arrow or the chip of the done children.
+// The selector of the control of the list that has the focus, to give it the focus again after a redraw: a formation's row, a child's row or an arrow.
 function focusedControl(feed: HTMLElement): string | undefined {
   const el = feed.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null;
-  const { formation, childOf, child, arrow, doneFor } = el?.dataset ?? {};
+  const { formation, childOf, child, arrow } = el?.dataset ?? {};
   if (arrow) return `[data-arrow="${CSS.escape(arrow)}"]`;
-  if (doneFor) return `[data-done-for="${CSS.escape(doneFor)}"]`;
   if (childOf && child) return `[data-child-of="${CSS.escape(childOf)}"][data-child="${CSS.escape(child)}"]`;
   if (formation) return `[data-formation="${CSS.escape(formation)}"]`;
   return undefined;
@@ -333,7 +336,7 @@ function draw() {
   const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
-  const key = JSON.stringify([current, [...deleting], [...folded], [...doneShown], formations.map((f) => [f.name, f.projects, f.waiting, f.children.map((c) => [c.name, c.repo, c.branch, c.state])])]);
+  const key = JSON.stringify([current, [...deleting], [...folded], formations.map((f) => [f.name, f.projects, f.waiting, f.children.map((c) => [c.name, c.repo, c.branch, c.state, c.terminal])])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.

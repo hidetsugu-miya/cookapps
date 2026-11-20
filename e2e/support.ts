@@ -829,7 +829,7 @@ export const decisionCard = (number: string, extra: Partial<Card> = {}): Card =>
 });
 
 // A launched child of a formation as `formation_list` lists it (A-37): its project (`repo`), the branch and the worktree it has under `/work/`, which tsunagiai made (`created`), and its terminal and agent (`handle`, `paneKey`, as the Orca rows of `orcaRow` name them).
-export const listedChild = (name: string, state: Exclude<FormationState, "planned">, extra: Partial<FormationListChild> = {}): FormationListChild => ({ name, repo: "example-api", branch: `formation/${name}`, path: `/work/${name}`, environment: "local", state, created: true, handle: `term_${name}`, paneKey: `tab_${name}:leaf_1`, ...extra });
+export const listedChild = (name: string, state: Exclude<FormationState, "planned">, extra: Partial<FormationListChild> = {}): FormationListChild => ({ name, repo: "example-api", branch: `formation/${name}`, path: `/work/${name}`, environment: "local", state, created: true, handle: `term_${name}`, paneKey: `tab_${name}:leaf_1`, terminal: true, ...extra });
 
 // A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca; `extra` gives those of a saved environment, with its `environment`), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state; `waiting: true` in `extra` is a leader that waits for input (#915).
 export const formationEntry = (name: string, extra: Partial<FormationEntry> & { minutes?: number; repos?: string[] } = {}): FormationEntry => {

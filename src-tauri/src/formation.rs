@@ -81,6 +81,7 @@ const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
+const STEP_STOP: &str = "ターミナルを閉じる";
 const STEP_WORKTREE_BASE: &str = "worktree の場所の設定";
 const STEP_EXCLUDE: &str = "git の追跡外の設定";
 pub(crate) const STEP_LISTED: &str = "worktree の一覧の読み取り";
@@ -2446,6 +2447,50 @@ pub fn close(config: &Path, formation: &str, name: &str) -> Result<Value, Refusa
     )
 }
 
+/// Stops a child: only its terminal is closed (A-37, `formation_stop`). Its worktree, its branch and its entry of the record stay, so the child is drawn as done and the owner closes it from its card. The terminal is the one `terminal_is_childs` confirms, as for `close_with`; nothing is closed on the record's word alone.
+/// What stops nothing is refused with a sentence: a child that is only planned, a name the record lacks, a record that is not well formed, a saved environment that is gone, a terminal that Orca's list does not say is the child's (it is already closed, or the list could not be read), and a terminal that Orca did not close.
+pub fn stop(config: &Path, formation: &str, name: &str) -> Result<Value, Refusal> {
+    check_name(formation)?;
+    stop_with(config, formation, name, &orca_read, &|args| {
+        orca::write(args)
+    })
+}
+
+fn stop_with(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<Value, Refusal> {
+    let (agent, launch, environment) = match locate_child(config, formation, name, read)? {
+        Located::Planned => {
+            return Err(Refusal::from(format!(
+                "「{name}」はまだ起動していない予定の子で、止めるターミナルがありません"
+            )))
+        }
+        Located::EnvironmentGone => {
+            return Err(Refusal::from(format!(
+                "「{name}」の保存した環境が Orca の一覧になく、止めるターミナルを確かめられません"
+            )))
+        }
+        Located::Launched {
+            agent,
+            launch,
+            environment,
+        } => (agent, launch, environment),
+    };
+    let ps = read(&orca::ps_args(Some(&environment)));
+    if !terminal_is_childs(agent, &launch, &environment, ps.as_ref().ok(), read) {
+        return Err(Refusal::from(format!(
+            "「{name}」のターミナルが、Orca の一覧でその子のものと確かめられないので、何も閉じていません。すでに閉じてあるか、Orca の一覧を読めませんでした"
+        )));
+    }
+    write(&terminal_close_args(&launch.handle, &environment))
+        .map_err(|e| Refusal::failed(STEP_STOP, e).saying("何も閉じていません"))?;
+    Ok(json!({ "name": name, "path": launch.path, "terminalClosed": true }))
+}
+
 /// What `inspect_child` found a child to need, with nothing done yet.
 enum Closing {
     /// Only planned: its entry is dropped.
@@ -2484,16 +2529,27 @@ pub struct FormationShown {
     pub path: String,
 }
 
-/// Every check that `close_with` makes before it changes anything, and nothing else: it only reads the record, Orca and git. A child that it refuses is one that `close_with` refuses for the same reason, and `delete_with` asks it of every child before it ends the orchestrator.
-/// `force` is the children the owner was shown (`None`: no force). It leaves out the look at the git of a child whose name and recorded path are both in it (a change, an untracked file, a commit no remote has, and what cannot be told of them) and nothing else: the record, the environment and the list of `orca worktree ps` are checked as always, so that the owner's force reaches only a worktree that Orca lists and that is not the repository's own folder. Any other child, one that was added or whose path was replaced after the owner was shown, is looked at as without `force`.
-fn inspect_child(
+/// Where a child of the record is, with nothing done yet (`inspect_child`, `stop_with`).
+enum Located {
+    /// Only planned: it has no terminal and no worktree.
+    Planned,
+    /// Its saved environment is gone: there is no Orca to ask.
+    EnvironmentGone,
+    /// Launched: the record's `launch` (its path and handle well formed) and the environment that its Orca commands go to (this Mac, or exactly one saved environment).
+    Launched {
+        agent: FormationAgent,
+        launch: Launch,
+        environment: String,
+    },
+}
+
+/// The child `name` of the record and the environment of its Orca. The record is a file the orchestrator can write: the path and the handle must be well formed, and the environment must be this Mac or exactly one saved environment, or nothing is done.
+fn locate_child(
     config: &Path,
     formation: &str,
     name: &str,
-    force: Option<&[FormationShown]>,
     read: &dyn Fn(&[String]) -> Result<Value, String>,
-    git_of: &dyn Fn(&str, &str) -> GitAnswers,
-) -> Result<Closing, Refusal> {
+) -> Result<Located, Refusal> {
     let child = read_record(config, formation)?
         .into_iter()
         .find(|c| c.name == name)
@@ -2503,10 +2559,9 @@ fn inspect_child(
             ))
         })?;
     let Some(launch) = child.launch else {
-        return Ok(Closing::Planned);
+        return Ok(Located::Planned);
     };
-    let path = launch.path.as_str();
-    orca::check_path(path)
+    orca::check_path(&launch.path)
         .and_then(|()| orca::check_handle(&launch.handle))
         .map_err(|e| {
             Refusal::from(format!(
@@ -2521,8 +2576,8 @@ fn inspect_child(
             .map(|result| environments_listed(&result))
             .map_err(|e| Refusal::failed(STEP_ENVIRONMENTS, e).saying("何も消していません"))?;
         if environment_is_gone(&saved, &child.environment) {
-            // The list was read and the environment is in none of it (the owner removed it in Orca): there is no Orca to ask, and no command is run. Only the entry goes.
-            return Ok(Closing::EnvironmentGone);
+            // The list was read and the environment is in none of it (the owner removed it in Orca): there is no Orca to ask, and no command is run.
+            return Ok(Located::EnvironmentGone);
         }
         resolve_environment(&saved, &child.environment).map_err(|e| {
             Refusal::from(format!(
@@ -2530,6 +2585,33 @@ fn inspect_child(
             ))
         })?
     };
+    Ok(Located::Launched {
+        agent: child.agent,
+        launch,
+        environment,
+    })
+}
+
+/// Every check that `close_with` makes before it changes anything, and nothing else: it only reads the record, Orca and git. A child that it refuses is one that `close_with` refuses for the same reason, and `delete_with` asks it of every child before it ends the orchestrator.
+/// `force` is the children the owner was shown (`None`: no force). It leaves out the look at the git of a child whose name and recorded path are both in it (a change, an untracked file, a commit no remote has, and what cannot be told of them) and nothing else: the record, the environment and the list of `orca worktree ps` are checked as always, so that the owner's force reaches only a worktree that Orca lists and that is not the repository's own folder. Any other child, one that was added or whose path was replaced after the owner was shown, is looked at as without `force`.
+fn inspect_child(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    force: Option<&[FormationShown]>,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    git_of: &dyn Fn(&str, &str) -> GitAnswers,
+) -> Result<Closing, Refusal> {
+    let (agent, launch, environment) = match locate_child(config, formation, name, read)? {
+        Located::Planned => return Ok(Closing::Planned),
+        Located::EnvironmentGone => return Ok(Closing::EnvironmentGone),
+        Located::Launched {
+            agent,
+            launch,
+            environment,
+        } => (agent, launch, environment),
+    };
+    let path = launch.path.as_str();
     let ps = read(&orca::ps_args(Some(&environment)));
     let gone = if environment == LOCAL {
         !Path::new(path).is_dir()
@@ -2538,8 +2620,7 @@ fn inspect_child(
     };
     if gone {
         // The handle is closed only when Orca's list says the terminal is the child's; a list that cannot be read or does not say so leaves every terminal alone.
-        let terminal =
-            terminal_is_childs(child.agent, &launch, &environment, ps.as_ref().ok(), read);
+        let terminal = terminal_is_childs(agent, &launch, &environment, ps.as_ref().ok(), read);
         return Ok(Closing::WorktreeGone {
             path: launch.path,
             handle: launch.handle,
@@ -2551,7 +2632,7 @@ fn inspect_child(
     if !launch.created {
         // Nothing of it is removed, so the repository's own folder and a worktree that has changes are closed all the same; the handle and the environment were checked above as for any child.
         // The record is a file the orchestrator can write: the terminal is closed only when Orca's list says that it is the child's.
-        let terminal = terminal_is_childs(child.agent, &launch, &environment, Some(&ps), read);
+        let terminal = terminal_is_childs(agent, &launch, &environment, Some(&ps), read);
         return Ok(Closing::Detach {
             handle: launch.handle,
             environment,
@@ -3642,6 +3723,8 @@ pub struct FormationListChild {
     pub handle: String,
     /// The `paneKey` of its agent in `orca worktree ps` (`Launch::pane_key`).
     pub pane_key: String,
+    /// Whether the child has a terminal now (`FormationChild::handle` is not `None`). A done child without one is a child that was stopped (`formation_stop`) or that Orca lists no more: the list leaves it out and counts it in 「完了 N」; a done child with one is drawn as waiting for the next instruction.
+    pub terminal: bool,
 }
 
 /// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed.
@@ -3661,6 +3744,7 @@ fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationL
                 created: launch.created,
                 handle: launch.handle.clone(),
                 pane_key: launch.pane_key.clone(),
+                terminal: row.handle.is_some(),
             })
         })
         .collect()
@@ -6773,6 +6857,136 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_child_has_only_its_terminal_closed_and_keeps_its_worktree_and_its_entry() {
+        let config = temp_dir("stop");
+        let there = temp_dir("stop-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        recorded(&config, &path, "term_a", "me/a");
+        // `launched` records the pane `tab-a:leaf`.
+        let listed = json!({"worktrees": [{"path": path, "isMainWorktree": false, "agents": [{"paneKey": "tab-a:leaf"}]}]});
+        let orca = Calls::new();
+        let done = stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|args| {
+            orca.run(args)
+        })
+        .unwrap();
+        assert_eq!(done["terminalClosed"], true);
+        assert_eq!(done["name"], "a");
+        // Only the terminal is closed: no `worktree rm`, the folder is there and the record is as it was.
+        assert_eq!(orca.names(), ["terminal close"]);
+        assert_eq!(orca.0.borrow()[0], terminal_close_args("term_a", "local"));
+        assert!(there.is_dir());
+        let record = read_children(&config, F);
+        assert_eq!(names(&record), ["p", "a"]);
+        // With no terminal, Orca's list has no agent of the child: the card is drawn as done, with no handle.
+        let after = json!({"worktrees": [{"path": path, "isMainWorktree": false, "agents": []}]});
+        let row = child_row(&record[1], LOCAL, Some(&after));
+        assert_eq!(row.state, FormationState::Done);
+        assert_eq!(row.handle, None);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_that_the_list_does_not_confirm_is_not_stopped_and_the_entry_stays() {
+        let config = temp_dir("stop-unconfirmed");
+        let path = "/work/a";
+        let cases: [Result<Value, String>; 5] = [
+            // Another pane, another path, no agent, nothing listed, and a list that cannot be read.
+            Ok(json!({"worktrees": [{"path": path, "agents": [{"paneKey": "tab-x:leaf"}]}]})),
+            Ok(json!({"worktrees": [{"path": "/w/other", "agents": [{"paneKey": "tab-a:leaf"}]}]})),
+            Ok(json!({"worktrees": [{"path": path}]})),
+            Ok(json!({})),
+            Err("orca が答えません".into()),
+        ];
+        for (i, listed) in cases.into_iter().enumerate() {
+            recorded(&config, path, "term_a", "me/a");
+            let orca = Calls::new();
+            let err = stop_with(&config, F, "a", &|_| listed.clone(), &|args| orca.run(args))
+                .unwrap_err();
+            assert!(err.error.contains("確かめられない"), "{i}");
+            assert!(orca.0.borrow().is_empty(), "{i}");
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"], "{i}");
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_terminal_of_a_codex_child_is_stopped_only_when_orcas_terminal_list_has_it() {
+        let config = temp_dir("stop-codex");
+        let path = "/work/a";
+        for (terminals, confirmed) in [
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": path}]}),
+                true,
+            ),
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": path, "orphaned": true}]}),
+                false,
+            ),
+            (
+                json!({"terminals": [{"handle": "term_a", "worktreePath": "/somewhere/else"}]}),
+                false,
+            ),
+            (
+                json!({"terminals": [{"handle": "term_other", "worktreePath": path}]}),
+                false,
+            ),
+        ] {
+            recorded_codex(&config, path, "term_a", true);
+            let orca = Calls::new();
+            let done = stop_with(&config, F, "a", &codex_orca(path, terminals), &|args| {
+                orca.run(args)
+            });
+            assert_eq!(done.is_ok(), confirmed);
+            let expected = if confirmed {
+                vec![terminal_close_args("term_a", "local")]
+            } else {
+                vec![]
+            };
+            assert_eq!(*orca.0.borrow(), expected);
+            assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_planned_child_an_unknown_name_a_bad_record_and_a_failed_close_stop_nothing() {
+        let config = temp_dir("stop-refused");
+        let listed =
+            json!({"worktrees": [{"path": "/work/a", "agents": [{"paneKey": "tab-a:leaf"}]}]});
+        write_children(&config, F, &[planned("p", "x")]).unwrap();
+        for name in ["p", "nobody"] {
+            let orca = Calls::new();
+            let err = stop_with(&config, F, name, &|_| Ok(listed.clone()), &|args| {
+                orca.run(args)
+            })
+            .unwrap_err();
+            assert!(!err.error.is_empty());
+            assert!(orca.0.borrow().is_empty());
+        }
+        // A handle that is not one is not passed to Orca.
+        recorded(&config, "/work/a", "--force", "me/a");
+        let orca = Calls::new();
+        assert!(
+            stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|args| {
+                orca.run(args)
+            })
+            .is_err()
+        );
+        assert!(orca.0.borrow().is_empty());
+        // Orca that does not close the terminal: the answer says so, and the entry stays.
+        recorded(&config, "/work/a", "term_a", "me/a");
+        let err = stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|_| {
+            Err("orca が答えません".into())
+        })
+        .unwrap_err();
+        assert_eq!(err.step, Some(STEP_STOP));
+        assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn a_child_whose_worktree_is_gone_has_its_terminal_closed_and_its_entry_dropped() {
         let config = temp_dir("close-gone");
         let gone = "/nonexistent-tsunagiai/w/a";
@@ -8953,6 +9167,14 @@ mod tests {
         assert_eq!(rows[2].handle, None);
         assert_eq!(listed[1].handle, "term_m");
         assert_eq!(listed[1].pane_key, "tab-m:leaf");
+        // The terminal is not the record's handle: the row has none once Orca lists the child no more.
+        assert!(!listed[1].terminal);
+        assert!(!listed[0].terminal);
+        // A done child that Orca still lists has its terminal.
+        let alive = ps_of(vec![agent("tab-k:leaf", "done", None)]);
+        let rows = rows_of(&records, &alive);
+        assert_eq!(rows[1].state, FormationState::Done);
+        assert!(listed_children(&records, &rows)[0].terminal);
     }
 
     #[test]
