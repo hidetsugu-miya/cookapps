@@ -45,6 +45,7 @@ CONSULTED {unit} {Q-id}: {outcome}
 | `not-covered` | Your deliverable says nothing about the point, and nothing in it has to change for the asker to go on. | What you read. |
 | `change-needed` | The asker needs something that your deliverable does not state or states otherwise, so that your deliverable would have to be rewritten. | What would have to change, where (the node or the line), and why the asker needs it. |
 
+- A `CONSULT` whose first line lists several ids (`Q-03,Q-04`) holds one block for each point ([consulting](consulting.md), "Several points at once"). Rate each point on its own, and answer in one message: the first line is `CONSULTED {unit} Q-03,Q-04: per point`, and each block starts with `{Q-id}: {outcome}` and holds that outcome's lines.
 - Answer only what the deliverable says. Do not read an intention into it, do not fill a gap with a guess, and do not design for the asker.
 - An `answered` carries evidence or it is not an `answered`. When you have none, the outcome is `not-covered` or `change-needed`.
 - When your unit is not `完了` in `case.json` (a reopen is waiting for its redo), your deliverable is not settled: answer `not-covered` and say that.

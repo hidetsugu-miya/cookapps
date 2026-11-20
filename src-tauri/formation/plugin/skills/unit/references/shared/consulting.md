@@ -20,7 +20,7 @@ Read your inputs again first. Ask only when they do not settle it.
 
 A judgment that is the owner's by the case itself (an open question of a requirement or a design, the approval of a deliverable) is no question to the upper unit. It goes on a decision page ([decision-page](decision-page.md)).
 
-A matter of the environment (a missing folder, a ticket or a design file you cannot read, a tool that needs a sign-in) is a `QUESTION` too. Say in its first line that it is a matter of the environment: the leader answers it itself and does not ask the upper unit.
+A matter of the environment (a missing folder, a ticket or a design file you cannot read, a tool that needs a sign-in) is a `QUESTION` too. Say in its first line that it is a matter of the environment: the leader answers it itself and does not ask the upper unit. When only the owner's action can settle it (a sign-in, the text of a ticket you cannot read, a folder to prepare), the leader asks the owner.
 
 ## The question
 
@@ -31,6 +31,14 @@ For a new point, read the file, take the number after the largest one in it (`Q-
 One point has one id. When you ask the same point again, because the answer did not settle it, use the same id and append nothing. A new point gets a new id.
 The leader counts by id: the same id a second time stops the loop and goes to the owner. So never put two points under one id, and never give a new id to a point that was already asked.
 Say what you read and where (a path and a line), so that the answer need not read it again.
+
+### Several points at once
+
+When one step of your unit leaves several points open together (Stage 6 of an implementation), send one `QUESTION` for all of them, so that the chain runs once.
+The first line lists the ids, in the order of the points, joined by commas with no space: `QUESTION {unit} Q-03,Q-04: {the points in a few words}`.
+Under it, each point is a block that starts with its own line `{Q-id}: {point}`, followed by its options and your recommendation.
+Each id is made, recorded and counted as above, on its own.
+The messages that come back keep that list of ids in their first line (`CONSULT`, `CONSULTED`, `ANSWER`), and the kind or the outcome in it is the word `per point`: the message holds one block for each id, which starts with `{Q-id}: {kind or outcome}`.
 
 ## The answer
 
@@ -43,6 +51,8 @@ The first line of the answer is `ANSWER {unit} {Q-id}: {kind}`. The next lines h
 | `reopen {target}` | The owner approved a change to the deliverable of the unit `{target}`. | Send the case back, as below. |
 | `not-settled` | No source settles it, and it is not the owner's kind of question. | Decide it yourself, from the code and the documents. Name the basis (a path and a line) in your `DONE` summary. Without a basis, do not decide: ask again with the same id and say that. |
 
+An answer to several points is read block by block, each block as one row of the table. When one block is `reopen {target}`, send the case back first and stop: the other blocks are moot, because the redo changes what they rest on.
+
 An answer without evidence is no answer: when an `answered` has none, ask again with the same id and say so.
 Never go on with work that depends on the answer before it comes.
 
@@ -50,7 +60,7 @@ Never go on with work that depends on the answer before it comes.
 
 When the answer is `reopen {target}`:
 
-1. Commit what your unit holds as work in progress, as your unit's procedure says for a send-back (the design: [1-context](../design/1-context.md), "Send the case back to the requirement"). An implementation has nothing to commit here: its commits stay on its child branch, and the unit stays `進行中`.
+1. Commit what your unit holds as work in progress, as your unit's procedure says for a send-back (the design: [1-context](../design/1-context.md), "Send the case back to the requirement"). An implementation has nothing to commit here: its commits stay on its child branch, and the unit stays `進行中`. It takes the mark of its converged review away from its own ledger ("The mark of a converged review" in [case-json](case-json.md)), so that its next child starts again at Stage 1 and reads the redone deliverable, whether or not the redo reaches its items.
 2. Run the `reopen` recipe of [case-json](case-json.md) for `{target}`, with the owner's words as the reason, quoted as data in the record.
 3. Do not commit the reopen. The next commit of the case root of the reopened unit takes it.
 4. Send `REOPENED {target}: {reason in one line}`, and stop.

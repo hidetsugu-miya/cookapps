@@ -920,38 +920,40 @@ The flow of a case (#1164, the parts #1166 to #1169).
 The owner's decisions of #1164 are the skill's words (`src-tauri/formation/leader/feature-dev/` and `src-tauri/formation/plugin/skills/unit/`): no Rust, no screen and no setting of the app changes with them.
 The page kind `code-review` stays in the contract above and on the screen, and the skill no longer writes it: an implementation is not accepted on a page (below).
 
-- What a unit builds (#1166).
+- What a unit builds (#1168).
   A child builds, writes and designs only what the requirement states, and adds and drops nothing of it.
   A technical means that the requirement needs (the structure of a design, the tests, the smallest fix of existing code) is its own to do.
   When something that the requirement does not state seems necessary, it asks the upper unit.
-- Questions (#1166).
+- Questions (#1168).
   A child never talks to another child.
   It sends `QUESTION {unit} {Q-id}: {question}` to the leader, with `{Q-id}` (`Q-01`, `Q-02`, ...) naming the point (the ids of a unit are kept in `records/{unit}/questions.md`), and the leader forwards it as `CONSULT` to the standby of the next unit up: an implementation and the specification ask the design, the design asks the requirement, and the requirement asks the leader.
   The standby answers `CONSULTED` with `answered` (with evidence, a path and a line or a `{file}#{pointer}`; one without evidence counts as `not-covered`), `not-covered` or `change-needed`, and the leader sends the asker `ANSWER {unit} {Q-id}: {kind}`, `{kind}` being `answered`, `owner`, `reopen {target}` or `not-settled`.
-  A matter of the environment (a missing folder, a ticket that cannot be read, a sign-in) is answered by the leader itself, without the chain.
+  A matter of the environment (a missing folder, a ticket that cannot be read, a sign-in) is answered by the leader itself, without the chain, and the leader asks the owner when only the owner's action can settle it (a sign-in, the text of a ticket, a folder to prepare).
   When no unit above settles a point, the leader researches it with its read tools and answers only with evidence: a product or specification judgment, or an operation that cannot be undone, goes to the owner, and anything else is `not-settled`, which the child decides itself with a basis it can cite.
   A `change-needed` goes to the owner too, to approve the change or to leave the deliverable as it stands: when the owner approves, the asker reopens the unit (the `reopen` record), sends `REOPENED` and stops.
   The leader counts the points by `{Q-id}`: the second time the same asker raises the same point, it stops and asks the owner with the answers so far.
+  Several points that a step of a unit leaves open together go in one `QUESTION`, so that the chain runs once: its first line lists the ids joined by commas (`Q-03,Q-04`), each point is a block that starts with `{Q-id}: {point}`, and `CONSULT`, `CONSULTED` and `ANSWER` keep the list of ids, with `per point` in place of the kind and a block `{Q-id}: {kind or outcome}` for each id. Each id is counted on its own.
   A decision of the case itself (an open question of a requirement or a design, the approval of a deliverable) is no `QUESTION`: it goes on a decision page by the way above (child, leader, owner).
-  The leader asks the owner only about a product or specification judgment that the sources do not settle and about an operation that cannot be undone, and nobody (a child, a standby, the leader) decides and goes on without a basis.
+  The leader asks the owner only about a product or specification judgment that the sources do not settle, about an operation that cannot be undone and about a matter of the environment that only the owner's action can settle, and nobody (a child, a standby, the leader) decides and goes on without a basis.
 - The standbys (#1167).
   The children of the requirement and of the design stay after their `DONE` as standbys until the specification is done.
   A standby answers a `CONSULT` and writes nothing, and at each answer it reads its deliverable and its records (`requirement.json` or `design.json`, `technical-notes.md`, `case.json`) from the disk again and gives the place of each fact.
   A unit that a reopen sent back is redone by its own standby, which the leader wakes with `RESUME {unit}: {record}`, and not by a new child: the child that asked has stopped before, so one child writes at a time (the rule that one child works at a time counts the working child and never a standby).
   A standby that is missing (the leader started again, or the child is gone or was closed) is launched again with the line `Role: standby` before the unit that needs it.
   At the `DONE` of the specification the leader stops the child of the specification and the two standbys with `formation_stop`.
-- The end of an implementation (#1168).
+- The end of an implementation (#1169).
   The owner does not accept an implementation before it is merged: it has no decision page and no status `受入待ち` (a `case.json` of an earlier case that holds it is set back to `進行中` first).
   Stage 6 asks about what the review and the checks left: a must-fix finding that is still open (not one that predates the change, which goes into the body of the pull request), a criterion that is unmet, a finding that needs a decision (`NR-n`), a screen item that still fails (`SV-n`) and a formal result that is `bug` or `blocked` (`FV-n`).
-  Each is one `QUESTION` through the leader as above, with the options to fix it (recommended) or to complete as it stands (for an `NR-n`, the reviewer's own options); a fix is a rework, and the rest is written into the body of the pull request as accepted as it stands.
+  They go in one `QUESTION` through the leader as above (one block for each item, one id each), with the options to fix it (recommended) or to complete as it stands (for an `NR-n`, the reviewer's own options); a fix is a rework, and the rest is written into the body of the pull request as accepted as it stands.
   When nothing is left the child asks nobody: it merges the child pull request into the base branch with a merge commit, creates the aggregate pull request of the repository as a draft, records `完了` and sends `DONE`.
   At that `DONE` the leader reads the body of the pull request, stops the child, and tells the owner in one line, in Japanese, which unit is complete, the URL of the pull request that was merged and what comes next.
   The owner reads the merged pull request, and tells the leader when something is wrong: the leader then reopens the unit as an instruction of the owner.
-- The language (#1169).
+  An implementation that is sent back starts again at Stage 1, never past the implementation stages: the `reopen` recipe, the redo of a design that reaches it (an implementation that is `完了` or `進行中` and holds a DESIGN item that the redo reaches goes back to `未着手`) and an implementation that sends an upper unit back itself take the line `Converged:` out of its ledger `records/{key}/ledger.md`, which Stage 3 writes when the review has converged and which the resume of a unit reads.
+- The language (#1166).
   Every message between the leader and a child is in English, the first prompt and the `DONE` summary included, and the owner's own words that the leader passes on stay as the owner wrote them.
   The owner talks to the leader only, in Japanese, and what the owner reads of the children's work (a decision page, the body of a pull request, the requirement, the design, the specification) stays in Japanese.
   Before the owner reads such a text, the leader reads it for two things only, that it is Japanese and that it reads well, and never for whether it is right (the review of the unit checks that); it reads a page before it calls `formation_page`.
-  It asks the child for a fix in English (`PAGE-REFUSED {path}` for a page), and when the same text needs a fix a third time, it tells the owner in Japanese what is wrong and shows the text as it is.
+  It asks the child for a fix in English (`PAGE-REFUSED {path}` for a page), and when the same text needs a fix a third time, it tells the owner in Japanese what is wrong and shows the text as it is. For a decision page the refusals of its own check and of `formation_page` are one count, and at the third it calls `formation_page` only when the page was refused by its own check (it shows the page as it is), never for a page that `formation_page` refused.
 - What the children made (#1169).
   A child records each Docker container, volume and network that its run made, once it has checked that the name was free, in `records/{unit}/cleanup.jsonl` of the case root (one JSON object a line: `kind` `docker-container`, `docker-volume` or `docker-network`, `name`, `by`, `at`); `feature-dev:ci-verifier` and `feature-dev:code-verifier` report the ones they start in `docker_objects`.
   When every unit is complete, the leader removes the recorded objects and does not ask the owner: it is the one exception to asking about an operation that cannot be undone (`requirements/constraints.md`, "Orca").

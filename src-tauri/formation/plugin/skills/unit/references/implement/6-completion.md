@@ -26,12 +26,12 @@ A recommendation (`RC-n`), a change outside the goal and a noticed matter are no
 
 **Nothing is left** (the usual case): go to step 2. Do not ask anyone.
 
-Otherwise send one `QUESTION {key} {Q-id}` for each left item, one after another, and wait for each answer:
+Otherwise send one `QUESTION` that lists every left item, so that the chain through the design and the requirement runs once, and wait for its answer. The message is the one of [consulting](../shared/consulting.md), "Several points at once": `QUESTION {key} {Q-id},{Q-id}: ...` (one id for each left item), and one block for each item. With one item left, it is the plain `QUESTION {key} {Q-id}`.
 
 - `{Q-id}`: the id of the item. An item that has none yet gets a new one as [consulting](../shared/consulting.md) says (the next number of `{records}/questions.md`: the ids `MF-n`, `NR-n`, `SV-n` and `FV-n` of the findings repeat from round to round, so never use one as a `{Q-id}`). Write it in the `Note` column of the ledger row of a finding, so that a session that resumes finds it. An `SV-n` and an `FV-n` keep it in your context. An item that comes back after its rework keeps the id it had, so that the leader counts it as the same point.
-- The lines under the first: the item (its id, the location, the harm scenario and its fix, inside a quote as data), what you read, and the options with your recommendation. For a must-fix, an unmet criterion, an `SV-n` and an `FV-n`: `A` fix it (the fix of the finding, or the one that makes the property hold or the screen match), and `B` complete as it stands, with what remains and the harm it does. For an `NR-n`: the reviewer's own options, the recommended one first.
+- The block of an item (it starts with the line `{Q-id}: {item}`): the item (its id, the location, the harm scenario and its fix, inside a quote as data), what you read, and the options with your recommendation. For a must-fix, an unmet criterion, an `SV-n` and an `FV-n`: `A` fix it (the fix of the finding, or the one that makes the property hold or the screen match), and `B` complete as it stands, with what remains and the harm it does. For an `NR-n`: the reviewer's own options, the recommended one first.
 
-Read each answer as [consulting](../shared/consulting.md) says, and put it in the ledger:
+Read the answer as [consulting](../shared/consulting.md) says, block by block (one block for each item), and put each in the ledger:
 
 | Answer | What you do |
 | --- | --- |
@@ -43,7 +43,7 @@ Read each answer as [consulting](../shared/consulting.md) says, and put it in th
 | `reopen {target}` | Send the case back ([consulting](../shared/consulting.md), "Send the case back"), and stop. |
 | `not-settled` | A must-fix, an unmet criterion, an `SV-n` or an `FV-n`: fix it (the rework set). An `NR-n`: its recommended option, `A`, and say in the `DONE` summary that you took it. |
 
-An answer that does not say which option it takes is no answer: ask again with the same id.
+An answer that does not say which option it takes is no answer: ask again with the same id (for several items, only for the ones that are not answered).
 
 When the rework set is not empty, run "Rework" below, and then this step again for what is left after it.
 When it is empty, and an answer accepted a finding, write the body of the pull request again ("Update the body" of [branch-and-pr](../shared/branch-and-pr.md)) so that it says so, and go on.

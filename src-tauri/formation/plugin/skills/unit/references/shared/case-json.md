@@ -181,8 +181,23 @@ The leader names the unit in your first instruction, with the owner's words as t
    | if $u != "specification" and .stages.specification.status == "完了" then .stages.specification.status = "未着手" else . end
    ```
 
+7. For an implementation, take the mark of its converged review away ("The mark of a converged review" below).
+
 What it does: the other units keep their statuses. A reopened implementation keeps an unmerged child (the redo goes on there) and loses a merged one (the redo starts a new child). A `完了` specification goes back to `未着手`, because what it wrote no longer holds.
 The record and `case.json` are committed with the unit's next case-root commit ([branch-and-pr](branch-and-pr.md)).
+
+### The mark of a converged review
+
+The ledger of an implementation (`{case root}/records/{key}/ledger.md`) holds the line `Converged:` once its review has converged.
+An implementation that is redone must start again at Stage 1, so the line goes whenever the implementation is sent back: by the `reopen` recipe above, by the redo of a design that reaches it ([7-implementations](../design/7-implementations.md)), and by the implementation itself when it sends an upper unit back ([consulting](consulting.md), "Send the case back").
+Otherwise its next child finds the line, takes the implementation stages as done, and merges code that does not follow the new request ([README of the implementation](../implement/README.md), "Where to start").
+It does nothing, and exits with 1, when there is no ledger: that is no failure. Run it with `{key}` filled in:
+
+```sh
+f="{case root}/records/{key}/ledger.md"; [ -f "$f" ] && { grep -v '^Converged:' "$f" > "$f.new"; mv "$f.new" "$f"; }
+```
+
+The ledger is committed with the unit's next case-root commit, as the record is.
 
 ### The implementations
 

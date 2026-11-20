@@ -16,8 +16,8 @@ Every message you send to a child is in English. Only the owner's own words that
 | --- | --- | --- |
 | `DONE {unit}: {summary}` | The unit is complete and recorded. | Check it, then go on (below). |
 | `REOPENED {unit}: {reason}` | The child reopened a unit `{unit}` with the owner's approval and stopped. | Stop the child ([below](#stopping-a-child)), then go back to [next-unit](next-unit.md). |
-| `QUESTION {unit} {Q-id}: {question}` | It needs an answer that its inputs do not give, with the options and its recommendation on the next lines. `{Q-id}` names the point. | Answer it (below). |
-| `CONSULTED {unit} {Q-id}: {outcome}` | A standby answers a `CONSULT`: `answered`, `not-covered` or `change-needed`. | Go on with the question it belongs to ([below](#answer-a-question)). |
+| `QUESTION {unit} {Q-id}: {question}` | It needs an answer that its inputs do not give, with the options and its recommendation on the next lines. `{Q-id}` names the point, or lists the points (`Q-03,Q-04`) that it asks together ([below](#several-points-in-one-question)). | Answer it (below). |
+| `CONSULTED {unit} {Q-id}: {outcome}` | A standby answers a `CONSULT`: `answered`, `not-covered` or `change-needed` (`per point` for several points, with one outcome for each). | Go on with the question it belongs to ([below](#answer-a-question)). |
 | `BLOCKED {unit}: {reason}` | It cannot go on. | Read the reason. Fix what you can (a missing folder, a refused name); otherwise tell the owner the reason and what you recommend. |
 | `PAGE {absolute path}` | A decision page is written for the owner. | [pages](pages.md) |
 
@@ -28,10 +28,10 @@ Use SendMessage with the child's name. The first line is the tag.
 | First line | When |
 | --- | --- |
 | `REPLY` | The owner answered a decision page. The next lines are the reply, word for word. |
-| `ANSWER {unit} {Q-id}: {kind}` | You answer a `QUESTION`. `{kind}` is `answered`, `owner`, `reopen {target}` or `not-settled`. The next lines are the answer. |
+| `ANSWER {unit} {Q-id}: {kind}` | You answer a `QUESTION`. `{kind}` is `answered`, `owner`, `reopen {target}` or `not-settled`. The next lines are the answer. For several points, the id is the same list and `{kind}` is `per point` ([below](#several-points-in-one-question)). |
 | `ANSWER {unit}` | No id: your check of its `DONE` or of its text found something to finish or to change. The next lines say what. |
 | `PAGE-REFUSED {absolute path}` | `formation_page` refused the page, or you did, for its language. The next lines are the violations, word for word. |
-| `CONSULT {unit} {Q-id}: {question}` | To a standby: a question of a unit below it. The next lines: `Asked by: {asker unit}`, then the options and the recommendation of the asker. |
+| `CONSULT {unit} {Q-id}: {question}` | To a standby: a question of a unit below it. The next lines: `Asked by: {asker unit}`, then the options and the recommendation of the asker (for several points, the ids are listed and each point is a block). |
 | `RESUME {unit}: {record}` | To a standby: its unit was reopened, and `{record}` is the path of the reopen record. It does the unit's work again. |
 
 ## Check a `DONE`
@@ -66,7 +66,7 @@ A `QUESTION` comes from a child that works. The chain of questions is:
 
 Take the steps in order.
 
-1. **Count.** Keep a list of the points you have seen: `{asker unit} {Q-id}` with the number of times it came. A point that comes the second time (the same asker with the same id) did not settle in one round trip. Stop here: do not forward it again, call `formation_ask_owner`, and tell the owner in Japanese the point, each answer so far and why it did not settle it, the options, and your recommendation. Wait. When the owner answers, send it as `ANSWER {unit} {Q-id}: owner`, word for word.
+1. **Count.** Keep a list of the points you have seen: `{asker unit} {Q-id}` with the number of times it came (each id of a list counts on its own). A point that comes the second time (the same asker with the same id) did not settle in one round trip. Stop here: do not forward it again, call `formation_ask_owner`, and tell the owner in Japanese the point, each answer so far and why it did not settle it, the options, and your recommendation. Wait. When the owner answers, send it as `ANSWER {unit} {Q-id}: owner`, word for word.
 2. **Skip the chain** for a matter of the environment (a folder, a ticket or a design you cannot read, a sign-in, a tool): go to step 4.
 3. **Ask the next unit up.** The unit must have its standby ([launch](launch.md), "Standbys"). Send it `CONSULT` and end your turn. When its `CONSULTED` comes:
    - `answered`, with evidence (a path and a line, or a `{file}#{pointer}`): send the asker `ANSWER {unit} {Q-id}: answered`, with the answer and the evidence. An `answered` with no evidence is a `not-covered`.
@@ -74,12 +74,25 @@ Take the steps in order.
    - `change-needed`: the owner decides. Call `formation_ask_owner`, then tell the owner in Japanese the question, what in which deliverable would have to change and why, and the options: to approve the change (the case goes back to that unit and it is redone) or not to change it (the asker goes on with the deliverable as it stands). Give your recommendation. Wait. When the owner approves, send the asker `ANSWER {unit} {Q-id}: reopen {upper unit}`, with the owner's words. When the owner declines, send `ANSWER {unit} {Q-id}: owner` with the owner's words. After a `reopen`, the asker reopens the unit and sends `REOPENED`: nothing is launched for the redo ([next-unit](next-unit.md), "A unit with a standby").
 4. **Answer it yourself.** Research it with your read tools: the documents, the code, the case root. Answer only with evidence.
    - The sources settle it: send `ANSWER {unit} {Q-id}: answered` with the answer and the source (a path and line).
-   - The sources do not settle it, and it is a product or specification judgment, or an operation that cannot be undone (a force push, a rewrite of history, a write to production data or services, publishing outside): ask the owner. Call `formation_ask_owner` first, then write the question in Japanese, in plain text: what you found, the options, and your recommendation. Then wait. When the owner answers in the terminal, send it as `ANSWER {unit} {Q-id}: owner`, word for word.
+   - The sources do not settle it, and it is a product or specification judgment, or an operation that cannot be undone (a force push, a rewrite of history, a write to production data or services, publishing outside), or a matter of the environment that only the owner's action can settle (a sign-in, the text of a ticket that cannot be read, a folder to prepare): ask the owner. Call `formation_ask_owner` first, then write the question in Japanese, in plain text: what you found, the options, and your recommendation. Then wait. When the owner answers in the terminal, send it as `ANSWER {unit} {Q-id}: owner`, word for word.
    - The sources do not settle it, and it is neither: send `ANSWER {unit} {Q-id}: not-settled`. The child decides it itself, with a basis it can cite.
 
 Never decide for a child, and never answer without evidence. Nobody (a child, a standby, you) decides and goes on without a basis.
 
 A decision of the case itself (a requirement question, a design choice, the approval of a deliverable) does not come as a `QUESTION`: the child puts it on a decision page.
+
+### Several points in one `QUESTION`
+
+A first line that lists ids (`QUESTION {unit} Q-03,Q-04: ...`) holds one block for each id, each starting with `{Q-id}: {point}`.
+Take the steps above once for the whole message: one `CONSULT` with the same first line and the blocks, one `CONSULTED` with `per point` and a block `{Q-id}: {outcome}` for each id.
+Then take each id on its own:
+
+- A point that the standby `answered` with evidence is settled.
+- A `not-covered` point goes up the table, in a new `CONSULT` that holds only the points that are not settled, and a `change-needed` point goes to the owner, as in step 3. A point that comes the second time is the owner's, as in step 1. Put every point for the owner into one message to the owner.
+- A matter of the environment goes through step 4.
+
+When every point is settled, send one `ANSWER {unit} Q-03,Q-04: per point`: a block `{Q-id}: {kind}` for each id, with the answer and its evidence under it. Send nothing before that: the child waits for one answer.
+When the owner approves a change (`reopen {target}`), the block of that point is `reopen {target}` and the asker sends the case back, so the other blocks need no more work.
 
 ### A `QUESTION` that waits for the business side
 
@@ -114,7 +127,7 @@ What you read:
 - The specification files at the specification's `DONE`, named in its summary: read them with `formation_read`.
 
 When one needs a fix, ask the child for it in English: `PAGE-REFUSED {absolute path}` for a page, and `ANSWER {unit}` for the others, with what is not Japanese or hard to read and where. The child fixes it and sends `PAGE` or `DONE` again.
-When the same text needs a fix a third time, tell the owner in Japanese what is wrong with it, and show it as it is.
+When the same text needs a fix a third time (for a decision page, the refusals of your own check and of `formation_page` are one count), send no more fix: tell the owner in Japanese what is wrong with it and show it as it is. For a page, [pages](pages.md#when-formation_page-refuses) says whether `formation_page` is called.
 
 ## Stopping a child
 

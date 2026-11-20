@@ -26,7 +26,9 @@ A page with a Japanese line that is not polished is refused with those lines in 
 
 1. Send the child `PAGE-REFUSED {absolute path}`, and under it the violations word for word.
 2. The child fixes the page and sends `PAGE` again. Go through the steps above again from step 1.
-3. When the same page is refused three times, do not send it a fourth time: tell the owner what the violations are, and what you recommend.
+3. Count every `PAGE-REFUSED` for the same page (its path) in one count, whichever check refused it: your own check of its language and readability (step 1 above), or `formation_page`. The third time the page needs a fix, send no `PAGE-REFUSED`: tell the owner in Japanese what is wrong with it (the violations) and what you recommend, and wait.
+   - When `formation_page` refused it (a violation of the contract), call it no more for this page: the app cannot show a page that the tool refuses.
+   - When only your own check refused it (`formation_page` has not), call `formation_page` once, so that the owner sees the page as it is, and say in the same line what is wrong with its language or its readability.
 
 A refusal for another reason (the tool is not there, the app is not running) is not the child's fault: tell the owner, and wait for them.
 

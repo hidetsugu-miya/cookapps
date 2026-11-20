@@ -99,7 +99,7 @@ After you send `PAGE` or `QUESTION`, stop and wait: the answer comes as a messag
 | --- | --- | --- |
 | `DONE {unit}: {summary}` | The unit is complete: its status is `完了` in `case.json`, and everything is committed and pushed. For an implementation, it is also merged. | none |
 | `REOPENED {unit}: {reason}` | You reopened a unit `{unit}` (a send-back the owner approved, [consulting](references/shared/consulting.md)) and you stop here. | none |
-| `QUESTION {unit} {Q-id}: {question}` | A point your inputs leave open ([consulting](references/shared/consulting.md)). `{unit}` is your own unit. | The options and your recommendation. |
+| `QUESTION {unit} {Q-id}: {question}` | A point your inputs leave open ([consulting](references/shared/consulting.md)). `{unit}` is your own unit. Several points that are open together go in one message, with `{Q-id}` a list (`Q-03,Q-04`). | The options and your recommendation. |
 | `CONSULTED {unit} {Q-id}: {outcome}` | A standby answers a `CONSULT` ([standby](references/shared/standby.md)). `{unit}` is the standby's own unit. | The answer and its evidence, or what it read, or what would have to change. |
 | `BLOCKED {unit}: {reason}` | You cannot go on, and you cannot fix it. | What you tried. |
 | `PAGE {absolute path}` | A decision page is written ([decision-page](references/shared/decision-page.md)). | none |
