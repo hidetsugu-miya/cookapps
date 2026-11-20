@@ -1,6 +1,6 @@
 //! The reply of a decision page (A-41): the answers the owner chose on the page of a child become the reply text, and the text goes into the leader's terminal under the line `判断ページの返信（{child}）`; the page is then no longer waiting.
 //!
-//! The reply text follows the reply format of the decision pages: a verdict line on an `approval` and a `code-review` page, then one block for each card that has an answer, the blocks and the verdict separated by one blank line. A block is `{number} {title}`, the answer line (`{key}. {label}` for a lettered option, the reply text of a fixed choice, and on a `question` of a requirement the mark of 仮置き when the owner put the answer in for now), and `補足: {text}`. The same format read the other way is `restore`: the answers that the reply of an earlier page carries (`previous_reply`) become the answers a page starts from.
+//! The reply text follows the reply format of the decision pages: a verdict line on an `approval` page, then one block for each card that has an answer, the blocks and the verdict separated by one blank line. A block is `{number} {title}`, the answer line (`{key}. {label}` for a lettered option, the reply text of a fixed choice, and on a `question` of a requirement the mark of 仮置き when the owner put the answer in for now), and `補足: {text}`. The same format read the other way is `restore`: the answers that the reply of an earlier page carries (`previous_reply`) become the answers a page starts from.
 //! Everything in the reply is the child's text or the owner's, so it goes into the terminal as one bracketed paste with its control characters taken out (a paste end that the text carries cannot close the paste early, and an Enter in the middle of a line cannot send half of it), and Enter follows only after the paste has ended.
 
 use std::{collections::HashSet, time::Duration};
@@ -31,7 +31,7 @@ pub struct PageAnswer {
     pub provisional: bool,
 }
 
-/// What the owner chose in the verdict box of an `approval` and a `code-review` page: to approve, or to ask for a revision.
+/// What the owner chose in the verdict box of an `approval` page: to approve, or to ask for a revision.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -57,7 +57,6 @@ fn fixed(kind: CardKind, hold: bool) -> Vec<(&'static str, &'static str)> {
         ],
         CardKind::Question => vec![("investigate", "調べてから決めて"), ("other", "その他")],
         CardKind::Nr => vec![("other", "その他")],
-        CardKind::ReviewDecision => vec![("defer", "今回は対応しない"), ("other", "その他")],
         CardKind::MustFix => vec![
             ("fix", "指摘のとおり修正する"),
             ("skip", "今回は対応しない"),
@@ -66,11 +65,6 @@ fn fixed(kind: CardKind, hold: bool) -> Vec<(&'static str, &'static str)> {
             vec![("approve", "承認"), ("reject", "却下"), ("hold", "保留")]
         }
         CardKind::Adr => vec![("keep", "残す"), ("decline", "不要")],
-        CardKind::ReviewMustFix => vec![
-            ("fix", "修正して再レビューする"),
-            ("accept", "現状で完了する"),
-        ],
-        CardKind::UnmetCriterion | CardKind::ScreenVerification => Vec::new(),
     }
 }
 
@@ -88,7 +82,7 @@ fn required(kind: CardKind) -> bool {
 
 /// Whether the choice asks for a revision (an approve verdict cannot go with it).
 fn revision(kind: CardKind, key: &str) -> bool {
-    matches!(kind, CardKind::MustFix | CardKind::ReviewMustFix) && key == "fix"
+    kind == CardKind::MustFix && key == "fix"
 }
 
 /// The cards of the page that take an answer, in the order the page draws them.
@@ -102,17 +96,8 @@ fn asking_cards(page: &DecisionPage) -> Vec<&Card> {
             .chain(&page.structural_proposals)
             .chain(page.adr.iter())
             .collect(),
-        PageKind::CodeReview => page
-            .residual_must_fix
-            .iter()
-            .chain(&page.unmet_criteria)
-            .chain(&page.needs_user_decision)
-            .collect(),
     };
     groups
-        .into_iter()
-        .filter(|card| !fixed(card.kind, page.hold).is_empty())
-        .collect()
 }
 
 /// `text` for a terminal: line ends are `\n`, a tab is a blank, and every other control character (an ESC with the paste marks, a C1 control) is gone.
@@ -143,7 +128,6 @@ fn verdict(kind: PageKind, subject: Subject, chosen: PageVerdict) -> Result<&'st
         (PageKind::Approval, Subject::Design) => {
             ("基本設計を承認します", "基本設計の修正を依頼します")
         }
-        (PageKind::CodeReview, Subject::Code) => ("この変更を承認します", "修正を依頼します"),
         _ => return Err("この判断ページには、返信の形式がありません".to_owned()),
     };
     Ok(match chosen {
@@ -234,7 +218,7 @@ fn block_of(
 /// The heading of the owner's own request for a revision, which comes right after the revise line.
 const REVISION_HEADING: &str = "修正してほしいこと";
 
-/// The reply text of `page` from `answers`: on an approval and a code review, first the verdict line that the owner chose (`verdict`; none is refused), then, on a revise verdict, the owner's own request for a revision (`revision`, under `修正してほしいこと`, when it has text), then the block of each card that has an answer, in the page's order. A card that does not ask, a card number twice, a number that is not on the page and a key the card does not offer are refused, and so is a page with a required card (`question`, `must-fix`) that has no answer, an approve verdict while a card has a revision choice (`fix`), a request for a revision under an approve verdict, and a verdict or a request on an `open-questions` page: the reply is not sent then.
+/// The reply text of `page` from `answers`: on an approval, first the verdict line that the owner chose (`verdict`; none is refused), then, on a revise verdict, the owner's own request for a revision (`revision`, under `修正してほしいこと`, when it has text), then the block of each card that has an answer, in the page's order. A card that does not ask, a card number twice, a number that is not on the page and a key the card does not offer are refused, and so is a page with a required card (`question`, `must-fix`) that has no answer, an approve verdict while a card has a revision choice (`fix`), a request for a revision under an approve verdict, and a verdict or a request on an `open-questions` page: the reply is not sent then.
 pub fn build_reply(
     page: &DecisionPage,
     answers: &[PageAnswer],
@@ -312,7 +296,7 @@ pub fn build_reply(
 
 // ---- reading a reply back: the answers a page starts from ----
 
-/// Every card of the page, the ones that take no answer included.
+/// Every card of the page.
 fn all_cards(page: &DecisionPage) -> impl Iterator<Item = &Card> {
     page.questions
         .iter()
@@ -320,8 +304,6 @@ fn all_cards(page: &DecisionPage) -> impl Iterator<Item = &Card> {
         .chain(&page.residual_must_fix)
         .chain(&page.structural_proposals)
         .chain(page.adr.iter())
-        .chain(&page.unmet_criteria)
-        .chain(&page.screen_verifications)
 }
 
 /// The number without its trailing digits (`論点` of `論点1`, `MF-` of `MF-1`); none when nothing is left.
@@ -385,7 +367,6 @@ pub fn restore(page: &DecisionPage) -> Vec<PageAnswer> {
         (PageKind::Approval, Subject::Design) => {
             vec!["基本設計を承認します", "基本設計の修正を依頼します"]
         }
-        (PageKind::CodeReview, _) => vec!["この変更を承認します", "修正を依頼します"],
         _ => Vec::new(),
     };
     let reply = reply.replace("\r\n", "\n").replace('\r', "\n");
@@ -617,7 +598,6 @@ mod tests {
             key: key.to_owned(),
             label: label.to_owned(),
             detail: None,
-            fix: None,
             unmet: Vec::new(),
             image: None,
             sample: None,
@@ -642,13 +622,11 @@ mod tests {
             facts: Vec::<Fact>::new(),
             blocks: Vec::new(),
             evidence: Vec::new(),
-            cards: Vec::new(),
             scene: None,
             scene_image: None,
             occurrence: None,
             conditions: Vec::new(),
             choice_details: Default::default(),
-            verification: None,
         }
     }
 
@@ -679,11 +657,6 @@ mod tests {
             withdrawn_needs_user_decision: Vec::new(),
             noticed: Vec::new(),
             quality_loop: None,
-            unmet_criteria: Vec::new(),
-            screen_verifications: Vec::new(),
-            policy_deviations: Vec::new(),
-            notices: Vec::new(),
-            pr: None,
         }
     }
 
@@ -838,62 +811,17 @@ mod tests {
     }
 
     #[test]
-    fn a_code_review_has_its_verdicts_and_the_criterion_takes_no_answer() {
-        let mut review = page(PageKind::CodeReview, Subject::Code);
-        review.residual_must_fix = vec![card(CardKind::ReviewMustFix, "RM-1", "指摘")];
-        review.unmet_criteria = vec![card(CardKind::UnmetCriterion, "UC-1", "条件")];
-        review.needs_user_decision = vec![card(CardKind::ReviewDecision, "RD-1", "判断")];
-        assert_eq!(
-            build_reply(&review, &[], Some(PageVerdict::Approve), "").unwrap(),
-            "この変更を承認します"
-        );
-        let reply = build_reply(
-            &review,
-            &[
-                answer("RD-1", Some("defer"), ""),
-                answer("RM-1", Some("fix"), ""),
-            ],
-            Some(PageVerdict::Revise),
-            "",
-        )
-        .unwrap();
-        assert_eq!(
-            reply,
-            "修正を依頼します\n\nRM-1 指摘\n修正して再レビューする\n\nRD-1 判断\n今回は対応しない"
-        );
-        let accepted = build_reply(
-            &review,
-            &[answer("RM-1", Some("accept"), "")],
-            Some(PageVerdict::Approve),
-            "",
-        )
-        .unwrap();
-        assert_eq!(
-            accepted,
-            "この変更を承認します\n\nRM-1 指摘\n現状で完了する"
-        );
-        let error = build_reply(
-            &review,
-            &[answer("UC-1", None, "x")],
-            Some(PageVerdict::Approve),
-            "",
-        )
-        .unwrap_err();
-        assert!(error.contains("UC-1"), "{error}");
-    }
-
-    #[test]
     fn a_note_alone_is_an_answer_on_a_card_with_fixed_choices_and_has_no_answer_line() {
-        let mut review = page(PageKind::CodeReview, Subject::Code);
-        review.residual_must_fix = vec![card(CardKind::ReviewMustFix, "RM-1", "指摘")];
+        let mut approved = page(PageKind::Approval, Subject::Requirement);
+        approved.residual_must_fix = vec![card(CardKind::MustFix, "MF-1", "指摘")];
         let reply = build_reply(
-            &review,
-            &[answer("RM-1", None, "あとで見る")],
+            &approved,
+            &[answer("MF-1", None, "あとで見る")],
             Some(PageVerdict::Approve),
             "",
         )
         .unwrap();
-        assert_eq!(reply, "この変更を承認します\n\nRM-1 指摘\n補足: あとで見る");
+        assert_eq!(reply, "要件定義を承認します\n\nMF-1 指摘\n補足: あとで見る");
     }
 
     #[test]
@@ -920,11 +848,9 @@ mod tests {
 
     #[test]
     fn a_page_kind_with_no_reply_format_is_refused() {
-        let mut odd = approval();
-        odd.subject = Subject::Code;
         assert!(build_reply(
-            &odd,
-            &[answer("MF-1", Some("skip"), "")],
+            &questions(),
+            &[answer("論点1", Some("A"), "")],
             Some(PageVerdict::Approve),
             ""
         )

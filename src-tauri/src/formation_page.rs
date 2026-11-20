@@ -1,6 +1,6 @@
 //! The decision pages of A-41: a child of a formation writes the input JSON of a page (a question or an approval for the owner), the leader hands its path to `formation_page`, and the page is checked here and recorded as "the child waits for the owner" in `formations/{name}/pages.json`. The screen reads the page through `formation_page_read`, which checks it again and resolves its evidence (the lines of a file, a node of a JSON file, the output of `git diff`).
 //!
-//! The input follows the input contract of the decision pages (`schema_version` 1, the page kinds `open-questions`, `approval` and `code-review`, the cards, blocks and evidence of `requirements/orca.md`, A-41). Every violation is a line `{path, message}` with a JSON path from `$`, and all of them are returned, never the first only.
+//! The input follows the input contract of the decision pages (`schema_version` 1, the page kinds `open-questions` and `approval`, the cards, blocks and evidence of `requirements/orca.md`, A-41). Every violation is a line `{path, message}` with a JSON path from `$`, and all of them are returned, never the first only.
 //! Everything the page names is inside the repositories of the formation: a root and an evidence path are checked against the folders that Orca lists for this PC (`Allowed`), through the real path of each, so that `..`, an absolute path and a link cannot leave them; `.git` and the names that start with `.env` are never read, as `formation_read` does not.
 
 use std::{
@@ -62,7 +62,6 @@ const FACT_FILE_LIMIT: u64 = 128 * 1024;
 pub enum PageKind {
     OpenQuestions,
     Approval,
-    CodeReview,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +71,6 @@ pub enum PageKind {
 pub enum Subject {
     Requirement,
     Design,
-    Code,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,10 +83,6 @@ pub enum CardKind {
     MustFix,
     StructuralProposal,
     Adr,
-    ReviewMustFix,
-    ReviewDecision,
-    UnmetCriterion,
-    ScreenVerification,
 }
 
 impl CardKind {
@@ -99,16 +93,12 @@ impl CardKind {
             Self::MustFix => "must-fix",
             Self::StructuralProposal => "structural-proposal",
             Self::Adr => "adr",
-            Self::ReviewMustFix => "review-must-fix",
-            Self::ReviewDecision => "review-decision",
-            Self::UnmetCriterion => "unmet-criterion",
-            Self::ScreenVerification => "screen-verification",
         }
     }
 
     /// Whether the card offers lettered options (`A`, `B`, ...); the recommended one is always `A`.
     pub(crate) fn lettered(self) -> bool {
-        matches!(self, Self::Question | Self::Nr | Self::ReviewDecision)
+        matches!(self, Self::Question | Self::Nr)
     }
 
     /// The keys of the fixed choices the page adds under the options (`choice_details` is by these keys).
@@ -116,24 +106,19 @@ impl CardKind {
         match self {
             Self::Question => &["investigate", "other"],
             Self::Nr => &["other"],
-            Self::ReviewDecision => &["defer", "other"],
             Self::MustFix => &["fix", "skip"],
             Self::StructuralProposal => &["approve", "reject", "hold"],
             Self::Adr => &["keep", "decline"],
-            Self::ReviewMustFix => &["fix", "accept"],
-            Self::UnmetCriterion | Self::ScreenVerification => &[],
         }
     }
 
     /// The fixed choices a card of this kind is recommended among (a lettered card: `A`); none for a card that takes no answer.
     fn choices(self) -> &'static [&'static str] {
         match self {
-            Self::Question | Self::Nr | Self::ReviewDecision => &["A"],
+            Self::Question | Self::Nr => &["A"],
             Self::MustFix => &["fix", "skip"],
             Self::StructuralProposal => &["approve", "reject", "hold"],
             Self::Adr => &["keep", "decline"],
-            Self::ReviewMustFix => &["fix", "accept"],
-            Self::UnmetCriterion | Self::ScreenVerification => &[],
         }
     }
 }
@@ -148,7 +133,7 @@ pub struct DecisionPage {
     pub subject: Subject,
     pub context_label: String,
     pub title: String,
-    /// The lead of 「何が変わるか」; only on `approval` and `code-review`.
+    /// The lead of 「何が変わるか」; only on `approval`.
     pub what: Option<String>,
     /// The roots of the page by name, as the real directories they are.
     pub roots: BTreeMap<String, String>,
@@ -169,9 +154,9 @@ pub struct DecisionPage {
     /// The repositories of the deliverables' `design.json` in the order they are implemented; only on an `approval` of a design, and only when the page is resolved.
     pub implementation_order: Vec<String>,
     pub changes: Vec<Change>,
-    /// `nr` cards on `approval`, `review-decision` cards on `code-review`.
+    /// `nr` cards on `approval`.
     pub needs_user_decision: Vec<Card>,
-    /// `must-fix` cards on `approval`, `review-must-fix` cards on `code-review`.
+    /// `must-fix` cards on `approval`.
     pub residual_must_fix: Vec<Card>,
     pub structural_proposals: Vec<Card>,
     pub adr: Option<Card>,
@@ -179,17 +164,9 @@ pub struct DecisionPage {
     pub settled_decisions: Vec<SettledDecision>,
     /// `approval`: the questions that the review withdrew because the final deliverable settles them.
     pub withdrawn_needs_user_decision: Vec<Withdrawn>,
-    /// `approval` and `code-review`: what the child noticed outside the request and did not reflect.
+    /// `approval`: what the child noticed outside the request and did not reflect.
     pub noticed: Vec<Noticed>,
     pub quality_loop: Option<QualityLoop>,
-    pub unmet_criteria: Vec<Card>,
-    /// `screen-verification` cards on `code-review`: no answer, in the order the unit holds them.
-    pub screen_verifications: Vec<Card>,
-    /// `code-review`: where the implementation departed from the contract of the unit.
-    pub policy_deviations: Vec<Block>,
-    /// `code-review`: one-line facts about the review (the state of the checks).
-    pub notices: Vec<String>,
-    pub pr: Option<PagePr>,
 }
 
 /// A word of the page and what it means: the screen shows `description` as a tooltip on `word` in the body text.
@@ -253,54 +230,16 @@ pub struct Card {
     pub facts: Vec<Fact>,
     pub blocks: Vec<Block>,
     pub evidence: Vec<Evidence>,
-    /// The numbers of the cards that cause an `unmet-criterion` card.
-    pub cards: Vec<String>,
     /// 「具体的な場面」: the situation the decision plays out in, and why the question arises.
     pub scene: Option<String>,
     /// The screenshot of the screen the scene is about; only on a card that asks.
     pub scene_image: Option<ImageRef>,
-    /// When the matter arises and how much it matters; on `review-decision`, and on `nr` of a design page.
+    /// When the matter arises and how much it matters; on `nr` of a design page.
     pub occurrence: Option<Occurrence>,
     /// Every condition the decision requires the options to meet; the `unmet` of an option names them.
     pub conditions: Vec<Condition>,
     /// The trade-offs of a fixed choice, by its key.
     pub choice_details: BTreeMap<String, String>,
-    /// What a `screen-verification` card shows; only on that kind.
-    pub verification: Option<ScreenVerification>,
-}
-
-/// The result of the verification of one screen state or operation.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-#[serde(rename_all = "kebab-case")]
-pub enum VerificationResult {
-    Pass,
-    Fail,
-    NotRun,
-}
-
-/// The verification of one screen state or operation against its viewpoint (A-41, #1155): the card takes no answer.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-#[serde(rename_all = "camelCase")]
-pub struct ScreenVerification {
-    /// 「確認したこと」.
-    pub viewpoint: String,
-    /// 「状態の作り方」.
-    pub state_setup: Option<String>,
-    pub result: VerificationResult,
-    /// 「結果と根拠」.
-    pub basis: String,
-    pub reference_image: Option<ImageRef>,
-    pub captured_image: Option<ImageRef>,
-    /// Why it was not run; only on a `not-run` card.
-    pub missing_reason: Option<String>,
-    /// The operations in order, on an operation item.
-    pub steps: Vec<String>,
-    /// What must appear after the last step; only with `steps`.
-    pub expected: Option<String>,
 }
 
 /// When a matter arises and how much it matters.
@@ -367,8 +306,6 @@ pub struct CardOption {
     pub key: String,
     pub label: String,
     pub detail: Option<String>,
-    /// The one fix the option's answer hands to the implementation; only on `review-decision`.
-    pub fix: Option<String>,
     /// The conditions of the card that the option fails.
     pub unmet: Vec<Unmet>,
     /// How the option looks.
@@ -643,15 +580,6 @@ pub struct QualityLoop {
     /// The fix runs among the rounds; only on a design.
     pub fix_cycles: Option<u32>,
     pub must_fix_resolved: u32,
-}
-
-/// The pull request of a code review: `url` is `None` (with the reason in `note`) when none was made.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-pub struct PagePr {
-    pub url: Option<String>,
-    pub note: Option<String>,
 }
 
 /// The decision page that waits for the owner, as the card of a child draws it.
@@ -1958,10 +1886,7 @@ impl<'a> Walk<'a> {
     }
 
     fn card(&mut self, value: &Value, path: &str, expected: CardKind) -> Option<Card> {
-        if expected == CardKind::ScreenVerification {
-            return self.screen_verification(value, path);
-        }
-        let mut keys = vec![
+        let keys = [
             "kind",
             "number",
             "title",
@@ -1979,9 +1904,6 @@ impl<'a> Walk<'a> {
             "conditions",
             "choice_details",
         ];
-        if expected == CardKind::UnmetCriterion {
-            keys.push("cards");
-        }
         let map = self.keys(value, path, &keys)?;
         match map.get("kind").and_then(Value::as_str) {
             Some(kind) if kind == expected.name() => {}
@@ -2012,11 +1934,6 @@ impl<'a> Walk<'a> {
         let facts = self.facts(map, path);
         let blocks = self.blocks_of(map, "blocks", path, 0);
         let evidence = self.evidence_of(map, "evidence", path);
-        let cards = if expected == CardKind::UnmetCriterion {
-            self.strings(map, "cards", path, false)
-        } else {
-            Vec::new()
-        };
         Some(Card {
             kind: expected,
             number: number?,
@@ -2029,163 +1946,12 @@ impl<'a> Walk<'a> {
             facts,
             blocks,
             evidence,
-            cards,
             scene,
             scene_image,
             occurrence,
             conditions,
             choice_details,
-            verification: None,
         })
-    }
-
-    /// A `screen-verification` card: it presents one verification and its result, so it carries no fact, no recommendation and no answer. The reference image and the capture are `image` blocks of the page (`image_ref`); a card without `steps` carries at least one of them, and a `not-run` card has no capture and says why.
-    fn screen_verification(&mut self, value: &Value, path: &str) -> Option<Card> {
-        let map = self.keys(
-            value,
-            path,
-            &[
-                "kind",
-                "number",
-                "title",
-                "summary",
-                "viewpoint",
-                "state_setup",
-                "result",
-                "basis",
-                "reference_image",
-                "captured_image",
-                "missing_reason",
-                "steps",
-                "expected",
-            ],
-        )?;
-        if map.get("kind").and_then(Value::as_str) != Some(CardKind::ScreenVerification.name()) {
-            self.bad(
-                &format!("{path}.kind"),
-                format!(
-                    "この欄に置けるカードの kind は {} です",
-                    CardKind::ScreenVerification.name()
-                ),
-            );
-        }
-        let number = self.text(map, "number", path, true);
-        if let Some(number) = &number {
-            if !self.numbers.insert(number.clone()) {
-                self.bad(
-                    &format!("{path}.number"),
-                    format!("同じ番号のカードがもう一枚あります: {number}"),
-                );
-            }
-        }
-        let title = self.text(map, "title", path, true);
-        let summary = self.text(map, "summary", path, true);
-        let viewpoint = self.text(map, "viewpoint", path, true);
-        let state_setup = self.text(map, "state_setup", path, false);
-        let result = self.verification_result(map, path);
-        let basis = self.text(map, "basis", path, true);
-        let reference_image = self.verification_image(map, "reference_image", path);
-        let captured_image = self.verification_image(map, "captured_image", path);
-        let missing_reason = self.text(
-            map,
-            "missing_reason",
-            path,
-            result == Some(VerificationResult::NotRun),
-        );
-        if result.is_some_and(|r| r != VerificationResult::NotRun)
-            && map.get("missing_reason").is_some_and(|v| !v.is_null())
-        {
-            self.bad(
-                &format!("{path}.missing_reason"),
-                "実施した（pass か fail の）カードには付けられません",
-            );
-        }
-        if result == Some(VerificationResult::NotRun) && captured_image.is_some() {
-            self.bad(
-                &format!("{path}.captured_image"),
-                "未実施（not-run）のカードには撮影画像がありません",
-            );
-        }
-        let steps = self.strings(map, "steps", path, false);
-        if map
-            .get("steps")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-        {
-            self.bad(&format!("{path}.steps"), "1 件以上にしてください");
-        }
-        let given_steps = map.get("steps").is_some_and(|v| !v.is_null());
-        let expected = self.text(map, "expected", path, given_steps);
-        if !given_steps && map.get("expected").is_some_and(|v| !v.is_null()) {
-            self.bad(&format!("{path}.expected"), "steps と一緒に使います");
-        }
-        if !given_steps && reference_image.is_none() && captured_image.is_none() {
-            self.bad(
-                path,
-                "steps のないカードには、reference_image か captured_image が要ります",
-            );
-        }
-        Some(Card {
-            kind: CardKind::ScreenVerification,
-            number: number?,
-            title: title?,
-            summary: summary?,
-            options: Vec::new(),
-            recommendation: None,
-            recommendation_reason: None,
-            background: None,
-            facts: Vec::new(),
-            blocks: Vec::new(),
-            evidence: Vec::new(),
-            cards: Vec::new(),
-            scene: None,
-            scene_image: None,
-            occurrence: None,
-            conditions: Vec::new(),
-            choice_details: BTreeMap::new(),
-            verification: Some(ScreenVerification {
-                viewpoint: viewpoint?,
-                state_setup,
-                result: result?,
-                basis: basis?,
-                reference_image,
-                captured_image,
-                missing_reason,
-                steps,
-                expected,
-            }),
-        })
-    }
-
-    fn verification_result(&mut self, map: &Object, path: &str) -> Option<VerificationResult> {
-        let at = format!("{path}.result");
-        match map.get("result") {
-            None | Some(Value::Null) => {
-                self.bad(&at, "必須です");
-                None
-            }
-            Some(Value::String(text)) => match text.as_str() {
-                "pass" => Some(VerificationResult::Pass),
-                "fail" => Some(VerificationResult::Fail),
-                "not-run" => Some(VerificationResult::NotRun),
-                _ => {
-                    self.bad(&at, "pass、fail、not-run のどれかにしてください");
-                    None
-                }
-            },
-            Some(_) => {
-                self.bad(&at, "文字列にしてください");
-                None
-            }
-        }
-    }
-
-    /// `reference_image` or `captured_image` of a `screen-verification` card: `{root, path, caption}`, checked as an `image` block.
-    fn verification_image(&mut self, map: &Object, key: &str, path: &str) -> Option<ImageRef> {
-        let value = map.get(key).filter(|v| !v.is_null())?;
-        let at = format!("{path}.{key}");
-        let image = self.keys(value, &at, &["root", "path", "caption"])?;
-        self.image_ref(image, &at)
     }
 
     /// Whether `map[key]` is given; on a kind that does not ask it is a violation, and it is not taken.
@@ -2213,7 +1979,6 @@ impl<'a> Walk<'a> {
     fn occurrence(&mut self, map: &Object, path: &str, kind: CardKind) -> Option<Occurrence> {
         let at = format!("{path}.occurrence");
         let asked = match kind {
-            CardKind::ReviewDecision => true,
             CardKind::Nr => self.subject == Some(Subject::Design),
             _ => false,
         };
@@ -2364,7 +2129,7 @@ impl<'a> Walk<'a> {
                 item,
                 &here,
                 &[
-                    "key", "label", "detail", "fix", "unmet", "image", "sample", "diagram",
+                    "key", "label", "detail", "unmet", "image", "sample", "diagram",
                 ],
             ) else {
                 continue;
@@ -2372,13 +2137,6 @@ impl<'a> Walk<'a> {
             let key = self.text(option, "key", &here, true);
             let label = self.text(option, "label", &here, true);
             let detail = self.text(option, "detail", &here, false);
-            let fix = self.text(option, "fix", &here, false);
-            if fix.is_some() && kind != CardKind::ReviewDecision {
-                self.bad(
-                    &format!("{here}.fix"),
-                    "fix は review-decision のカードの選択肢だけに付けられます",
-                );
-            }
             let unmet = self.unmet(option, &here, conditions);
             unmet_without_conditions |= !unmet.is_empty() && conditions.is_empty();
             let image = match option.get("image").filter(|v| !v.is_null()) {
@@ -2415,7 +2173,6 @@ impl<'a> Walk<'a> {
                     key,
                     label,
                     detail,
-                    fix,
                     unmet,
                     image,
                     sample,
@@ -2505,17 +2262,6 @@ impl<'a> Walk<'a> {
         path: &str,
         kind: CardKind,
     ) -> (Option<String>, Option<String>) {
-        if kind == CardKind::UnmetCriterion || kind == CardKind::ScreenVerification {
-            for key in ["recommendation", "recommendation_reason"] {
-                if map.get(key).is_some_and(|v| !v.is_null()) {
-                    self.bad(
-                        &format!("{path}.{key}"),
-                        "この種類のカードは答えを求めないので付けられません",
-                    );
-                }
-            }
-            return (None, None);
-        }
         let recommendation = self.text(map, "recommendation", path, true);
         let reason = self.text(map, "recommendation_reason", path, true);
         if let Some(choice) = &recommendation {
@@ -2925,19 +2671,6 @@ impl<'a> Walk<'a> {
         noticed
     }
 
-    /// `notices`: one-line texts.
-    fn notices(&mut self, top: &Object) -> Vec<String> {
-        let notices = self.strings(top, "notices", "$", false);
-        for (at, text) in notices.iter().enumerate() {
-            if text.trim().is_empty() {
-                self.bad(&format!("$.notices[{at}]"), "空にできません");
-            } else if text.contains('\n') {
-                self.bad(&format!("$.notices[{at}]"), "1 行にしてください");
-            }
-        }
-        notices
-    }
-
     /// The repositories of `design.json` `/implementation_order` of the deliverables, in order; none when the page is not resolved or the file does not say (the nodes the page cites report that).
     fn implementation_order(&mut self) -> Vec<String> {
         if !self.resolve {
@@ -2952,22 +2685,6 @@ impl<'a> Walk<'a> {
             .unwrap_or_default()
     }
 
-    fn pr(&mut self, top: &Object) -> Option<PagePr> {
-        let value = top.get("pr").filter(|v| !v.is_null())?;
-        let map = self.keys(value, "$.pr", &["url", "note"])?;
-        let url = self.text(map, "url", "$.pr", false);
-        let note = self.text(map, "note", "$.pr", false);
-        if url.is_none() && note.is_none() && !map.contains_key("url") {
-            self.bad("$.pr.url", "必須です（PR がないときは null と note）");
-        } else if url.is_none() && note.is_none() {
-            self.bad(
-                "$.pr.note",
-                "url が null のときは理由を note に書いてください",
-            );
-        }
-        Some(PagePr { url, note })
-    }
-
     // -- the page --
 
     fn page(&mut self, value: &Value) -> Option<DecisionPage> {
@@ -2978,27 +2695,14 @@ impl<'a> Walk<'a> {
         let kind = match top.get("page_kind").and_then(Value::as_str) {
             Some("open-questions") => Some(PageKind::OpenQuestions),
             Some("approval") => Some(PageKind::Approval),
-            Some("code-review") => Some(PageKind::CodeReview),
             _ => {
-                self.bad(
-                    "$.page_kind",
-                    "open-questions、approval、code-review のどれかにしてください",
-                );
+                self.bad("$.page_kind", "open-questions か approval にしてください");
                 None
             }
         };
         let subject = match (kind, top.get("subject").and_then(Value::as_str)) {
-            (Some(PageKind::CodeReview), Some("code")) => Some(Subject::Code),
-            (Some(PageKind::OpenQuestions | PageKind::Approval), Some("requirement")) => {
-                Some(Subject::Requirement)
-            }
-            (Some(PageKind::OpenQuestions | PageKind::Approval), Some("design")) => {
-                Some(Subject::Design)
-            }
-            (Some(PageKind::CodeReview), _) => {
-                self.bad("$.subject", "code にしてください");
-                None
-            }
+            (Some(_), Some("requirement")) => Some(Subject::Requirement),
+            (Some(_), Some("design")) => Some(Subject::Design),
             (Some(_), _) => {
                 self.bad("$.subject", "requirement か design にしてください");
                 None
@@ -3034,17 +2738,6 @@ impl<'a> Walk<'a> {
                 "settled_decisions",
                 "withdrawn_needs_user_decision",
                 "noticed",
-            ],
-            PageKind::CodeReview => vec![
-                "changes",
-                "residual_must_fix",
-                "unmet_criteria",
-                "needs_user_decision",
-                "screen_verifications",
-                "policy_deviations",
-                "notices",
-                "noticed",
-                "pr",
             ],
         });
         let top = self.keys(value, "$", &keys)?;
@@ -3102,11 +2795,6 @@ impl<'a> Walk<'a> {
             withdrawn_needs_user_decision: Vec::new(),
             noticed: Vec::new(),
             quality_loop: None,
-            unmet_criteria: Vec::new(),
-            screen_verifications: Vec::new(),
-            policy_deviations: Vec::new(),
-            notices: Vec::new(),
-            pr: None,
         };
         match kind {
             PageKind::OpenQuestions => {
@@ -3139,25 +2827,6 @@ impl<'a> Walk<'a> {
                 page.settled_decisions = self.settled(top);
                 page.withdrawn_needs_user_decision = self.withdrawn(top);
                 page.noticed = self.noticed(top);
-            }
-            PageKind::CodeReview => {
-                page.changes = self.changes(top);
-                page.residual_must_fix =
-                    self.cards(top, "residual_must_fix", CardKind::ReviewMustFix, false);
-                page.unmet_criteria =
-                    self.cards(top, "unmet_criteria", CardKind::UnmetCriterion, false);
-                page.needs_user_decision =
-                    self.cards(top, "needs_user_decision", CardKind::ReviewDecision, false);
-                page.screen_verifications = self.cards(
-                    top,
-                    "screen_verifications",
-                    CardKind::ScreenVerification,
-                    false,
-                );
-                page.policy_deviations = self.blocks_of(top, "policy_deviations", "$", 0);
-                page.notices = self.notices(top);
-                page.noticed = self.noticed(top);
-                page.pr = self.pr(top);
             }
         }
         if page.context_label.is_empty() || page.title.is_empty() {
@@ -3315,6 +2984,13 @@ struct Pages {
     pages: Vec<PageRecord>,
 }
 
+/// `Pages` as it is read: each record on its own, so that one that does not convert is skipped.
+#[derive(Deserialize)]
+struct RawPages {
+    #[serde(default)]
+    pages: Vec<serde_json::Value>,
+}
+
 fn read_pages_strict(config: &Path, formation: &str) -> Result<Vec<PageRecord>, String> {
     let path = formation::dir(config, formation).join(PAGES_FILE);
     let text = match std::fs::read_to_string(&path) {
@@ -3322,8 +2998,14 @@ fn read_pages_strict(config: &Path, formation: &str) -> Result<Vec<PageRecord>, 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
     };
-    serde_json::from_str::<Pages>(&text)
-        .map(|pages| pages.pages)
+    // A record that no longer reads (a kind of page that was removed, say) is skipped, so that it does not make every other page of the formation unreadable; the next write drops it.
+    serde_json::from_str::<RawPages>(&text)
+        .map(|raw| {
+            raw.pages
+                .into_iter()
+                .filter_map(|page| serde_json::from_value(page).ok())
+                .collect()
+        })
         .map_err(|_| {
             format!(
                 "{} の形式が正しくありません。記録を上書きしないよう、何も書いていません",
@@ -3912,54 +3594,40 @@ mod tests {
     }
 
     #[test]
-    fn a_code_review_page_with_every_card_kind_and_block_is_accepted() {
-        let repo = repo("accept-code");
-        let value = json!({
-            "schema_version": 1,
-            "page_kind": "code-review",
-            "subject": "code",
-            "context_label": "コードレビュー",
-            "title": "変更の確認",
-            "what": "変えました",
-            "roots": {"deliverables": repo.case_root(), "repo": repo.root()},
-            "changes": [{"heading": "変更", "blocks": [
-                {"type": "paragraph", "text": "本文"},
-                {"type": "heading", "text": "見出し"},
-                {"type": "list", "items": ["a", "b"]},
-                {"type": "callout", "text": "注意"},
-                {"type": "table", "header": ["x", "y"], "rows": [["1", {"text": "2", "changed": true}]]},
-                {"type": "before-after", "before": [{"type": "paragraph", "text": "前"}], "after": [{"type": "paragraph", "text": "後"}], "before_caption": "今"},
-                {"type": "folded", "summary": "開く", "blocks": [{"type": "paragraph", "text": "中"}]},
-                {"type": "diagram", "mermaid": "\nflowchart TD\n  A --> B", "caption": "図"},
-                {"type": "evidence", "items": [
-                    {"type": "excerpt", "root": "repo", "path": "src/main.rs", "start": 1, "end": 2, "highlight": [2], "note": "ここ"},
-                    {"type": "diff", "summary": "差", "name": "x", "before": ["a"], "after": ["b"], "before_source": "元", "after_source": "先"},
-                    {"type": "current", "note": "後で決める", "excerpts": [{"root": "repo", "path": "src/main.rs", "start": 1}]},
-                    {"type": "git-diff", "summary": "差", "root": "repo", "path": "src/main.rs", "base": "HEAD~1", "head": "HEAD"},
-                    {"type": "node", "root": "deliverables", "ref": "design.json#/designs/1"}
-                ]}
-            ]}],
-            "residual_must_fix": [{
-                "kind": "review-must-fix", "number": "CR-1", "title": "t", "summary": "s",
-                "recommendation": "fix", "recommendation_reason": "r",
-                "facts": [{"label": "検出元", "value": "v"}], "background": "b"
-            }],
-            "unmet_criteria": [{
-                "kind": "unmet-criterion", "number": "UC-1", "title": "t", "summary": "s",
-                "cards": ["ND-1"]
-            }],
-            "needs_user_decision": [{
-                "kind": "review-decision", "number": "ND-1", "title": "t", "summary": "s",
-                "scene": "場面", "occurrence": occurrence(),
-                "options": [{"key": "A", "label": "a"}],
-                "recommendation": "A", "recommendation_reason": "r"
-            }],
-            "pr": {"url": null, "note": "まだありません"}
-        });
+    fn an_approval_page_with_every_card_kind_and_block_is_accepted() {
+        let repo = repo("accept-blocks");
+        let mut value = approval(&repo);
+        value["changes"] = json!([{"heading": "変更", "blocks": [
+            {"type": "paragraph", "text": "本文"},
+            {"type": "heading", "text": "見出し"},
+            {"type": "list", "items": ["a", "b"]},
+            {"type": "callout", "text": "注意"},
+            {"type": "table", "header": ["x", "y"], "rows": [["1", {"text": "2", "changed": true}]]},
+            {"type": "before-after", "before": [{"type": "paragraph", "text": "前"}], "after": [{"type": "paragraph", "text": "後"}], "before_caption": "今"},
+            {"type": "folded", "summary": "開く", "blocks": [{"type": "paragraph", "text": "中"}]},
+            {"type": "diagram", "mermaid": "\nflowchart TD\n  A --> B", "caption": "図"},
+            {"type": "evidence", "items": [
+                {"type": "excerpt", "root": "repo", "path": "src/main.rs", "start": 1, "end": 2, "highlight": [2], "note": "ここ"},
+                {"type": "diff", "summary": "差", "name": "x", "before": ["a"], "after": ["b"], "before_source": "元", "after_source": "先"},
+                {"type": "current", "note": "後で決める", "excerpts": [{"root": "repo", "path": "src/main.rs", "start": 1}]},
+                {"type": "git-diff", "summary": "差", "root": "repo", "path": "src/main.rs", "base": "HEAD~1", "head": "HEAD"},
+                {"type": "node", "root": "deliverables", "ref": "design.json#/designs/1"}
+            ]}
+        ]}]);
+        value["residual_must_fix"] = json!([{
+            "kind": "must-fix", "number": "MF-1", "title": "t", "summary": "s",
+            "recommendation": "fix", "recommendation_reason": "r",
+            "facts": [{"label": "検出元", "value": "v"}], "background": "b"
+        }]);
+        value["needs_user_decision"] = json!([{
+            "kind": "nr", "number": "NR-1", "title": "t", "summary": "s",
+            "scene": "場面", "occurrence": occurrence(),
+            "options": [{"key": "A", "label": "a"}],
+            "recommendation": "A", "recommendation_reason": "r"
+        }]);
         let page = build(&value, &repo.allowed()).unwrap();
         assert_eq!(page.changes[0].blocks.len(), 9);
-        assert_eq!(page.unmet_criteria[0].cards, ["ND-1"]);
-        assert_eq!(page.pr.unwrap().url, None);
+        assert_eq!(page.residual_must_fix[0].facts.len(), 1);
         let Block::Evidence { items } = &page.changes[0].blocks[8] else {
             panic!("an evidence block");
         };
@@ -4019,7 +3687,7 @@ mod tests {
     fn the_page_kind_and_the_subject_go_together() {
         let repo = repo("kinds");
         let mut value = open_questions(&repo);
-        value["page_kind"] = json!("pr-code-review");
+        value["page_kind"] = json!("unknown-kind");
         assert_eq!(paths(&violations(&value, &repo)), ["$.page_kind"]);
         let mut value = open_questions(&repo);
         value["subject"] = json!("code");
@@ -5190,6 +4858,34 @@ mod tests {
     }
 
     #[test]
+    fn a_record_of_a_removed_kind_is_skipped_and_the_other_pages_still_read_and_write() {
+        let repo = repo("removed-kind");
+        let config = temp_dir("removed-kind-config");
+        formation_folder(&config, "api-work", &[child("one", &repo.root(), 100)]);
+        let old = json!({
+            "child": "old", "path": "/p", "title": "古い", "page_kind": "code-review",
+            "subject": "code", "at": 200
+        });
+        let valid = serde_json::to_value(record_of("one", 250)).unwrap();
+        write(
+            &formation::dir(&config, "api-work"),
+            PAGES_FILE,
+            &json!({"pages": [old, valid]}).to_string(),
+        );
+        let pages = read_pages(&config, "api-work");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].child, "one");
+        mark_answered(&config, "api-work", "one", 250, 500).unwrap();
+        put_page(&config, "api-work", record_of("two", 260)).unwrap();
+        let pages = read_pages(&config, "api-work");
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(|p| p.child != "old"));
+        // A file that is not a record list is still not written over.
+        write(&formation::dir(&config, "api-work"), PAGES_FILE, "[1]");
+        assert!(put_page(&config, "api-work", record_of("three", 300)).is_err());
+    }
+
+    #[test]
     fn an_answer_does_not_bring_back_the_folder_of_a_deleted_formation() {
         let config = temp_dir("answer-deleted");
         assert!(mark_answered(&config, "gone", "one", 1, 2).is_err());
@@ -5565,7 +5261,7 @@ mod tests {
     }
 
     #[test]
-    fn an_occurrence_is_required_on_a_review_decision_and_on_an_nr_of_a_design_and_nowhere_else() {
+    fn an_occurrence_is_required_on_an_nr_of_a_design_and_nowhere_else() {
         let repo = repo("occurrence");
         let mut value = approval(&repo);
         let nr = |extra: Value| {
@@ -5659,39 +5355,33 @@ mod tests {
     }
 
     #[test]
-    fn an_option_takes_a_fix_an_image_a_sample_and_a_diagram() {
+    fn an_option_takes_an_image_a_sample_and_a_diagram() {
         let repo = repo("option-parts");
         write_bytes(&repo.dir, ".feature-dev/current/ui/a.png", PNG_1X1);
-        let value = json!({
-            "schema_version": 1, "page_kind": "code-review", "subject": "code",
-            "context_label": "c", "title": "t", "what": "w",
-            "roots": {"deliverables": repo.case_root()},
-            "needs_user_decision": [{
-                "kind": "review-decision", "number": "ND-1", "title": "t", "summary": "s",
-                "scene": "場面", "occurrence": occurrence(),
-                "options": [{
-                    "key": "A", "label": "直す", "fix": "ロックを足す",
-                    "image": {"path": "ui/a.png", "caption": "直したあと"},
-                    "sample": {"text": "見本", "font_size": 14, "font_weight": 700, "color": "#2f5bd3"},
-                    "diagram": {"mermaid": "flowchart LR\n  a --> b"}
-                }],
-                "recommendation": "A", "recommendation_reason": "r",
-                "choice_details": {"defer": "このまま出す"}
-            }]
-        });
+        let mut value = approval(&repo);
+        value["needs_user_decision"] = json!([{
+            "kind": "nr", "number": "NR-1", "title": "t", "summary": "s",
+            "scene": "場面", "occurrence": occurrence(),
+            "options": [{
+                "key": "A", "label": "直す",
+                "image": {"path": "ui/a.png", "caption": "直したあと"},
+                "sample": {"text": "見本", "font_size": 14, "font_weight": 700, "color": "#2f5bd3"},
+                "diagram": {"mermaid": "flowchart LR\n  a --> b"}
+            }],
+            "recommendation": "A", "recommendation_reason": "r",
+            "choice_details": {"other": "別の案"}
+        }]);
         let page = build(&value, &repo.allowed()).unwrap();
         let option = &page.needs_user_decision[0].options[0];
-        assert_eq!(option.fix.as_deref(), Some("ロックを足す"));
         assert_eq!(option.image.as_ref().unwrap().path, "ui/a.png");
         assert_eq!(option.sample.as_ref().unwrap().font_weight, 700);
         assert_eq!(option.diagram.as_deref(), Some("flowchart LR\n  a --> b"));
         assert_eq!(
-            page.needs_user_decision[0].choice_details["defer"],
-            "このまま出す"
+            page.needs_user_decision[0].choice_details["other"],
+            "別の案"
         );
-        // A fix on a question, a diagram of another type, a sample out of its ranges, and a key that is no fixed choice.
+        // A diagram of another type, a sample out of its ranges, and a key that is no fixed choice.
         let bad = with_question(&repo, |q| {
-            q["options"][0]["fix"] = json!("x");
             q["options"][0]["diagram"] = json!({"mermaid": "pie\n  a: 1"});
             q["options"][0]["sample"] =
                 json!({"text": "t", "font_size": 0, "font_weight": 650, "color": "red"});
@@ -5705,7 +5395,6 @@ mod tests {
             [
                 "$.questions[0].choice_details.defer",
                 "$.questions[0].options[0].diagram.mermaid",
-                "$.questions[0].options[0].fix",
                 "$.questions[0].options[0].sample.color",
                 "$.questions[0].options[0].sample.font_size",
                 "$.questions[0].options[0].sample.font_weight",
@@ -5799,204 +5488,6 @@ mod tests {
         );
     }
 
-    // -- screen-verification cards (#1155) --
-
-    /// A `code-review` page whose roots are the case root, the repository, the captures of the unit (`.feature-dev/captures/u1` of the docs worktree) and the folder of the reference screenshots.
-    fn verification_page(repo: &Repo, cards: Value) -> Value {
-        write_bytes(&repo.dir, ".feature-dev/captures/u1/a.png", PNG_1X1);
-        write_bytes(
-            &repo.dir,
-            ".feature-dev/current/ui-references/a.png",
-            PNG_1X1,
-        );
-        write_bytes(&repo.dir, "shots/ref.png", PNG_1X1);
-        json!({
-            "schema_version": 1,
-            "page_kind": "code-review",
-            "subject": "code",
-            "context_label": "コードレビュー",
-            "title": "変更の確認",
-            "what": "変えました",
-            "roots": {
-                "deliverables": repo.case_root(),
-                "repo": repo.root(),
-                "captures": repo.dir.join(".feature-dev/captures/u1").to_string_lossy(),
-                "screenshots": repo.dir.join("shots").to_string_lossy()
-            },
-            "screen_verifications": cards
-        })
-    }
-
-    fn passed_card(number: &str) -> Value {
-        json!({
-            "kind": "screen-verification", "number": number, "title": "一覧", "summary": "一覧を見た",
-            "viewpoint": "件数が出る", "state_setup": "3 件ある", "result": "pass", "basis": "3 件出た",
-            "reference_image": {"root": "deliverables", "path": "ui-references/a.png", "caption": "見本"},
-            "captured_image": {"root": "captures", "path": "a.png", "caption": "撮影"}
-        })
-    }
-
-    #[test]
-    fn a_screen_verification_card_is_accepted_with_its_images_and_takes_no_answer() {
-        let repo = repo("sv-accept");
-        let not_run = json!({
-            "kind": "screen-verification", "number": "SV-2", "title": "削除", "summary": "削除を押した",
-            "viewpoint": "確認が出る", "result": "not-run", "basis": "判定していません",
-            "missing_reason": "ゴールの検証をしないで再開しました",
-            "steps": ["削除を押す", "はいを押す"], "expected": "一覧から消える"
-        });
-        let failed = json!({
-            "kind": "screen-verification", "number": "SV-3", "title": "空", "summary": "空を見た",
-            "viewpoint": "空の表示", "result": "fail", "basis": "文字が出ない",
-            "reference_image": {"root": "screenshots", "path": "ref.png", "caption": "見本"}
-        });
-        let value = verification_page(&repo, json!([passed_card("SV-1"), not_run, failed]));
-        let page = build(&value, &repo.allowed()).unwrap();
-        assert_eq!(page.screen_verifications.len(), 3);
-        let card = &page.screen_verifications[0];
-        assert_eq!(card.kind, CardKind::ScreenVerification);
-        assert!(card.options.is_empty() && card.recommendation.is_none());
-        let v = card.verification.as_ref().unwrap();
-        assert_eq!(v.result, VerificationResult::Pass);
-        assert_eq!(v.captured_image.as_ref().unwrap().root, "captures");
-        assert_eq!(
-            v.reference_image.as_ref().unwrap().path,
-            "ui-references/a.png"
-        );
-        let v = page.screen_verifications[1].verification.as_ref().unwrap();
-        assert_eq!(v.result, VerificationResult::NotRun);
-        assert_eq!(v.steps, ["削除を押す", "はいを押す"]);
-        assert_eq!(v.expected.as_deref(), Some("一覧から消える"));
-        assert!(v.reference_image.is_none() && v.captured_image.is_none());
-        let json = serde_json::to_value(&page.screen_verifications[1]).unwrap();
-        assert_eq!(json["verification"]["result"], "not-run");
-        assert_eq!(
-            json["verification"]["missingReason"],
-            "ゴールの検証をしないで再開しました"
-        );
-        // The page that is read for its cards alone checks the shape and touches no image.
-        let mut gone = value.clone();
-        gone["screen_verifications"][0]["captured_image"]["path"] = json!("none.png");
-        assert!(build_input(&gone, &repo.allowed()).is_ok());
-        assert_eq!(
-            paths(&violations(&gone, &repo)),
-            ["$.screen_verifications[0].captured_image.path"]
-        );
-    }
-
-    #[test]
-    fn the_captures_folder_is_a_root_but_git_and_env_names_stay_refused() {
-        let repo = repo("sv-boundary");
-        write_bytes(&repo.dir, ".feature-dev/captures/u1/.env.png", PNG_1X1);
-        write_bytes(&repo.dir, ".feature-dev/captures/u1/.git/x.png", PNG_1X1);
-        let mut card = passed_card("SV-1");
-        card["captured_image"]["path"] = json!(".env.png");
-        let mut other = passed_card("SV-2");
-        other["captured_image"]["path"] = json!(".git/x.png");
-        let mut escape = passed_card("SV-3");
-        escape["captured_image"]["path"] = json!("../../current/ui-references/a.png");
-        let mut git_root = passed_card("SV-4");
-        git_root["captured_image"]["root"] = json!("gitroot");
-        let mut value = verification_page(&repo, json!([card, other, escape, git_root]));
-        value["roots"]["gitroot"] = json!(repo.dir.join(".git").to_string_lossy());
-        let found = violations(&value, &repo);
-        assert_eq!(
-            paths(&found),
-            [
-                "$.roots.gitroot",
-                "$.screen_verifications[0].captured_image.path",
-                "$.screen_verifications[1].captured_image.path",
-                "$.screen_verifications[2].captured_image.path",
-            ]
-        );
-        // A root outside the repositories is refused as it is for any card.
-        let outside = temp_dir("sv-outside");
-        let mut value = verification_page(&repo, json!([passed_card("SV-1")]));
-        value["roots"]["captures"] = json!(outside.to_string_lossy());
-        assert_eq!(paths(&violations(&value, &repo)), ["$.roots.captures"]);
-    }
-
-    #[test]
-    fn a_screen_verification_card_that_breaks_the_contract_is_refused() {
-        let repo = repo("sv-refuse");
-        let base = passed_card("SV-1");
-        let with = |change: &dyn Fn(&mut Value)| {
-            let mut card = base.clone();
-            change(&mut card);
-            card
-        };
-        let cards = json!([
-            with(&|c| c["recommendation"] = json!("fix")),
-            with(&|c| c["result"] = json!("maybe")),
-            with(&|c| {
-                c.as_object_mut().unwrap().remove("viewpoint");
-                c.as_object_mut().unwrap().remove("basis");
-            }),
-            with(&|c| c["missing_reason"] = json!("理由")),
-            with(&|c| c["result"] = json!("not-run")),
-            with(&|c| {
-                c["result"] = json!("not-run");
-                c["missing_reason"] = json!("理由");
-            }),
-            with(&|c| {
-                c.as_object_mut().unwrap().remove("reference_image");
-                c.as_object_mut().unwrap().remove("captured_image");
-            }),
-            with(&|c| c["steps"] = json!(["押す"])),
-            with(&|c| c["steps"] = json!([])),
-            with(&|c| c["expected"] = json!("出る")),
-            with(&|c| c["facts"] = json!([])),
-            with(&|c| c["captured_image"]["alt"] = json!("x"))
-        ]);
-        let mut cards = cards;
-        for (at, card) in cards.as_array_mut().unwrap().iter_mut().enumerate() {
-            card["number"] = json!(format!("SV-{at}"));
-        }
-        let value = verification_page(&repo, cards);
-        let found = violations(&value, &repo);
-        let expected = [
-            "$.screen_verifications[0].recommendation",
-            "$.screen_verifications[1].result",
-            "$.screen_verifications[2].viewpoint",
-            "$.screen_verifications[2].basis",
-            "$.screen_verifications[3].missing_reason",
-            "$.screen_verifications[4].missing_reason",
-            "$.screen_verifications[4].captured_image",
-            "$.screen_verifications[5].captured_image",
-            "$.screen_verifications[6]",
-            "$.screen_verifications[7].expected",
-            "$.screen_verifications[8].steps",
-            "$.screen_verifications[8].expected",
-            "$.screen_verifications[9].expected",
-            "$.screen_verifications[10].facts",
-            "$.screen_verifications[11].captured_image.alt",
-        ];
-        assert_eq!(paths(&found), expected, "{}", violations_text(&found));
-    }
-
-    #[test]
-    fn a_screen_verification_card_is_for_a_code_review_page_only() {
-        let repo = repo("sv-page-kind");
-        let mut value = open_questions(&repo);
-        value["screen_verifications"] = json!([passed_card("SV-1")]);
-        assert_eq!(
-            paths(&violations(&value, &repo)),
-            ["$.screen_verifications"]
-        );
-        let mut value = verification_page(&repo, json!([passed_card("SV-1"), passed_card("SV-1")]));
-        value["unmet_criteria"] = json!([{"kind": "screen-verification", "number": "SV-9", "title": "t", "summary": "s"}]);
-        let found = violations(&value, &repo);
-        assert_eq!(
-            paths(&found),
-            [
-                "$.unmet_criteria[0].kind",
-                "$.screen_verifications[1].number"
-            ],
-            "{}",
-            violations_text(&found)
-        );
-    }
-
     #[test]
     fn every_embedded_kind_has_a_name_that_the_contract_uses() {
         let set: std::collections::BTreeSet<&str> = [
@@ -6005,10 +5496,6 @@ mod tests {
             CardKind::MustFix,
             CardKind::StructuralProposal,
             CardKind::Adr,
-            CardKind::ReviewMustFix,
-            CardKind::ReviewDecision,
-            CardKind::UnmetCriterion,
-            CardKind::ScreenVerification,
         ]
         .into_iter()
         .map(|kind| {
@@ -6017,22 +5504,10 @@ mod tests {
             kind.name()
         })
         .collect();
-        assert_eq!(set.len(), 9);
+        assert_eq!(set.len(), 5);
     }
 
     // -- the items of the page that the earlier decision pages had (#1156) --
-
-    fn code_review(repo: &Repo) -> Value {
-        json!({
-            "schema_version": 1,
-            "page_kind": "code-review",
-            "subject": "code",
-            "context_label": "実装の承認依頼",
-            "title": "承認してください",
-            "what": "実装しました",
-            "roots": {"deliverables": repo.case_root(), "repo": repo.root()}
-        })
-    }
 
     #[test]
     fn terms_hold_and_clarified_numbers_are_checked_and_carried() {
@@ -6117,8 +5592,8 @@ mod tests {
     #[test]
     fn the_numbers_of_the_cards_that_the_children_give_are_accepted() {
         let repo = repo("page-numbers");
-        let mut value = code_review(&repo);
-        let card = |number: &str| json!({"kind": "review-must-fix", "number": number, "title": "t", "summary": "s", "recommendation": "fix", "recommendation_reason": "r"});
+        let mut value = approval(&repo);
+        let card = |number: &str| json!({"kind": "must-fix", "number": number, "title": "t", "summary": "s", "recommendation": "fix", "recommendation_reason": "r"});
         value["residual_must_fix"] = json!([card("MF-1"), card("MF-1-r2"), card("FV-1")]);
         value["noticed"] = json!([
             {"title": "RC-1", "text": "直さなかった"},
@@ -6140,7 +5615,7 @@ mod tests {
     }
 
     #[test]
-    fn the_noticed_matters_the_withdrawn_questions_and_the_notices_are_checked() {
+    fn the_noticed_matters_and_the_withdrawn_questions_are_checked() {
         let repo = repo("page-sections");
         let mut value = approval(&repo);
         value["noticed"] = json!([{
@@ -6168,48 +5643,10 @@ mod tests {
                 "$.noticed[2]"
             ]
         );
-        // These sections have their own page kinds: `noticed` is on a code review too, the withdrawn questions are not.
-        let mut review = code_review(&repo);
-        review["noticed"] = json!([{"title": "RC-1", "text": "t"}]);
-        assert_eq!(build(&review, &repo.allowed()).unwrap().noticed.len(), 1);
-        review["withdrawn_needs_user_decision"] = json!([]);
-        assert_eq!(
-            paths(&violations(&review, &repo)),
-            ["$.withdrawn_needs_user_decision"]
-        );
+        // `noticed` is for an approval page: an open-questions page has none.
         let mut questions = open_questions(&repo);
         questions["noticed"] = json!([]);
         assert_eq!(paths(&violations(&questions, &repo)), ["$.noticed"]);
-    }
-
-    #[test]
-    fn the_policy_deviations_and_the_notices_of_a_code_review_are_checked() {
-        let repo = repo("page-review-sections");
-        let mut value = code_review(&repo);
-        value["policy_deviations"] = json!([{"type": "paragraph", "text": "契約と違います"}, {"type": "list", "items": ["a"]}]);
-        value["notices"] = json!(["集約の検査は通りました", "カバレッジは 91%"]);
-        let page = build(&value, &repo.allowed()).unwrap();
-        assert_eq!(page.policy_deviations.len(), 2);
-        assert_eq!(page.notices, ["集約の検査は通りました", "カバレッジは 91%"]);
-        value["policy_deviations"] = json!([{"type": "paragraph"}]);
-        value["notices"] = json!(["", "二行\nにわたる", 1]);
-        assert_eq!(
-            paths(&violations(&value, &repo)),
-            [
-                "$.policy_deviations[0].text",
-                "$.notices[2]",
-                "$.notices[0]",
-                "$.notices[1]"
-            ]
-        );
-        // An approval has neither.
-        let mut approved = approval(&repo);
-        approved["notices"] = json!(["x"]);
-        approved["policy_deviations"] = json!([]);
-        assert_eq!(
-            paths(&violations(&approved, &repo)),
-            ["$.notices", "$.policy_deviations"]
-        );
     }
 
     #[test]
