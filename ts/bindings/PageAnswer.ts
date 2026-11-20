@@ -7,4 +7,8 @@ export type PageAnswer = {
 /**
  * The card's number.
  */
-card: string, choice: string | null, note: string, };
+card: string, choice: string | null, note: string, 
+/**
+ * The answer is put in for now, until the business side confirms it (only on a `question` of a requirement).
+ */
+provisional: boolean, };

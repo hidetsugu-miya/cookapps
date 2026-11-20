@@ -22,6 +22,7 @@ use crate::{
     auth::config_dir,
     formation::{self, Child, Refusal, LOCAL},
     formation_image,
+    formation_reply::{self, PageAnswer},
     formation_server::Client,
     orca,
     orca_files::check_relative,
@@ -152,9 +153,21 @@ pub struct DecisionPage {
     /// The roots of the page by name, as the real directories they are.
     pub roots: BTreeMap<String, String>,
     pub previous_reply: Option<String>,
+    /// The answers that `previous_reply` carries for the cards of this page, as the screen starts from them (`formation_reply::restore`).
+    pub restored: Vec<PageAnswer>,
+    /// The words of the page that a reader outside the project cannot tell, with what they mean.
+    pub terms: Vec<Term>,
+    /// `open-questions` of a requirement: every `question` card has the fixed choice `ビジネス側に確認する`.
+    pub hold: bool,
+    /// The numbers of the cards whose items the owner asked to have explained more clearly: nothing is restored into them from `previous_reply`.
+    pub clarified_numbers: Vec<String>,
     /// `open-questions`.
     pub questions: Vec<Card>,
     pub approval_scope: Vec<ScopeGroup>,
+    /// The design items of an `approval` of a design, one row each (the groups of `approval_scope` that hold them are marked `design`).
+    pub design_items: Vec<DesignItem>,
+    /// The repositories of the deliverables' `design.json` in the order they are implemented; only on an `approval` of a design, and only when the page is resolved.
+    pub implementation_order: Vec<String>,
     pub changes: Vec<Change>,
     /// `nr` cards on `approval`, `review-decision` cards on `code-review`.
     pub needs_user_decision: Vec<Card>,
@@ -164,11 +177,64 @@ pub struct DecisionPage {
     pub adr: Option<Card>,
     pub risks: Option<Risks>,
     pub settled_decisions: Vec<SettledDecision>,
+    /// `approval`: the questions that the review withdrew because the final deliverable settles them.
+    pub withdrawn_needs_user_decision: Vec<Withdrawn>,
+    /// `approval` and `code-review`: what the child noticed outside the request and did not reflect.
+    pub noticed: Vec<Noticed>,
     pub quality_loop: Option<QualityLoop>,
     pub unmet_criteria: Vec<Card>,
     /// `screen-verification` cards on `code-review`: no answer, in the order the unit holds them.
     pub screen_verifications: Vec<Card>,
+    /// `code-review`: where the implementation departed from the contract of the unit.
+    pub policy_deviations: Vec<Block>,
+    /// `code-review`: one-line facts about the review (the state of the checks).
+    pub notices: Vec<String>,
     pub pr: Option<PagePr>,
+}
+
+/// A word of the page and what it means: the screen shows `description` as a tooltip on `word` in the body text.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Term {
+    pub word: String,
+    pub description: String,
+}
+
+/// A decision item that the review withdrew, with why.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Withdrawn {
+    pub number: String,
+    pub title: String,
+    pub withdrawal_reason: String,
+}
+
+/// A matter noticed outside the request and not reflected; it takes no answer.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Noticed {
+    pub title: String,
+    pub text: String,
+    pub evidence: Vec<Evidence>,
+}
+
+/// A design item of the deliverables' `design.json`, as a row of 設計項目: the node `reference` of `root` with its `text`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct DesignItem {
+    pub id: String,
+    pub title: String,
+    pub root: String,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub text: Option<String>,
+    /// The `release` the DESIGN writes, when it writes one.
+    pub release: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -479,7 +545,10 @@ impl Evidence {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct ScopeGroup {
     pub heading: String,
+    /// Empty on a `design` group: its items are the rows of `design_items`.
     pub items: Vec<ScopeItem>,
+    /// A group whose every item names a design item (`design.json#/designs/{id}`), on a design approval.
+    pub design: bool,
 }
 
 /// One thing the approval covers: a node of a deliverable (`reference`, with its `text`), or a file (`path`, which exists) with the files `extras` that belong to it.
@@ -529,6 +598,8 @@ pub struct SettledDecision {
 #[serde(rename_all = "camelCase")]
 pub struct QualityLoop {
     pub rounds: u32,
+    /// The fix runs among the rounds; only on a design.
+    pub fix_cycles: Option<u32>,
     pub must_fix_resolved: u32,
 }
 
@@ -2375,7 +2446,11 @@ impl<'a> Walk<'a> {
                 }
             }
             if let Some(heading) = heading {
-                scope.push(ScopeGroup { heading, items });
+                scope.push(ScopeGroup {
+                    heading,
+                    items,
+                    design: false,
+                });
             }
         }
         scope
@@ -2501,13 +2576,139 @@ impl<'a> Walk<'a> {
             self.bad("$.quality_loop", "必須です");
             return None;
         };
-        let map = self.keys(value, "$.quality_loop", &["rounds", "must_fix_resolved"])?;
+        let map = self.keys(
+            value,
+            "$.quality_loop",
+            &["rounds", "fix_cycles", "must_fix_resolved"],
+        )?;
+        let design = self.subject == Some(Subject::Design);
         let rounds = self.uint(map, "rounds", "$.quality_loop", true);
+        let fix_cycles = if design {
+            self.uint(map, "fix_cycles", "$.quality_loop", true)
+        } else {
+            if map.get("fix_cycles").is_some_and(|v| !v.is_null()) {
+                self.bad(
+                    "$.quality_loop.fix_cycles",
+                    "design のページだけに付けられます",
+                );
+            }
+            None
+        };
         let resolved = self.uint(map, "must_fix_resolved", "$.quality_loop", true);
         Some(QualityLoop {
             rounds: rounds?,
+            fix_cycles,
             must_fix_resolved: resolved?,
         })
+    }
+
+    /// `terms`: `{word, description}`, both texts.
+    fn terms(&mut self, top: &Object) -> Vec<Term> {
+        let Some(items) = self.array(top, "terms", "$", false) else {
+            return Vec::new();
+        };
+        let mut terms = Vec::new();
+        for (at, item) in items.iter().enumerate() {
+            let here = format!("$.terms[{at}]");
+            let Some(map) = self.keys(item, &here, &["word", "description"]) else {
+                continue;
+            };
+            let word = self.text(map, "word", &here, true);
+            let description = self.text(map, "description", &here, true);
+            if let (Some(word), Some(description)) = (word, description) {
+                terms.push(Term { word, description });
+            }
+        }
+        terms
+    }
+
+    /// `hold`: `true` only on an `open-questions` page of a requirement; `false` is the same as none.
+    fn hold(&mut self, top: &Object, kind: PageKind, subject: Subject) -> bool {
+        let hold = self.flag(top, "hold", "$");
+        if hold && !(kind == PageKind::OpenQuestions && subject == Subject::Requirement) {
+            self.bad(
+                "$.hold",
+                "true にできるのは、requirement の open-questions のページだけです",
+            );
+            return false;
+        }
+        hold
+    }
+
+    fn withdrawn(&mut self, top: &Object) -> Vec<Withdrawn> {
+        let Some(items) = self.array(top, "withdrawn_needs_user_decision", "$", false) else {
+            return Vec::new();
+        };
+        let mut withdrawn = Vec::new();
+        for (at, item) in items.iter().enumerate() {
+            let here = format!("$.withdrawn_needs_user_decision[{at}]");
+            let Some(map) = self.keys(item, &here, &["number", "title", "withdrawal_reason"])
+            else {
+                continue;
+            };
+            let number = self.text(map, "number", &here, true);
+            let title = self.text(map, "title", &here, true);
+            let reason = self.text(map, "withdrawal_reason", &here, true);
+            if let (Some(number), Some(title), Some(withdrawal_reason)) = (number, title, reason) {
+                withdrawn.push(Withdrawn {
+                    number,
+                    title,
+                    withdrawal_reason,
+                });
+            }
+        }
+        withdrawn
+    }
+
+    fn noticed(&mut self, top: &Object) -> Vec<Noticed> {
+        let Some(items) = self.array(top, "noticed", "$", false) else {
+            return Vec::new();
+        };
+        let mut noticed = Vec::new();
+        for (at, item) in items.iter().enumerate() {
+            let here = format!("$.noticed[{at}]");
+            let Some(map) = self.keys(item, &here, &["title", "text", "evidence"]) else {
+                continue;
+            };
+            let title = self.text(map, "title", &here, true);
+            let text = self.text(map, "text", &here, true);
+            let evidence = self.evidence_of(map, "evidence", &here);
+            if let (Some(title), Some(text)) = (title, text) {
+                noticed.push(Noticed {
+                    title,
+                    text,
+                    evidence,
+                });
+            }
+        }
+        noticed
+    }
+
+    /// `notices`: one-line texts.
+    fn notices(&mut self, top: &Object) -> Vec<String> {
+        let notices = self.strings(top, "notices", "$", false);
+        for (at, text) in notices.iter().enumerate() {
+            if text.trim().is_empty() {
+                self.bad(&format!("$.notices[{at}]"), "空にできません");
+            } else if text.contains('\n') {
+                self.bad(&format!("$.notices[{at}]"), "1 行にしてください");
+            }
+        }
+        notices
+    }
+
+    /// The repositories of `design.json` `/implementation_order` of the deliverables, in order; none when the page is not resolved or the file does not say (the nodes the page cites report that).
+    fn implementation_order(&mut self) -> Vec<String> {
+        if !self.resolve {
+            return Vec::new();
+        }
+        let Some(Some(root)) = self.roots.get(DEFAULT_ROOT).cloned() else {
+            return Vec::new();
+        };
+        node_text(&root, "design.json#/implementation_order", &mut self.docs)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+            .unwrap_or_default()
     }
 
     fn pr(&mut self, top: &Object) -> Option<PagePr> {
@@ -2574,6 +2775,9 @@ impl<'a> Walk<'a> {
             "roots",
             "what",
             "previous_reply",
+            "terms",
+            "clarified_numbers",
+            "hold",
         ];
         keys.extend(match kind {
             PageKind::OpenQuestions => vec!["questions"],
@@ -2587,6 +2791,8 @@ impl<'a> Walk<'a> {
                 "adr",
                 "risks",
                 "settled_decisions",
+                "withdrawn_needs_user_decision",
+                "noticed",
             ],
             PageKind::CodeReview => vec![
                 "changes",
@@ -2594,6 +2800,9 @@ impl<'a> Walk<'a> {
                 "unmet_criteria",
                 "needs_user_decision",
                 "screen_verifications",
+                "policy_deviations",
+                "notices",
+                "noticed",
                 "pr",
             ],
         });
@@ -2616,6 +2825,9 @@ impl<'a> Walk<'a> {
             }
         };
         let roots = self.roots(top);
+        let terms = self.terms(top);
+        let hold = self.hold(top, kind, subject);
+        let clarified_numbers = self.strings(top, "clarified_numbers", "$", false);
         if subject != Subject::Design {
             for key in ["structural_proposals", "adr"] {
                 if top.get(key).is_some_and(|v| !v.is_null()) {
@@ -2631,8 +2843,14 @@ impl<'a> Walk<'a> {
             what,
             roots,
             previous_reply,
+            restored: Vec::new(),
+            terms,
+            hold,
+            clarified_numbers,
             questions: Vec::new(),
             approval_scope: Vec::new(),
+            design_items: Vec::new(),
+            implementation_order: Vec::new(),
             changes: Vec::new(),
             needs_user_decision: Vec::new(),
             residual_must_fix: Vec::new(),
@@ -2640,9 +2858,13 @@ impl<'a> Walk<'a> {
             adr: None,
             risks: None,
             settled_decisions: Vec::new(),
+            withdrawn_needs_user_decision: Vec::new(),
+            noticed: Vec::new(),
             quality_loop: None,
             unmet_criteria: Vec::new(),
             screen_verifications: Vec::new(),
+            policy_deviations: Vec::new(),
+            notices: Vec::new(),
             pr: None,
         };
         match kind {
@@ -2650,7 +2872,13 @@ impl<'a> Walk<'a> {
                 page.questions = self.cards(top, "questions", CardKind::Question, true);
             }
             PageKind::Approval => {
-                page.approval_scope = self.scope(top);
+                let scope = self.scope(top);
+                if subject == Subject::Design {
+                    (page.approval_scope, page.design_items) = split_design(scope);
+                    page.implementation_order = self.implementation_order();
+                } else {
+                    page.approval_scope = scope;
+                }
                 page.quality_loop = self.quality_loop(top);
                 page.changes = self.changes(top);
                 page.needs_user_decision =
@@ -2668,6 +2896,8 @@ impl<'a> Walk<'a> {
                 }
                 page.risks = self.risks(top);
                 page.settled_decisions = self.settled(top);
+                page.withdrawn_needs_user_decision = self.withdrawn(top);
+                page.noticed = self.noticed(top);
             }
             PageKind::CodeReview => {
                 page.changes = self.changes(top);
@@ -2683,6 +2913,9 @@ impl<'a> Walk<'a> {
                     CardKind::ScreenVerification,
                     false,
                 );
+                page.policy_deviations = self.blocks_of(top, "policy_deviations", "$", 0);
+                page.notices = self.notices(top);
+                page.noticed = self.noticed(top);
                 page.pr = self.pr(top);
             }
         }
@@ -2696,6 +2929,57 @@ impl<'a> Walk<'a> {
         let value = top.get("adr").filter(|v| !v.is_null())?;
         self.card(value, "$.adr", CardKind::Adr)
     }
+}
+
+/// The ref of a design item of `design.json`; the segment after it is the item's id.
+const DESIGN_REF: &str = "design.json#/designs/";
+
+/// The row of 設計項目 that a scope item makes: its `ref` is `design.json#/designs/{id}`, its title the description without its leading `{id} `.
+fn design_row(item: &ScopeItem) -> Option<DesignItem> {
+    let reference = item.reference.as_deref()?;
+    let id = reference.strip_prefix(DESIGN_REF)?;
+    if id.is_empty() || id.contains('/') {
+        return None;
+    }
+    let title = item
+        .description
+        .strip_prefix(&format!("{id} "))
+        .unwrap_or(&item.description);
+    let release = item
+        .text
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|node| node.get("release").and_then(Value::as_u64))
+        .and_then(|n| u32::try_from(n).ok());
+    Some(DesignItem {
+        id: id.to_owned(),
+        title: title.to_owned(),
+        root: item.root.clone(),
+        reference: reference.to_owned(),
+        text: item.text.clone(),
+        release,
+    })
+}
+
+/// A group whose every item names a design item moves its items to the rows of 設計項目 and keeps its heading; every other group stays as it is.
+fn split_design(groups: Vec<ScopeGroup>) -> (Vec<ScopeGroup>, Vec<DesignItem>) {
+    let mut kept = Vec::new();
+    let mut rows = Vec::new();
+    for group in groups {
+        let items: Option<Vec<DesignItem>> = group.items.iter().map(design_row).collect();
+        match items {
+            Some(items) if !items.is_empty() => {
+                rows.extend(items);
+                kept.push(ScopeGroup {
+                    heading: group.heading,
+                    items: Vec::new(),
+                    design: true,
+                });
+            }
+            _ => kept.push(group),
+        }
+    }
+    (kept, rows)
 }
 
 /// Checks the input `value` of a decision page and resolves its evidence. Every violation is returned, in the order the input is walked; a page with any is not returned.
@@ -2718,9 +3002,10 @@ fn build_with(
     if !walk.errors.is_empty() {
         return Err(walk.errors);
     }
-    let Some(page) = page else {
+    let Some(mut page) = page else {
         return Err(alone("ページを読めませんでした"));
     };
+    page.restored = formation_reply::restore(&page);
     if !resolve {
         return Ok(page);
     }
@@ -3349,7 +3634,7 @@ mod tests {
                     {"path": "notes.md", "description": "notes"}
                 ]
             }],
-            "quality_loop": {"rounds": 2, "must_fix_resolved": 3}
+            "quality_loop": {"rounds": 2, "fix_cycles": 1, "must_fix_resolved": 3}
         })
     }
 
@@ -3492,6 +3777,7 @@ mod tests {
         assert_eq!(paths(&violations(&value, &repo)), ["$.subject"]);
         let mut value = approval(&repo);
         value["subject"] = json!("requirement");
+        value["quality_loop"]["fix_cycles"] = Value::Null;
         value["adr"] = json!({"kind": "adr", "number": "AD-1", "title": "t", "summary": "s", "recommendation": "keep", "recommendation_reason": "r"});
         assert_eq!(paths(&violations(&value, &repo)), ["$.adr"]);
     }
@@ -4854,6 +5140,7 @@ mod tests {
         assert_eq!(got.conditions, ["条件"]);
         // On a requirement page an nr takes none.
         value["subject"] = json!("requirement");
+        value["quality_loop"]["fix_cycles"] = Value::Null;
         assert_eq!(
             paths(&violations(&value, &repo)),
             ["$.needs_user_decision[0].occurrence"]
@@ -5284,5 +5571,307 @@ mod tests {
         })
         .collect();
         assert_eq!(set.len(), 9);
+    }
+
+    // -- the items of the page that the earlier decision pages had (#1156) --
+
+    fn code_review(repo: &Repo) -> Value {
+        json!({
+            "schema_version": 1,
+            "page_kind": "code-review",
+            "subject": "code",
+            "context_label": "実装の承認依頼",
+            "title": "承認してください",
+            "what": "実装しました",
+            "roots": {"deliverables": repo.case_root(), "repo": repo.root()}
+        })
+    }
+
+    #[test]
+    fn terms_hold_and_clarified_numbers_are_checked_and_carried() {
+        let repo = repo("page-terms");
+        let mut value = open_questions(&repo);
+        value["terms"] = json!([{"word": "与信", "description": "支払いを先に押さえること"}]);
+        value["hold"] = json!(true);
+        value["clarified_numbers"] = json!(["論点1", "論点9"]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(
+            page.terms,
+            [Term {
+                word: "与信".into(),
+                description: "支払いを先に押さえること".into()
+            }]
+        );
+        assert!(page.hold);
+        assert_eq!(page.clarified_numbers, ["論点1", "論点9"]);
+        // `false` is the same as none, on any page.
+        let mut approved = approval(&repo);
+        approved["hold"] = json!(false);
+        assert!(!build(&approved, &repo.allowed()).unwrap().hold);
+        // A term needs both texts, and no other key.
+        value["terms"] = json!([{"word": "与信"}, {"word": "a", "description": "b", "x": 1}, "c"]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.terms[0].description", "$.terms[1].x", "$.terms[2]"]
+        );
+        value["terms"] = json!([]);
+        value["clarified_numbers"] = json!("論点1");
+        assert_eq!(paths(&violations(&value, &repo)), ["$.clarified_numbers"]);
+    }
+
+    #[test]
+    fn hold_is_for_the_open_questions_of_a_requirement_only() {
+        let repo = repo("page-hold");
+        for (kind, subject) in [("open-questions", "design"), ("approval", "requirement")] {
+            let mut value = if kind == "approval" {
+                approval(&repo)
+            } else {
+                open_questions(&repo)
+            };
+            value["subject"] = json!(subject);
+            if kind == "approval" {
+                value["quality_loop"]["fix_cycles"] = Value::Null;
+            }
+            value["hold"] = json!(true);
+            assert_eq!(
+                paths(&violations(&value, &repo)),
+                ["$.hold"],
+                "{kind} {subject}"
+            );
+        }
+        let mut value = open_questions(&repo);
+        value["hold"] = json!("yes");
+        assert_eq!(paths(&violations(&value, &repo)), ["$.hold"]);
+    }
+
+    #[test]
+    fn the_previous_reply_is_read_back_into_the_answers_the_page_starts_from() {
+        let repo = repo("page-restore");
+        let mut value = open_questions(&repo);
+        value["previous_reply"] =
+            json!("論点1 どちらにしますか\nB. 案 B（仮置き: ビジネス側に確認してから確定）");
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(
+            page.restored,
+            [PageAnswer {
+                card: "論点1".into(),
+                choice: Some("B".into()),
+                note: String::new(),
+                provisional: true
+            }]
+        );
+        // The cards alone are read for the reply, and it holds the answers too.
+        let page = build_input(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.restored.len(), 1);
+        value["clarified_numbers"] = json!(["論点1"]);
+        assert!(build(&value, &repo.allowed()).unwrap().restored.is_empty());
+    }
+
+    #[test]
+    fn the_numbers_of_the_cards_that_the_children_give_are_accepted() {
+        let repo = repo("page-numbers");
+        let mut value = code_review(&repo);
+        let card = |number: &str| json!({"kind": "review-must-fix", "number": number, "title": "t", "summary": "s", "recommendation": "fix", "recommendation_reason": "r"});
+        value["residual_must_fix"] = json!([card("MF-1"), card("MF-1-r2"), card("FV-1")]);
+        value["noticed"] = json!([
+            {"title": "RC-1", "text": "直さなかった"},
+            {"title": "OG-1", "text": "範囲外"},
+            {"title": "SV-2-o1", "text": "気づいた"},
+            {"title": "FV-bound-1", "text": "上限を下げた"},
+            {"title": "FV-scope-1", "text": "範囲外に触った"},
+            {"title": "FV-unrun-1", "text": "検査しなかった"}
+        ]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        let numbers: Vec<_> = page
+            .residual_must_fix
+            .iter()
+            .map(|c| c.number.as_str())
+            .collect();
+        assert_eq!(numbers, ["MF-1", "MF-1-r2", "FV-1"]);
+        assert_eq!(page.noticed.len(), 6);
+        assert_eq!(page.noticed[3].title, "FV-bound-1");
+    }
+
+    #[test]
+    fn the_noticed_matters_the_withdrawn_questions_and_the_notices_are_checked() {
+        let repo = repo("page-sections");
+        let mut value = approval(&repo);
+        value["noticed"] = json!([{
+            "title": "気づいたこと",
+            "text": "本文",
+            "evidence": [{"type": "excerpt", "root": "repo", "path": "src/main.rs", "start": 1}]
+        }]);
+        value["withdrawn_needs_user_decision"] =
+            json!([{"number": "NR-3", "title": "目標値", "withdrawal_reason": "回答で決まった"}]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.noticed[0].title, "気づいたこと");
+        assert_eq!(page.noticed[0].evidence.len(), 1);
+        assert_eq!(
+            page.withdrawn_needs_user_decision[0].withdrawal_reason,
+            "回答で決まった"
+        );
+        value["noticed"] = json!([{"title": "t"}, {"title": "u", "text": "v", "extra": 1}, 3]);
+        value["withdrawn_needs_user_decision"] = json!([{"number": "NR-3", "title": "目標値"}]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            [
+                "$.withdrawn_needs_user_decision[0].withdrawal_reason",
+                "$.noticed[0].text",
+                "$.noticed[1].extra",
+                "$.noticed[2]"
+            ]
+        );
+        // These sections have their own page kinds: `noticed` is on a code review too, the withdrawn questions are not.
+        let mut review = code_review(&repo);
+        review["noticed"] = json!([{"title": "RC-1", "text": "t"}]);
+        assert_eq!(build(&review, &repo.allowed()).unwrap().noticed.len(), 1);
+        review["withdrawn_needs_user_decision"] = json!([]);
+        assert_eq!(
+            paths(&violations(&review, &repo)),
+            ["$.withdrawn_needs_user_decision"]
+        );
+        let mut questions = open_questions(&repo);
+        questions["noticed"] = json!([]);
+        assert_eq!(paths(&violations(&questions, &repo)), ["$.noticed"]);
+    }
+
+    #[test]
+    fn the_policy_deviations_and_the_notices_of_a_code_review_are_checked() {
+        let repo = repo("page-review-sections");
+        let mut value = code_review(&repo);
+        value["policy_deviations"] = json!([{"type": "paragraph", "text": "契約と違います"}, {"type": "list", "items": ["a"]}]);
+        value["notices"] = json!(["集約の検査は通りました", "カバレッジは 91%"]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.policy_deviations.len(), 2);
+        assert_eq!(page.notices, ["集約の検査は通りました", "カバレッジは 91%"]);
+        value["policy_deviations"] = json!([{"type": "paragraph"}]);
+        value["notices"] = json!(["", "二行\nにわたる", 1]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            [
+                "$.policy_deviations[0].text",
+                "$.notices[2]",
+                "$.notices[0]",
+                "$.notices[1]"
+            ]
+        );
+        // An approval has neither.
+        let mut approved = approval(&repo);
+        approved["notices"] = json!(["x"]);
+        approved["policy_deviations"] = json!([]);
+        assert_eq!(
+            paths(&violations(&approved, &repo)),
+            ["$.notices", "$.policy_deviations"]
+        );
+    }
+
+    #[test]
+    fn the_fix_cycles_are_for_a_design_only_and_a_design_needs_them() {
+        let repo = repo("page-fix-cycles");
+        let page = build(&approval(&repo), &repo.allowed()).unwrap();
+        assert_eq!(
+            page.quality_loop,
+            Some(QualityLoop {
+                rounds: 2,
+                fix_cycles: Some(1),
+                must_fix_resolved: 3
+            })
+        );
+        let mut value = approval(&repo);
+        value["quality_loop"]["fix_cycles"] = Value::Null;
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.quality_loop.fix_cycles"]
+        );
+        value["subject"] = json!("requirement");
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.quality_loop.unwrap().fix_cycles, None);
+        value["quality_loop"]["fix_cycles"] = json!(1);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.quality_loop.fix_cycles"]
+        );
+    }
+
+    fn design_page(repo: &Repo) -> Value {
+        write(
+            &repo.dir,
+            ".feature-dev/current/design.json",
+            r#"{"designs": [{"id": "DESIGN-01", "title": "first", "release": 2}, {"id": "DESIGN-02", "title": "second"}], "shared": [{"id": "data-model"}], "implementation_order": ["example-api", "example-web"]}"#,
+        );
+        let mut value = approval(repo);
+        value["approval_scope"] = json!([
+            {"heading": "設計項目", "items": [
+                {"ref": "design.json#/designs/DESIGN-01", "description": "DESIGN-01 最初。概要です"},
+                {"ref": "design.json#/designs/DESIGN-02", "description": "DESIGN-02 二つめ"}
+            ]},
+            {"heading": "共有の設計資料", "items": [
+                {"ref": "design.json#/shared/data-model", "description": "データモデル"}
+            ]}
+        ]);
+        value
+    }
+
+    #[test]
+    fn the_design_items_of_a_design_approval_are_rows_and_their_group_keeps_its_heading() {
+        let repo = repo("page-design-items");
+        let page = build(&design_page(&repo), &repo.allowed()).unwrap();
+        assert_eq!(page.design_items.len(), 2);
+        let first = &page.design_items[0];
+        assert_eq!(
+            (
+                first.id.as_str(),
+                first.title.as_str(),
+                first.reference.as_str(),
+                first.release
+            ),
+            (
+                "DESIGN-01",
+                "最初。概要です",
+                "design.json#/designs/DESIGN-01",
+                Some(2)
+            )
+        );
+        assert!(first.text.as_deref().unwrap().contains("\"first\""));
+        assert_eq!(page.design_items[1].release, None);
+        assert_eq!(page.approval_scope.len(), 2);
+        assert!(page.approval_scope[0].design);
+        assert!(page.approval_scope[0].items.is_empty());
+        assert_eq!(page.approval_scope[0].heading, "設計項目");
+        assert!(!page.approval_scope[1].design);
+        assert_eq!(page.approval_scope[1].items.len(), 1);
+        assert_eq!(page.implementation_order, ["example-api", "example-web"]);
+    }
+
+    #[test]
+    fn a_group_with_any_other_item_and_every_group_of_a_requirement_stay_in_the_scope() {
+        let repo = repo("page-design-mixed");
+        let mut value = design_page(&repo);
+        value["approval_scope"][0]["items"][1] =
+            json!({"path": "notes.md", "description": "notes"});
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert!(page.design_items.is_empty());
+        assert_eq!(page.approval_scope[0].items.len(), 2);
+        assert!(!page.approval_scope[0].design);
+        // On a requirement the order is not read either.
+        let mut requirement = design_page(&repo);
+        requirement["subject"] = json!("requirement");
+        requirement["quality_loop"]["fix_cycles"] = Value::Null;
+        let page = build(&requirement, &repo.allowed()).unwrap();
+        assert!(page.design_items.is_empty());
+        assert!(page.implementation_order.is_empty());
+        assert_eq!(page.approval_scope[0].items.len(), 2);
+    }
+
+    #[test]
+    fn the_implementation_order_is_empty_when_the_file_says_none_and_is_not_read_for_the_cards_alone(
+    ) {
+        let repo = repo("page-design-order");
+        let page = build(&approval(&repo), &repo.allowed()).unwrap();
+        assert!(page.implementation_order.is_empty());
+        let page = build_input(&design_page(&repo), &repo.allowed()).unwrap();
+        assert!(page.implementation_order.is_empty());
+        assert_eq!(page.design_items.len(), 2);
+        assert!(page.design_items[0].text.is_none());
     }
 }

@@ -3,6 +3,7 @@ import type { Block } from "./bindings/Block";
 import type { Evidence } from "./bindings/Evidence";
 import type { FactContent } from "./bindings/FactContent";
 import type { ImageRef } from "./bindings/ImageRef";
+import type { Term } from "./bindings/Term";
 import { tag } from "./dom.js";
 import { loadMermaid } from "./vendor-load.js";
 
@@ -17,6 +18,35 @@ export function fold(summary: string, className: string, open = false): HTMLDeta
   return node;
 }
 
+// The words of the page being drawn, longest first: `drawPage` sets them before it draws, and the body texts take them when they are drawn.
+let termList: Term[] = [];
+
+export function useTerms(terms: Term[]) {
+  termList = [...terms].sort((a, b) => b.word.length - a.word.length);
+}
+
+// A body text of the page as an element: each listed word in it is an `abbr` that carries what the word means as its tooltip. The text goes in as `textContent` like every text of the page.
+export function termed<K extends "p" | "li" | "div" | "dd">(name: K, className: string, text: string): HTMLElementTagNameMap[K] {
+  const node = tag(name, className);
+  let plain = 0;
+  let at = 0;
+  while (at < text.length) {
+    const term = termList.find((t) => text.startsWith(t.word, at));
+    if (term === undefined) {
+      at += 1;
+      continue;
+    }
+    if (at > plain) node.append(text.slice(plain, at));
+    const word = tag("abbr", "fp-term", term.word);
+    word.title = term.description;
+    node.append(word);
+    at += term.word.length;
+    plain = at;
+  }
+  if (plain < text.length) node.append(text.slice(plain));
+  return node;
+}
+
 // `lazy` is for blocks inside a fold that is closed: a diagram there is drawn when the fold is first opened, not when the page is drawn.
 export function drawBlocks(blocks: Block[], lazy = false): HTMLElement[] {
   return blocks.map((block) => drawBlock(block, lazy));
@@ -25,16 +55,16 @@ export function drawBlocks(blocks: Block[], lazy = false): HTMLElement[] {
 function drawBlock(block: Block, lazy: boolean): HTMLElement {
   switch (block.type) {
     case "paragraph":
-      return tag("p", "fp-p", block.text);
+      return termed("p", "fp-p", block.text);
     case "heading":
       return tag("h4", "fp-h", block.text);
     case "list": {
       const list = tag("ul", "fp-list");
-      for (const item of block.items) list.append(tag("li", "", item));
+      for (const item of block.items) list.append(termed("li", "", item));
       return list;
     }
     case "callout":
-      return tag("div", "fp-callout", block.text);
+      return termed("div", "fp-callout", block.text);
     case "table":
       return drawTable(block.header, block.rows);
     case "before-after": {

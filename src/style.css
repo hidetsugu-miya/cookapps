@@ -1237,6 +1237,12 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .fp-note { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; color: var(--muted); font-size: calc(13px * var(--fs)); }
 .fp-note .fp-text { margin: 0; max-width: 100%; color: var(--ink-soft); }
+.fp-provisional { display: flex; align-items: center; gap: 8px; margin: 2px 8px 0; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+.fp-provisional input { flex: none; margin: 0; }
+.fp-provisional[data-on] { border-color: var(--agent-question); background: color-mix(in srgb, var(--agent-question) 8%, var(--surface)); }
+.fp-term { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.fp-unit { color: var(--muted); }
+.fp-restored { margin: 0; }
 .fp-verdict .fp-muted { margin: 0 8px; font-size: calc(13px * var(--fs)); }
 .fp-verdict .fp-revision { margin-left: 8px; max-width: calc(100% - 16px); }
 .fp-cancel { align-self: flex-start; margin-left: 8px; height: 26px; font-size: calc(13px * var(--fs)); }
