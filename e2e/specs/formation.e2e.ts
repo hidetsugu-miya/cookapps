@@ -1,6 +1,7 @@
 import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
+import type { DecisionPage } from "../../ts/bindings/DecisionPage";
 import type { FormationList } from "../../ts/bindings/FormationList";
 
 // The text of each element as it is, with the spaces that `textsOf` trims (a line of git's status starts with one).
@@ -2668,7 +2669,7 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await labels("ADR-1")).toEqual(["残す推奨", "不要"]);
     expect(await textsOf('#formation-page [data-card="SP-1"] .fp-note > span')).toEqual(["理由（却下・保留のとき）"]);
     expect(await textsOf('#formation-page [data-card="MF-1"] .fp-note > span')).toEqual(["補足（任意）"]);
-    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "ADR（設計判断の記録） 1 件"]);
+    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "ADR（設計判断の記録） 1 件", "あなたの判定"]);
     await $("#formation-page .fp-reference > summary").click();
     expect(await textsOf("#formation-page .fp-reference .fp-ref .fp-p")).toEqual(["実施回数: 2 回", "解消した必ず直す指摘: 3 件"]);
   });
@@ -2870,6 +2871,9 @@ describe("orchestration mode: the decision page of a child", () => {
   it("sends what was chosen to the leader with the mark's time, and reads the questions' choices and free text as they stand", async () => {
     await openPage(decisionPage({ questions: [QUESTION, QUESTION_2] }));
     await expect($(SEND)).toHaveText("リーダーに送る");
+    // An open-questions page has no verdict to choose, and its button is ready.
+    expect(await count("#formation-page .fp-verdict")).toBe(0);
+    await expect($(SEND)).toBeEnabled();
     await $('#formation-page [data-card="Q1"] input[value="B"]').click();
     await $('#formation-page [data-card="Q2"] input[value="other"]').click();
     await $('#formation-page [data-card="Q2"] .fp-text').setValue("来週の頭");
@@ -2883,6 +2887,8 @@ describe("orchestration mode: the decision page of a child", () => {
           { card: "Q1", choice: "B", note: "" },
           { card: "Q2", choice: "other", note: "来週の頭" },
         ],
+        verdict: null,
+        revision: "",
       },
     ]);
   });
@@ -2902,6 +2908,7 @@ describe("orchestration mode: the decision page of a child", () => {
     await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
     await $('#formation-page [data-card="SP-1"] input[value="reject"]').click();
     await $('#formation-page [data-card="SP-1"] .fp-text').setValue("重複は減らない");
+    await $(`${VERDICT} input[value="approve"]`).click();
     await $(SEND).click();
     expect(await waitForCalls("formation_page_answer", 1)).toEqual([
       {
@@ -2913,14 +2920,17 @@ describe("orchestration mode: the decision page of a child", () => {
           { card: "SP-1", choice: "reject", note: "重複は減らない" },
           { card: "ADR-1", choice: null, note: "" },
         ],
+        verdict: "approve",
+        revision: "",
       },
     ]);
   });
 
   it("sends a page with no card that asks, with no answer", async () => {
     await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", qualityLoop: null }));
+    await $(`${VERDICT} input[value="approve"]`).click();
     await $(SEND).click();
-    expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [] }]);
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [], verdict: "approve", revision: "" }]);
   });
 
   it("keeps the page and the answers, and says why, when the reply could not be sent, and sends again when it is pressed again", async () => {
@@ -2949,9 +2959,154 @@ describe("orchestration mode: the decision page of a child", () => {
           { card: "Q1", choice: "A", note: "" },
           { card: "Q2", choice: "A", note: "" },
         ],
+        verdict: null,
+        revision: "",
       },
     ]);
     await expect($(SEND_ERROR)).not.toBeDisplayed();
+  });
+
+  const VERDICT = "#formation-page .fp-verdict";
+  const verdictRadio = (key: string) => $(`${VERDICT} input[value="${key}"]`);
+  const approvalPage = (extra: Partial<DecisionPage> = {}) =>
+    decisionPage({
+      pageKind: "approval",
+      subject: "design",
+      what: "設計を承認します",
+      needsUserDecision: [decisionCard("NR-1", { kind: "nr", title: "どちらにするか", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
+      structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
+      qualityLoop: { rounds: 2, mustFixResolved: 3 },
+      ...extra,
+    });
+
+  it("puts 「あなたの判定」 under the cards with the two choices of the page's subject, and sends nothing until one is chosen", async () => {
+    await openPage(approvalPage());
+    expect(await textsOf(`${VERDICT} .fp-sec`)).toEqual(["あなたの判定"]);
+    expect(await textsOf(`${VERDICT} .fp-choice-label`)).toEqual(["基本設計を承認する", "基本設計の修正を依頼する"]);
+    // The verdict is below the cards and above the button, and nothing is chosen at first.
+    expect(await browser.execute((s) => document.querySelector(s)!.nextElementSibling!.className, VERDICT)).toBe("fp-send");
+    await expect(verdictRadio("approve")).not.toBeSelected();
+    await expect(verdictRadio("revise")).not.toBeSelected();
+    await expect($(SEND)).toBeDisabled();
+    await $(SEND).click();
+    expect(await answerCalls()).toHaveLength(0);
+    await verdictRadio("revise").click();
+    await expect($(SEND)).toBeEnabled();
+  });
+
+  it("words the verdict of a requirement's approval by the requirement", async () => {
+    await openPage(approvalPage({ subject: "requirement" }));
+    expect(await textsOf(`${VERDICT} .fp-choice-label`)).toEqual(["要件定義を承認する", "要件定義の修正を依頼する"]);
+  });
+
+  it("words the verdict of a code review by the change", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です" }));
+    expect(await textsOf(`${VERDICT} .fp-choice-label`)).toEqual(["この変更を承認する", "修正を依頼する"]);
+  });
+
+  it("does not let the approval be chosen while a card has its fix chosen, says why, and turns an approval chosen before into the request", async () => {
+    await openPage(approvalPage());
+    const fix = $('#formation-page [data-card="MF-1"] input[value="fix"]');
+    const reason = $(`${VERDICT} .fp-verdict-reason`);
+    await expect(reason).not.toBeDisplayed();
+    await verdictRadio("approve").click();
+    await expect(verdictRadio("approve")).toBeSelected();
+    await fix.click();
+    await expect(verdictRadio("revise")).toBeSelected();
+    await expect(verdictRadio("approve")).toBeDisabled();
+    await expect(reason).toBeDisplayed();
+    expect(await rawTextsOf(`${VERDICT} .fp-verdict-reason`)).toEqual(["修正を選んだカード（MF-1）があるので、承認は選べません"]);
+    // Taking the choice back lets the approval be chosen again, and the request stays chosen.
+    await $('#formation-page [data-card="MF-1"] .fp-cancel').click();
+    await expect(verdictRadio("approve")).toBeEnabled();
+    await expect(verdictRadio("revise")).toBeSelected();
+    await expect(reason).not.toBeDisplayed();
+    // Another choice of the card is no revision.
+    await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
+    await expect(verdictRadio("approve")).toBeEnabled();
+  });
+
+  it("holds the approval back for the fix of a code review's card too, and names every card with a fix", async () => {
+    await openPage(
+      decisionPage({
+        pageKind: "code-review",
+        subject: "code",
+        what: "変更です",
+        residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" }), decisionCard("RMF-2", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "遅い" })],
+      }),
+    );
+    await $('#formation-page [data-card="RMF-1"] input[value="fix"]').click();
+    await $('#formation-page [data-card="RMF-2"] input[value="fix"]').click();
+    await expect(verdictRadio("approve")).toBeDisabled();
+    expect(await rawTextsOf(`${VERDICT} .fp-verdict-reason`)).toEqual(["修正を選んだカード（RMF-1、RMF-2）があるので、承認は選べません"]);
+    await $('#formation-page [data-card="RMF-1"] input[value="accept"]').click();
+    await expect(verdictRadio("approve")).toBeDisabled();
+    await $('#formation-page [data-card="RMF-2"] input[value="accept"]').click();
+    await expect(verdictRadio("approve")).toBeEnabled();
+  });
+
+  it("opens a box for what to revise with the request, and sends its text with the verdict", async () => {
+    await openPage(approvalPage());
+    const box = $(`${VERDICT} .fp-revision`);
+    await expect(box).not.toBeDisplayed();
+    await verdictRadio("revise").click();
+    await expect(box).toBeDisplayed();
+    await expect(box).toHaveAttribute("aria-label", "修正してほしいこと");
+    await box.setValue("画面の名前を直す\n二行目");
+    await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([
+      {
+        name: "formation",
+        child: "req-login",
+        atMs: MARK_AT,
+        answers: [
+          { card: "NR-1", choice: null, note: "" },
+          { card: "MF-1", choice: "skip", note: "" },
+          { card: "SP-1", choice: null, note: "" },
+        ],
+        verdict: "revise",
+        revision: "画面の名前を直す\n二行目",
+      },
+    ]);
+  });
+
+  it("closes the box again for the approval and sends no text with it", async () => {
+    await openPage(approvalPage());
+    await verdictRadio("revise").click();
+    await $(`${VERDICT} .fp-revision`).setValue("やっぱり承認する");
+    await verdictRadio("approve").click();
+    await expect($(`${VERDICT} .fp-revision`)).not.toBeDisplayed();
+    await $(SEND).click();
+    const [call] = await waitForCalls("formation_page_answer", 1);
+    expect(call).toMatchObject({ verdict: "approve", revision: "" });
+  });
+
+  it("says in one line which unanswered cards go with which choice, and drops a card from it when it is answered", async () => {
+    await openPage(approvalPage({ residualMustFix: [], adr: null }));
+    const line = `${VERDICT} .fp-unanswered`;
+    expect(await rawTextsOf(line)).toEqual(["答えていないカードは、この案で送ります: NR-1 A. 案 A、SP-1 承認"]);
+    await $('#formation-page [data-card="NR-1"] input[value="A"]').click();
+    expect(await rawTextsOf(line)).toEqual(["答えていないカードは、この案で送ります: SP-1 承認"]);
+    await $('#formation-page [data-card="SP-1"] input[value="reject"]').click();
+    await expect($(line)).not.toBeDisplayed();
+    // Taking an answer back puts the card in the line again.
+    await $('#formation-page [data-card="SP-1"] .fp-cancel').click();
+    expect(await rawTextsOf(line)).toEqual(["答えていないカードは、この案で送ります: SP-1 承認"]);
+  });
+
+  it("says that an unanswered fix card of a code review is sent as completing it as it is", async () => {
+    await openPage(
+      decisionPage({
+        pageKind: "code-review",
+        subject: "code",
+        what: "変更です",
+        residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" })],
+        needsUserDecision: [decisionCard("RD-1", { kind: "review-decision", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      }),
+    );
+    expect(await rawTextsOf(`${VERDICT} .fp-unanswered`)).toEqual(["答えていないカードは、この案で送ります: RMF-1 現状で完了する"]);
   });
 
   it("sends once however often it is pressed, and closes the tab and puts the card back when the reply went through", async () => {

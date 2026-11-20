@@ -29,6 +29,16 @@ pub struct PageAnswer {
     pub note: String,
 }
 
+/// What the owner chose in the verdict box of an `approval` and a `code-review` page: to approve, or to ask for a revision.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub enum PageVerdict {
+    Approve,
+    Revise,
+}
+
 /// The choices of a kind that every card of it has, as `(key, reply text)`: the lettered options of the card come before them.
 fn fixed(kind: CardKind) -> &'static [(&'static str, &'static str)] {
     match kind {
@@ -56,7 +66,7 @@ fn required(kind: CardKind) -> bool {
     matches!(kind, CardKind::Question | CardKind::MustFix)
 }
 
-/// Whether the choice asks for a revision (it makes the verdict line the revise line).
+/// Whether the choice asks for a revision (an approve verdict cannot go with it).
 fn revision(kind: CardKind, key: &str) -> bool {
     matches!(kind, CardKind::MustFix | CardKind::ReviewMustFix) && key == "fix"
 }
@@ -104,8 +114,8 @@ fn one_line(text: &str) -> String {
     clean(text).replace('\n', " ").trim().to_owned()
 }
 
-/// The verdict line of the page: the approve line, or the revise line.
-fn verdict(kind: PageKind, subject: Subject, revise: bool) -> Result<&'static str, String> {
+/// The verdict line of the page: the approve line, or the revise line, as the owner chose.
+fn verdict(kind: PageKind, subject: Subject, chosen: PageVerdict) -> Result<&'static str, String> {
     let (approve, ask) = match (kind, subject) {
         (PageKind::Approval, Subject::Requirement) => {
             ("要件定義を承認します", "要件定義の修正を依頼します")
@@ -116,7 +126,10 @@ fn verdict(kind: PageKind, subject: Subject, revise: bool) -> Result<&'static st
         (PageKind::CodeReview, Subject::Code) => ("この変更を承認します", "修正を依頼します"),
         _ => return Err("この判断ページには、返信の形式がありません".to_owned()),
     };
-    Ok(if revise { ask } else { approve })
+    Ok(match chosen {
+        PageVerdict::Approve => approve,
+        PageVerdict::Revise => ask,
+    })
 }
 
 /// One card's block, and whether its choice asks for a revision; `None` for a card with no answer (no choice, or `その他` with no text, and no note that counts).
@@ -171,8 +184,16 @@ fn block_of(card: &Card, answer: Option<&PageAnswer>) -> Result<Option<(String, 
     )))
 }
 
-/// The reply text of `page` from `answers`: the verdict line (on an approval and a code review: the revise line while a revision is chosen, else the approve line), then the block of each card that has an answer, in the page's order. A card that does not ask, a card number twice, a number that is not on the page and a key the card does not offer are refused, and so is a page with a required card (`question`, `must-fix`) that has no answer: the reply is not sent then.
-pub fn build_reply(page: &DecisionPage, answers: &[PageAnswer]) -> Result<String, String> {
+/// The heading of the owner's own request for a revision, which comes right after the revise line.
+const REVISION_HEADING: &str = "修正してほしいこと";
+
+/// The reply text of `page` from `answers`: on an approval and a code review, first the verdict line that the owner chose (`verdict`; none is refused), then, on a revise verdict, the owner's own request for a revision (`revision`, under `修正してほしいこと`, when it has text), then the block of each card that has an answer, in the page's order. A card that does not ask, a card number twice, a number that is not on the page and a key the card does not offer are refused, and so is a page with a required card (`question`, `must-fix`) that has no answer, an approve verdict while a card has a revision choice (`fix`), a request for a revision under an approve verdict, and a verdict or a request on an `open-questions` page: the reply is not sent then.
+pub fn build_reply(
+    page: &DecisionPage,
+    answers: &[PageAnswer],
+    verdict_chosen: Option<PageVerdict>,
+    revision: &str,
+) -> Result<String, String> {
     let cards = asking_cards(page);
     let mut seen = HashSet::new();
     for answer in answers {
@@ -189,14 +210,17 @@ pub fn build_reply(page: &DecisionPage, answers: &[PageAnswer]) -> Result<String
             ));
         }
     }
+    let revision = clean(revision).trim().to_owned();
     let mut blocks = Vec::new();
     let mut missing = Vec::new();
-    let mut revise = false;
+    let mut revising = Vec::new();
     for card in cards {
         let answer = answers.iter().find(|a| a.card == card.number);
         match block_of(card, answer)? {
             Some((block, asks)) => {
-                revise |= asks;
+                if asks {
+                    revising.push(one_line(&card.number));
+                }
                 blocks.push(block);
             }
             None if required(card.kind) => missing.push(one_line(&card.number)),
@@ -210,8 +234,27 @@ pub fn build_reply(page: &DecisionPage, answers: &[PageAnswer]) -> Result<String
         ));
     }
     let mut parts = Vec::new();
-    if page.page_kind != PageKind::OpenQuestions {
-        parts.push(verdict(page.page_kind, page.subject, revise)?.to_owned());
+    if page.page_kind == PageKind::OpenQuestions {
+        if verdict_chosen.is_some() || !revision.is_empty() {
+            return Err("この判断ページには、判定がありません".to_owned());
+        }
+    } else {
+        let Some(chosen) = verdict_chosen else {
+            return Err("判定が選ばれていません".to_owned());
+        };
+        if chosen == PageVerdict::Approve && !revising.is_empty() {
+            return Err(format!(
+                "修正を選んだカードがあるので、承認の答えは送れません: {}",
+                revising.join("、")
+            ));
+        }
+        if chosen == PageVerdict::Approve && !revision.is_empty() {
+            return Err("承認の答えに、修正してほしいことは付けられません".to_owned());
+        }
+        parts.push(verdict(page.page_kind, page.subject, chosen)?.to_owned());
+        if !revision.is_empty() {
+            parts.push(format!("{REVISION_HEADING}\n{revision}"));
+        }
     }
     parts.extend(blocks);
     if parts.is_empty() {
@@ -320,8 +363,9 @@ impl Drop for Sending {
     }
 }
 
-/// Sends the owner's `answers` to the page that waits on the child `child` of the formation `name` (A-41) as the reply, into the leader's terminal, and takes the page off the waiting. `at_ms` is the time of the mark the screen drew the page for: a page that was replaced meanwhile is refused, because the answers belong to the page that was shown. The page is read again, so the reply is made of what is there now; nothing is sent when a required card has no answer. A formation of this Mac has its leader in the app's own pseudo terminal; one of a saved environment has it in the terminal of that PC's Orca, and the page's record is on that PC. The page is read for its cards alone (`page_input_with_time`: its evidence is not resolved, because the reply holds none of it). A failure carries the message, and the page stays waiting; when the reply was sent and only the mark failed, the next press marks the page and sends nothing (`deliver`).
+/// Sends the owner's `answers`, `verdict` and `revision` to the page that waits on the child `child` of the formation `name` (A-41) as the reply, into the leader's terminal, and takes the page off the waiting. `at_ms` is the time of the mark the screen drew the page for: a page that was replaced meanwhile is refused, because the answers belong to the page that was shown. The page is read again, so the reply is made of what is there now; nothing is sent when a required card has no answer or when the verdict is missing or does not fit the answers. A formation of this Mac has its leader in the app's own pseudo terminal; one of a saved environment has it in the terminal of that PC's Orca, and the page's record is on that PC. The page is read for its cards alone (`page_input_with_time`: its evidence is not resolved, because the reply holds none of it). A failure carries the message, and the page stays waiting; when the reply was sent and only the mark failed, the next press marks the page and sends nothing (`deliver`).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn formation_page_answer(
     app: tauri::AppHandle,
     sessions: tauri::State<'_, ClaudeCode>,
@@ -329,6 +373,8 @@ pub async fn formation_page_answer(
     child: String,
     at_ms: i64,
     answers: Vec<PageAnswer>,
+    verdict: Option<PageVerdict>,
+    revision: String,
 ) -> Result<(), String> {
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
@@ -350,7 +396,7 @@ pub async fn formation_page_answer(
     if current != at {
         return Err("ページが差し替わりました。開き直してください".to_owned());
     }
-    let reply = build_reply(&page, &answers)?;
+    let reply = build_reply(&page, &answers, verdict, &revision)?;
     let paste = paste_of(&terminal_text(&child, &reply))?;
     let key = (name.clone(), child.clone(), at);
     let leader_of = name.clone();
@@ -459,6 +505,8 @@ mod tests {
                 answer("論点1", Some("B"), "ignored for a lettered option"),
                 answer("論点2", Some("investigate"), ""),
             ],
+            None,
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -475,6 +523,8 @@ mod tests {
                 answer("論点1", Some("other"), "  自由な\n答え  "),
                 answer("論点2", Some("A"), "x"),
             ],
+            None,
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -487,6 +537,8 @@ mod tests {
                 answer("論点1", Some("other"), "  "),
                 answer("論点2", Some("A"), ""),
             ],
+            None,
+            "",
         );
         assert_eq!(
             missing.unwrap_err(),
@@ -496,9 +548,10 @@ mod tests {
 
     #[test]
     fn a_required_card_with_no_answer_cannot_be_sent_and_the_reason_names_the_cards() {
-        let error = build_reply(&questions(), &[]).unwrap_err();
+        let error = build_reply(&questions(), &[], None, "").unwrap_err();
         assert_eq!(error, "回答が必要なカードが未回答です: 論点1、論点2");
-        let error = build_reply(&questions(), &[answer("論点2", Some("B"), "")]).unwrap_err();
+        let error =
+            build_reply(&questions(), &[answer("論点2", Some("B"), "")], None, "").unwrap_err();
         assert_eq!(error, "回答が必要なカードが未回答です: 論点1");
     }
 
@@ -521,6 +574,8 @@ mod tests {
                 answer("SP-1", Some("reject"), "理由は別にある"),
                 answer("NR-1", Some("A"), ""),
             ],
+            Some(PageVerdict::Approve),
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -531,22 +586,46 @@ mod tests {
 
     #[test]
     fn a_revision_choice_makes_the_revise_line_and_an_unanswered_optional_card_leaves_no_block() {
-        let reply = build_reply(&approval(), &[answer("MF-1", Some("fix"), "")]).unwrap();
+        let reply = build_reply(
+            &approval(),
+            &[answer("MF-1", Some("fix"), "")],
+            Some(PageVerdict::Revise),
+            "",
+        )
+        .unwrap();
         assert_eq!(
             reply,
             "基本設計の修正を依頼します\n\nMF-1 直す\n指摘のとおり修正する"
         );
         let mut requirement = approval();
         requirement.subject = Subject::Requirement;
-        let reply = build_reply(&requirement, &[answer("MF-1", Some("skip"), "")]).unwrap();
+        let reply = build_reply(
+            &requirement,
+            &[answer("MF-1", Some("skip"), "")],
+            Some(PageVerdict::Approve),
+            "",
+        )
+        .unwrap();
         assert!(reply.starts_with("要件定義を承認します\n\n"));
-        let reply = build_reply(&requirement, &[answer("MF-1", Some("fix"), "")]).unwrap();
+        let reply = build_reply(
+            &requirement,
+            &[answer("MF-1", Some("fix"), "")],
+            Some(PageVerdict::Revise),
+            "",
+        )
+        .unwrap();
         assert!(reply.starts_with("要件定義の修正を依頼します\n\n"));
     }
 
     #[test]
     fn an_approval_cannot_be_sent_while_a_must_fix_card_has_no_answer() {
-        let error = build_reply(&approval(), &[answer("NR-1", Some("A"), "")]).unwrap_err();
+        let error = build_reply(
+            &approval(),
+            &[answer("NR-1", Some("A"), "")],
+            Some(PageVerdict::Approve),
+            "",
+        )
+        .unwrap_err();
         assert_eq!(error, "回答が必要なカードが未回答です: MF-1");
     }
 
@@ -556,25 +635,42 @@ mod tests {
         review.residual_must_fix = vec![card(CardKind::ReviewMustFix, "RM-1", "指摘")];
         review.unmet_criteria = vec![card(CardKind::UnmetCriterion, "UC-1", "条件")];
         review.needs_user_decision = vec![card(CardKind::ReviewDecision, "RD-1", "判断")];
-        assert_eq!(build_reply(&review, &[]).unwrap(), "この変更を承認します");
+        assert_eq!(
+            build_reply(&review, &[], Some(PageVerdict::Approve), "").unwrap(),
+            "この変更を承認します"
+        );
         let reply = build_reply(
             &review,
             &[
                 answer("RD-1", Some("defer"), ""),
                 answer("RM-1", Some("fix"), ""),
             ],
+            Some(PageVerdict::Revise),
+            "",
         )
         .unwrap();
         assert_eq!(
             reply,
             "修正を依頼します\n\nRM-1 指摘\n修正して再レビューする\n\nRD-1 判断\n今回は対応しない"
         );
-        let accepted = build_reply(&review, &[answer("RM-1", Some("accept"), "")]).unwrap();
+        let accepted = build_reply(
+            &review,
+            &[answer("RM-1", Some("accept"), "")],
+            Some(PageVerdict::Approve),
+            "",
+        )
+        .unwrap();
         assert_eq!(
             accepted,
             "この変更を承認します\n\nRM-1 指摘\n現状で完了する"
         );
-        let error = build_reply(&review, &[answer("UC-1", None, "x")]).unwrap_err();
+        let error = build_reply(
+            &review,
+            &[answer("UC-1", None, "x")],
+            Some(PageVerdict::Approve),
+            "",
+        )
+        .unwrap_err();
         assert!(error.contains("UC-1"), "{error}");
     }
 
@@ -582,27 +678,35 @@ mod tests {
     fn a_note_alone_is_an_answer_on_a_card_with_fixed_choices_and_has_no_answer_line() {
         let mut review = page(PageKind::CodeReview, Subject::Code);
         review.residual_must_fix = vec![card(CardKind::ReviewMustFix, "RM-1", "指摘")];
-        let reply = build_reply(&review, &[answer("RM-1", None, "あとで見る")]).unwrap();
+        let reply = build_reply(
+            &review,
+            &[answer("RM-1", None, "あとで見る")],
+            Some(PageVerdict::Approve),
+            "",
+        )
+        .unwrap();
         assert_eq!(reply, "この変更を承認します\n\nRM-1 指摘\n補足: あとで見る");
     }
 
     #[test]
     fn a_key_the_card_does_not_offer_a_number_twice_and_a_card_not_on_the_page_are_refused() {
         let page = questions();
-        let error = build_reply(&page, &[answer("論点1", Some("Z"), "")]).unwrap_err();
+        let error = build_reply(&page, &[answer("論点1", Some("Z"), "")], None, "").unwrap_err();
         assert!(error.contains("論点1") && error.contains('Z'), "{error}");
         // A fixed choice of another kind is no choice of a question card.
-        assert!(build_reply(&page, &[answer("論点1", Some("fix"), "")]).is_err());
+        assert!(build_reply(&page, &[answer("論点1", Some("fix"), "")], None, "").is_err());
         let error = build_reply(
             &page,
             &[
                 answer("論点1", Some("A"), ""),
                 answer("論点1", Some("B"), ""),
             ],
+            None,
+            "",
         )
         .unwrap_err();
         assert!(error.contains("二つ"), "{error}");
-        let error = build_reply(&page, &[answer("論点9", Some("A"), "")]).unwrap_err();
+        let error = build_reply(&page, &[answer("論点9", Some("A"), "")], None, "").unwrap_err();
         assert!(error.contains("論点9"), "{error}");
     }
 
@@ -610,7 +714,13 @@ mod tests {
     fn a_page_kind_with_no_reply_format_is_refused() {
         let mut odd = approval();
         odd.subject = Subject::Code;
-        assert!(build_reply(&odd, &[answer("MF-1", Some("skip"), "")]).is_err());
+        assert!(build_reply(
+            &odd,
+            &[answer("MF-1", Some("skip"), "")],
+            Some(PageVerdict::Approve),
+            ""
+        )
+        .is_err());
     }
 
     #[test]
@@ -624,6 +734,8 @@ mod tests {
                 answer("論点1", Some("A"), ""),
                 answer("論点2", Some("other"), "a\x1b[201~b\x1b[200~c\tz\u{9b}"),
             ],
+            None,
+            "",
         )
         .unwrap();
         assert!(

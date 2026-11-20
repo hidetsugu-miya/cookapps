@@ -1193,6 +1193,8 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .fp-note { display: flex; flex-direction: column; gap: 4px; padding: 4px 8px; color: var(--muted); font-size: calc(13px * var(--fs)); }
 .fp-note .fp-text { margin: 0; max-width: 100%; color: var(--ink-soft); }
+.fp-verdict .fp-muted { margin: 0 8px; font-size: calc(13px * var(--fs)); }
+.fp-verdict .fp-revision { margin-left: 8px; max-width: calc(100% - 16px); }
 .fp-cancel { align-self: flex-start; margin-left: 8px; height: 26px; font-size: calc(13px * var(--fs)); }
 .fp-cancel:disabled { opacity: .4; cursor: default; }
 .fp-send { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; padding-top: 4px; border-top: 1px solid var(--line); }

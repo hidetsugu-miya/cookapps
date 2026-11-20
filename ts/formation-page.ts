@@ -1,9 +1,10 @@
 // The decision page of a child (A-41): what `formation_page_read` gives, drawn in the middle pane under the tab 「判断: {title}」 (formation-flow.ts). The page is the child's text, so everything goes in as `textContent` (formation-page-blocks.ts); nothing is read as HTML.
-// A card that asks has its choices as radios and a box for free text; 「リーダーに送る」 at the end of the page hands what was chosen to `send` (the reply is made and sent in Rust, #923). Nothing here decides what the answers mean.
+// A card that asks has its choices as radios and a box for free text; an approval and a code review end with 「あなたの判定」, the owner's choice between approving and asking for a revision, and 「リーダーに送る」 hands what was chosen to `send` (the reply is made and sent in Rust, #923). The screen keeps the verdict and a `fix` from contradicting each other and shows what an unanswered card will be sent as; what the answers mean is Rust's.
 import type { Card } from "./bindings/Card";
 import type { CardKind } from "./bindings/CardKind";
 import type { DecisionPage } from "./bindings/DecisionPage";
 import type { PageAnswer } from "./bindings/PageAnswer";
+import type { PageVerdict } from "./bindings/PageVerdict";
 import type { ScopeGroup } from "./bindings/ScopeGroup";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
@@ -51,8 +52,10 @@ const NOTE_LABEL: Partial<Record<CardKind, string>> = { "structural-proposal": "
 // The number of the cards drawn, so that the radios of a card are a group of their own.
 let cards = 0;
 
-// `send` takes the answers of the page and fails with the message when the reply could not be sent.
-export function drawPage(page: DecisionPage, child: string, atMs: number, send: (answers: PageAnswer[]) => Promise<void>): HTMLElement {
+// The verdict of a page and the writing of a revision, as chosen; `send` fails with the message when the reply could not be sent.
+type Send = (answers: PageAnswer[], verdict: PageVerdict | null, revision: string) => Promise<void>;
+
+export function drawPage(page: DecisionPage, child: string, atMs: number, send: Send): HTMLElement {
   const root = tag("article", "fp");
   root.dataset.child = child;
   root.dataset.at = String(atMs);
@@ -66,7 +69,9 @@ export function drawPage(page: DecisionPage, child: string, atMs: number, send: 
   root.append(...groups(page));
   const reference = referenceOf(page);
   if (reference !== null) root.append(reference);
-  root.append(sender(root, send));
+  const verdict = page.pageKind === "open-questions" ? null : verdictBox(root, page);
+  if (verdict !== null) root.append(verdict.node);
+  root.append(sender(root, send, verdict));
   return root;
 }
 
@@ -81,25 +86,114 @@ function answersOf(root: HTMLElement): PageAnswer[] {
   });
 }
 
-// 「リーダーに送る」 and the reason a send failed. The button waits while the send is on its way, so that a second press sends nothing; after a send that went through the page is closed by its owner, and after one that failed the answers stay and the button can be pressed again.
-function sender(root: HTMLElement, send: (answers: PageAnswer[]) => Promise<void>): HTMLElement {
+// 「あなたの判定」: the choice between approving the page's subject and asking for a revision of it, and the box for the revision that opens with the second. `read` gives the choice (null while none) and the writing, which is empty unless a revision is asked for.
+interface Verdict {
+  node: HTMLElement;
+  read: () => { verdict: PageVerdict | null; revision: string };
+}
+
+const VERDICT_LABELS: Record<DecisionPage["subject"], [string, string]> = {
+  requirement: ["要件定義を承認する", "要件定義の修正を依頼する"],
+  design: ["基本設計を承認する", "基本設計の修正を依頼する"],
+  code: ["この変更を承認する", "修正を依頼する"],
+};
+// The kinds whose `fix` is a request for a revision, and the kinds that are sent as a choice of their own when they have no answer: what the child reads for a card with no block (decision-page.md, "Reading the reply").
+const FIXING = new Set<CardKind>(["must-fix", "review-must-fix"]);
+const UNANSWERED_AS: Partial<Record<CardKind, (card: Card) => string | null>> = {
+  nr: (card) => {
+    const option = card.options.find((o) => o.key === card.recommendation);
+    return option ? `${option.key}. ${option.label}` : null;
+  },
+  "structural-proposal": (card) => FIXED["structural-proposal"].find((c) => c.key === card.recommendation)?.label ?? null,
+  "review-must-fix": () => "現状で完了する",
+};
+
+function verdictBox(root: HTMLElement, page: DecisionPage): Verdict {
+  const group = `fp-verdict-${++cards}`;
+  const cardOf = new Map<string, Card>(
+    [...page.needsUserDecision, ...page.residualMustFix, ...page.structuralProposals, ...(page.adr === null ? [] : [page.adr]), ...page.unmetCriteria].map((c) => [c.number, c]),
+  );
+  const node = section("あなたの判定", "fp-verdict");
+  const box = tag("fieldset", "fp-answer");
+  box.append(tag("legend", "fp-sr", "あなたの判定"));
+  const radios = new Map<PageVerdict, HTMLInputElement>();
+  const [approveLabel, reviseLabel] = VERDICT_LABELS[page.subject];
+  for (const [key, text] of [["approve", approveLabel], ["revise", reviseLabel]] as const) {
+    const row = tag("div", "fp-choice");
+    const label = tag("label", "fp-choice-label");
+    const radio = tag("input");
+    radio.type = "radio";
+    radio.name = group;
+    radio.value = key;
+    radios.set(key, radio);
+    label.append(radio, tag("span", "", text));
+    row.append(label);
+    box.append(row);
+  }
+  const reason = tag("p", "fp-muted fp-verdict-reason");
+  const revision = freeText("修正してほしいこと");
+  revision.classList.add("fp-revision");
+  const unanswered = tag("p", "fp-muted fp-unanswered");
+  box.append(reason, revision, unanswered);
+  node.append(box);
+  const approve = radios.get("approve") as HTMLInputElement;
+  const revise = radios.get("revise") as HTMLInputElement;
+  const sync = () => {
+    const cardsOf = [...root.querySelectorAll<HTMLElement>(".fp-card")];
+    const fixing = cardsOf.filter((c) => FIXING.has(c.dataset.kind as CardKind) && c.querySelector<HTMLInputElement>("input:checked")?.value === "fix").map((c) => c.dataset.card ?? "");
+    // A revision choice and an approval do not go together: the approval cannot be chosen, and one chosen before turns into the request.
+    approve.disabled = fixing.length > 0;
+    if (fixing.length > 0 && approve.checked) revise.checked = true;
+    reason.hidden = fixing.length === 0;
+    reason.textContent = fixing.length === 0 ? "" : `修正を選んだカード（${fixing.join("、")}）があるので、承認は選べません`;
+    revision.hidden = !revise.checked;
+    const left = cardsOf.flatMap((c) => {
+      const card = cardOf.get(c.dataset.card ?? "");
+      const as = card ? UNANSWERED_AS[card.kind]?.(card) : undefined;
+      return card && as && c.querySelector("input:checked") === null ? [`${card.number} ${as}`] : [];
+    });
+    unanswered.hidden = left.length === 0;
+    unanswered.textContent = left.length === 0 ? "" : `答えていないカードは、この案で送ります: ${left.join("、")}`;
+  };
+  root.addEventListener("change", sync);
+  sync();
+  return {
+    node,
+    read: () => {
+      const verdict = approve.checked ? "approve" : revise.checked ? "revise" : null;
+      return { verdict, revision: verdict === "revise" ? revision.value : "" };
+    },
+  };
+}
+
+// 「リーダーに送る」 and the reason a send failed. The button waits while the send is on its way, so that a second press sends nothing, and while a page that asks for a verdict has none chosen; after a send that went through the page is closed by its owner, and after one that failed the answers stay and the button can be pressed again.
+function sender(root: HTMLElement, send: Send, verdict: Verdict | null): HTMLElement {
   const row = tag("footer", "fp-send");
   const error = tag("p", "fp-error pending fail");
   error.setAttribute("role", "alert");
   error.hidden = true;
   const button = tag("button", "text-btn primary fp-send-btn", "リーダーに送る");
   button.type = "button";
+  let busy = false;
+  const sync = () => {
+    button.disabled = busy || (verdict !== null && verdict.read().verdict === null);
+  };
+  root.addEventListener("change", sync);
+  sync();
   button.onclick = async () => {
     if (button.disabled) return;
-    button.disabled = true;
+    busy = true;
+    sync();
     button.setAttribute("aria-busy", "true");
     error.hidden = true;
     try {
-      await send(answersOf(root));
+      const chosen = verdict?.read() ?? { verdict: null, revision: "" };
+      await send(answersOf(root), chosen.verdict, chosen.revision);
     } catch (e) {
       error.textContent = String(e);
       error.hidden = false;
-      button.disabled = false;
+      busy = false;
+      sync();
       button.removeAttribute("aria-busy");
     }
   };
@@ -275,7 +369,8 @@ function answer(card: Card): HTMLElement {
   box.addEventListener("change", sync);
   cancel.onclick = () => {
     for (const radio of box.querySelectorAll<HTMLInputElement>("input:checked")) radio.checked = false;
-    sync();
+    // The change reaches the page, whose verdict follows the choices of the cards.
+    box.dispatchEvent(new Event("change", { bubbles: true }));
   };
   return box;
 }

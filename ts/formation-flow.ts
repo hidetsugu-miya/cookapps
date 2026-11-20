@@ -7,6 +7,7 @@ import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
 import type { FormationState } from "./bindings/FormationState";
 import type { PageAnswer } from "./bindings/PageAnswer";
+import type { PageVerdict } from "./bindings/PageVerdict";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
@@ -225,7 +226,7 @@ async function loadPage(formation: string, name: string, atMs: number) {
   try {
     const page = await invoke("formation_page_read", { name: formation, child: name });
     if (pages.get(name) !== state) return;
-    state.el = drawPage(page, name, atMs, (answers) => answerPage(formation, name, atMs, answers));
+    state.el = drawPage(page, name, atMs, (answers, verdict, revision) => answerPage(formation, name, atMs, answers, verdict, revision));
   } catch (e) {
     if (pages.get(name) !== state) return;
     state.error = String(e);
@@ -238,8 +239,8 @@ async function loadPage(formation: string, name: string, atMs: number) {
 }
 
 // Sends the answers of the page of `name` (drawn for the mark's time `atMs`) to the leader (#923). A failure goes back to the page, which stays. After a send that went through the mark is gone from the child at once (the tab closes, the card is as it was), and a read that began before the send, which still has the mark, is dropped.
-async function answerPage(formation: string, name: string, atMs: number, answers: PageAnswer[]) {
-  await invoke("formation_page_answer", { name: formation, child: name, atMs, answers });
+async function answerPage(formation: string, name: string, atMs: number, answers: PageAnswer[], verdict: PageVerdict | null, revision: string) {
+  await invoke("formation_page_answer", { name: formation, child: name, atMs, answers, verdict, revision });
   // Another formation is shown now: its children are read when it is shown again.
   if (currentFormation() !== formation) return;
   children = children.map((c) => (c.name === name ? { ...c, pendingPage: null } : c));

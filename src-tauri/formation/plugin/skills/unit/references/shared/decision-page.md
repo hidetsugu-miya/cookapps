@@ -130,6 +130,9 @@ The reply is text that the page assembled from the owner's answers, in page orde
 ```text
 {verdict line}
 
+修正してほしいこと
+{the owner's own request for a revision}
+
 {number} {title}
 {answer line}
 補足: {free text}
@@ -143,7 +146,8 @@ The reply is text that the page assembled from the owner's answers, in page orde
   | `approval`, `design` | 基本設計を承認します | 基本設計の修正を依頼します |
   | `code-review` | この変更を承認します | 修正を依頼します |
 
-  The page derives it from the answers: the Revise line while a revision choice is chosen (`fix` on `must-fix` and on `review-must-fix`), the Approve line otherwise.
+  The owner chooses it in the box 「あなたの判定」 of the page, and the page cannot be sent without it. The page does not derive it from the answers, but it does not let the Approve line go with a revision choice (`fix` on `must-fix` and on `review-must-fix`), so a reply with a `fix` has the Revise line.
+- The block `修正してほしいこと` comes only right after the Revise line, and only when the owner wrote something in the box that opens with the Revise choice. It has no card number. Its text is the owner's own request for a revision, which is read in the same way as a request to fix that the owner wrote outside the layout (Verdict, below).
 - A card block has the card's `number` and `title` as they are. A number with a round mark (`MF-1-r2`, step 6) names the item `MF-1` of that round: read the answer for that item, not for the earlier card of the same number. Its answer line is `{key}. {label}` for a lettered option, or the reply text of a fixed choice: `調べてから決めて`, `その他`, `指摘のとおり修正する`, `今回は対応しない`, `承認`, `却下`, `保留`, `残す`, `不要`, `修正して再レビューする`, `現状で完了する`. A card with free text only has no answer line. The `補足` line is the owner's free text, when there is any.
 - A card with no block is unanswered.
 
@@ -156,7 +160,7 @@ Read each block by its card:
 - **adr**: `残す` keeps the record. `不要` means it is not needed. Unanswered keeps it.
 - **review-must-fix**: `修正して再レビューする` chooses a fix. `現状で完了する` agrees to complete as it is. Unanswered means `現状で完了する`, under an approve verdict.
 - **review-decision**: `{key}. {label}` names the option under that key. `今回は対応しない` defers it. `その他` takes the disposition its `補足` states; when the `補足` states none, ask the owner. Unanswered is undecided.
-- **Verdict**: the approve line approves the deliverable or the change. The revise line, or a request to fix it that the owner wrote outside the layout, is a revision request: its content is the revision choices and that text. A hold, a redesign or a send-back is read from that text. An approve line with no block and no other text is a blanket approval.
+- **Verdict**: the approve line approves the deliverable or the change. The revise line, or a request to fix it that the owner wrote outside the layout, is a revision request: its content is the revision choices and that text (the block `修正してほしいこと` is that text, and it may be the whole content when no card has a revision choice). A hold, a redesign or a send-back is read from that text. An approve line with no block and no other text is a blanket approval.
 - A `補足` with no answer line, on a kind not named above, is free text you read with the unit's own criterion.
 - A reply that does not follow the layout is read as free text in the same way.
 
