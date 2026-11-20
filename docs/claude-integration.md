@@ -135,6 +135,17 @@ worktree を読み、言語サーバーの設定を `tsunagiai-mcp` の `lsp_set
 - 同じ頼みをもう一度押しても、何も変わりません。別の頼み（別の言語、別の worktree）は、前の Claude Code を終えて、新しく始めます。
 - ペインの ✕ を押すと、Claude Code を終えてペインを閉じます。欄を隠したときや、別の worktree を出したときは、隠すだけで、Claude Code は動き続けます。Orca の一覧から worktree が消えたときと、アプリを終了したときに、終えます。
 
+## 開発の画面の「Claude を起動」で Claude Code を動かす
+
+開発の画面の作業ペインの＋の「Claude を起動」と、「Orca に渡す」は、Orca のターミナルで `claude` を起動します（画面は [Orca](orca.md#セッション)）。
+アプリは、`--plugin-dir` で、HTML のプレビューを開くプラグインを付けます。
+
+- プラグインのスキルは、HTML のファイルを書いたあとや頼まれたときに、そのファイルを開発の画面のプレビューのタブで開くことを教えます（[Orca](orca.md#claude-code-が開くプレビュー)）。
+- MCP サーバーは `tsunagiai-mcp --preview` で、ツールは `preview_open` だけです。メール、Slack、Todo の内容を最初の指示にして始めることがあるので、メールを読む、消す、投稿するといったツールは渡しません。
+- このマシンでは、アプリが設定フォルダの `preview-plugin/` にプラグインを書きます。Orca に保存した接続先では、つなぎAIがその PC に置いた `tsunagiai-mcp` が `--preview-plugin` で書きます。置いていない PC では、プラグインを付けずに起動します。
+- 「Orca に渡す」の最初の指示は、起動のコマンドに載せず、worktree の `.orca/drops/` に置いたファイルで渡します。起動のコマンドがファイルを読み、すぐに消します。
+- Orca の「Chat | CLI」の設定には従わず、いつもターミナルで起動します。
+
 ## 開発の画面のリーダーで Claude Code を動かす
 
 開発の画面のフォーメーションの中のペインは、リーダーの Claude Code です（画面は [Orca](orca.md#オーケストレーション)）。
@@ -198,5 +209,5 @@ Claude Code を使う機能（メールの AI 要約、Slack のメッセージ�
 
 ## Claude との連携
 
-Claude Code から受信トレイと予定と、データベースの画面の接続と、Todoist のタスクと、スキルと、開いている画面の欄（メール、Slack、Todo の画面）を扱う MCP サーバー `tsunagiai-mcp` があります。
+Claude Code から受信トレイと予定と、データベースの画面の接続と、Todoist のタスクと、スキルと、開いている画面の欄（メール、Slack、Todo の画面）と、開発の画面の HTML のプレビューを扱う MCP サーバー `tsunagiai-mcp` があります。
 設定の手順は [Claude との連携（MCP）](mcp.md) にあります。
