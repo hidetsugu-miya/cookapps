@@ -373,14 +373,15 @@ export function nameField(value: string): HTMLTextAreaElement {
   name.rows = 1;
   name.value = oneLine(value);
   name.setAttribute("aria-label", "タスクの名前");
-  name.oninput = () => {
+  // A listener and not `oninput`: the draft sets its own `oninput` on the field.
+  name.addEventListener("input", () => {
     if (/[\r\n]/.test(name.value)) {
       const caret = oneLine(name.value.slice(0, name.selectionStart)).length;
       name.value = oneLine(name.value);
       name.setSelectionRange(caret, caret);
     }
     fitName(name);
-  };
+  });
   new ResizeObserver(() => fitName(name)).observe(name);
   return name;
 }
@@ -559,13 +560,23 @@ export function renderDetail() {
   box.onchange = () => setTaskDone(t.id, true, box);
   const name = nameField(t.content);
   name.dataset.field = "name";
-  name.onchange = () => {
-    if (name.value.trim()) saveTask(t.id, { content: name.value });
-    else name.value = t.content;
+  // The name is saved by the change event (a click elsewhere) and by Enter itself: a blur does not fire the change event while the window is not the one with the focus. What was saved is not saved again when the blur that follows Enter fires the change event.
+  let saved = t.content;
+  const commitName = () => {
+    if (name.value === saved) return;
+    if (name.value.trim()) {
+      saved = name.value;
+      saveTask(t.id, { content: name.value });
+    } else {
+      name.value = t.content;
+      fitName(name);
+    }
   };
+  name.onchange = commitName;
   name.onkeydown = (e) => {
     if (e.key !== "Enter" || composing(e)) return;
     e.preventDefault();
+    commitName();
     name.blur();
   };
   const head = tag("div", "head");
