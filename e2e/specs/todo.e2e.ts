@@ -763,6 +763,19 @@ describe("todo", () => {
     await waitForCalls(addFromSlack);
   });
 
+  it("wraps a long name in the draft at the width of its field, and Enter adds it with no newline", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $("#todo-draft .draft-name").setValue("Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245");
+    const fits = await browser.execute(() => {
+      const a = document.querySelector<HTMLTextAreaElement>("#todo-draft .draft-name")!;
+      return { lines: Math.round(a.scrollHeight / parseFloat(getComputedStyle(a).lineHeight)), full: a.scrollHeight <= a.clientHeight };
+    });
+    expect(fits.lines).toBeGreaterThan(1);
+    expect(fits.full).toBe(true);
+    await browser.keys("Enter");
+    expect(await waitForCalls(addFromSlack)).toMatchObject([{ content: "Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245" }]);
+  });
+
   // Focus is not checked: WebDriver's click leaves the focus on the clicked button in the hidden E2E window.
   it("adds nothing and keeps the page when the name is empty", async () => {
     const { addFromSlack } = await openSummaryCard();
@@ -1434,6 +1447,33 @@ describe("todo detail", () => {
     expect(await waitForCalls(move)).toEqual([{ id: "k1", projectId: "p2" }]);
     await expect($("#todo-detail .field:nth-child(1) .field-value")).toHaveText("Design");
     await expect($("#todo-title")).toHaveText("Design");
+  });
+
+  it("wraps a long name of the task at the width of its field and grows with it, and Enter saves it with no newline", async () => {
+    const data = todoData();
+    data.tasks[0].content = "Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245";
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    const update = await mock("todoist_update", true);
+    await $(ROWS).click();
+    const name = "#todo-detail .name";
+    const fits = () =>
+      browser.execute((s) => {
+        const a = document.querySelector<HTMLTextAreaElement>(s)!;
+        return { lines: Math.round(a.scrollHeight / parseFloat(getComputedStyle(a).lineHeight)), full: a.scrollHeight <= a.clientHeight };
+      }, name);
+    await expect($(name)).toHaveValue("Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245");
+    await browser.waitUntil(async () => (await fits()).full, { timeoutMsg: "the name field did not grow to its text" });
+    expect((await fits()).lines).toBeGreaterThan(1);
+    await $(name).click();
+    await browser.keys(["End", " ", "x", "Enter"]);
+    await expect($(name)).toHaveValue("Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245 x");
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", content: "Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245 x" }]);
+    // An empty name goes back to the task's own.
+    await $(name).setValue("");
+    await browser.keys("Enter");
+    await expect($(name)).toHaveValue("Reply to the vendor about the automatic messages after the visit, and let them be sent once approved by the clinic, as agreed in the meeting on Monday # 245");
+    expect(await callsOf(update)).toHaveLength(1);
   });
 
   it("changes the due date from the side pane", async () => {

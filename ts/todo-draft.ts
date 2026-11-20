@@ -14,7 +14,7 @@ import { getSlackWorkspaces } from "./slack-workspaces.js";
 import { initSplit } from "./split.js";
 import { addSlackTodo, drawDueChip, type ReviewJob } from "./todo-add.js";
 import { inboxOf, projectName, projectOf, todoState } from "./todo-data.js";
-import { field, openProjectPicker } from "./todo-detail.js";
+import { field, fitName, nameField, oneLine, openProjectPicker } from "./todo-detail.js";
 import { renderTodo } from "./todo.js";
 
 // What the owner of the draft does with it: drop it (破棄, the back button), and learn that the task was added (`added` is its name; null when Todoist needs a token).
@@ -34,7 +34,7 @@ export const draftOpen = () => open !== null;
 export const discardDraft = () => open?.discard();
 
 // The left part of the open draft that Claude Code reads and changes; `saving` is true while the add is on its way, when a write is refused.
-let live: { name: HTMLInputElement; description: HTMLTextAreaElement; saving: boolean } | null = null;
+let live: { name: HTMLTextAreaElement; description: HTMLTextAreaElement; saving: boolean } | null = null;
 
 // The id of the pane (Rust names the process by it) and its owner in ts/orca-terminal.ts.
 const ID = "todo-draft";
@@ -88,7 +88,10 @@ function writeFields(fields: Fields) {
   if (!live) return refusal("todo-draft の画面が開いていません");
   if (live.saving) return refusal("追加の最中のため、書けません");
   const before = textsNow();
-  if (fields.name !== undefined) live.name.value = fields.name;
+  if (fields.name !== undefined) {
+    live.name.value = oneLine(fields.name);
+    fitName(live.name);
+  }
   if (fields.description !== undefined) live.description.value = fields.description;
   const after = textsNow();
   if (after.name !== before.name || after.description !== before.description) undos.push({ before, after });
@@ -101,6 +104,7 @@ function undoWrite() {
   if (!live || live.saving || !last) return;
   undos.pop();
   live.name.value = last.before.name;
+  fitName(live.name);
   live.description.value = last.before.description;
   refreshUndo();
 }
@@ -132,9 +136,8 @@ function close() {
 
 export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   close();
-  const name = tag("input", "name draft-name");
-  name.value = summary.content;
-  name.setAttribute("aria-label", "タスクの名前");
+  const name = nameField(summary.content);
+  name.classList.add("draft-name");
   const description = tag("textarea", "draft-desc");
   description.value = summary.description;
   description.setAttribute("aria-label", "説明");

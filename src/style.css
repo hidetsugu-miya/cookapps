@@ -670,7 +670,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .parent-desc-text { min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: var(--ink-soft); font-size: calc(12px * var(--fs)); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
 #todo-detail .head .check { margin-top: 4px; }
-#todo-detail .name, #todo-draft .name { flex: 1; font-size: calc(18px * var(--fs)); font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; }
+#todo-detail .name, #todo-draft .name { flex: 1; min-width: 0; box-sizing: border-box; margin: 0; font-size: calc(18px * var(--fs)); font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; line-height: 1.3; resize: none; overflow: hidden; overflow-wrap: anywhere; }
 #todo-detail .name:hover, #todo-draft .name:hover { background: var(--hover); }
 #todo-detail .name:focus, #todo-draft .name:focus { outline: 2px solid var(--accent); background: var(--surface); }
 .chip-input { box-sizing: border-box; height: 28px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 14px; font: inherit; font-size: calc(12px * var(--fs)); }
