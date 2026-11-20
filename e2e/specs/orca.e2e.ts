@@ -3,7 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -4312,5 +4312,89 @@ describe("orca: add a project (A-38)", () => {
     await browser.keys("Escape");
     await expect(pop()).not.toExist();
     expect(await callsOf(here)).toEqual([]);
+  });
+});
+
+describe("orca: Claude Code opens an HTML preview (A-45)", () => {
+  const request = { path: "/work/example-app", relative: "docs/page.html" };
+  const PREVIEW_URL = "http://127.0.0.1:12345/tok/docs/page.html";
+  const page: OrcaFileText = { content: "<h1>見出し</h1>\n", crlf: false, signature: "sig-1", language: "html", highlight: null };
+  const checkArgs = { ...request, environment: null };
+  // The screen open with the answers of the file that is opened and of the check that Rust makes again.
+  const ready = () => openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [], orca_file_read: page, orca_file_preview_url: PREVIEW_URL, orca_preview_check: null });
+  const read = () => callsOf("orca_file_read");
+
+  it("opens the file as a preview tab of the project that has the worktree and selects it, after the check of Rust again", async () => {
+    await ready();
+    await pickProject("example-app");
+    const answer = await askScreen("write", "preview-open", request);
+    expect(answer).toEqual({ ok: true });
+    expect(await callsOf("orca_preview_check")).toEqual([checkArgs]);
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await tabTitles()).toContain("page.html");
+    await expect(selectedTab()).toHaveText(expect.stringContaining("page.html"));
+    expect(await callsOf("orca_file_preview_url")).toEqual([checkArgs]);
+    await expect($(".orca-edit-preview")).toBeDisplayed();
+  });
+
+  it("takes the environment of a request as it is for the check, and does not open a worktree that the list lacks", async () => {
+    await ready();
+    await pickProject("example-app");
+    const answer = await askScreen("write", "preview-open", { ...request, environment: "Studio" });
+    expect(answer).toEqual({ ok: false, error: "そのフォルダは、一覧のプロジェクトにありません" });
+    expect(await callsOf("orca_preview_check")).toEqual([{ ...checkArgs, environment: "Studio" }]);
+    expect(await tabTitles()).not.toContain("page.html");
+    expect(await read()).toEqual([]);
+  });
+
+  it("opens nothing for a worktree that is not in the list, after it read the list once more", async () => {
+    await ready();
+    await pickProject("example-app");
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    const answer = await askScreen("write", "preview-open", { path: "/work/elsewhere", relative: "page.html" });
+    expect(answer).toEqual({ ok: false, error: "そのフォルダは、一覧のプロジェクトにありません" });
+    expect(await callsOf(overview)).toHaveLength(1);
+    expect(await tabTitles()).not.toContain("page.html");
+    expect(await read()).toEqual([]);
+  });
+
+  it("opens nothing when the check of Rust refuses, and the answer holds its reason", async () => {
+    await ready();
+    await pickProject("example-app");
+    await mock("orca_preview_check", rejects("HTML のファイルだけをプレビューで開けます"));
+    const answer = await askScreen("write", "preview-open", { path: "/work/example-app", relative: "notes.md" });
+    expect(answer).toEqual({ ok: false, error: "HTML のファイルだけをプレビューで開けます" });
+    expect(await tabTitles()).not.toContain("notes.md");
+    expect(await read()).toEqual([]);
+    expect(await callsOf("orca_file_preview_url")).toEqual([]);
+  });
+
+  it("only puts the tab in a project that is not selected, and does not select the project or the tab", async () => {
+    await ready();
+    await pickProject("example-api");
+    const answer = await askScreen("write", "preview-open", request);
+    expect(answer).toEqual({ ok: true });
+    await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
+    expect(await tabTitles()).not.toContain("page.html");
+    await pickProject("example-app");
+    expect(await tabTitles()).toContain("page.html");
+  });
+
+  it("opens the tab while the screen is not shown, and has it ready when the screen is shown again", async () => {
+    await ready();
+    await pickProject("example-app");
+    await $("#nav-mail").click();
+    await expect($("#orca")).not.toBeDisplayed();
+    expect(await askScreen("write", "preview-open", request)).toEqual({ ok: true });
+    await expect($("#orca")).not.toBeDisplayed();
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await tabTitles()).toContain("page.html");
+  });
+
+  it("refuses a write of a field that the screen does not have", async () => {
+    await ready();
+    expect(await askScreen("write", "preview-open", { path: "/work/example-app", relative: "page.html", other: "x" })).toMatchObject({ ok: false });
   });
 });

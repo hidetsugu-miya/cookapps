@@ -200,6 +200,15 @@ pub fn check(request: &Request, rules: &Rules) -> Result<(), String> {
         Request::Changed { what } => check_listed("変更", what, rules.changes),
         Request::Write { target, fields } => {
             check_listed("画面", target, rules.targets)?;
+            // Only the app names the environment of a request to open a preview: it knows it from the connection a push came through (A-45).
+            if target == crate::orca_preview::OPEN_TARGET
+                && fields.contains_key(crate::orca_preview::OPEN_ENVIRONMENT)
+            {
+                return Err(format!(
+                    "欄 {} は書き込めません",
+                    crate::orca_preview::OPEN_ENVIRONMENT
+                ));
+            }
             if fields.is_empty() {
                 return Err("書き込む欄がありません".to_owned());
             }
@@ -334,6 +343,22 @@ pub async fn handle(
             .await
         }
     }
+}
+
+/// Writes `fields` into the target `target` of a screen for the app itself, as a write of a client of the socket would, without the check of a client's request (the app made the fields: A-45's push gives the environment of its connection). Ok when the screen took it, else the screen's reason (Japanese).
+pub async fn write_screen(app: &AppHandle, target: &str, fields: Fields) -> Result<(), String> {
+    let pending = app.state::<Pending>();
+    ask(
+        &pending,
+        &|event| emit_event(app, event),
+        RULES.wait,
+        ScreenOp::Write,
+        target.to_owned(),
+        fields,
+    )
+    .await
+    .into_result()
+    .map(|_| ())
 }
 
 /// A screen's answer to an ask (a late one, after the wait, is dropped).
@@ -658,6 +683,19 @@ mod tests {
             &RULES
         )
         .is_ok());
+        // The environment of a request to open a preview is the app's to name, not a client's (A-45, #985).
+        assert!(check(
+            &write(
+                "preview-open",
+                &[
+                    ("path", "/w"),
+                    ("relative", "a.html"),
+                    ("environment", "pc")
+                ]
+            ),
+            &RULES
+        )
+        .is_err());
         // The candidates of free time (C-6, #1063): a read and a write, no post.
         assert!(check(&read("calendar-slots"), &RULES).is_ok());
         assert!(check(&write("calendar-slots", &[("slot1", "a/b")]), &RULES).is_ok());

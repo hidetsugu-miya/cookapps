@@ -425,6 +425,7 @@ pub fn run() {
             orca_files::orca_file_download,
             orca_preview::orca_file_open_in_browser,
             orca_preview::orca_file_preview_url,
+            orca_preview::orca_preview_check,
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,
             orca_files::orca_remote_branches,

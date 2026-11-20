@@ -42,6 +42,7 @@ import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, pa
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
+import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
 import { showFailure } from "./error-card.js";
 import { copyText, setNavCount, show } from "./view.js";
@@ -875,6 +876,31 @@ function openPlace(place: DefinitionOpen) {
   draw();
   goTo(id, line, character);
 }
+
+// A request to open an HTML preview (A-45, #985), from a Claude Code through the app (a push of a saved environment's PC, or the screen bridge of this PC): the file is a tab of the project that has the worktree, in the preview, and the tab is selected when that project is the one selected. The request is data from outside, so Rust checks it again (`orca_preview_check`: the file A-31 opens, a worktree of the list read just now), and the list held here must have the worktree (it is read again once when it lacks it, for a worktree that was made a moment ago). The screen is not switched and no project is selected for it: another project, or a formation selected, only gets the tab; a screen that is not shown has it ready when it is shown again.
+async function openPreview(fields: Fields) {
+  const [path, relative, environment] = [fields.path ?? "", fields.relative ?? "", fields.environment || null];
+  if (view === null) throw new Error("開発の画面の一覧をまだ読めていません");
+  await invoke("orca_preview_check", { path, relative, environment });
+  const find = () => mix.worktrees.find((w) => w.path === path && placeOf(w) === environment);
+  let worktree = find();
+  if (worktree === undefined) {
+    await refreshOrca(true);
+    worktree = find();
+  }
+  if (worktree === undefined) throw new Error("そのフォルダは、一覧のプロジェクトにありません");
+  const id = openEditorFile(environment, worktree.projectKey, path, relative);
+  if (currentFormation() === null && worktree.projectKey === projectKey) chooseTab(id);
+  draw();
+}
+
+registerDraftTarget("preview-open", {
+  names: ["path", "relative", "environment"],
+  isOpen: () => true,
+  // The target only takes a request: a read holds nothing.
+  read: () => ({ path: "", relative: "", environment: "" }),
+  write: openPreview,
+});
 
 // A table of the database part of the file pane was pressed (A-43): it opens as a tab in the focused pane and is selected, with the first page of its records; one that is open already is selected and read again.
 function openDatabaseTable(profile: DatabaseProfileView, database: string, table: string) {

@@ -582,6 +582,40 @@ pub fn open_fields(path: &str, relative: &str) -> Result<Fields, String> {
     ]))
 }
 
+/// The field that carries the environment to the screen that takes the request. Only the app puts it there (a push's connection tells the environment); a client of the screen bridge may not write it, so that a request of this PC's own is this machine's.
+pub const OPEN_ENVIRONMENT: &str = "environment";
+const UNREADABLE_REQUEST: &str = "依頼を読めませんでした";
+
+/// What the app asks the screen when a push comes through the connection of the saved environment `environment` (#985): `None` when the push is not a request to open a preview, else the fields of the target `preview-open` (the same two values, checked again, and the environment), or the reason it is refused. The reason quotes nothing of the request: what the PC sent is data.
+pub fn open_fields_of_push(
+    request: &PushRequest,
+    environment: &str,
+) -> Option<Result<Fields, String>> {
+    if request.method != OPEN_METHOD {
+        return None;
+    }
+    Some(
+        serde_json::from_value::<OpenParams>(request.params.clone())
+            .map_err(|_| UNREADABLE_REQUEST.to_owned())
+            .and_then(|p| open_fields(&p.path, &p.relative))
+            .map(|mut fields| {
+                fields.insert(OPEN_ENVIRONMENT.to_owned(), environment.to_owned());
+                fields
+            }),
+    )
+}
+
+/// The check that the screen makes again when it takes a request to open a preview, which comes from outside the app (a Claude Code, through the push of a PC or the screen bridge): the file is the one A-31 opens, and the worktree is one of the target's list read just now (an SSH host is refused), as `preview_url` checks them. It starts no server and makes no address.
+#[tauri::command]
+pub async fn orca_preview_check(
+    path: String,
+    relative: String,
+    environment: Option<String>,
+) -> Result<(), String> {
+    check_open(&path, &relative)?;
+    host_of(&path, environment.as_deref()).await.map(|_| ())
+}
+
 /// The error of the tool when neither way worked: what the daemon of a saved environment's PC answered, and what the app of this PC answered. Both are fixed words of ours, never what a file or a request held.
 pub fn open_failed(pushed: &str, local: &str) -> String {
     format!(

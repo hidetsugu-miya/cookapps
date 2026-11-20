@@ -495,6 +495,8 @@ export interface Commands {
   orca_file_open_in_browser: { args: { path: string; relative: string; environment: string | null }; result: null };
   // A-31: starts the same server and answers the address of the HTML file `relative` of the worktree, for the preview frame of the editor only.
   orca_file_preview_url: { args: { path: string; relative: string; environment: string | null }; result: string };
+  // A-45: the checks of A-31 again for a request to open a preview that came from outside the app: the file is an HTML file inside the worktree, and the worktree is one of the target's list read just now. It starts no server.
+  orca_preview_check: { args: { path: string; relative: string; environment: string | null }; result: null };
   // A-18: the settings of the editor: how long after the typing stops the file is saved.
   editor_settings: { args: undefined; result: EditorSettings };
   // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.

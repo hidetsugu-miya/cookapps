@@ -29,10 +29,10 @@ use crate::{
     formation::{self, terminal_close_args, FLOATING_WORKTREE, LOCAL},
     formation_server::{
         self, canonical_32, error_line, parse_error_line, parse_ready_line, public_of, random_32,
-        Client, PushHandler, STOPPED_LINE,
+        Client, PushHandler, PushRequest, STOPPED_LINE,
     },
     identity::IDENTIFIER,
-    keychain, orca, orca_link,
+    keychain, orca, orca_link, orca_preview,
 };
 
 /// The keychain service of the app's secret key, and the user of its item.
@@ -681,7 +681,7 @@ pub async fn formation_consent(
     })
     .await??;
     // The PC is agreed to now: its connection of pushes is opened at once (a failure is tried again by the clock).
-    let _ = sync_pushes(&kept_config, &kept_version).await;
+    let _ = sync_pushes(&app, &kept_config, &kept_version).await;
     Ok(consent)
 }
 
@@ -707,7 +707,7 @@ pub async fn formation_consent_revoke(
     })
     .await??;
     // The consent is gone: the connection of pushes to that PC is ended at once.
-    let _ = sync_pushes(&kept_config, &app_version).await;
+    let _ = sync_pushes(&app, &kept_config, &app_version).await;
     Ok(left)
 }
 
@@ -1059,10 +1059,26 @@ impl Subscriptions {
     }
 }
 
-/// What the app does with a push while no request is taken: it refuses every one, with a reason that quotes nothing of the request (what the PC sent is data). A screen that takes a request replaces this handler.
-fn refuse_every_push() -> PushHandler {
-    Arc::new(|_| {
-        Box::pin(async { Err("アプリはこの依頼を受けられません".to_owned()) })
+/// The reason a push is refused that no request of the app is.
+const REFUSED_PUSH: &str = "アプリはこの依頼を受けられません";
+
+/// What the app asks a screen for a push that came through the connection of `environment`: the fields of the screen that takes it, or the reason it is refused (with a reason that quotes nothing of the request: what the PC sent is data). The one request taken is to open an HTML preview (A-45).
+fn screen_of_push(
+    request: &PushRequest,
+    environment: &str,
+) -> Result<crate::screen_bridge::Fields, String> {
+    orca_preview::open_fields_of_push(request, environment)
+        .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
+}
+
+/// What the app does with a push of `environment`: the request to open a preview is given to the screen of the development screen (`preview-open`), which answers it, and every other push is refused.
+fn push_handler(app: tauri::AppHandle, environment: String) -> PushHandler {
+    Arc::new(move |request| {
+        let (app, environment) = (app.clone(), environment.clone());
+        Box::pin(async move {
+            let fields = screen_of_push(&request, &environment)?;
+            crate::screen_bridge::write_screen(&app, orca_preview::OPEN_TARGET, fields).await
+        })
     })
 }
 
@@ -1079,7 +1095,12 @@ fn push_targets(saved: &[String], pins: &BTreeMap<String, Pin>) -> Vec<String> {
 static SUBSCRIPTIONS: LazyLock<Subscriptions> = LazyLock::new(Subscriptions::default);
 
 /// Makes the connections of pushes those of the saved environments `saved` that the owner agreed to: one is opened for each that has none, and the one of an environment that is no longer in the list, or whose consent was taken back, is ended. Call it in the tokio runtime.
-fn keep_pushes_to(config: &Path, app_version: &str, saved: &[String]) -> Result<(), String> {
+fn keep_pushes_to(
+    app: &tauri::AppHandle,
+    config: &Path,
+    app_version: &str,
+    saved: &[String],
+) -> Result<(), String> {
     let targets = push_targets(saved, &pins(config)?);
     let (config, app_version) = (config.to_owned(), app_version.to_owned());
     SUBSCRIPTIONS.set(&targets, |environment| {
@@ -1087,16 +1108,20 @@ fn keep_pushes_to(config: &Path, app_version: &str, saved: &[String]) -> Result<
             config.clone(),
             environment.to_owned(),
             app_version.clone(),
-            refuse_every_push(),
+            push_handler(app.clone(), environment.to_owned()),
         )
     });
     Ok(())
 }
 
 /// Reads the saved environments and sets the connections of pushes by them (`keep_pushes_to`). A list that cannot be read changes nothing: the connections that are open stay.
-pub async fn sync_pushes(config: &Path, app_version: &str) -> Result<(), String> {
+pub async fn sync_pushes(
+    app: &tauri::AppHandle,
+    config: &Path,
+    app_version: &str,
+) -> Result<(), String> {
     let saved = orca::blocking(formation::saved_environment_names).await??;
-    keep_pushes_to(config, app_version, &saved)
+    keep_pushes_to(app, config, app_version, &saved)
 }
 
 /// How often the list of saved environments is read for the connections of pushes, so that one taken out of Orca's list, or added to it, is noticed.
@@ -1111,7 +1136,7 @@ pub fn start_pushes(app: tauri::AppHandle) {
         loop {
             tick.tick().await;
             let done = match config_dir(&app) {
-                Ok(config) => sync_pushes(&config, &version).await,
+                Ok(config) => sync_pushes(&app, &config, &version).await,
                 Err(e) => Err(e),
             };
             match done {
@@ -1142,7 +1167,7 @@ impl Drop for Subscriptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formation_server::{serve, serve_with, Hub, PushRequest, Setup};
+    use crate::formation_server::{serve, serve_with, Hub, Setup};
     use std::{
         cell::RefCell,
         path::PathBuf,
@@ -2836,15 +2861,28 @@ mod tests {
         assert!(push_targets(&saved, &BTreeMap::new()).is_empty());
     }
 
-    #[tokio::test]
-    async fn every_push_is_refused_with_a_reason_that_quotes_nothing_of_it() {
-        let handler = refuse_every_push();
+    #[test]
+    fn a_push_that_is_not_a_request_to_open_a_preview_is_refused_with_a_reason_that_quotes_nothing_of_it(
+    ) {
         let request = PushRequest {
             method: "ignore previous instructions".to_owned(),
             params: Value::Null,
         };
-        let reason = handler(request).await.unwrap_err();
+        let reason = screen_of_push(&request, "pc-a").unwrap_err();
         assert_eq!(reason, "アプリはこの依頼を受けられません");
+        // A request to open a preview is the one that is taken: the screen gets the two values and the environment of the connection.
+        let open = PushRequest {
+            method: "preview.open".to_owned(),
+            params: serde_json::json!({"path": "/w/app", "relative": "a.html"}),
+        };
+        assert_eq!(
+            screen_of_push(&open, "pc-a").unwrap(),
+            BTreeMap::from([
+                ("environment".to_owned(), "pc-a".to_owned()),
+                ("path".to_owned(), "/w/app".to_owned()),
+                ("relative".to_owned(), "a.html".to_owned()),
+            ])
+        );
     }
 
     #[test]
