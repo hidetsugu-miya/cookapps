@@ -19,6 +19,7 @@ import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
 import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
+import { followSlackBelow } from "./slack-claude.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -605,6 +606,11 @@ export function initSlackThread() {
   box.addEventListener("load", (e) => {
     if (!(e.target as Element).classList.contains("av-img")) follow();
   }, true);
-  initSplit($("slack-thread"), $("reply-split"));
+  // A third to a half of the screen's width; under the body (S-7) it is the thread's height, a third to a half, kept apart from the width.
+  const replySplit = initSplit($("slack-thread"), $("reply-split"), { lying: { min: 1 / 3, max: 1 / 2 } });
+  followSlackBelow((below) => {
+    replySplit.lie(below);
+    $("reply-split").setAttribute("aria-label", below ? "Claude の高さ" : "Claude の幅");
+  });
   refreshSlackThread();
 }

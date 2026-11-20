@@ -594,80 +594,82 @@
         <div id="slack-side-feed"></div>
       </aside>
       <div id="slack-side-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="一覧の幅" aria-valuemin="15" aria-valuemax="40" aria-valuenow="20" tabindex="0"><span></span></div>
-      <div id="slack-pane">
-        <section id="slack-list" hidden>
-          <header id="slack-header" data-tauri-drag-region="deep">
-            <h1>Slack</h1>
-            <button id="slack-hidden-open" class="icon-btn" aria-label="一覧に出さないチャンネル"></button>
-          </header>
-          <span id="slack-pending" class="header-sub" hidden></span>
-          <div id="slack-notice"></div>
-          <div id="slack-feed"></div>
-        </section>
-        <section id="slack-channel" hidden>
-          <header id="sc-head" data-tauri-drag-region="deep">
-            <h1><span id="sc-ic"></span><span id="sc-name"></span><small id="sc-team"></small></h1>
-          </header>
-          <div id="sc-feed"></div>
-          <div id="sc-reply">
-            <div id="sc-undo-bar" hidden>
-              <button id="sc-undo" class="text-btn" type="button">元に戻す</button>
-            </div>
-            <p id="sc-error" class="pending fail" role="alert" hidden></p>
-          </div>
-        </section>
-        <section id="slack-thread" class="split-main" hidden>
-          <div id="st-detail">
-            <header id="st-head" data-tauri-drag-region="deep">
-              <button id="st-back" class="icon-btn" aria-label="戻る">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
-              </button>
-              <h1><span id="st-channel"></span><small id="st-team"></small></h1>
-              <a id="st-open" class="icon-btn" aria-label="Slack で開く">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
-              </a>
-              <button id="st-todo" class="icon-btn" aria-label="Todo にする" hidden>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
-              </button>
+      <div id="slack-work">
+        <div id="slack-pane">
+          <section id="slack-list" hidden>
+            <header id="slack-header" data-tauri-drag-region="deep">
+              <h1>Slack</h1>
+              <button id="slack-hidden-open" class="icon-btn" aria-label="一覧に出さないチャンネル"></button>
             </header>
-            <div id="st-body">
-              <div id="st-msgs"></div>
-              <div id="st-note" role="status" hidden></div>
-              <div id="st-card"></div>
-            </div>
-            <div id="st-reply">
-              <div id="st-undo-bar" hidden>
-                <button id="st-undo" class="text-btn" type="button">元に戻す</button>
+            <span id="slack-pending" class="header-sub" hidden></span>
+            <div id="slack-notice"></div>
+            <div id="slack-feed"></div>
+          </section>
+          <section id="slack-channel" hidden>
+            <header id="sc-head" data-tauri-drag-region="deep">
+              <h1><span id="sc-ic"></span><span id="sc-name"></span><small id="sc-team"></small></h1>
+            </header>
+            <div id="sc-feed"></div>
+            <div id="sc-reply">
+              <div id="sc-undo-bar" hidden>
+                <button id="sc-undo" class="text-btn" type="button">元に戻す</button>
               </div>
-              <p id="st-error" class="pending fail" role="alert" hidden></p>
+              <p id="sc-error" class="pending fail" role="alert" hidden></p>
             </div>
-          </div>
-          <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
-          <aside id="reply-chat" class="chat-pane split-chat" aria-label="Claude">
-            <div class="chat-head">
-              <div id="reply-tabs" role="tablist" aria-label="Claude と Orca">
-                <button id="reply-tab-claude" class="chat-tab" role="tab" aria-selected="true" type="button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+          </section>
+          <section id="slack-thread" class="split-main" hidden>
+            <div id="st-detail">
+              <header id="st-head" data-tauri-drag-region="deep">
+                <button id="st-back" class="icon-btn" aria-label="戻る">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
                 </button>
-                <button id="reply-tab-orca" class="chat-tab" role="tab" aria-selected="false" type="button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Orca
+                <h1><span id="st-channel"></span><small id="st-team"></small></h1>
+                <a id="st-open" class="icon-btn" aria-label="Slack で開く">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+                </a>
+                <button id="st-todo" class="icon-btn" aria-label="Todo にする" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
                 </button>
+              </header>
+              <div id="st-body">
+                <div id="st-msgs"></div>
+                <div id="st-note" role="status" hidden></div>
+                <div id="st-card"></div>
               </div>
-              <button id="reply-restart" type="button" class="text-btn chat-clear">やり直す</button>
+              <div id="st-reply">
+                <div id="st-undo-bar" hidden>
+                  <button id="st-undo" class="text-btn" type="button">元に戻す</button>
+                </div>
+                <p id="st-error" class="pending fail" role="alert" hidden></p>
+              </div>
             </div>
-            <div id="reply-term"></div>
-            <div id="st-orca" class="ho-pane ho-slack" hidden></div>
-          </aside>
-        </section>
-      </div>
-      <div id="slack-claude-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="25" aria-valuemax="40" aria-valuenow="30" tabindex="0"><span></span></div>
-      <aside id="slack-claude" class="chat-pane" aria-label="Claude">
-        <div class="chat-head">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
-          <button id="slack-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
+            <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
+            <aside id="reply-chat" class="chat-pane split-chat" aria-label="Claude">
+              <div class="chat-head">
+                <div id="reply-tabs" role="tablist" aria-label="Claude と Orca">
+                  <button id="reply-tab-claude" class="chat-tab" role="tab" aria-selected="true" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+                  </button>
+                  <button id="reply-tab-orca" class="chat-tab" role="tab" aria-selected="false" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Orca
+                  </button>
+                </div>
+                <button id="reply-restart" type="button" class="text-btn chat-clear">やり直す</button>
+              </div>
+              <div id="reply-term"></div>
+              <div id="st-orca" class="ho-pane ho-slack" hidden></div>
+            </aside>
+          </section>
         </div>
-        <div id="slack-claude-term"></div>
-      </aside>
+        <div id="slack-claude-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="25" aria-valuemax="40" aria-valuenow="30" tabindex="0"><span></span></div>
+        <aside id="slack-claude" class="chat-pane" aria-label="Claude">
+          <div class="chat-head">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+            <button id="slack-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
+          </div>
+          <div id="slack-claude-term"></div>
+        </aside>
+      </div>
     </section>
     <section id="database" class="split-main" hidden>
       <aside id="database-side" aria-label="接続">

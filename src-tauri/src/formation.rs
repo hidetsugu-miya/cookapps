@@ -32,6 +32,9 @@ use crate::{
     orca_link::{CallError, Connection},
 };
 
+mod status;
+pub use status::status;
+
 const FOLDER: &str = "formations";
 /// The name `FOLDER` had before it was renamed (#889): `migrate_folder` moves a folder of this name to `FOLDER`.
 const OLD_FOLDER: &str = "formation";
@@ -72,6 +75,7 @@ const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
 const STEP_PLUGIN: &str = "プラグインの書き出し";
+const STEP_HOOK: &str = "メッセージを記録するフックの書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_GIT: &str = "git での確認";
@@ -1083,15 +1087,30 @@ fn all_terminals_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["terminal", "list", "--json"]), environment)
 }
 
+/// Writes the hook of a Claude Code child that records its SendMessage calls (`formation_message`, #1084) in the folder of its formation, for the `tsunagiai-mcp` that runs this launch, and answers its path. A Codex child has no SendMessage and no hook.
+fn write_child_hook(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
+    let mcp =
+        std::env::current_exe().map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))?;
+    let folder = dir(config, formation);
+    let file = crate::formation_message::child_hook_file(name);
+    accounts::write_atomic(
+        &folder,
+        &file,
+        &crate::formation_message::hook_settings(&mcp, formation, Some(name)),
+    )?;
+    Ok(folder.join(file))
+}
+
 /// The command of a Codex child's terminal (A-41): its sandbox lets it write in the worktree, and it never stops to ask (no `-n`: its title is the name that Orca gives the terminal, and no plugin: it reads the prompt alone).
 const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval never";
 
-/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space). The name was checked, so the rest of the command line holds nothing a shell would read.
-fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path) -> String {
+/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and the hook that records its SendMessage calls (`--settings {hook}`, #1084). The name was checked, so the rest of the command line holds nothing a shell would read.
+fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, hook: &Path) -> String {
     match agent {
         FormationAgent::Claude => format!(
-            "claude -n {name} --permission-mode auto --effort medium --plugin-dir {}",
-            crate::claude_code::sh_quote(&plugin_dir.to_string_lossy())
+            "claude -n {name} --permission-mode auto --effort medium --plugin-dir {} --settings {}",
+            crate::claude_code::sh_quote(&plugin_dir.to_string_lossy()),
+            crate::claude_code::sh_quote(&hook.to_string_lossy())
         ),
         FormationAgent::Codex => CODEX_COMMAND.to_owned(),
     }
@@ -1103,6 +1122,7 @@ fn terminal_create_args(
     agent: FormationAgent,
     name: &str,
     plugin_dir: &Path,
+    hook: &Path,
     environment: &str,
 ) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
@@ -1111,7 +1131,7 @@ fn terminal_create_args(
         "--title".into(),
         name.into(),
         "--command".into(),
-        child_command(agent, name, plugin_dir),
+        child_command(agent, name, plugin_dir, hook),
         "--json".into(),
     ]);
     on(args, environment)
@@ -1732,10 +1752,13 @@ pub fn launch(
     }
     let agent = agent_for(agent, &record, name);
     // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
-    let plugin_dir = match agent {
-        FormationAgent::Claude => crate::formation_assets::write_plugin(config)
-            .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
-        FormationAgent::Codex => PathBuf::new(),
+    let (plugin_dir, hook) = match agent {
+        FormationAgent::Claude => (
+            crate::formation_assets::write_plugin(config)
+                .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
+            write_child_hook(config, formation, name).map_err(|e| Refusal::failed(STEP_HOOK, e))?,
+        ),
+        FormationAgent::Codex => (PathBuf::new(), PathBuf::new()),
     };
     let environment = chosen_environment(&mut None, environment)?;
     let environment = environment.as_str();
@@ -1779,6 +1802,7 @@ pub fn launch(
         agent,
         name,
         &plugin_dir,
+        &hook,
         environment,
     ))
     .map_err(|e| kept(STEP_TERMINAL, e))?;
@@ -5492,6 +5516,7 @@ mod tests {
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
+                Path::new("/c/formations/f/message-hook-web-2.json"),
                 "local"
             ),
             [
@@ -5502,7 +5527,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin'",
+                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/message-hook-web-2.json'",
                 "--json",
                 "--environment=local"
             ]
@@ -5573,15 +5598,50 @@ mod tests {
     }
 
     #[test]
+    fn the_hook_of_a_child_is_written_in_the_folder_of_its_formation_for_that_child() {
+        let config = std::env::temp_dir().join(format!(
+            "tsunagiai-child-hook-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let path = write_child_hook(&config, "api-work", "web-2").unwrap();
+        assert_eq!(
+            path,
+            dir(&config, "api-work").join("message-hook-web-2.json")
+        );
+        let hook: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let command = hook["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            command.ends_with(" --formation-message api-work --from web-2"),
+            "{command}"
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn a_codex_child_is_started_with_its_sandbox_and_no_plugin_or_name_flag() {
         let plugin = Path::new("/c/formation-plugin");
-        let command = child_command(FormationAgent::Codex, "web-2", plugin);
+        let hook = Path::new("/c/formations/f/message-hook-web-2.json");
+        let command = child_command(FormationAgent::Codex, "web-2", plugin, hook);
         assert_eq!(
             command,
             "codex --sandbox workspace-write --ask-for-approval never"
         );
-        assert!(!command.contains("--plugin-dir") && !command.contains(" -n "));
-        let args = terminal_create_args("/w/a", FormationAgent::Codex, "web-2", plugin, "local");
+        assert!(
+            !command.contains("--plugin-dir")
+                && !command.contains(" -n ")
+                && !command.contains("--settings")
+        );
+        let args = terminal_create_args(
+            "/w/a",
+            FormationAgent::Codex,
+            "web-2",
+            plugin,
+            hook,
+            "local",
+        );
         // Its title is the child's name, and its command is the one above.
         let at = |flag: &str| args.iter().position(|a| a == flag).unwrap();
         assert_eq!(args[at("--title") + 1], "web-2");
@@ -5648,18 +5708,27 @@ mod tests {
     }
 
     #[test]
-    fn the_command_of_a_child_passes_the_plugin_folder_as_one_quoted_word() {
+    fn the_command_of_a_child_passes_the_plugin_folder_and_the_hook_as_quoted_words() {
+        let hook = Path::new("/c/formations/f/message-hook-web-2.json");
         assert_eq!(
-            child_command(FormationAgent::Claude, "web-2", Path::new("/c/formation-plugin")),
-            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin'"
+            child_command(
+                FormationAgent::Claude,
+                "web-2",
+                Path::new("/c/formation-plugin"),
+                hook
+            ),
+            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/message-hook-web-2.json'"
         );
         // A folder with a space or a quote stays one word.
         assert!(child_command(
             FormationAgent::Claude,
             "web-2",
-            Path::new("/c/it's here/formation-plugin")
+            Path::new("/c/it's here/formation-plugin"),
+            Path::new("/c/it's here/hook.json")
         )
-        .ends_with(r"--plugin-dir '/c/it'\''s here/formation-plugin'"));
+        .ends_with(
+            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/hook.json'"
+        ));
     }
 
     #[test]
@@ -5674,6 +5743,7 @@ mod tests {
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
+                Path::new("/c/hook.json"),
                 environment,
             ),
             terminal_wait_args("term_1", environment),

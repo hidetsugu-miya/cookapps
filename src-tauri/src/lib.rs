@@ -10,6 +10,7 @@ mod disk_cache;
 pub mod fonts;
 pub mod formation;
 pub mod formation_assets;
+pub mod formation_message;
 pub mod formation_page;
 pub mod formation_remote;
 pub mod formation_reply;
@@ -503,6 +504,7 @@ pub fn run() {
             formation::formation_create,
             formation::formation_delete,
             formation::formation_close_child,
+            formation_message::formation_messages,
             formation_page::formation_page_read,
             formation_reply::formation_page_answer,
             formation_remote::formation_consents,

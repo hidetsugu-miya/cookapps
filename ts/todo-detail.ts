@@ -360,6 +360,32 @@ function growDesc(area: HTMLTextAreaElement) {
   area.style.height = `${area.scrollHeight}px`;
 }
 
+// Sets the height of a name field to its text.
+export const fitName = growDesc;
+
+// A name is one line: a newline in it turns into a space (an `input` did this by itself, and the textarea of the name does not).
+export const oneLine = (text: string) => text.replace(/[\r\n]+/g, " ");
+
+// The field of a task's name, in the detail and in the Slack draft: a textarea that wraps at its width and grows with its text, so the whole name is read; it holds one line (a newline typed or pasted turns into a space, and Enter is the owner's to handle).
+// A detached field has no height to read, so the observer fits it once it is in the page and again when its width changes.
+export function nameField(value: string): HTMLTextAreaElement {
+  const name = tag("textarea", "name");
+  name.rows = 1;
+  name.value = oneLine(value);
+  name.setAttribute("aria-label", "タスクの名前");
+  // A listener and not `oninput`: the draft sets its own `oninput` on the field.
+  name.addEventListener("input", () => {
+    if (/[\r\n]/.test(name.value)) {
+      const caret = oneLine(name.value.slice(0, name.selectionStart)).length;
+      name.value = oneLine(name.value);
+      name.setSelectionRange(caret, caret);
+    }
+    fitName(name);
+  });
+  new ResizeObserver(() => fitName(name)).observe(name);
+  return name;
+}
+
 // The lines `view` draws, top to bottom, each as the vertical span of its text: the margins between paragraphs are not lines.
 // Text boxes that overlap vertically are one line, so a `code` in a line of other text counts once.
 function drawnLines(view: HTMLElement): { top: number; bottom: number }[] {
@@ -532,15 +558,27 @@ export function renderDetail() {
 
   const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
   box.onchange = () => setTaskDone(t.id, true, box);
-  const name = tag("input", "name");
-  name.value = t.content;
+  const name = nameField(t.content);
   name.dataset.field = "name";
-  name.setAttribute("aria-label", "タスクの名前");
-  name.onchange = () => {
-    if (name.value.trim()) saveTask(t.id, { content: name.value });
-    else name.value = t.content;
+  // The name is saved by the change event (a click elsewhere) and by Enter itself: a blur does not fire the change event while the window is not the one with the focus. What was saved is not saved again when the blur that follows Enter fires the change event.
+  let saved = t.content;
+  const commitName = () => {
+    if (name.value === saved) return;
+    if (name.value.trim()) {
+      saved = name.value;
+      saveTask(t.id, { content: name.value });
+    } else {
+      name.value = t.content;
+      fitName(name);
+    }
   };
-  onEnter(name, () => name.blur());
+  name.onchange = commitName;
+  name.onkeydown = (e) => {
+    if (e.key !== "Enter" || composing(e)) return;
+    e.preventDefault();
+    commitName();
+    name.blur();
+  };
   const head = tag("div", "head");
   head.append(box, name);
 

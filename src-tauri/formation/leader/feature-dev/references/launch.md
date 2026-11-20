@@ -90,4 +90,22 @@ The answer of `formation_launch` has `path` (the folder) and `branch`.
 For the child of a new case, `path` is the docs worktree: keep it, and the case root is `{path}/.feature-dev/current`.
 When the answer is `{ok: false, ...}`, read `error` and `step`, fix what you can (another name, another place), and launch again. Tell the owner only when the same refusal comes twice or you cannot fix it.
 
+## Register the patrol
+
+Once `formation_launch` has answered `ok`, register the patrol of that child, which looks at it every 10 minutes ([patrol](messages.md#the-patrol)).
+Call `CronCreate` with:
+
+- `cron` `*/10 * * * *`,
+- `recurring` true,
+- `prompt` as below, with the child's name and the folder of this skill (`${CLAUDE_SKILL_DIR}`, as SKILL.md gives it) filled in.
+
+```text
+Patrol of the child "{child name}". Read {skill folder}/references/messages.md, the section "The patrol", and do one round of it for this child.
+```
+
+`CronCreate` answers the ID of the schedule: keep it with the child's name, and never register a second patrol for a child that has one (`CronList` shows what is registered).
+The patrol is only for the child of this unit. A codex child of [codex](codex.md) is waited for by its marker file and has no patrol.
+A recurring schedule ends by itself after 7 days: when a unit runs longer than that, register it again.
+The patrol is deleted with `CronDelete` when the child's `DONE` holds, when the child reopens an earlier unit, and when you close the child ([messages](messages.md)).
+
 Then serve the child: [messages](messages.md).
