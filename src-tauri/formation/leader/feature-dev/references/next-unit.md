@@ -62,4 +62,4 @@ Report to the owner, in Japanese:
 - what was made and where: the base branch, the aggregate pull request of each repository (`repos[].pull_request` and `name_with_owner` of `case.json`; the URL is `https://github.com/{name_with_owner}/pull/{number}`), and the specification,
 - what is left for the owner, such as marking a pull request ready or merging it.
 
-Stop there. Do not close the children: their screens and worktrees stay until the owner closes them.
+Stop there. Do not close the children: their worktrees and cards stay until the owner closes them.
