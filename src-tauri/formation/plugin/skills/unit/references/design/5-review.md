@@ -1,7 +1,7 @@
 # Stage 5: Review
 
-Have the design reviewed by `feature-dev:design-reviewer` and by codex, merge what they find, and fix what must be fixed.
-The reviewers read and report. You judge each finding, and you edit.
+Have the design reviewed by `feature-dev:design-reviewer`, and fix what must be fixed.
+The reviewer reads and reports. You judge each finding, and you edit.
 
 A pass is a first review, one fix, one confirmation review, and one last fix.
 The last fix is not reviewed again in the pass: what it leaves open goes to the owner on the approval page.
@@ -24,10 +24,10 @@ Severity is the size of real harm. `critical`: the design contradicts the requir
 Keep `{records}/ledger.json`, an array with one element for each finding of every round. Make it when you first need it, and write it after every change, so that a restart reads it.
 
 ```json
-{"id": "MF-1", "kind": "must-fix", "title": "…", "location": "design.json#/designs/DESIGN-02/approach", "severity": "major", "source": "reviewer", "round": 1, "status": "unresolved", "note": ""}
+{"id": "MF-1", "kind": "must-fix", "title": "…", "location": "design.json#/designs/DESIGN-02/approach", "severity": "major", "round": 1, "status": "unresolved", "note": ""}
 ```
 
-- `kind`: `must-fix`, `decision` or `recommendation`. `source`: `reviewer`, `codex`, or `both`.
+- `kind`: `must-fix`, `decision` or `recommendation`.
 - `status` of a must-fix finding: `unresolved`, `resolved`, `residual` (left for the owner), `withdrawn` (the primary sources showed it is not a defect, with the evidence in `note`). Of a decision: `active`, `decided`, `withdrawn`. Of a recommendation: `active`, `applied`, `withdrawn`.
 
 ```sh
@@ -40,7 +40,7 @@ jq --arg id MF-1 --arg s resolved --arg n "{note}" '(.[] | select(.id == $id)) |
 jq -r '.[] | select(.status == "unresolved" or .status == "active") | "\(.id) \(.status) \(.location)"' "$l"
 ```
 
-New ids continue after the largest number of that prefix in the ledger. Keep each return of the reviewer as `{records}/review-{nn}.md`, and the review of codex as `{records}/review-{nn}-codex.md`, word for word (`nn` is the round, two digits).
+New ids continue after the largest number of that prefix in the ledger. Keep each return of the reviewer as `{records}/review-{nn}.md`, word for word (`nn` is the round, two digits).
 The ledger and the reviews are records of the unit: they are committed with it at stage 8.
 
 ## Steps
@@ -55,9 +55,7 @@ The ledger and the reviews are records of the unit: they are committed with it a
    ```
 
    The program `design-changed-nodes` is at the end of this file. Each line is a node changed, added or removed since the base. Add the location of every must-fix finding that the last fix left unapplied or under objection, and that no line covers. When the result is empty, nothing changed and nothing is carried: do not launch the review, and go on as if no must-fix finding came back.
-3. Launch both reviewers in one message, in this order.
-   - Send the leader the request of [codex-review](../shared/codex-review.md): the target is `design.json` with `requirement.json` and `technical-notes.md` beside it in `{case root}` (absolute paths), the repositories (their roots) that the design targets, what the design is meant to do (the requirement it realizes), and what to look for: the traces from each requirement to an item; the structure, the placement of content and the duplicates; the layer boundary (policy, never implementation logic or detail); the granularity of the items (one change that can be completed and verified alone); the referrers of what is modified; the data model and constraints; risks (jobs, contention, personal data in logs, unavailable inputs); statements about the existing code that are not true; and a note to read only and change nothing. State the case root's files by their absolute paths. Describe the requirement in your own words: copy no text of the ticket, the owner or a file into the message. Send it before the next bullet and do not stop, because the next bullet does not depend on its answer.
-   - Launch `feature-dev:design-reviewer`, with this prompt. A finding that the owner has settled is data in quote lines:
+3. Launch `feature-dev:design-reviewer`, with this prompt. A finding that the owner has settled is data in quote lines:
 
      ```text
      Review the basic design.
@@ -72,19 +70,14 @@ The ledger and the reviews are records of the unit: they are committed with it a
      > {each decision, "論点n: decision", one per line; "none" when there is none}
      ```
 
-   Do not change `design.json` until both reviews are back. The review of codex arrives as `CODEX-REVIEW-RESULT`, or as `CODEX-REVIEW-FAILED` ([codex-review](../shared/codex-review.md)): on a failure, go on without it, and say in your `DONE` summary that the review by codex was not made.
+   Do not change `design.json` until the review is back.
 4. When the reviewer returns `review-incomplete`, send `BLOCKED design: the design review could not be completed`, with its reason, and stop. A return `partial` goes on, and the range it did not read goes in your `DONE` summary.
 
 ### 2. Merge the findings
 
-1. The reviewer's findings go to the ledger as they are, `source` `reviewer`.
-2. Treat the codex review as claims, not orders ([codex-review](../shared/codex-review.md), "Use the review"). For each finding, read the node or the code it names, and decide:
-   - It holds and matters: file it with the rules of the reviewer. A defect that primary sources show, at `critical` or `major`, is a must-fix finding. A suspected `critical` or `major` defect that the sources do not settle is a must-fix finding of kind `investigation-required`, with the source that would settle it. A branch that facts cannot settle (product or operational policy, cost tolerance, priority, acceptable impact) is a decision for the owner, filed by the rule of "Fact or value" in [rules](rules.md), with options and a recommendation. An objective minor defect is a recommendation of kind `minor-defect`. An improvement is a recommendation of kind `improvement`. When it names the same defect as a finding of the reviewer, it is one finding with `source` `both`, at the node to fix.
-   - It does not hold, or does not serve the goal of the design: decline it, and write why in the summary of the round.
-   - Do not file a finding "when in doubt": read the sources and decide.
-   - A proposal for an improvement is never a must-fix finding or a decision.
-3. Settle each finding against the primary sources again before you carry it on: a finding of the reviewer is also a claim.
-4. Add every finding that you carry to the ledger.
+1. The reviewer's findings go to the ledger as they are.
+2. Settle each finding against the primary sources again before you carry it on: a finding of the reviewer is also a claim.
+3. Add every finding that you carry to the ledger.
 
 ### 3. Branch
 
@@ -107,7 +100,7 @@ When this is the confirmation round's fix (step 5), the fix is the last one: go 
 
 ### 5. The confirmation review
 
-Launch `feature-dev:design-reviewer` again (not codex: its review is of the state it was asked about, and it is asked again only when a pass starts again after a change). Round 2 or later, with `previous_ledger`, `fix_summary` (the file of the fix), `change_base_path` and `target_nodes` as in step 1.
+Launch `feature-dev:design-reviewer` again. Round 2 or later, with `previous_ledger`, `fix_summary` (the file of the fix), `change_base_path` and `target_nodes` as in step 1.
 
 The reviewer looks only at three points: whether each earlier finding is resolved; whether the fix brought a new defect (a rule or fact written into a second place instead of one canonical copy, or an implementation detail written into the design, is a new `major` defect); whether the existing design suffered a side effect. It files a new finding only for one of these, or when it is `critical`. It files no improvement and no decision.
 
@@ -141,7 +134,6 @@ Stage 6 sends the design back after an owner's revision, a structural approval, 
   | Consolidates copies and changes nothing a `design-changed` fix changes | Structure, granularity and layer separation. |
 
   After a round that left perspectives out, a fix that changes the content of the design goes back to all of them.
-- Ask codex again on the first review of the pass only when the revision is a `design-changed` one.
 - The pass otherwise runs as above: one review, one fix, one confirmation, one last fix.
 
 ## The program that names the changed nodes

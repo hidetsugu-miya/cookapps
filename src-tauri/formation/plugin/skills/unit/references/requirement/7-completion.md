@@ -61,7 +61,6 @@ When these apply, add them to the first line's text, short:
 - the user decisions that the approval settled (`UD-NN` and the decision), when the owner's reply to the approval page recorded some,
 - the must-fix findings the owner declined ("declined by the owner's decision"), by id and title,
 - the provisional user decisions that still wait for the business side,
-- the matters you noticed that the request did not present, one line each,
-- that the codex review was not made, when it failed.
+- the matters you noticed that the request did not present, one line each.
 
 The unit ends here. The leader launches the next unit's child.

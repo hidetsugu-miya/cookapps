@@ -18,7 +18,7 @@ Read the ledger `{records}/ledger.md` and the last review reports. Present only 
 The sections of `changes`, each a heading and blocks, left out when empty:
 
 - **What changes**: who does what and what happens to them, from the purpose of each DESIGN item and the code. Add a `git-diff` evidence item for each file that carries the behavior (`root`: the name of the repository, `base`: `{review base}`, `head`: `git -C "{folder}" rev-parse HEAD`). Do not copy lines of code into the page.
-- **How it was checked**: the review rounds and what they fixed, the review by codex (or that it was not made, and why), the aggregate check (its command, and `passed`, or that the repository defines none), and the coverage figure when Stage 4 kept one. State only what you ran.
+- **How it was checked**: the review rounds and what they fixed, the aggregate check (its command, and `passed`, or that the repository defines none), and the coverage figure when Stage 4 kept one. State only what you ran.
 - **Operations for the owner to try**: each `operation_checks` element (the operation, its state set-up, its steps, what is expected) and each `user_confirmations` element (the screen state and its screenshot), as a `table`. You did not run them.
 - **Not checked**: each `formal_verification` element, as a `callout` that says it was not checked.
 - **Changes outside the goal**: each out-of-goal change that stayed (Stage 2), with its reason.
