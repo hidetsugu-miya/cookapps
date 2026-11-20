@@ -2,13 +2,17 @@
 // A card that asks has its choices as radios and a box for free text; an approval and a code review end with 「あなたの判定」, the owner's choice between approving and asking for a revision, and 「リーダーに送る」 hands what was chosen to `send` (the reply is made and sent in Rust, #923). The screen keeps the verdict and a `fix` from contradicting each other and shows what an unanswered card will be sent as; what the answers mean is Rust's.
 import type { Card } from "./bindings/Card";
 import type { CardKind } from "./bindings/CardKind";
+import type { CardOption } from "./bindings/CardOption";
+import type { Condition } from "./bindings/Condition";
 import type { DecisionPage } from "./bindings/DecisionPage";
+import type { Occurrence } from "./bindings/Occurrence";
 import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
+import type { Sample } from "./bindings/Sample";
 import type { ScopeGroup } from "./bindings/ScopeGroup";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
-import { drawBlocks, drawEvidence, fold, useImages } from "./formation-page-blocks.js";
+import { drawBlocks, drawEvidence, drawFactContent, drawImage, drawTable, fold, useImages } from "./formation-page-blocks.js";
 import { invoke } from "./ipc.js";
 
 interface Choice {
@@ -299,8 +303,10 @@ function scope(groupsOf: ScopeGroup[]): HTMLElement {
   return node;
 }
 
-// 「確認する項目」: the cards, grouped by kind in the order of the page, a group with no card left out.
+// 「確認する項目」: the cards, grouped by kind in the order of the page, a group with no card left out. An unmet criterion that a card of the page causes is shown on that card (「反するリリース条件」), and in its own group only when it names a card that the page does not have, or none.
 function groups(page: DecisionPage): HTMLElement[] {
+  const cardNumbers = new Set([...page.residualMustFix, ...page.needsUserDecision].map((c) => c.number));
+  const unmet = page.unmetCriteria.filter((c) => c.cards.length === 0 || c.cards.some((n) => !cardNumbers.has(n)));
   const list: [string, Card[]][] =
     page.pageKind === "open-questions"
       ? [["論点", page.questions]]
@@ -313,46 +319,147 @@ function groups(page: DecisionPage): HTMLElement[] {
           ]
         : [
             ["未解消の必ず直す指摘", page.residualMustFix],
-            ["満たしていないリリース条件", page.unmetCriteria],
+            ["満たしていないリリース条件", unmet],
             ["判断が必要", page.needsUserDecision],
           ];
   return list
     .filter(([, cardsOf]) => cardsOf.length > 0)
     .map(([heading, cardsOf]) => {
       const node = section(`${heading} ${cardsOf.length} 件`, "fp-group");
-      node.append(...cardsOf.map(drawCard));
+      node.append(...cardsOf.map((card) => drawCard(card, page.unmetCriteria.filter((u) => u.cards.includes(card.number)))));
       return node;
     });
 }
 
-function drawCard(card: Card): HTMLElement {
+// A card. One that asks (`question`, `nr`, `review-decision`) opens its title with the tag 「聞きたいこと」 and shows no summary: 「具体的な場面」, the image of the screen, the first diagram as wide as the card, the unmet release conditions it causes and 「あなたの回答」, then 「詳しく見る」. Any other card shows its summary, its background and the unmet conditions, then its answer and 「詳しく見る」.
+function drawCard(card: Card, causes: Card[]): HTMLElement {
   const node = tag("article", "fp-card");
   node.dataset.card = card.number;
   node.dataset.kind = card.kind;
+  const asks = LETTERED.has(card.kind);
   const head = tag("header", "fp-card-head");
-  head.append(tag("span", "fp-number", card.number), tag("h4", "fp-card-title", card.title));
-  node.append(head, tag("p", "fp-p", card.summary));
+  head.append(tag("span", "fp-number", card.number));
+  if (asks) head.append(tag("span", "fp-asks", "聞きたいこと"));
+  head.append(tag("h4", "fp-card-title", card.title));
+  node.append(head);
+  if (!asks) node.append(tag("p", "fp-p", card.summary));
   if (card.kind === "unmet-criterion" && card.cards.length > 0) node.append(tag("p", "fp-muted", card.cards.join("、")));
-  // A card that asks shows its first diagram in the card; the rest of it is behind the fold.
-  const asks = FIXED[card.kind].length > 0;
   const blocks = [...card.blocks];
-  const first = asks ? blocks.findIndex((b) => b.type === "diagram") : -1;
-  if (first >= 0) node.append(...drawBlocks(blocks.splice(first, 1)));
-  if (asks) node.append(answer(card));
-  const hasMore = card.background !== null || card.facts.length > 0 || blocks.length > 0 || card.evidence.length > 0;
-  if (hasMore) {
-    const more = fold("詳しく見る", "fp-more");
-    if (card.background !== null) more.append(tag("h4", "fp-h", "背景"), tag("p", "fp-p", card.background));
-    if (card.facts.length > 0) {
-      const facts = tag("dl", "fp-facts");
-      for (const fact of card.facts) facts.append(tag("dt", "", fact.label), tag("dd", "", fact.value));
-      more.append(facts);
+  if (asks) {
+    if (card.scene !== null) node.append(tag("h4", "fp-h", "具体的な場面"), tag("p", "fp-p fp-scene", card.scene));
+    if (card.sceneImage !== null) node.append(drawImage(card.sceneImage, false));
+    // The first diagram of a card that asks is the flow of its scene, as wide as the card; the rest of the blocks are behind the fold.
+    const first = blocks.findIndex((b) => b.type === "diagram");
+    if (first >= 0) {
+      const [diagram] = drawBlocks(blocks.splice(first, 1));
+      diagram.dataset.wide = "true";
+      node.append(diagram);
     }
-    more.append(...drawBlocks(blocks, true));
-    if (card.evidence.length > 0) more.append(drawEvidence(card.evidence));
-    node.append(more);
+  } else if (card.background !== null) node.append(tag("h4", "fp-h", "背景"), tag("p", "fp-p", card.background));
+  if (causes.length > 0) {
+    node.append(tag("h4", "fp-h", "反するリリース条件"));
+    for (const cause of causes) node.append(tag("p", "fp-p fp-cause", cause.title), tag("p", "fp-muted", cause.summary));
   }
+  if (asks) node.append(tag("h4", "fp-h", "あなたの回答"));
+  if (FIXED[card.kind].length > 0) node.append(answer(card));
+  const more = detail(card, blocks, asks);
+  if (more !== null) node.append(more);
   return node;
+}
+
+// 「詳しく見る」: for a card with an occurrence, that block; then the scene of a card that does not ask, or the background of one that asks; the facts with 「中身を見る」; the rest of the blocks; the table of the conditions against the options, and the evidence.
+function detail(card: Card, blocks: Card["blocks"], asks: boolean): HTMLElement | null {
+  const parts: HTMLElement[] = [];
+  if (card.occurrence !== null) parts.push(...drawOccurrence(card.occurrence));
+  if (!asks && card.scene !== null) parts.push(tag("h4", "fp-h", "具体的な場面"), tag("p", "fp-p fp-scene", card.scene));
+  if (asks && card.background !== null) parts.push(tag("h4", "fp-h", "背景"), tag("p", "fp-p", card.background));
+  if (card.facts.length > 0) {
+    const facts = tag("dl", "fp-facts");
+    for (const fact of card.facts) {
+      const value = tag("dd", "", fact.value);
+      if (fact.content !== null) {
+        const content = fold("中身を見る", "fp-more fp-fact");
+        content.append(drawFactContent(fact.content, true));
+        value.append(content);
+      }
+      facts.append(tag("dt", "", fact.label), value);
+    }
+    parts.push(facts);
+  }
+  parts.push(...drawBlocks(blocks, true));
+  if (card.conditions.length > 0) parts.push(conditionTable(card.conditions, card.options));
+  if (card.evidence.length > 0) parts.push(drawEvidence(card.evidence));
+  if (parts.length === 0) return null;
+  const more = fold("詳しく見る", "fp-more");
+  more.append(...parts);
+  return more;
+}
+
+// 「発生条件」, 「発生頻度」 as a meter of three cells, 「影響」 and 「検知」.
+const LIKELIHOOD: Record<Occurrence["likelihood"], [string, string]> = {
+  rare: ["まれ", "■□□"],
+  occasional: ["ときどき", "■■□"],
+  frequent: ["頻繁", "■■■"],
+};
+
+function drawOccurrence(o: Occurrence): HTMLElement[] {
+  const [word, cells] = LIKELIHOOD[o.likelihood];
+  const meter = tag("div", "fp-meter");
+  meter.dataset.level = o.likelihood;
+  meter.append(tag("span", "fp-meter-cells", cells), tag("span", "fp-meter-word", word));
+  const conditions = o.conditions.length === 1 ? tag("p", "fp-p", o.conditions[0]) : tag("ol", "fp-list");
+  if (o.conditions.length > 1) for (const text of o.conditions) conditions.append(tag("li", "", text));
+  return [
+    tag("h4", "fp-h", o.conditions.length === 1 ? "発生条件" : "発生条件（すべて重なったときだけ起きる）"),
+    conditions,
+    tag("h4", "fp-h", "発生頻度"),
+    meter,
+    tag("p", "fp-muted", o.basis),
+    tag("h4", "fp-h", "影響"),
+    tag("p", "fp-p", o.impact),
+    tag("h4", "fp-h", "検知"),
+    tag("p", "fp-p", o.detectability),
+  ];
+}
+
+// One row for each condition and one column for each option, each cell 「満たす」 or 「満たさない」.
+function conditionTable(conditions: Condition[], options: CardOption[]): HTMLElement {
+  const rows = conditions.map((c) => [{ text: `${c.id} ${c.text}`, changed: false }, ...options.map((o) => ({ text: o.unmet.some((u) => u.id === c.id) ? "満たさない" : "満たす", changed: false }))]);
+  return drawTable(["必須条件", ...options.map((o) => o.key)], rows);
+}
+
+// A text in the style of an option: framed, in its size, weight and colour, with the numbers under it.
+function drawSample(sample: Sample): HTMLElement {
+  const node = tag("div", "fp-sample");
+  const frame = tag("div", "fp-sample-frame", sample.text);
+  frame.style.fontSize = `${sample.fontSize}px`;
+  frame.style.fontWeight = String(sample.fontWeight);
+  if (sample.color !== null) frame.style.color = sample.color;
+  node.append(frame, tag("p", "fp-muted fp-sample-note", `文字の大きさ ${sample.fontSize}px・太さ ${sample.fontWeight}${sample.color === null ? "" : `・色 ${sample.color}`}`));
+  return node;
+}
+
+// 「この選択肢の詳細」 of a lettered option: its detail, 「直し方」, the sample, the image, the diagram and 「満たさない必須条件」, in that order; of a fixed choice, its entry of `choiceDetails`. None when it has nothing. Everything in it waits for the fold to be opened.
+function optionDetail(option: CardOption | undefined, fixed: string | undefined, conditions: Condition[]): HTMLElement | null {
+  const parts: HTMLElement[] = [];
+  const text = option?.detail ?? fixed;
+  if (text) parts.push(tag("p", "fp-p", text));
+  if (option?.fix) parts.push(tag("h4", "fp-h", "直し方"), tag("p", "fp-p", option.fix));
+  if (option?.sample) parts.push(drawSample(option.sample));
+  if (option?.image) parts.push(drawImage(option.image, true));
+  if (option?.diagram) parts.push(...drawBlocks([{ type: "diagram", mermaid: option.diagram, caption: null }], true));
+  if (option && option.unmet.length > 0) {
+    parts.push(tag("h4", "fp-h", "満たさない必須条件"));
+    for (const unmet of option.unmet) {
+      const entry = tag("div", "fp-unmet");
+      entry.append(tag("p", "fp-p", `${unmet.id} ${conditions.find((c) => c.id === unmet.id)?.text ?? ""}`.trim()), tag("p", "fp-muted", unmet.reason));
+      parts.push(entry);
+    }
+  }
+  if (parts.length === 0) return null;
+  const more = fold("この選択肢の詳細", "fp-detail");
+  more.append(...parts);
+  return more;
 }
 
 // The choices of a card that asks, and its free text.
@@ -360,7 +467,7 @@ function answer(card: Card): HTMLElement {
   const group = `fp-answer-${++cards}`;
   const lettered = LETTERED.has(card.kind);
   const choices: Choice[] = [...(lettered ? card.options.map((o) => ({ key: o.key, label: o.label })) : []), ...FIXED[card.kind]];
-  const details = new Map(card.options.map((o) => [o.key, o.detail]));
+  const options = new Map(card.options.map((o) => [o.key, o]));
   const box = tag("fieldset", "fp-answer");
   box.append(tag("legend", "fp-sr", "あなたの回答"));
   let text: HTMLTextAreaElement | null = null;
@@ -374,17 +481,13 @@ function answer(card: Card): HTMLElement {
     radio.name = group;
     radio.value = choice.key;
     label.append(radio);
-    if (lettered && choice.key !== "other" && details.has(choice.key)) label.append(tag("b", "fp-key", choice.key));
+    if (lettered && choice.key !== "other" && options.has(choice.key)) label.append(tag("b", "fp-key", choice.key));
     label.append(tag("span", "", choice.label));
     if (recommended) label.append(tag("span", "fp-rec", "推奨"));
     row.append(label);
     if (recommended && card.recommendationReason !== null) row.append(tag("p", "fp-reason", `理由: ${card.recommendationReason}`));
-    const detail = details.get(choice.key);
-    if (detail) {
-      const more = fold("この選択肢の詳細", "fp-detail");
-      more.append(tag("p", "fp-p", detail));
-      row.append(more);
-    }
+    const more = optionDetail(options.get(choice.key), card.choiceDetails[choice.key], card.conditions);
+    if (more !== null) row.append(more);
     if (lettered && choice.key === "other") {
       text = freeText("その他");
       text.hidden = true;

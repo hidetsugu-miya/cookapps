@@ -49,6 +49,8 @@ const PAGE_LIMIT: usize = 700 * 1024;
 /// How deep blocks nest (`folded`, `before-after`).
 const BLOCK_DEPTH: usize = 6;
 const DEFAULT_ROOT: &str = "deliverables";
+/// A file that a fact of a card cites, at most (bytes).
+const FACT_FILE_LIMIT: u64 = 128 * 1024;
 
 // ---- the page as the screen gets it ----
 
@@ -104,6 +106,20 @@ impl CardKind {
     /// Whether the card offers lettered options (`A`, `B`, ...); the recommended one is always `A`.
     pub(crate) fn lettered(self) -> bool {
         matches!(self, Self::Question | Self::Nr | Self::ReviewDecision)
+    }
+
+    /// The keys of the fixed choices the page adds under the options (`choice_details` is by these keys).
+    fn fixed_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Question => &["investigate", "other"],
+            Self::Nr => &["other"],
+            Self::ReviewDecision => &["defer", "other"],
+            Self::MustFix => &["fix", "skip"],
+            Self::StructuralProposal => &["approve", "reject", "hold"],
+            Self::Adr => &["keep", "decline"],
+            Self::ReviewMustFix => &["fix", "accept"],
+            Self::UnmetCriterion => &[],
+        }
     }
 
     /// The fixed choices a card of this kind is recommended among (a lettered card: `A`); none for a card that takes no answer.
@@ -169,6 +185,73 @@ pub struct Card {
     pub evidence: Vec<Evidence>,
     /// The numbers of the cards that cause an `unmet-criterion` card.
     pub cards: Vec<String>,
+    /// 「具体的な場面」: the situation the decision plays out in, and why the question arises.
+    pub scene: Option<String>,
+    /// The screenshot of the screen the scene is about; only on a card that asks.
+    pub scene_image: Option<ImageRef>,
+    /// When the matter arises and how much it matters; on `review-decision`, and on `nr` of a design page.
+    pub occurrence: Option<Occurrence>,
+    /// Every condition the decision requires the options to meet; the `unmet` of an option names them.
+    pub conditions: Vec<Condition>,
+    /// The trade-offs of a fixed choice, by its key.
+    pub choice_details: BTreeMap<String, String>,
+}
+
+/// When a matter arises and how much it matters.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Occurrence {
+    /// The conditions that must all hold for the matter to arise.
+    pub conditions: Vec<String>,
+    pub likelihood: Likelihood,
+    /// The ground of `likelihood`; it opens with `実測: ` or `推測: `.
+    pub basis: String,
+    pub impact: String,
+    pub detectability: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "lowercase")]
+pub enum Likelihood {
+    Frequent,
+    Occasional,
+    Rare,
+}
+
+/// A condition the decision requires the options to meet (`KO-03`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Condition {
+    pub id: String,
+    pub text: String,
+}
+
+/// A condition of the card that an option fails, with what the option does against it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Unmet {
+    pub id: String,
+    pub reason: String,
+}
+
+/// A text the screen draws in an option's style.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Sample {
+    pub text: String,
+    /// In px, 1 to 200.
+    pub font_size: u32,
+    /// 100 to 900 in steps of 100.
+    pub font_weight: u32,
+    /// `#rgb` or `#rrggbb`.
+    pub color: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -178,6 +261,16 @@ pub struct CardOption {
     pub key: String,
     pub label: String,
     pub detail: Option<String>,
+    /// The one fix the option's answer hands to the implementation; only on `review-decision`.
+    pub fix: Option<String>,
+    /// The conditions of the card that the option fails.
+    pub unmet: Vec<Unmet>,
+    /// How the option looks.
+    pub image: Option<ImageRef>,
+    /// The option's text style.
+    pub sample: Option<Sample>,
+    /// How things go after the option is chosen, as Mermaid.
+    pub diagram: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -186,6 +279,33 @@ pub struct CardOption {
 pub struct Fact {
     pub label: String,
     pub value: String,
+    /// What the fact's `ref` or `path` holds, for 「中身を見る」; none when it names nothing (and on a page read for its cards alone).
+    pub content: Option<FactContent>,
+}
+
+/// What a fact cites: a node of a deliverable, a file as text or as Markdown, or an image (the file is read when the screen draws it).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum FactContent {
+    Node {
+        root: String,
+        #[serde(rename = "ref")]
+        reference: String,
+        text: String,
+    },
+    Markdown {
+        root: String,
+        path: String,
+        text: String,
+    },
+    Text {
+        root: String,
+        path: String,
+        text: String,
+    },
+    Image(ImageRef),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -780,6 +900,8 @@ struct Walk<'a> {
     docs: BTreeMap<PathBuf, Result<Value, String>>,
     /// Whether the evidence is read (the lines of a file, a node, `git diff`). A page read for its cards alone (`build_input`) checks the evidence's shape and reads none of it.
     resolve: bool,
+    /// The page's subject, once the page has been read far enough to know it (`nr` asks for an occurrence on a design page).
+    subject: Option<Subject>,
 }
 
 type Object = Map<String, Value>;
@@ -796,6 +918,7 @@ impl<'a> Walk<'a> {
             over: false,
             numbers: BTreeSet::new(),
             docs: BTreeMap::new(),
+            subject: None,
         }
     }
 
@@ -1377,25 +1500,12 @@ impl<'a> Walk<'a> {
             }
             "diagram" => {
                 let map = self.keys(value, path, &["type", "mermaid", "caption"])?;
-                let mermaid = self.text(map, "mermaid", path, true);
+                let mermaid = self.mermaid(map, path);
                 let caption = self.text(map, "caption", path, false);
-                let mermaid = mermaid?;
-                let first = mermaid
-                    .lines()
-                    .find(|line| !line.trim().is_empty())
-                    .and_then(|line| line.split_whitespace().next())
-                    .unwrap_or_default();
-                if !matches!(
-                    first,
-                    "flowchart" | "graph" | "sequenceDiagram" | "stateDiagram" | "stateDiagram-v2"
-                ) {
-                    self.bad(
-                        &format!("{path}.mermaid"),
-                        "最初の語は flowchart、graph、sequenceDiagram、stateDiagram、stateDiagram-v2 のどれかにしてください",
-                    );
-                    return None;
-                }
-                Some(Block::Diagram { mermaid, caption })
+                Some(Block::Diagram {
+                    mermaid: mermaid?,
+                    caption,
+                })
             }
             "image" => {
                 let map = self.keys(value, path, &["type", "root", "path", "caption"])?;
@@ -1415,6 +1525,27 @@ impl<'a> Walk<'a> {
                 None
             }
         }
+    }
+
+    /// The Mermaid text of `map["mermaid"]`: not empty, and its first word names one of the diagram types the screen draws.
+    fn mermaid(&mut self, map: &Object, path: &str) -> Option<String> {
+        let mermaid = self.text(map, "mermaid", path, true)?;
+        let first = mermaid
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .and_then(|line| line.split_whitespace().next())
+            .unwrap_or_default();
+        if !matches!(
+            first,
+            "flowchart" | "graph" | "sequenceDiagram" | "stateDiagram" | "stateDiagram-v2"
+        ) {
+            self.bad(
+                &format!("{path}.mermaid"),
+                "最初の語は flowchart、graph、sequenceDiagram、stateDiagram、stateDiagram-v2 のどれかにしてください",
+            );
+            return None;
+        }
+        Some(mermaid)
     }
 
     fn table_rows(&mut self, map: &Object, path: &str) -> Option<Vec<Vec<TableCell>>> {
@@ -1487,6 +1618,11 @@ impl<'a> Walk<'a> {
             "facts",
             "blocks",
             "evidence",
+            "scene",
+            "scene_image",
+            "occurrence",
+            "conditions",
+            "choice_details",
         ];
         if expected == CardKind::UnmetCriterion {
             keys.push("cards");
@@ -1510,7 +1646,12 @@ impl<'a> Walk<'a> {
         }
         let title = self.text(map, "title", path, true);
         let summary = self.text(map, "summary", path, true);
-        let options = self.options(map, path, expected);
+        let scene = self.text(map, "scene", path, expected.lettered());
+        let scene_image = self.scene_image(map, path, expected);
+        let occurrence = self.occurrence(map, path, expected);
+        let conditions = self.conditions(map, path, expected);
+        let options = self.options(map, path, expected, &conditions);
+        let choice_details = self.choice_details(map, path, expected);
         let (recommendation, recommendation_reason) = self.recommendation(map, path, expected);
         let background = self.text(map, "background", path, false);
         let facts = self.facts(map, path);
@@ -1534,10 +1675,170 @@ impl<'a> Walk<'a> {
             blocks,
             evidence,
             cards,
+            scene,
+            scene_image,
+            occurrence,
+            conditions,
+            choice_details,
         })
     }
 
-    fn options(&mut self, map: &Object, path: &str, kind: CardKind) -> Vec<CardOption> {
+    /// Whether `map[key]` is given; on a kind that does not ask it is a violation, and it is not taken.
+    fn only_asking(&mut self, map: &Object, key: &str, path: &str, kind: CardKind) -> bool {
+        let given = map.get(key).is_some_and(|v| !v.is_null());
+        if given && !kind.lettered() {
+            self.bad(
+                &format!("{path}.{key}"),
+                "この種類のカードには付けられません",
+            );
+            return false;
+        }
+        given
+    }
+
+    fn scene_image(&mut self, map: &Object, path: &str, kind: CardKind) -> Option<ImageRef> {
+        if !self.only_asking(map, "scene_image", path, kind) {
+            return None;
+        }
+        let at = format!("{path}.scene_image");
+        let image = self.keys(&map["scene_image"], &at, &["root", "path", "caption"])?;
+        self.image_ref(image, &at)
+    }
+
+    fn occurrence(&mut self, map: &Object, path: &str, kind: CardKind) -> Option<Occurrence> {
+        let at = format!("{path}.occurrence");
+        let asked = match kind {
+            CardKind::ReviewDecision => true,
+            CardKind::Nr => self.subject == Some(Subject::Design),
+            _ => false,
+        };
+        let given = map.get("occurrence").is_some_and(|v| !v.is_null());
+        if !asked {
+            if given {
+                self.bad(&at, "この種類のカードには付けられません");
+            }
+            return None;
+        }
+        if !given {
+            self.bad(&at, "必須です");
+            return None;
+        }
+        let occurrence = self.keys(
+            &map["occurrence"],
+            &at,
+            &[
+                "conditions",
+                "likelihood",
+                "basis",
+                "impact",
+                "detectability",
+            ],
+        )?;
+        let conditions = match self.some(occurrence, "conditions", &at) {
+            Some(_) => self.strings(occurrence, "conditions", &at, true),
+            None => Vec::new(),
+        };
+        let likelihood = match occurrence.get("likelihood").and_then(Value::as_str) {
+            Some("frequent") => Some(Likelihood::Frequent),
+            Some("occasional") => Some(Likelihood::Occasional),
+            Some("rare") => Some(Likelihood::Rare),
+            _ => {
+                self.bad(
+                    &format!("{at}.likelihood"),
+                    "frequent、occasional、rare のどれかにしてください",
+                );
+                None
+            }
+        };
+        let basis = self.text(occurrence, "basis", &at, true);
+        if let Some(basis) = &basis {
+            if !basis.starts_with("実測: ") && !basis.starts_with("推測: ") {
+                self.bad(
+                    &format!("{at}.basis"),
+                    "`実測: ` か `推測: ` で始めてください",
+                );
+            }
+        }
+        let impact = self.text(occurrence, "impact", &at, true);
+        let detectability = self.text(occurrence, "detectability", &at, true);
+        if conditions.is_empty() {
+            return None;
+        }
+        Some(Occurrence {
+            conditions,
+            likelihood: likelihood?,
+            basis: basis?,
+            impact: impact?,
+            detectability: detectability?,
+        })
+    }
+
+    fn conditions(&mut self, map: &Object, path: &str, kind: CardKind) -> Vec<Condition> {
+        if !self.only_asking(map, "conditions", path, kind) {
+            return Vec::new();
+        }
+        let Some(items) = self.array(map, "conditions", path, false) else {
+            return Vec::new();
+        };
+        let mut conditions: Vec<Condition> = Vec::new();
+        for (at, item) in items.iter().enumerate() {
+            let here = format!("{path}.conditions[{at}]");
+            let Some(condition) = self.keys(item, &here, &["id", "text"]) else {
+                continue;
+            };
+            let id = self.text(condition, "id", &here, true);
+            let text = self.text(condition, "text", &here, true);
+            let (Some(id), Some(text)) = (id, text) else {
+                continue;
+            };
+            if conditions.iter().any(|c| c.id == id) {
+                self.bad(&format!("{here}.id"), format!("同じ id があります: {id}"));
+                continue;
+            }
+            conditions.push(Condition { id, text });
+        }
+        conditions
+    }
+
+    fn choice_details(
+        &mut self,
+        map: &Object,
+        path: &str,
+        kind: CardKind,
+    ) -> BTreeMap<String, String> {
+        let mut details = BTreeMap::new();
+        let at = format!("{path}.choice_details");
+        let Some(value) = map.get("choice_details").filter(|v| !v.is_null()) else {
+            return details;
+        };
+        let Some(object) = value.as_object() else {
+            self.bad(&at, "オブジェクトにしてください");
+            return details;
+        };
+        for key in object.keys() {
+            if !kind.fixed_keys().contains(&key.as_str()) {
+                let message = if kind.fixed_keys().is_empty() {
+                    "この種類のカードには固定の選択肢がありません".to_owned()
+                } else {
+                    format!("{} のどれかにしてください", kind.fixed_keys().join("、"))
+                };
+                self.bad(&format!("{at}.{key}"), message);
+                continue;
+            }
+            if let Some(text) = self.text(object, key, &at, true) {
+                details.insert(key.clone(), text);
+            }
+        }
+        details
+    }
+
+    fn options(
+        &mut self,
+        map: &Object,
+        path: &str,
+        kind: CardKind,
+        conditions: &[Condition],
+    ) -> Vec<CardOption> {
         if !kind.lettered() {
             if map.get("options").is_some_and(|v| !v.is_null()) {
                 self.bad(
@@ -1551,14 +1852,47 @@ impl<'a> Walk<'a> {
             return Vec::new();
         };
         let mut options = Vec::new();
+        let mut unmet_without_conditions = false;
         for (at, item) in items.iter().enumerate() {
             let here = format!("{path}.options[{at}]");
-            let Some(option) = self.keys(item, &here, &["key", "label", "detail"]) else {
+            let Some(option) = self.keys(
+                item,
+                &here,
+                &[
+                    "key", "label", "detail", "fix", "unmet", "image", "sample", "diagram",
+                ],
+            ) else {
                 continue;
             };
             let key = self.text(option, "key", &here, true);
             let label = self.text(option, "label", &here, true);
             let detail = self.text(option, "detail", &here, false);
+            let fix = self.text(option, "fix", &here, false);
+            if fix.is_some() && kind != CardKind::ReviewDecision {
+                self.bad(
+                    &format!("{here}.fix"),
+                    "fix は review-decision のカードの選択肢だけに付けられます",
+                );
+            }
+            let unmet = self.unmet(option, &here, conditions);
+            unmet_without_conditions |= !unmet.is_empty() && conditions.is_empty();
+            let image = match option.get("image").filter(|v| !v.is_null()) {
+                Some(image) => {
+                    let at = format!("{here}.image");
+                    self.keys(image, &at, &["root", "path", "caption"])
+                        .and_then(|image| self.image_ref(image, &at))
+                }
+                None => None,
+            };
+            let sample = self.sample(option, &here);
+            let diagram = match option.get("diagram").filter(|v| !v.is_null()) {
+                Some(diagram) => {
+                    let at = format!("{here}.diagram");
+                    self.keys(diagram, &at, &["mermaid"])
+                        .and_then(|diagram| self.mermaid(diagram, &at))
+                }
+                None => None,
+            };
             let letter = u8::try_from(at)
                 .ok()
                 .filter(|n| *n < 26)
@@ -1572,10 +1906,92 @@ impl<'a> Walk<'a> {
                 }
             }
             if let (Some(key), Some(label)) = (key, label) {
-                options.push(CardOption { key, label, detail });
+                options.push(CardOption {
+                    key,
+                    label,
+                    detail,
+                    fix,
+                    unmet,
+                    image,
+                    sample,
+                    diagram,
+                });
             }
         }
+        if unmet_without_conditions {
+            self.bad(
+                &format!("{path}.conditions"),
+                "選択肢に unmet があるカードには必須です",
+            );
+        }
         options
+    }
+
+    /// The `unmet` of an option: `{id, reason}` for conditions of the card, each at most once.
+    fn unmet(&mut self, option: &Object, path: &str, conditions: &[Condition]) -> Vec<Unmet> {
+        let Some(items) = self.array(option, "unmet", path, false) else {
+            return Vec::new();
+        };
+        let mut unmet: Vec<Unmet> = Vec::new();
+        for (at, item) in items.iter().enumerate() {
+            let here = format!("{path}.unmet[{at}]");
+            let Some(entry) = self.keys(item, &here, &["id", "reason"]) else {
+                continue;
+            };
+            let id = self.text(entry, "id", &here, true);
+            let reason = self.text(entry, "reason", &here, true);
+            let (Some(id), Some(reason)) = (id, reason) else {
+                continue;
+            };
+            if !conditions.is_empty() && !conditions.iter().any(|c| c.id == id) {
+                self.bad(
+                    &format!("{here}.id"),
+                    format!("カードの conditions にない id です: {id}"),
+                );
+            } else if unmet.iter().any(|u| u.id == id) {
+                self.bad(&format!("{here}.id"), format!("同じ id があります: {id}"));
+            } else {
+                unmet.push(Unmet { id, reason });
+            }
+        }
+        unmet
+    }
+
+    /// The `sample` of an option: a text in a size (1 to 200 px), a weight (100 to 900 in steps of 100) and, optionally, a colour (`#rgb` or `#rrggbb`).
+    fn sample(&mut self, option: &Object, path: &str) -> Option<Sample> {
+        let value = option.get("sample").filter(|v| !v.is_null())?;
+        let at = format!("{path}.sample");
+        let map = self.keys(value, &at, &["text", "font_size", "font_weight", "color"])?;
+        let text = self.text(map, "text", &at, true);
+        let size = self.uint(map, "font_size", &at, true);
+        let weight = self.uint(map, "font_weight", &at, true);
+        let color = self.text(map, "color", &at, false);
+        let size = size.filter(|n| (1..=200).contains(n));
+        if size.is_none() && map.get("font_size").is_some_and(Value::is_number) {
+            self.bad(
+                &format!("{at}.font_size"),
+                "1 から 200 の整数にしてください",
+            );
+        }
+        let weight = weight.filter(|n| (100..=900).contains(n) && n % 100 == 0);
+        if weight.is_none() && map.get("font_weight").is_some_and(Value::is_number) {
+            self.bad(
+                &format!("{at}.font_weight"),
+                "100 から 900 の 100 きざみの整数にしてください",
+            );
+        }
+        if let Some(color) = &color {
+            let hex = color.strip_prefix('#').unwrap_or("");
+            if !matches!(hex.len(), 3 | 6) || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                self.bad(&format!("{at}.color"), "`#rgb` か `#rrggbb` にしてください");
+            }
+        }
+        Some(Sample {
+            text: text?,
+            font_size: size?,
+            font_weight: weight?,
+            color,
+        })
     }
 
     fn recommendation(
@@ -1615,16 +2031,113 @@ impl<'a> Walk<'a> {
         let mut facts = Vec::new();
         for (at, item) in items.iter().enumerate() {
             let here = format!("{path}.facts[{at}]");
-            let Some(fact) = self.keys(item, &here, &["label", "value"]) else {
+            let Some(fact) = self.keys(item, &here, &["label", "value", "ref", "path", "root"])
+            else {
                 continue;
             };
             let label = self.text(fact, "label", &here, true);
             let value = self.text(fact, "value", &here, true);
+            let content = self.fact_content(fact, &here, value.as_deref());
             if let (Some(label), Some(value)) = (label, value) {
-                facts.push(Fact { label, value });
+                facts.push(Fact {
+                    label,
+                    value,
+                    content,
+                });
             }
         }
         facts
+    }
+
+    /// What the `ref` or the `path` of a fact holds (`root`, which defaults to `deliverables`, goes with either): a node, a Markdown file, a text file or an image. A page read for its cards alone checks the shape and reads none of it.
+    fn fact_content(
+        &mut self,
+        fact: &Object,
+        path: &str,
+        value: Option<&str>,
+    ) -> Option<FactContent> {
+        let reference = self.text(fact, "ref", path, false);
+        let file = self.text(fact, "path", path, false);
+        if reference.is_some() && file.is_some() {
+            self.bad(path, "ref と path は両方は付けられません");
+            return None;
+        }
+        if reference.is_none() && file.is_none() {
+            if fact.get("root").is_some_and(|v| !v.is_null()) {
+                self.bad(&format!("{path}.root"), "ref か path と一緒に使います");
+            }
+            return None;
+        }
+        let (name, root) = self.root_of(fact, path)?;
+        if let Some(reference) = reference {
+            let at = format!("{path}.ref");
+            if let Err(message) = split_ref(&reference) {
+                self.bad(&at, message);
+                return None;
+            }
+            if !self.resolve || self.over_budget(path) {
+                return None;
+            }
+            return match node_text(&root, &reference, &mut self.docs) {
+                Ok(text) => {
+                    self.resolved += text.len();
+                    Some(FactContent::Node {
+                        root: name,
+                        reference,
+                        text,
+                    })
+                }
+                Err(message) => {
+                    self.bad(&at, message);
+                    None
+                }
+            };
+        }
+        let file = file?;
+        let at = format!("{path}.path");
+        if let Err(message) = check_clean(&file) {
+            self.bad(&at, message);
+            return None;
+        }
+        if !self.resolve || self.over_budget(path) {
+            return None;
+        }
+        if formation_image::mime_of(&file).is_some() {
+            if let Err(message) = formation_image::check(&root, &file) {
+                self.bad(&at, message);
+                return None;
+            }
+            return Some(FactContent::Image(ImageRef {
+                root: name,
+                path: file,
+                caption: value.unwrap_or_default().to_owned(),
+            }));
+        }
+        let read = locate(&root, &file).and_then(|real| read_bounded(&real, FACT_FILE_LIMIT));
+        let text = match read.and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|_| "UTF-8 の文字ではありません".to_owned())
+        }) {
+            Ok(text) => text,
+            Err(message) => {
+                self.bad(&at, message);
+                return None;
+            }
+        };
+        self.resolved += text.len();
+        let lower = file.to_ascii_lowercase();
+        Some(if lower.ends_with(".md") || lower.ends_with(".markdown") {
+            FactContent::Markdown {
+                root: name,
+                path: file,
+                text,
+            }
+        } else {
+            FactContent::Text {
+                root: name,
+                path: file,
+                text,
+            }
+        })
     }
 
     // -- the sections --
@@ -1858,6 +2371,7 @@ impl<'a> Walk<'a> {
             (None, _) => None,
         };
         let (kind, subject) = (kind?, subject?);
+        self.subject = Some(subject);
         let mut keys = vec![
             "schema_version",
             "page_kind",
@@ -2580,12 +3094,23 @@ mod tests {
         }
     }
 
+    fn occurrence() -> Value {
+        json!({
+            "conditions": ["条件"],
+            "likelihood": "rare",
+            "basis": "実測: 試した",
+            "impact": "影響",
+            "detectability": "気づかない"
+        })
+    }
+
     fn question(number: &str) -> Value {
         json!({
             "kind": "question",
             "number": number,
             "title": "どちらにしますか",
             "summary": "要約",
+            "scene": "場面",
             "options": [
                 {"key": "A", "label": "案 A"},
                 {"key": "B", "label": "案 B", "detail": "詳しく"}
@@ -2697,6 +3222,7 @@ mod tests {
             }],
             "needs_user_decision": [{
                 "kind": "review-decision", "number": "ND-1", "title": "t", "summary": "s",
+                "scene": "場面", "occurrence": occurrence(),
                 "options": [{"key": "A", "label": "a"}],
                 "recommendation": "A", "recommendation_reason": "r"
             }],
@@ -2734,7 +3260,7 @@ mod tests {
         value["what"] = json!("x");
         value["questions"][0]["options"][1]["key"] = json!("C");
         value["questions"][0]["recommendation"] = json!("B");
-        value["questions"][0]["scene"] = json!("not in the contract");
+        value["questions"][0]["unlisted"] = json!("not in the contract");
         value["questions"][0]["evidence"] =
             json!([{"type": "excerpt", "root": "nowhere", "path": "a", "start": 1}]);
         let found = violations(&value, &repo);
@@ -2747,7 +3273,7 @@ mod tests {
                 "$.questions[0].evidence[0].root",
                 "$.questions[0].options[1].key",
                 "$.questions[0].recommendation",
-                "$.questions[0].scene",
+                "$.questions[0].unlisted",
                 "$.title",
                 "$.what",
             ]
@@ -3079,7 +3605,7 @@ mod tests {
             {"type": "node", "root": "deliverables", "ref": "design.json#/designs/NONE"}
         ]);
         value["needs_user_decision"] = json!([
-            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r", "evidence": cited}
+            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "scene": "場面", "occurrence": occurrence(), "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r", "evidence": cited}
         ]);
         value["approval_scope"][0]["items"] = json!([
             {"ref": "design.json#/designs/NONE", "description": "d"},
@@ -3125,7 +3651,7 @@ mod tests {
         // Another list of the page shares the numbers of the first.
         let mut value = approval(&repo);
         value["needs_user_decision"] = json!([
-            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r"}
+            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "scene": "場面", "occurrence": occurrence(), "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r"}
         ]);
         value["residual_must_fix"] = json!([
             {"kind": "must-fix", "number": "NR-1", "title": "t", "summary": "s", "recommendation": "fix", "recommendation_reason": "r"}
@@ -4044,6 +4570,297 @@ mod tests {
         assert!(
             args.contains(&"--no-ext-diff".to_owned())
                 && args.contains(&"--literal-pathspecs".to_owned())
+        );
+    }
+
+    // -- the cards of the earlier feature-dev: scene, occurrence, conditions, the details of an option and the content of a fact --
+
+    /// `open_questions` with the first question changed by `change`.
+    fn with_question(repo: &Repo, change: impl FnOnce(&mut Value)) -> Value {
+        let mut value = open_questions(repo);
+        change(&mut value["questions"][0]);
+        value
+    }
+
+    #[test]
+    fn a_card_that_asks_needs_a_scene_and_any_other_card_may_have_one() {
+        let repo = repo("scene");
+        let value = with_question(&repo, |q| {
+            q.as_object_mut().unwrap().remove("scene");
+        });
+        assert_eq!(paths(&violations(&value, &repo)), ["$.questions[0].scene"]);
+        let mut value = approval(&repo);
+        value["residual_must_fix"] = json!([
+            {"kind": "must-fix", "number": "MF-1", "title": "t", "summary": "s", "scene": "場面", "recommendation": "fix", "recommendation_reason": "r"}
+        ]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.residual_must_fix[0].scene.as_deref(), Some("場面"));
+    }
+
+    #[test]
+    fn a_scene_image_is_read_like_an_image_block_and_only_on_a_card_that_asks() {
+        let repo = repo("scene-image");
+        write_bytes(&repo.dir, ".feature-dev/current/ui/a.png", PNG_1X1);
+        let image = json!({"path": "ui/a.png", "caption": "いまの画面"});
+        let value = with_question(&repo, |q| q["scene_image"] = image.clone());
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(
+            page.questions[0].scene_image,
+            Some(ImageRef {
+                root: "deliverables".into(),
+                path: "ui/a.png".into(),
+                caption: "いまの画面".into()
+            })
+        );
+        let missing = with_question(&repo, |q| {
+            q["scene_image"] = json!({"path": "ui/none.png", "caption": "c"})
+        });
+        assert_eq!(
+            paths(&violations(&missing, &repo)),
+            ["$.questions[0].scene_image.path"]
+        );
+        assert!(build_input(&missing, &repo.allowed()).is_ok());
+        let mut other = approval(&repo);
+        other["residual_must_fix"] = json!([
+            {"kind": "must-fix", "number": "MF-1", "title": "t", "summary": "s", "scene_image": image, "recommendation": "fix", "recommendation_reason": "r"}
+        ]);
+        assert_eq!(
+            paths(&violations(&other, &repo)),
+            ["$.residual_must_fix[0].scene_image"]
+        );
+    }
+
+    #[test]
+    fn an_occurrence_is_required_on_a_review_decision_and_on_an_nr_of_a_design_and_nowhere_else() {
+        let repo = repo("occurrence");
+        let mut value = approval(&repo);
+        let nr = |extra: Value| {
+            let mut card = json!({"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "scene": "場面", "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r"});
+            card.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            card
+        };
+        value["needs_user_decision"] = json!([nr(json!({}))]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.needs_user_decision[0].occurrence"]
+        );
+        value["needs_user_decision"] = json!([nr(json!({"occurrence": occurrence()}))]);
+        let page = build(&value, &repo.allowed()).unwrap();
+        let got = page.needs_user_decision[0].occurrence.as_ref().unwrap();
+        assert_eq!(got.likelihood, Likelihood::Rare);
+        assert_eq!(got.conditions, ["条件"]);
+        // On a requirement page an nr takes none.
+        value["subject"] = json!("requirement");
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.needs_user_decision[0].occurrence"]
+        );
+        // A question takes none either.
+        let bad = with_question(&repo, |q| q["occurrence"] = occurrence());
+        assert_eq!(
+            paths(&violations(&bad, &repo)),
+            ["$.questions[0].occurrence"]
+        );
+    }
+
+    #[test]
+    fn every_part_of_an_occurrence_is_checked() {
+        let repo = repo("occurrence-parts");
+        let mut value = approval(&repo);
+        value["needs_user_decision"] = json!([
+            {"kind": "nr", "number": "NR-1", "title": "t", "summary": "s", "scene": "場面", "options": [{"key": "A", "label": "a"}], "recommendation": "A", "recommendation_reason": "r",
+             "occurrence": {"conditions": [], "likelihood": "often", "basis": "たぶん", "impact": "i"}}
+        ]);
+        let found = violations(&value, &repo);
+        let mut at = paths(&found);
+        at.sort_unstable();
+        assert_eq!(
+            at,
+            [
+                "$.needs_user_decision[0].occurrence.basis",
+                "$.needs_user_decision[0].occurrence.conditions",
+                "$.needs_user_decision[0].occurrence.detectability",
+                "$.needs_user_decision[0].occurrence.likelihood",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_conditions_of_a_card_and_the_unmet_ones_of_its_options_go_together() {
+        let repo = repo("conditions");
+        let value = with_question(&repo, |q| {
+            q["conditions"] =
+                json!([{"id": "KO-01", "text": "止められる"}, {"id": "KO-02", "text": "戻せる"}]);
+            q["options"][1]["unmet"] = json!([{"id": "KO-02", "reason": "戻せない"}]);
+        });
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.questions[0].conditions.len(), 2);
+        assert_eq!(page.questions[0].options[1].unmet[0].id, "KO-02");
+        // A condition the card does not list, and an unmet with no conditions at all.
+        let unknown = with_question(&repo, |q| {
+            q["conditions"] = json!([{"id": "KO-01", "text": "止められる"}]);
+            q["options"][1]["unmet"] = json!([{"id": "KO-09", "reason": "r"}]);
+        });
+        assert_eq!(
+            paths(&violations(&unknown, &repo)),
+            ["$.questions[0].options[1].unmet[0].id"]
+        );
+        let none = with_question(&repo, |q| {
+            q["options"][1]["unmet"] = json!([{"id": "KO-01", "reason": "r"}]);
+        });
+        assert_eq!(
+            paths(&violations(&none, &repo)),
+            ["$.questions[0].conditions"]
+        );
+        let twice = with_question(&repo, |q| {
+            q["conditions"] = json!([{"id": "KO-01", "text": "a"}, {"id": "KO-01", "text": "b"}]);
+        });
+        assert_eq!(
+            paths(&violations(&twice, &repo)),
+            ["$.questions[0].conditions[1].id"]
+        );
+    }
+
+    #[test]
+    fn an_option_takes_a_fix_an_image_a_sample_and_a_diagram() {
+        let repo = repo("option-parts");
+        write_bytes(&repo.dir, ".feature-dev/current/ui/a.png", PNG_1X1);
+        let value = json!({
+            "schema_version": 1, "page_kind": "code-review", "subject": "code",
+            "context_label": "c", "title": "t", "what": "w",
+            "roots": {"deliverables": repo.case_root()},
+            "needs_user_decision": [{
+                "kind": "review-decision", "number": "ND-1", "title": "t", "summary": "s",
+                "scene": "場面", "occurrence": occurrence(),
+                "options": [{
+                    "key": "A", "label": "直す", "fix": "ロックを足す",
+                    "image": {"path": "ui/a.png", "caption": "直したあと"},
+                    "sample": {"text": "見本", "font_size": 14, "font_weight": 700, "color": "#2f5bd3"},
+                    "diagram": {"mermaid": "flowchart LR\n  a --> b"}
+                }],
+                "recommendation": "A", "recommendation_reason": "r",
+                "choice_details": {"defer": "このまま出す"}
+            }]
+        });
+        let page = build(&value, &repo.allowed()).unwrap();
+        let option = &page.needs_user_decision[0].options[0];
+        assert_eq!(option.fix.as_deref(), Some("ロックを足す"));
+        assert_eq!(option.image.as_ref().unwrap().path, "ui/a.png");
+        assert_eq!(option.sample.as_ref().unwrap().font_weight, 700);
+        assert_eq!(option.diagram.as_deref(), Some("flowchart LR\n  a --> b"));
+        assert_eq!(
+            page.needs_user_decision[0].choice_details["defer"],
+            "このまま出す"
+        );
+        // A fix on a question, a diagram of another type, a sample out of its ranges, and a key that is no fixed choice.
+        let bad = with_question(&repo, |q| {
+            q["options"][0]["fix"] = json!("x");
+            q["options"][0]["diagram"] = json!({"mermaid": "pie\n  a: 1"});
+            q["options"][0]["sample"] =
+                json!({"text": "t", "font_size": 0, "font_weight": 650, "color": "red"});
+            q["choice_details"] = json!({"defer": "x", "other": "y"});
+        });
+        let found = violations(&bad, &repo);
+        let mut at = paths(&found);
+        at.sort_unstable();
+        assert_eq!(
+            at,
+            [
+                "$.questions[0].choice_details.defer",
+                "$.questions[0].options[0].diagram.mermaid",
+                "$.questions[0].options[0].fix",
+                "$.questions[0].options[0].sample.color",
+                "$.questions[0].options[0].sample.font_size",
+                "$.questions[0].options[0].sample.font_weight",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fact_with_a_ref_or_a_path_carries_what_it_cites() {
+        let repo = repo("fact-content");
+        write(&repo.dir, ".feature-dev/current/notes.txt", "plain\n");
+        write(
+            &repo.dir,
+            ".feature-dev/current/doc.md",
+            "# 見出し\n\n本文\n",
+        );
+        write_bytes(&repo.dir, ".feature-dev/current/shot.png", PNG_1X1);
+        let value = with_question(&repo, |q| {
+            q["facts"] = json!([
+                {"label": "ノード", "value": "第二の設計", "ref": "design.json#/designs/DESIGN-02"},
+                {"label": "文書", "value": "メモ", "path": "doc.md"},
+                {"label": "文字", "value": "テキスト", "path": "notes.txt"},
+                {"label": "画像", "value": "いまの画面", "path": "shot.png"},
+                {"label": "ソース", "value": "main", "root": "repo", "path": "src/main.rs"},
+                {"label": "なし", "value": "何も引かない"}
+            ]);
+        });
+        let page = build(&value, &repo.allowed()).unwrap();
+        let facts = &page.questions[0].facts;
+        let Some(FactContent::Node { text, .. }) = &facts[0].content else {
+            panic!("a node");
+        };
+        assert!(text.contains("second"));
+        assert!(
+            matches!(&facts[1].content, Some(FactContent::Markdown { text, .. }) if text.contains("# 見出し"))
+        );
+        assert!(
+            matches!(&facts[2].content, Some(FactContent::Text { text, .. }) if text == "plain\n")
+        );
+        assert_eq!(
+            facts[3].content,
+            Some(FactContent::Image(ImageRef {
+                root: "deliverables".into(),
+                path: "shot.png".into(),
+                caption: "いまの画面".into()
+            }))
+        );
+        assert!(
+            matches!(&facts[4].content, Some(FactContent::Text { root, .. }) if root == "repo")
+        );
+        assert_eq!(facts[5].content, None);
+        // A page read for its cards alone reads none of it.
+        let input = build_input(&value, &repo.allowed()).unwrap();
+        assert!(input.questions[0].facts.iter().all(|f| f.content.is_none()));
+    }
+
+    #[test]
+    fn a_fact_that_cites_wrongly_is_a_violation() {
+        let repo = repo("fact-bad");
+        let value = with_question(&repo, |q| {
+            q["facts"] = json!([
+                {"label": "a", "value": "v", "ref": "design.json#/designs/DESIGN-01", "path": "doc.md"},
+                {"label": "b", "value": "v", "root": "repo"},
+                {"label": "c", "value": "v", "path": "missing.md"},
+                {"label": "d", "value": "v", "ref": "design.json#/designs/NONE"},
+                {"label": "e", "value": "v", "path": "../x.md"},
+                {"label": "f", "value": "v", "ref": "no-pointer"}
+            ]);
+        });
+        let found = violations(&value, &repo);
+        assert_eq!(
+            paths(&found),
+            [
+                "$.questions[0].facts[0]",
+                "$.questions[0].facts[1].root",
+                "$.questions[0].facts[2].path",
+                "$.questions[0].facts[3].ref",
+                "$.questions[0].facts[4].path",
+                "$.questions[0].facts[5].ref",
+            ]
+        );
+        // Without its evidence read, only the shapes are checked.
+        assert_eq!(
+            paths(&build_input(&value, &repo.allowed()).unwrap_err()),
+            [
+                "$.questions[0].facts[0]",
+                "$.questions[0].facts[1].root",
+                "$.questions[0].facts[4].path",
+                "$.questions[0].facts[5].ref",
+            ]
         );
     }
 

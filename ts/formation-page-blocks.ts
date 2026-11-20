@@ -1,6 +1,7 @@
 // The blocks and the evidence of a decision page (A-41, formation-page.ts): what a child wrote in its page and what Rust read for it. The text is the child's, so every text goes in as `textContent`; nothing is read as HTML. The one exception is the SVG that Mermaid draws (`securityLevel: "strict"`), which goes through DOMPurify's SVG profile.
 import type { Block } from "./bindings/Block";
 import type { Evidence } from "./bindings/Evidence";
+import type { FactContent } from "./bindings/FactContent";
 import type { ImageRef } from "./bindings/ImageRef";
 import { tag } from "./dom.js";
 import { loadMermaid } from "./vendor-load.js";
@@ -63,7 +64,7 @@ function drawBlock(block: Block, lazy: boolean): HTMLElement {
   }
 }
 
-function drawTable(header: string[], rows: { text: string; changed: boolean }[][]): HTMLElement {
+export function drawTable(header: string[], rows: { text: string; changed: boolean }[][]): HTMLElement {
   const wrap = tag("div", "fp-table-wrap");
   const table = tag("table", "fp-table");
   const head = tag("tr");
@@ -268,6 +269,31 @@ function plainLine(text: string, kind: string): HTMLElement {
   row.dataset.kind = kind;
   row.append(tag("span", "fp-lc", text));
   return row;
+}
+
+// Markdown that a fact cites, as HTML. Raw HTML in it is not kept as markup, and a link that is not http(s) stays text only: the file is the child's, and the page draws only what Markdown itself makes (headings, lists, tables, code, emphasis, links).
+const MARKDOWN_SANITIZE = {
+  ALLOWED_TAGS: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "pre", "code", "em", "strong", "del", "blockquote", "hr", "br", "table", "thead", "tbody", "tr", "th", "td", "a"],
+  ALLOWED_ATTR: ["href", "start"],
+  ALLOWED_URI_REGEXP: /^https?:/i,
+  ALLOW_DATA_ATTR: false,
+};
+
+// What a fact cites, as 「中身を見る」 shows it: a node of a deliverable as its tree, a Markdown file formatted, any other file as text, an image as an image. `lazy` is for a fold that is closed.
+export function drawFactContent(content: FactContent, lazy: boolean): HTMLElement {
+  switch (content.type) {
+    case "node":
+      return drawValue(content.text);
+    case "markdown": {
+      const node = tag("div", "fp-md");
+      node.innerHTML = DOMPurify.sanitize(marked.parse(content.text), MARKDOWN_SANITIZE);
+      return node;
+    }
+    case "text":
+      return tag("pre", "fp-pre", content.text);
+    case "image":
+      return drawImage(content, lazy);
+  }
 }
 
 // A node of a deliverable: its JSON as a tree of folds, or as the text it is when it is not JSON.

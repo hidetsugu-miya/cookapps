@@ -9,6 +9,7 @@ import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { Card } from "../ts/bindings/Card";
+import type { CardOption } from "../ts/bindings/CardOption";
 import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
 import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
 import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
@@ -825,8 +826,16 @@ export const decisionCard = (number: string, extra: Partial<Card> = {}): Card =>
   blocks: [],
   evidence: [],
   cards: [],
+  scene: null,
+  sceneImage: null,
+  occurrence: null,
+  conditions: [],
+  choiceDetails: {},
   ...extra,
 });
+
+// An option of a card of a decision page: a letter and a label, which `extra` fills in (the fix, the unmet conditions, the image, the sample and the diagram).
+export const decisionOption = (key: string, label: string, detail: string | null = null, extra: Partial<CardOption> = {}): CardOption => ({ key, label, detail, fix: null, unmet: [], image: null, sample: null, diagram: null, ...extra });
 
 // A launched child of a formation as `formation_list` lists it (A-37): its project (`repo`), the branch and the worktree it has under `/work/`, which tsunagiai made (`created`), and its terminal and agent (`handle`, `paneKey`, as the Orca rows of `orcaRow` name them).
 export const listedChild = (name: string, state: Exclude<FormationState, "planned">, extra: Partial<FormationListChild> = {}): FormationListChild => ({ name, repo: "example-api", branch: `formation/${name}`, path: `/work/${name}`, environment: "local", state, created: true, handle: `term_${name}`, paneKey: `tab_${name}:leaf_1`, terminal: true, awaitingPage: false, ...extra });

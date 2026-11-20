@@ -173,6 +173,8 @@ const answers = {
   },
   // A-41 (#923): the reply that the answers of a page make was put into the leader's terminal.
   formation_page_answer: null,
+  // A-41 (#1153): an image of a page as a `data:` URI: a picture 600 pixels wide, wider than the 400 pixels the page shows it at.
+  formation_page_image: `data:image/svg+xml,${encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='600' height='300'><rect width='600' height='300' fill='#99cccc'/></svg>")}`,
   // A-37 (#893): no PC has the owner's consent yet; a spec that needs one gives `formationConsent` of e2e/support.ts, and one that presses 「同意する」 or 「取り消す」 mocks `formation_consent` or `formation_consent_revoke`.
   formation_consents: [],
   // J-1: no Jira connection saved yet; a spec that saves or tries one mocks `jira_save` or `jira_test`, and one that starts with a saved connection gives `jira_settings`.

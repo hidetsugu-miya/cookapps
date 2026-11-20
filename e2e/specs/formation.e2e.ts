@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -2560,8 +2560,8 @@ const QUESTION = decisionCard("Q1", {
   title: "ログインに何回失敗したら止めるか",
   summary: "止める回数を決める",
   options: [
-    { key: "A", label: "5 回で 15 分止める", detail: "API の上限と同じ" },
-    { key: "B", label: "10 回で 15 分止める", detail: null },
+    decisionOption("A", "5 回で 15 分止める", "API の上限と同じ"),
+    decisionOption("B", "10 回で 15 分止める", null),
   ],
   recommendation: "A",
   recommendationReason: "今の API の上限と同じ",
@@ -2647,7 +2647,7 @@ describe("orchestration mode: the decision page of a child", () => {
       pageKind: "approval",
       subject: "design",
       what: "設計を承認します",
-      needsUserDecision: [decisionCard("NR-1", { kind: "nr", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      needsUserDecision: [decisionCard("NR-1", { kind: "nr", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
       adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
@@ -2728,7 +2728,7 @@ describe("orchestration mode: the decision page of a child", () => {
   it("draws the blocks, the facts and the evidence of a card behind 詳しく見る", async () => {
     const card = decisionCard("Q1", {
       background: "今の上限は 5 回",
-      facts: [{ label: "場所", value: "api/auth" }],
+      facts: [{ label: "場所", value: "api/auth", content: null }],
       blocks: [
         { type: "heading", text: "比べ方" },
         { type: "paragraph", text: "二つの案" },
@@ -2786,14 +2786,14 @@ describe("orchestration mode: the decision page of a child", () => {
 
   it("draws a diagram with Mermaid as an SVG, and shows the source as text when it cannot", async () => {
     const good = "flowchart TD\n  A[開始] --> B[終了]";
-    await openPage(decisionPage({ questions: [decisionCard("Q1", { options: [{ key: "A", label: "案", detail: null }], blocks: [{ type: "diagram", mermaid: good, caption: "流れ" }] })], changes: [] }));
+    await openPage(decisionPage({ questions: [decisionCard("Q1", { options: [decisionOption("A", "案", null)], blocks: [{ type: "diagram", mermaid: good, caption: "流れ" }] })], changes: [] }));
     const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
     await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
     expect(await count(`${box} svg`)).toBe(1);
     expect(await $(`${box} svg`).getAttribute("aria-label")).toBe("流れ");
     expect(await browser.execute((s) => document.querySelector(s)!.textContent, `${box} svg`)).toContain("開始");
     expect(await textsOf('#formation-page [data-card="Q1"] figcaption')).toEqual(["流れ"]);
-    // The app's icon rule (`svg { width: 20px }`) does not shrink the diagram: it is as wide as the smaller of the box and its own width (#1089).
+    // The app's icon rule (`svg { width: 20px }`) does not shrink the diagram, and the first diagram of a card that asks is stretched to the width of the card (#1089, #1154).
     const size = await browser.execute((s) => {
       const svg = document.querySelector(s) as SVGSVGElement;
       const box = svg.parentElement as HTMLElement;
@@ -2801,13 +2801,12 @@ describe("orchestration mode: the decision page of a child", () => {
       return {
         width: svg.getBoundingClientRect().width,
         boxWidth: box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
-        ownWidth: svg.viewBox.baseVal.width,
         fill: getComputedStyle(svg).fill,
         stroke: getComputedStyle(svg).stroke,
       };
     }, `${box} svg`);
     expect(size.width).not.toBe(20);
-    expect(Math.abs(size.width - Math.min(size.boxWidth, size.ownWidth))).toBeLessThan(1);
+    expect(Math.abs(size.width - size.boxWidth)).toBeLessThan(1);
     expect(size.stroke).toBe("none");
     expect(await browser.execute(() => document.querySelectorAll('script[src$="mermaid.min.js"]').length)).toBe(1);
     // The diagram is in the card, not behind 詳しく見る.
@@ -2820,7 +2819,7 @@ describe("orchestration mode: the decision page of a child", () => {
       decisionPage({
         questions: [
           decisionCard("Q1", {
-            options: [{ key: "A", label: "案", detail: null }],
+            options: [decisionOption("A", "案", null)],
             blocks: [
               { type: "diagram", mermaid: good, caption: "表の図" },
               { type: "diagram", mermaid: good, caption: "中の図" },
@@ -2852,6 +2851,204 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await count(`${box} svg`)).toBe(0);
     expect(await textsOf(`${box} .fp-diagram-source`)).toEqual([bad]);
     await expect($(`${box} .fp-diagram-source`)).toBeDisplayed();
+  });
+
+  // A card that asks of the earlier feature-dev: 「聞きたいこと」, the scene, the image of the screen, the flow, the choices and the details of each.
+  const FLOW = "flowchart LR\n  subgraph S[共通の手順]\n    a[予約を受け付ける] --> b[診察が終わる]\n  end\n  subgraph OA[案 A の流れ]\n    c[会計待ちにできる<br/>（病院ごと）]\n  end\n  b --> c\n  classDef shared fill:#e8eefb,stroke:#2f5bd3,color:#1b2a4a\n  classDef resolves fill:#e8f3ec,stroke:#2e7d4f,color:#17402a\n  class a,b shared\n  class c resolves\n  style S fill:#f6f8fd,stroke:#2f5bd3\n  style OA fill:#f4faf6,stroke:#2e7d4f";
+  const SHOT = { root: "deliverables", path: "ui/now.png", caption: "いまの画面" };
+  const ASKING = decisionCard("Q1", {
+    title: "会計待ちを選べるようにするか？",
+    summary: "要約は出さない",
+    scene: "診察を終えた予約を会計待ちにしようとしたとき、選べるかどうかが決まります。",
+    sceneImage: SHOT,
+    blocks: [
+      { type: "diagram", mermaid: FLOW, caption: null },
+      { type: "paragraph", text: "詳しい文" },
+    ],
+    conditions: [
+      { id: "KO-01", text: "予約を失わない" },
+      { id: "KO-02", text: "元に戻せる" },
+    ],
+    options: [
+      decisionOption("A", "選べるようにする", "選ぶと会計待ちになる", {
+        fix: "ステータスに会計待ちを足す",
+        sample: { text: "会計待ち", fontSize: 18, fontWeight: 700, color: "#2f5bd3" },
+        image: { root: "deliverables", path: "ui/after.png", caption: "直したあと" },
+        diagram: "flowchart LR\n  x[選ぶ] --> y[会計待ち]",
+      }),
+      decisionOption("B", "今のままにする", null, { unmet: [{ id: "KO-02", reason: "戻す手段がありません" }] }),
+    ],
+    recommendation: "A",
+    recommendationReason: "予約を失わないから",
+    choiceDetails: { investigate: "調べるあいだ予約は今のままです" },
+  });
+  const CARD_Q = '#formation-page [data-card="Q1"]';
+
+  it("opens a card that asks with 聞きたいこと, shows the scene and no summary, and draws the image of the screen in the card at 400px with 拡大する", async () => {
+    await openPage(decisionPage({ questions: [ASKING] }));
+    expect(await textsOf(`${CARD_Q} .fp-asks`)).toEqual(["聞きたいこと"]);
+    expect(await textsOf(`${CARD_Q} .fp-card-head > *`)).toEqual(["Q1", "聞きたいこと", "会計待ちを選べるようにするか？"]);
+    expect(await textsOf(`${CARD_Q} > .fp-p`)).toEqual(["診察を終えた予約を会計待ちにしようとしたとき、選べるかどうかが決まります。"]);
+    expect(await textsOf(`${CARD_Q} > .fp-h`)).toEqual(["具体的な場面", "あなたの回答"]);
+    expect(await browser.execute((s) => document.querySelector(s)!.textContent, CARD_Q)).not.toContain("要約は出さない");
+    // The image is in the card, never in a fold, and is read by its root and path.
+    expect(await count(`${CARD_Q} > .fp-image`)).toBe(1);
+    expect(await waitForCalls("formation_page_image", 1)).toEqual([{ name: "formation", child: "req-login", root: "deliverables", path: "ui/now.png" }]);
+    const picture = `${CARD_Q} > .fp-image img`;
+    await browser.waitUntil(async () => (await count(picture)) === 1);
+    const widthOf = () => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().width, picture);
+    expect(Math.round(await widthOf())).toBe(400);
+    expect(await textsOf(`${CARD_Q} > .fp-image figcaption`)).toEqual(["いまの画面"]);
+    await browser.waitUntil(async () => (await textsOf(`${CARD_Q} > .fp-image .fp-image-zoom`))[0] === "拡大する");
+    await $(`${CARD_Q} > .fp-image .fp-image-zoom`).click();
+    expect(await textsOf(`${CARD_Q} > .fp-image .fp-image-zoom`)).toEqual(["縮小する"]);
+    expect(await widthOf()).toBeGreaterThan(400);
+    await $(`${CARD_Q} > .fp-image .fp-image-zoom`).click();
+    expect(Math.round(await widthOf())).toBe(400);
+  });
+
+  it("draws the first diagram of a card that asks as wide as the card, in the colors of its classDef and subgraph styles, and keeps the line break of a label", async () => {
+    await openPage(decisionPage({ questions: [ASKING] }));
+    const box = `${CARD_Q} > .fp-diagram .fp-diagram-box`;
+    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
+    const drawn = await browser.execute((s) => {
+      const svg = document.querySelector(`${s} svg`) as SVGSVGElement;
+      const holder = svg.parentElement as HTMLElement;
+      const cs = getComputedStyle(holder);
+      const fillOf = (text: string) => {
+        const label = [...svg.querySelectorAll("g.node")].find((g) => g.textContent?.includes(text));
+        const shape = label?.querySelector("rect, polygon, path");
+        return shape ? getComputedStyle(shape).fill : null;
+      };
+      const cluster = [...svg.querySelectorAll("g.cluster")].find((g) => g.textContent?.includes("案 A の流れ"));
+      const joined = [...svg.querySelectorAll("g.node")].find((g) => g.textContent?.includes("会計待ちにできる"));
+      return {
+        width: svg.getBoundingClientRect().width,
+        boxWidth: holder.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        shared: fillOf("予約を受け付ける"),
+        resolves: fillOf("会計待ちにできる"),
+        cluster: cluster?.querySelector("rect") ? getComputedStyle(cluster.querySelector("rect")!).fill : null,
+        lines: joined ? [...joined.querySelectorAll("tspan")].map((t) => t.textContent) : [],
+        text: svg.textContent ?? "",
+      };
+    }, box);
+    expect(Math.abs(drawn.width - drawn.boxWidth)).toBeLessThan(1);
+    expect(drawn.shared).toBe("rgb(232, 238, 251)");
+    expect(drawn.resolves).toBe("rgb(232, 243, 236)");
+    expect(drawn.cluster).toBe("rgb(244, 250, 246)");
+    // `<br/>` is a line break, and is not drawn as the text `<br/>`.
+    expect(drawn.text).not.toContain("<br");
+    expect(drawn.lines.length).toBeGreaterThan(1);
+  });
+
+  it("opens 「この選択肢の詳細」 with the detail, 直し方, the sample in its style, the image, the diagram and the conditions the option fails, in that order", async () => {
+    await openPage(decisionPage({ questions: [ASKING] }));
+    const row = `${CARD_Q} [data-recommended="true"]`;
+    const details = `${row} .fp-detail`;
+    expect(await folded(details)).toBe(false);
+    // Nothing of the fold is read before it is opened.
+    expect(await count(`${details} img`)).toBe(0);
+    expect(await callsOf("formation_page_image")).toHaveLength(1);
+    await $(`${details} > summary`).click();
+    expect(await folded(details)).toBe(true);
+    expect(await browser.execute((s) => [...document.querySelector(s)!.children].slice(1).map((e) => e.className.split(" ")[0] || e.tagName.toLowerCase()), details)).toEqual(["fp-p", "fp-h", "fp-p", "fp-sample", "fp-image", "fp-diagram"]);
+    expect(await textsOf(`${details} .fp-h`)).toEqual(["直し方"]);
+    expect(await textsOf(`${details} .fp-p`)).toEqual(["選ぶと会計待ちになる", "ステータスに会計待ちを足す"]);
+    const sample = await browser.execute((s) => {
+      const frame = document.querySelector(`${s} .fp-sample-frame`) as HTMLElement;
+      const style = getComputedStyle(frame);
+      return { text: frame.textContent, size: style.fontSize, weight: style.fontWeight, color: style.color, note: document.querySelector(`${s} .fp-sample-note`)!.textContent };
+    }, details);
+    expect(sample).toEqual({ text: "会計待ち", size: "18px", weight: "700", color: "rgb(47, 91, 211)", note: "文字の大きさ 18px・太さ 700・色 #2f5bd3" });
+    await browser.waitUntil(async () => (await count(`${details} img`)) === 1, { timeoutMsg: "the image of the option was not read" });
+    expect(await waitForCalls("formation_page_image", 2)).toContainEqual({ name: "formation", child: "req-login", root: "deliverables", path: "ui/after.png" });
+    expect(await textsOf(`${details} .fp-image figcaption`)).toEqual(["直したあと"]);
+    await browser.waitUntil(async () => (await $(`${details} .fp-diagram-box`).getAttribute("data-drawn")) === "true", { timeoutMsg: "the diagram of the option was not drawn" });
+    // The option that fails a condition says which, and why.
+    const second = `${CARD_Q} .fp-choice:nth-child(3) .fp-detail`;
+    await $(`${second} > summary`).click();
+    expect(await textsOf(`${second} .fp-h`)).toEqual(["満たさない必須条件"]);
+    expect(await textsOf(`${second} .fp-unmet > *`)).toEqual(["KO-02 元に戻せる", "戻す手段がありません"]);
+    // A fixed choice has the details of its own key.
+    const fixed = `${CARD_Q} .fp-choice:nth-child(4) .fp-detail`;
+    await $(`${fixed} > summary`).click();
+    expect(await textsOf(`${fixed} .fp-p`)).toEqual(["調べるあいだ予約は今のままです"]);
+    expect(await count(`${CARD_Q} .fp-choice:nth-child(5) .fp-detail`)).toBe(0);
+  });
+
+  it("draws the conditions against the options as a table and the occurrence of the matter in 詳しく見る", async () => {
+    const card = decisionCard("ND-1", {
+      kind: "review-decision",
+      title: "待たせるか？",
+      scene: "ロックが取れないとき",
+      options: [decisionOption("A", "待たせる"), decisionOption("B", "すぐ失敗にする", null, { unmet: [{ id: "KO-01", reason: "失敗が増えます" }] })],
+      conditions: [{ id: "KO-01", text: "失敗を増やさない" }],
+      recommendation: "A",
+      recommendationReason: "r",
+      occurrence: { conditions: ["同じ予約を二人が同時に開く"], likelihood: "occasional", basis: "実測: 手元で 3 回に 1 回起きた", impact: "片方の変更が消える", detectability: "気づかない" },
+    });
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [card, { ...card, number: "ND-2", occurrence: { ...card.occurrence!, conditions: ["一つめ", "二つめ"], likelihood: "rare" } }] }));
+    const more = '#formation-page [data-card="ND-1"] .fp-more';
+    await $(`${more} > summary`).click();
+    expect(await textsOf(`${more} .fp-h`)).toEqual(["発生条件", "発生頻度", "影響", "検知"]);
+    expect(await textsOf(`${more} .fp-meter-cells`)).toEqual(["■■□"]);
+    expect(await textsOf(`${more} .fp-meter-word`)).toEqual(["ときどき"]);
+    expect(await textsOf(`${more} > .fp-muted`)).toEqual(["実測: 手元で 3 回に 1 回起きた"]);
+    expect(await textsOf(`${more} .fp-table th`)).toEqual(["必須条件", "A", "B"]);
+    expect(await textsOf(`${more} .fp-table td`)).toEqual(["KO-01 失敗を増やさない", "満たす", "満たさない"]);
+    // Several conditions are a numbered list under the heading that says they must all hold.
+    const second = '#formation-page [data-card="ND-2"] .fp-more';
+    await $(`${second} > summary`).click();
+    expect(await textsOf(`${second} .fp-h`)).toEqual(["発生条件（すべて重なったときだけ起きる）", "発生頻度", "影響", "検知"]);
+    expect(await textsOf(`${second} ol.fp-list li`)).toEqual(["一つめ", "二つめ"]);
+    expect(await textsOf(`${second} .fp-meter-cells`)).toEqual(["■□□"]);
+  });
+
+  it("shows an unmet release condition on the card that causes it, and in its own group only when no card of the page does", async () => {
+    const ask = decisionCard("ND-1", { kind: "review-decision", title: "待たせるか？", scene: "場面", options: [decisionOption("A", "待たせる")], recommendation: "A", recommendationReason: "r" });
+    const caused = decisionCard("UC-1", { kind: "unmet-criterion", title: "ロックを失わない", summary: "待たせないと失われます", cards: ["ND-1"] });
+    const alone = decisionCard("UC-2", { kind: "unmet-criterion", title: "全件が通る", summary: "一件落ちます", cards: [] });
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [ask], unmetCriteria: [caused, alone] }));
+    expect(await textsOf('#formation-page [data-card="ND-1"] > .fp-h')).toEqual(["具体的な場面", "反するリリース条件", "あなたの回答"]);
+    expect(await textsOf('#formation-page [data-card="ND-1"] .fp-cause')).toEqual(["ロックを失わない"]);
+    expect(await count('#formation-page [data-card="UC-1"]')).toBe(0);
+    expect(await count('#formation-page [data-card="UC-2"]')).toBe(1);
+  });
+
+  it("gives a fact its 「中身を見る」: a node as a tree, Markdown formatted, a file as text and an image as an image, and no raw HTML", async () => {
+    const card = decisionCard("Q1", {
+      scene: "場面",
+      options: [decisionOption("A", "案")],
+      recommendation: "A",
+      recommendationReason: "r",
+      facts: [
+        { label: "設計", value: "第二の設計", content: { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-02", text: JSON.stringify({ id: "DESIGN-02", steps: ["a"] }, null, 2) } },
+        { label: "メモ", value: "議事", content: { type: "markdown", root: "deliverables", path: "memo.md", text: "# 見出し\n\n- 一つめ\n- 二つめ\n\n[外へ](https://example.com/a) [中へ](../x.md) <img src=x onerror=\"document.title=1\"><b>raw</b>\n" } },
+        { label: "ログ", value: "出力", content: { type: "text", root: "repo", path: "out.txt", text: "line 1\nline 2" } },
+        { label: "画面", value: "いまの画面", content: { type: "image", root: "deliverables", path: "ui/now.png", caption: "いまの画面" } },
+        { label: "なし", value: "引かない", content: null },
+      ],
+    });
+    await openPage(decisionPage({ questions: [card] }));
+    const more = `${CARD_Q} > .fp-more`;
+    await $(`${more} > summary`).click();
+    expect(await textsOf(`${more} .fp-facts dt`)).toEqual(["設計", "メモ", "ログ", "画面", "なし"]);
+    expect(await count(`${more} .fp-fact`)).toBe(4);
+    const fact = (n: number) => `${more} .fp-facts dd:nth-of-type(${n}) .fp-fact`;
+    for (const n of [1, 2, 3, 4]) {
+      expect(await textsOf(`${fact(n)} > summary`)).toEqual(["中身を見る"]);
+      expect(await folded(fact(n))).toBe(false);
+      await $(`${fact(n)} > summary`).click();
+    }
+    expect(await textsOf(`${fact(1)} .fp-leaf-value`)).toEqual(["DESIGN-02", "a"]);
+    expect(await textsOf(`${fact(2)} h1`)).toEqual(["見出し"]);
+    expect(await textsOf(`${fact(2)} li`)).toEqual(["一つめ", "二つめ"]);
+    // A link to the web stays a link; one that is not http(s) is text only; raw HTML is no markup.
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} a`)].map((a) => a.getAttribute("href")), fact(2))).toEqual(["https://example.com/a", null]);
+    expect(await count(`${fact(2)} img, ${fact(2)} b, ${fact(2)} [onerror]`)).toBe(0);
+    expect(await textsOf(`${fact(3)} .fp-pre`)).toEqual(["line 1\nline 2"]);
+    await browser.waitUntil(async () => (await count(`${fact(4)} img`)) === 1, { timeoutMsg: "the image of the fact was not read" });
+    expect(await textsOf(`${fact(4)} .fp-image-zoom`)).toEqual(["拡大する"]);
   });
 
   it("closes the tab when the mark is gone and shows the tab that was selected before", async () => {
@@ -2896,7 +3093,7 @@ describe("orchestration mode: the decision page of a child", () => {
 
   const SEND = "#formation-page .fp-send-btn";
   const SEND_ERROR = "#formation-page .fp-send .fp-error";
-  const QUESTION_2 = decisionCard("Q2", { title: "いつまでに決めるか", options: [{ key: "A", label: "今週", detail: null }], recommendation: "A", recommendationReason: "早い" });
+  const QUESTION_2 = decisionCard("Q2", { title: "いつまでに決めるか", options: [decisionOption("A", "今週", null)], recommendation: "A", recommendationReason: "早い" });
   const answerCalls = () => callsOf("formation_page_answer");
 
   it("sends what was chosen to the leader with the mark's time, and reads the questions' choices and free text as they stand", async () => {
@@ -3004,7 +3201,7 @@ describe("orchestration mode: the decision page of a child", () => {
       pageKind: "approval",
       subject: "design",
       what: "設計を承認します",
-      needsUserDecision: [decisionCard("NR-1", { kind: "nr", title: "どちらにするか", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      needsUserDecision: [decisionCard("NR-1", { kind: "nr", title: "どちらにするか", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
       qualityLoop: { rounds: 2, mustFixResolved: 3 },
@@ -3134,7 +3331,7 @@ describe("orchestration mode: the decision page of a child", () => {
         subject: "code",
         what: "変更です",
         residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" })],
-        needsUserDecision: [decisionCard("RD-1", { kind: "review-decision", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+        needsUserDecision: [decisionCard("RD-1", { kind: "review-decision", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       }),
     );
     expect(await rawTextsOf(`${VERDICT} .fp-unanswered`)).toEqual(["答えていないカードは、この案で送ります: RMF-1 現状で完了する"]);

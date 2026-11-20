@@ -432,6 +432,11 @@ mod tests {
             key: key.to_owned(),
             label: label.to_owned(),
             detail: None,
+            fix: None,
+            unmet: Vec::new(),
+            image: None,
+            sample: None,
+            diagram: None,
         }
     }
 
@@ -453,6 +458,11 @@ mod tests {
             blocks: Vec::new(),
             evidence: Vec::new(),
             cards: Vec::new(),
+            scene: None,
+            scene_image: None,
+            occurrence: None,
+            conditions: Vec::new(),
+            choice_details: Default::default(),
         }
     }
 
