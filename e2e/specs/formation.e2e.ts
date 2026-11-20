@@ -13,7 +13,6 @@ const pressed = (selector: string) => browser.execute((s) => document.querySelec
 const ground = (selector: string) => browser.execute((s) => getComputedStyle(document.querySelector(s)!).backgroundColor, selector);
 const starts = async () => (await callsOf("claude_code_start")).length;
 // The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
-const pressRestart = () => browser.execute(() => document.getElementById("formation-restart")!.click());
 const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
 
 // A list with one project that has a session with no pane, so the project is a row of the list and pressing it shows the work pane of Orca with nothing to read.
@@ -186,69 +185,6 @@ describe("development screen: orchestration", () => {
     await $(ROW("formation")).click();
     await waitForStarts(2);
     expect(await callsOf("claude_code_close")).toEqual([]);
-  });
-
-  it("has the restart button at the right end of the orchestrator's header, with the icon only", async () => {
-    await openFormation();
-    const button = $("#formation-restart");
-    await expect(button).toHaveAttribute("aria-label", "リーダーを再起動");
-    expect(await button.getText()).toBe("");
-    expect(await browser.execute(() => document.querySelectorAll("#formation-restart svg").length)).toBe(1);
-    const place = await browser.execute(() => {
-      const head = document.getElementById("formation-head")!.getBoundingClientRect();
-      const button = document.getElementById("formation-restart")!.getBoundingClientRect();
-      const tabs = document.getElementById("formation-tabs")!.getBoundingClientRect();
-      return { fromRight: Math.round(head.right - button.right), afterTitle: button.left >= tabs.right, children: document.getElementById("formation-head")!.lastElementChild!.id };
-    });
-    expect(place.children).toBe("formation-restart");
-    expect(place.afterTitle).toBe(true);
-    expect(place.fromRight).toBeLessThan(40);
-  });
-
-  it("ends the running process and starts a new one with the keyboard when the restart button is pressed, and calls no Orca command", async () => {
-    await openFormation();
-    await waitForStarts(1);
-    await sendClaudeCode({ kind: "output", data: "old conversation" });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("old conversation"));
-    await pressRestart();
-    await waitForStarts(2);
-    expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation:formation", launch: 1 }]);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation", builtinTools: true, skill: null }, { id: "formation:formation", builtinTools: true, skill: null }]);
-    // The screen is new, and the terminal takes the keys.
-    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("old conversation");
-    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
-    await sendClaudeCode({ kind: "output", data: "new conversation" });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("new conversation"));
-    for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input", "formation_launch", "formation_close"]) expect(await callsOf(command)).toEqual([]);
-  });
-
-  it("leaves the restart button off until the new start has answered, so a second press starts nothing", async () => {
-    await openFormation();
-    await waitForStarts(1);
-    const start = await mock("claude_code_start", holds);
-    await pressRestart();
-    await waitForCalls(start);
-    await expect($("#formation-restart")).toBeDisabled();
-    await pressRestart();
-    await browser.pause(300);
-    expect(await starts()).toBe(1);
-    await release(start, 1);
-    await expect($("#formation-restart")).toBeEnabled();
-    await mock("claude_code_start", 1);
-    await pressRestart();
-    await waitForStarts(1);
-  });
-
-  it("starts a new process when the restart button is pressed after the process ended", async () => {
-    await openFormation();
-    await waitForStarts(1);
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Claude Code が終わりました"));
-    await pressRestart();
-    await waitForStarts(2);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation" }, { id: "formation:formation" }]);
-    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("Claude Code が終わりました");
-    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
   });
 
   it("starts nothing for the orchestrator while no formation is selected", async () => {
@@ -521,7 +457,7 @@ describe("orchestration mode: the flow pane", () => {
     await openFlow(mixed());
     await expect($("#formation-flow")).toBeDisplayed();
     for (const id of ["formation-flow-toggle", "formation-strip", "formation-strip-open", "formation-flow-split", "formation-session", "formation-child-term", "formation-flow-count"]) expect(await browser.execute((i) => document.getElementById(i), id)).toBeNull();
-    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-head button, #formation-flow-head [role="button"]')].map((e) => e.id))).toEqual(["formation-flow-done", "formation-follow"]);
+    expect(await browser.execute(() => [...document.querySelectorAll('#formation-flow-head button, #formation-flow-head [role="button"]')].map((e) => e.id))).toEqual(["formation-flow-done", "formation-flow-size", "formation-follow"]);
     const [head, button] = [await rectOf("#formation-flow-head"), await rectOf("#formation-follow")];
     expect(head.right - button.right).toBeLessThan(24);
     expect(button.top).toBeGreaterThanOrEqual(head.top);
@@ -668,7 +604,7 @@ describe("orchestration mode: the view of the flow", () => {
     expect(await styleOf(marks("done"), "color")).toBe(await resolved("--agent-done"));
     expect(await styleOf(marks("waiting"), "color")).toBe(await resolved("--agent-question"));
     expect(await styleOf(marks("working"), "color")).toBe(await resolved("--agent-working"));
-    // The tabs are in the header, level with the restart button at its right end, and the header is above the terminal.
+    // The tabs are in the header, and the header is above the terminal.
     const [head, tabs, term] = [await rectOf("#formation-head"), await rectOf("#formation-tabs"), await rectOf("#formation-teammate-term")];
     expect(tabs.top).toBeGreaterThanOrEqual(head.top);
     expect(tabs.bottom).toBeLessThanOrEqual(head.bottom + 1);
@@ -709,8 +645,6 @@ describe("orchestration mode: the view of the flow", () => {
     expect(term.right - term.left).toBeGreaterThan(200);
     // The terminal is under the tabs: nothing of it is in the right pane.
     expect(await browser.execute(() => document.getElementById("formation-flow")!.querySelectorAll(".orca-term-box").length)).toBe(0);
-    // The restart button restarts the leader, so it is off while a child's tab is the selected one.
-    await expect($("#formation-restart")).toBeDisabled();
   });
 
   it("selects the leader's tab with its tab and with its card, shows its terminal, and turns 自動で追う off", async () => {
@@ -722,7 +656,6 @@ describe("orchestration mode: the view of the flow", () => {
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
     expect(await pressed("#formation-flow-root")).toBe("true");
     expect(await pressed("#formation-follow")).toBe("false");
-    await expect($("#formation-restart")).toBeEnabled();
     // The card of a child brings its tab and its terminal back, and the leader's card does the leader's.
     await card("batch-update").click();
     await expect($("#formation-teammate-term")).toBeDisplayed();
@@ -1465,17 +1398,6 @@ describe("orchestration mode: the list of the formations", () => {
     await mock("formation_children", []);
     await waitForCalls("formation_children", 3);
     expect([...new Set((await callsOf("formation_children")).map((c) => (c as { name: string }).name))]).toEqual(["mail-summary"]);
-  });
-
-  it("restarts the orchestrator of the shown formation only", async () => {
-    await openList();
-    await waitForStarts(1);
-    await row("won-2485").click();
-    await waitForStarts(2);
-    await pressRestart();
-    await waitForStarts(3);
-    expect(await waitForCalls("claude_code_close")).toMatchObject([{ id: "formation:won-2485" }]);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation" }, { id: "formation:won-2485" }, { id: "formation:won-2485" }]);
   });
 
   it("drops the children of the last formation when another is pressed, and an answer of the last one that comes late", async () => {
@@ -2458,7 +2380,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
-  it("says in the pane why the terminal could not be made, and asks again on the restart button", async () => {
+  it("says in the pane why the terminal could not be made, and asks again when the formation is pressed again", async () => {
     const reason = "リーダーを起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
     await openList({ formation_list: remote(), ...SHOWN }, null);
     await mock("formation_orchestrator", rejects(reason));
@@ -2470,37 +2392,13 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await browser.pause(300);
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
     await mock("formation_orchestrator", terminal());
-    await pressRestart();
-    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: true }]);
-    await expect($("#formation-term-error")).not.toBeDisplayed();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-    expect(await starts()).toBe(0);
-    expect(await callsOf("claude_code_close")).toEqual([]);
-  });
-
-  it("leaves the restart button off while the first start of the terminal is on its way, so a press is not dropped", async () => {
-    await openList({ formation_list: remote(), ...SHOWN }, null);
-    const start = await mock("formation_orchestrator", holds);
-    await row("studio-work").click();
-    await waitForCalls(start);
-    await expect($("#formation-restart")).toBeDisabled();
-    await release(start, terminal());
-    await expect($("#formation-restart")).toBeEnabled();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-  });
-
-  it("does not carry the off restart button of a start on its way over to a formation of this Mac", async () => {
-    await openList({ formation_list: remote(), ...SHOWN }, null);
-    const start = await mock("formation_orchestrator", holds);
-    await row("studio-work").click();
-    await waitForCalls(start);
-    await expect($("#formation-restart")).toBeDisabled();
     await row("formation").click();
     await waitForStarts(1);
-    await expect($("#formation-restart")).toBeEnabled();
-    await pressRestart();
-    await waitForStarts(2);
-    await release(start, terminal());
+    await row("studio-work").click();
+    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await expect($("#formation-term-error")).not.toBeDisplayed();
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
+    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
   // #893: a formation made before the owner's consent for its PC asks for it when it is opened.
@@ -2537,7 +2435,6 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf(consent)).toEqual([]);
     expect(await callsOf("formation_orchestrator")).toEqual([]);
     await expect($("#formation-term-error")).not.toBeDisplayed();
-    await expect($("#formation-restart")).toBeEnabled();
   });
 
   it("asks nothing of a PC that has the consent, and nothing of a formation of this Mac", async () => {
@@ -2550,17 +2447,6 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf("formation_consents")).toHaveLength(1);
   });
 
-  it("restarts the terminal through Rust, and shows the new one in place of the old", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
-    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-    await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
-    await mock("orca_terminal_read", ["$ claude", "> 新しいリーダー"]);
-    await pressRestart();
-    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: true }]);
-    await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダー"), { timeoutMsg: "the new terminal never showed" });
-    expect((await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
-    await expect($("#formation-restart")).toBeEnabled();
-  });
 });
 
 // A-41: the decision page of a child, in a tab of the middle pane.
@@ -3659,5 +3545,322 @@ describe("orchestration mode: the done children of the flow pane", () => {
     expect(await childRows()).toHaveLength(1);
     expect(await chip()).toEqual(["完了 2", "true"]);
     expect(await cardNames()).toHaveLength(4);
+  });
+});
+
+// A-37: the compact view of the flow pane. The view that was chosen is kept in `localStorage`, which the app's page keeps between the specs too, so every spec leaves the standard view.
+const COMPACT_KEY = "formation-flow-compact";
+const forgetView = () => browser.execute((k) => localStorage.removeItem(k), COMPACT_KEY);
+const storedView = () => browser.execute((k) => localStorage.getItem(k), COMPACT_KEY);
+const widthOf = async (selector: string) => {
+  const r = await rectOf(selector);
+  return r.right - r.left;
+};
+const SIZE = "#formation-flow-size";
+const ORB = (name: string) => `#formation-flow-orbs [data-orb="${name}"]`;
+const orbNames = () => textsOf("#formation-flow-orbs .formation-orb-name");
+// The tip is shown by a pointer over an orb or by the focus on it: the window has no pointer, so the events are dispatched, as the footer's spec does.
+const fire = (selector: string, type: string) =>
+  browser.execute(
+    (s, t) => {
+      document.querySelector(s)!.dispatchEvent(t === "focus" || t === "blur" ? new FocusEvent(t) : new MouseEvent(t));
+    },
+    selector,
+    type,
+  );
+const asCompact = async (children: unknown, extra: Record<string, unknown> = {}, doneHidden = false) => {
+  await openFlow(children, extra, doneHidden);
+  await $(SIZE).click();
+  await expect($(SIZE)).toHaveAttribute("aria-pressed", "true");
+};
+
+describe("orchestration mode: the compact flow pane", () => {
+  beforeEach(forgetView);
+  afterEach(forgetView);
+
+  it("has a button of the view in the heading, and starts with the standard view, 260px wide", async () => {
+    await openFlow(mixed());
+    await expect($(SIZE)).toHaveAttribute("aria-label", "コンパクト表示");
+    await expect($(SIZE)).toHaveAttribute("aria-pressed", "false");
+    expect(await browser.execute(() => document.getElementById("formation-flow-size")!.classList.contains("icon-btn"))).toBe(true);
+    expect(await textsOf(SIZE)).toEqual([""]);
+    expect(await widthOf("#formation-flow")).toBe(260);
+    await expect($("#formation-flow-root")).toBeDisplayed();
+    expect(await visible("#formation-flow-compact")).toBe(false);
+    expect(await storedView()).toBeNull();
+  });
+
+  it("takes the width of the sidebar, shows the leader as one orb, and puts one arrow under it and no arrow beside a child", async () => {
+    await asCompact(mixed(), {}, true);
+    expect(await widthOf("#formation-flow")).toBe(await widthOf("#sidebar"));
+    expect(await widthOf("#formation-flow")).toBe(78);
+    expect(await visible("#formation-flow-root")).toBe(false);
+    expect(await visible("#formation-flow-list")).toBe(false);
+    expect(await count("#formation-flow-list .formation-card")).toBe(0);
+    await expect($("#formation-flow-leader")).toBeDisplayed();
+    expect(await ground("#formation-flow-leader .formation-orb-dot")).toBe(await resolvedGround("--accent"));
+    expect(await styleOf("#formation-flow-leader .formation-orb-dot", "color")).toBe(await resolved("--on-accent"));
+    // The arrow is one SVG of 20 by 26, between the leader's orb and the children's orbs; the children have none.
+    await expect($("#formation-flow-arrow")).toBeDisplayed();
+    expect(await count("#formation-flow-compact svg")).toBe(1);
+    expect(await count("#formation-flow-orbs svg")).toBe(0);
+    expect(await browser.execute(() => {
+      const r = document.getElementById("formation-flow-arrow")!.getBoundingClientRect();
+      return [Math.round(r.width), Math.round(r.height)];
+    })).toEqual([20, 26]);
+    const [leader, arrow, first] = [await rectOf("#formation-flow-leader"), await rectOf("#formation-flow-arrow"), await rectOf("#formation-flow-orbs .formation-orb")];
+    expect(leader.bottom).toBeLessThanOrEqual(arrow.top);
+    expect(arrow.bottom).toBeLessThanOrEqual(first.top);
+    // Each child is one orb of 36px, with its name under it, in the order of the cards (the done one is left out until its chip is pressed).
+    expect(await orbNames()).toEqual(["web-update", "batch-update", "e2e-check", "summary"]);
+    expect(await widthOf("#formation-flow-orbs .formation-orb-dot")).toBe(36);
+    expect(await count("#formation-flow-orbs .formation-orb-dot")).toBe(4);
+    const [dot, name] = [await rectOf("#formation-flow-orbs .formation-orb-dot"), await rectOf("#formation-flow-orbs .formation-orb-name")];
+    expect(dot.bottom).toBeLessThanOrEqual(name.top);
+    expect(await textsOf("#formation-flow-orbs .formation-orb-dot")).toEqual(["W", "B", "E", "S"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-orbs .formation-orb")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["waiting", "working", "planned", "planned"]);
+  });
+
+  it("flows the dashes of the arrow", async () => {
+    await asCompact(mixed());
+    expect(await styleOf("#formation-flow-arrow .formation-arrow-line", "animationName")).toBe("formation-arrow-flow");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#formation-flow-arrow .formation-arrow-line")!).strokeDasharray)).not.toBe("none");
+  });
+
+  it("frames each orb in the color of the card of its state, and draws a planned one dashed", async () => {
+    await openFlow(mixed(), {}, true);
+    const cards = {
+      working: await styleOf('#formation-flow-list .formation-card[data-state="working"]', "borderTopColor"),
+      waiting: await styleOf('#formation-flow-list .formation-card[data-state="waiting"]', "borderTopColor"),
+    };
+    await showDoneCards();
+    const done = await styleOf('#formation-flow-list .formation-card[data-state="done"]', "borderTopColor");
+    await $(SIZE).click();
+    const dot = (state: string) => `#formation-flow-orbs .formation-orb[data-state="${state}"] .formation-orb-dot`;
+    expect(await styleOf(dot("working"), "borderTopColor")).toBe(cards.working);
+    expect(await styleOf(dot("waiting"), "borderTopColor")).toBe(cards.waiting);
+    expect(await styleOf(dot("waiting"), "borderTopColor")).toBe(await resolved("--agent-question"));
+    expect(await styleOf(dot("done"), "borderTopColor")).toBe(done);
+    expect(await styleOf(dot("working"), "borderTopStyle")).toBe("solid");
+    expect(await styleOf(dot("planned"), "borderTopStyle")).toBe("dashed");
+    expect(await browser.execute((s) => getComputedStyle(document.querySelector(s)!).borderTopWidth, dot("working"))).toBe("3px");
+  });
+
+  it("shows a Codex child with the pale blue ground and the tag cx, also while it waits", async () => {
+    await asCompact([formationChild("api-update", "working"), formationChild("review-codex", "waiting", { agent: "codex" }), formationChild("later-codex", "working", { agent: "codex" })]);
+    expect(await textsOf("#formation-flow-orbs .formation-orb-cx")).toEqual(["cx", "cx"]);
+    expect(await count(`${ORB("api-update")} .formation-orb-cx`)).toBe(0);
+    for (const name of ["review-codex", "later-codex"]) {
+      expect(await ground(`${ORB(name)} .formation-orb-dot`)).toBe("rgb(230, 237, 251)");
+      expect(await styleOf(`${ORB(name)} .formation-orb-dot`, "color")).toBe("rgb(29, 63, 138)");
+    }
+    expect(await ground(`${ORB("api-update")} .formation-orb-dot`)).not.toBe("rgb(230, 237, 251)");
+    // The frame still says the state.
+    expect(await styleOf(`${ORB("review-codex")} .formation-orb-dot`, "borderTopColor")).toBe(await resolved("--agent-question"));
+  });
+
+  it("selects the tab of a child by pressing its orb, as its card does, and the leader's tab by the leader's orb", async () => {
+    await asCompact(mixed());
+    await expect($("#formation-flow-leader")).toHaveAttribute("aria-pressed", "true");
+    await $(ORB("batch-update")).click();
+    await expect($(ORB("batch-update"))).toHaveAttribute("aria-pressed", "true");
+    await expect($('#formation-tabs-mates [data-child="batch-update"]')).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-flow-leader")).toHaveAttribute("aria-pressed", "false");
+    expect(await count('#formation-flow-orbs [aria-pressed="true"]')).toBe(1);
+    await $(ORB("web-update")).click();
+    await expect($(ORB("web-update"))).toHaveAttribute("aria-pressed", "true");
+    await expect($(ORB("batch-update"))).toHaveAttribute("aria-pressed", "false");
+    await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
+    // A planned child has no terminal: its orb is shown and a press selects nothing.
+    expect(await browser.execute((s) => document.querySelector(s)!.tagName, ORB("e2e-check"))).toBe("DIV");
+    await $("#formation-flow-leader").click();
+    await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-flow-leader")).toHaveAttribute("aria-pressed", "true");
+    await expect($(ORB("web-update"))).toHaveAttribute("aria-pressed", "false");
+    // The same press on the card of the standard view selects the same tab.
+    await $(SIZE).click();
+    await $('#formation-flow-list [data-child="web-update"]').click();
+    await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows the content of the card in a tip beside an orb while the pointer or the focus is on it, and takes it away when they leave", async () => {
+    await asCompact(mixed(), {}, true);
+    expect(await visible("#formation-flow-tip")).toBe(false);
+    await fire(ORB("web-update"), "mouseenter");
+    await expect($("#formation-flow-tip")).toBeDisplayed();
+    expect(await textsOf("#formation-flow-tip .formation-card-name")).toEqual(["web-update"]);
+    expect(await textsOf("#formation-flow-tip .formation-card-state")).toEqual(["承認待ち"]);
+    expect(await textsOf("#formation-flow-tip .formation-card-msg")).toEqual(["依存の衝突を無視して入れてよいか確認します。"]);
+    expect(await textsOf("#formation-flow-tip .formation-card-time")).toEqual(["1 分"]);
+    // It is beside the orb, at its left, and inside the window.
+    const [tip, orb] = [await rectOf("#formation-flow-tip"), await rectOf(`${ORB("web-update")} .formation-orb-dot`)];
+    expect(tip.right).toBeLessThanOrEqual(orb.left);
+    expect(tip.left).toBeGreaterThanOrEqual(0);
+    expect(tip.top).toBeGreaterThanOrEqual(0);
+    await fire(ORB("web-update"), "mouseleave");
+    expect(await visible("#formation-flow-tip")).toBe(false);
+    await fire(ORB("batch-update"), "focus");
+    expect(await textsOf("#formation-flow-tip .formation-card-state")).toEqual(["作業中"]);
+    await fire(ORB("batch-update"), "blur");
+    expect(await visible("#formation-flow-tip")).toBe(false);
+    await fire(ORB("e2e-check"), "mouseenter");
+    expect(await textsOf("#formation-flow-tip .formation-card-state")).toEqual(["予定"]);
+    await fire(ORB("e2e-check"), "mouseleave");
+    await fire("#formation-flow-leader", "mouseenter");
+    expect(await textsOf("#formation-flow-tip .formation-card-name")).toEqual(["formation"]);
+    expect(await textsOf("#formation-flow-tip .formation-card-role")).toEqual(["リーダー"]);
+    await fire("#formation-flow-leader", "mouseleave");
+    expect(await visible("#formation-flow-tip")).toBe(false);
+  });
+
+  it("names a Codex child in its tip and a child with a decision page by the page", async () => {
+    await asCompact([formationChild("review-codex", "working", { agent: "codex" }), formationChild("req-login", "working", { pendingPage: { title: "要件の未決事項", atMs: 1_700_000_000_000 } })]);
+    await fire(ORB("review-codex"), "mouseenter");
+    expect(await textsOf("#formation-flow-tip .formation-card-agent")).toEqual(["codex"]);
+    await fire(ORB("review-codex"), "mouseleave");
+    await fire(ORB("req-login"), "mouseenter");
+    expect(await textsOf("#formation-flow-tip .formation-card-state")).toEqual(["判断待ち"]);
+    expect(await textsOf("#formation-flow-tip .formation-card-msg")).toEqual(["要件の未決事項"]);
+    await expect($(ORB("req-login"))).toHaveAttribute("data-state", "waiting");
+  });
+
+  it("keeps the chip 完了 N in the heading, short, inside the 78px, and shows a done child's orb only while it is pressed", async () => {
+    await asCompact(mixed(), {}, true);
+    await expect($(FLOW_DONE)).toBeDisplayed();
+    await expect($(FLOW_DONE)).toHaveText("✓1");
+    await expect($(FLOW_DONE)).toHaveAttribute("aria-label", "完了 1");
+    await expect($(FLOW_DONE)).toHaveAttribute("aria-pressed", "false");
+    const [head, chip] = [await rectOf("#formation-flow-head"), await rectOf(FLOW_DONE)];
+    expect(chip.left).toBeGreaterThanOrEqual(head.left);
+    expect(chip.right).toBeLessThanOrEqual(head.right);
+    expect(await widthOf("#formation-flow")).toBe(78);
+    expect(await browser.execute(() => document.getElementById("formation-flow-head")!.scrollWidth <= document.getElementById("formation-flow-head")!.clientWidth)).toBe(true);
+    expect(await orbNames()).not.toContain("api-update");
+    await $(FLOW_DONE).click();
+    await expect($(FLOW_DONE)).toHaveAttribute("aria-pressed", "true");
+    expect(await orbNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    await expect($(ORB("api-update"))).toHaveAttribute("data-state", "done");
+    // The tabs follow the chip, as in the standard view.
+    expect(await count('#formation-tabs-mates [data-child="api-update"]')).toBe(1);
+    await $(FLOW_DONE).click();
+    expect(await orbNames()).not.toContain("api-update");
+    expect(await count('#formation-tabs-mates [data-child="api-update"]')).toBe(0);
+    // Back in the standard view the chip says 完了 N again.
+    await $(SIZE).click();
+    await expect($(FLOW_DONE)).toHaveText("完了 1");
+    expect(await $(FLOW_DONE).getAttribute("aria-label")).toBeNull();
+  });
+
+  it("keeps the view that was chosen when the app starts again, and goes back to the standard one when it is pressed again", async () => {
+    await openFlow(mixed());
+    await $(SIZE).click();
+    expect(await storedView()).toBe("1");
+    await openFlow(mixed());
+    await expect($(SIZE)).toHaveAttribute("aria-pressed", "true");
+    expect(await widthOf("#formation-flow")).toBe(78);
+    await expect($("#formation-flow-leader")).toBeDisplayed();
+    await $(SIZE).click();
+    await expect($(SIZE)).toHaveAttribute("aria-pressed", "false");
+    expect(await storedView()).toBe("0");
+    expect(await widthOf("#formation-flow")).toBe(260);
+    await expect($("#formation-flow-root")).toBeDisplayed();
+    expect(await cardNames()).toEqual(["api-update", "web-update", "batch-update", "e2e-check", "summary"]);
+    await openFlow(mixed());
+    await expect($(SIZE)).toHaveAttribute("aria-pressed", "false");
+    expect(await widthOf("#formation-flow")).toBe(260);
+  });
+
+  it("draws the orbs again in place when a read changes a child, and drops the orb of a child that is gone", async () => {
+    await asCompact(mixed(), {}, true);
+    await mock("formation_children", [formationChild("web-update", "working"), formationChild("batch-update", "working"), formationChild("added", "working")]);
+    await browser.waitUntil(async () => (await orbNames()).length === 3);
+    expect(await orbNames()).toEqual(["web-update", "batch-update", "added"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#formation-flow-orbs .formation-orb")].map((e) => (e as HTMLElement).dataset.state))).toEqual(["working", "working", "working"]);
+    await mock("formation_children", []);
+    await browser.waitUntil(async () => (await orbNames()).length === 0);
+    await expect($("#formation-flow-leader")).toBeDisplayed();
+    expect(await visible("#formation-flow-arrow")).toBe(false);
+  });
+
+  // #1087: the children that the leader told something and that have not answered. The look is checked by the computed colors, not by the text of the rules.
+  describe("a child that was told something", () => {
+    const told = (...names: string[]) => mock("formation_instructed", names);
+    const dotOf = (name: string) => `${ORB(name)} .formation-orb-dot`;
+    const kids = () => [formationChild("web-update", "working"), formationChild("batch-update", "working"), formationChild("review-codex", "working", { agent: "codex" }), formationChild("api-update", "done")];
+
+    it("fills the circle of the child in the color of its agent, Claude green and Codex blue, with white text, and leaves the others as they were", async () => {
+      await asCompact(kids(), { formation_instructed: ["batch-update", "review-codex", "api-update"] }, true);
+      await browser.waitUntil(async () => (await count('#formation-flow-orbs [data-instructed="true"]')) === 2);
+      await expect($(ORB("batch-update"))).toHaveAttribute("data-instructed", "true");
+      await expect($(ORB("review-codex"))).toHaveAttribute("data-instructed", "true");
+      expect(await ground(dotOf("batch-update"))).toBe(await resolvedGround("--accent"));
+      expect(await styleOf(dotOf("batch-update"), "color")).toBe(await resolved("--on-accent"));
+      expect(await ground(dotOf("review-codex"))).toBe("rgb(37, 84, 180)");
+      expect(await styleOf(dotOf("review-codex"), "color")).toBe(await resolved("--on-accent"));
+      // The others keep their ground; a done child is not colored although it is in the answer (its orb is shown after the chip).
+      expect(await ground(dotOf("web-update"))).not.toBe(await resolvedGround("--accent"));
+      await $(FLOW_DONE).click();
+      await expect($(ORB("api-update"))).not.toHaveAttribute("data-instructed", "true");
+      // It beats; the one that is not told something does not.
+      expect(await styleOf(dotOf("batch-update"), "animationName")).toBe("formation-orb-beat");
+      expect(await styleOf(dotOf("web-update"), "animationName")).not.toBe("formation-orb-beat");
+    });
+
+    it("puts the told children right under the arrow, newest first, and the others after them in the order of the cards", async () => {
+      await asCompact(kids(), {}, true);
+      expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+      await told("review-codex", "batch-update");
+      await browser.waitUntil(async () => (await orbNames())[0] === "review-codex");
+      expect(await orbNames()).toEqual(["review-codex", "batch-update", "web-update"]);
+      const [arrow, first] = [await rectOf("#formation-flow-arrow"), await rectOf("#formation-flow-orbs .formation-orb")];
+      expect(arrow.bottom).toBeLessThanOrEqual(first.top);
+      // The answer of the child takes it off, and the order is the cards' again.
+      await told();
+      await browser.waitUntil(async () => (await count('#formation-flow-orbs [data-instructed="true"]')) === 0);
+      expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+    });
+
+    it("slides the orbs that moved, and does not when the system asks for less motion", async () => {
+      await asCompact(kids(), {}, true);
+      // Every call of `animate` is counted from here.
+      await browser.execute(() => {
+        const w = window as unknown as { __slid__: number };
+        w.__slid__ = 0;
+        const animate = Element.prototype.animate;
+        Element.prototype.animate = function (this: Element, ...args: Parameters<Element["animate"]>) {
+          w.__slid__++;
+          return animate.apply(this, args);
+        };
+      });
+      await told("review-codex");
+      await browser.waitUntil(async () => (await orbNames())[0] === "review-codex");
+      const slid = await browser.execute(() => (window as unknown as { __slid__: number }).__slid__);
+      // The told one moved up by two places and the two above it down by one.
+      const reduced = await browser.execute(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      expect(slid).toBe(reduced ? 0 : 3);
+    });
+
+    it("reads it only in the compact view, with the formation's name", async () => {
+      await openFlow(kids(), { formation_instructed: ["batch-update"] });
+      await waitForCalls("formation_children", 2);
+      expect(await callsOf("formation_instructed")).toEqual([]);
+      await expect($(SIZE)).toHaveAttribute("aria-pressed", "false");
+      await $(SIZE).click();
+      const calls = await waitForCalls("formation_instructed", 1);
+      expect(calls[0]).toEqual({ name: "formation" });
+      await expect($(ORB("batch-update"))).toHaveAttribute("data-instructed", "true");
+      // Back in the standard view nothing is called any more.
+      await $(SIZE).click();
+      const after = (await callsOf("formation_instructed")).length;
+      await waitForCalls("formation_children", (await callsOf("formation_children")).length + 1);
+      expect((await callsOf("formation_instructed")).length).toBe(after);
+    });
+
+    it("keeps the children when the read of the told ones fails, and says why", async () => {
+      await asCompact(kids(), {}, true);
+      await mock("formation_instructed", rejects("記録を読めません"));
+      await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("").includes("記録を読めません"));
+      expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
+    });
   });
 });

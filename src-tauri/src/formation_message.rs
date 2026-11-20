@@ -4,6 +4,7 @@
 //! A line holds who sent it (`from`), to whom (`to`), when (`atMs`) and the first line of the text (`line`, at most `LINE_CHARS` characters). The rest of the text is not kept: it comes from outside and is data.
 
 use std::{
+    collections::HashMap,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
@@ -161,6 +162,31 @@ pub fn message_of_hook(
     }))
 }
 
+/// The children of `formation` that the leader told something and that have not answered yet (#1087): the latest message between the leader (named as the formation) and the child is the leader's. A message between two children is not counted. Newest instruction first; `messages` is oldest first, as `read` gives it.
+pub fn instructed(messages: &[FormationMessage], formation: &str) -> Vec<String> {
+    // The latest message of each child: where it stands in the record, when it was sent, and whether the leader sent it.
+    let mut last: HashMap<&str, (usize, u64, bool)> = HashMap::new();
+    for (index, message) in messages.iter().enumerate() {
+        let (child, from_leader) = if message.from == formation && message.to != formation {
+            (message.to.as_str(), true)
+        } else if message.to == formation && message.from != formation {
+            (message.from.as_str(), false)
+        } else {
+            continue;
+        };
+        last.insert(child, (index, message.at_ms, from_leader));
+    }
+    let mut open: Vec<(u64, usize, &str)> = last
+        .into_iter()
+        .filter(|(_, (_, _, from_leader))| *from_leader)
+        .map(|(child, (index, at_ms, _))| (at_ms, index, child))
+        .collect();
+    open.sort_by_key(|&(at_ms, index, _)| std::cmp::Reverse((at_ms, index)));
+    open.into_iter()
+        .map(|(_, _, child)| child.to_owned())
+        .collect()
+}
+
 /// The record's path, or the reason it cannot be used: a link or anything but a file in its place is refused, because the leader can write in its folder, and a link there would lead the append to a file elsewhere.
 fn record_path(config: &Path, formation: &str) -> Result<PathBuf, String> {
     formation::check_name(formation)?;
@@ -292,6 +318,21 @@ pub async fn formation_messages(
     let version = app.package_info().version.to_string();
     orca::blocking(move || {
         messages_for_screen(&dir, &name, &formation::pc_connect(&dir, &version, false))
+    })
+    .await?
+}
+
+/// The children of the formation `name` that the leader told something and that have not answered yet, newest instruction first (A-37, #1087). The compact view of the flow pane reads it.
+#[tauri::command]
+pub async fn formation_instructed(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<String>, String> {
+    let dir = config_dir(&app)?;
+    let version = app.package_info().version.to_string();
+    orca::blocking(move || {
+        messages_for_screen(&dir, &name, &formation::pc_connect(&dir, &version, false))
+            .map(|messages| instructed(&messages, &name))
     })
     .await?
 }
@@ -625,5 +666,42 @@ mod tests {
         );
         assert!(messages_for_screen(&config, "../x", &open).is_err());
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_child_the_leader_told_last_is_instructed_and_an_answer_ends_it() {
+        let record = vec![
+            message("api-work", "req", 1, "ASK"),
+            message("req", "api-work", 2, "DONE"),
+            message("api-work", "impl", 3, "GO"),
+        ];
+        assert_eq!(instructed(&record, "api-work"), names(&["impl"]));
+        let more = [record, vec![message("api-work", "req", 4, "AGAIN")]].concat();
+        assert_eq!(instructed(&more, "api-work"), names(&["req", "impl"]));
+    }
+
+    #[test]
+    fn the_instructed_children_are_newest_first_and_one_message_counts_once() {
+        let record = vec![
+            message("api-work", "a", 10, "1"),
+            message("api-work", "b", 20, "2"),
+            message("api-work", "a", 30, "3"),
+            message("api-work", "c", 5, "4"),
+        ];
+        assert_eq!(instructed(&record, "api-work"), names(&["a", "b", "c"]));
+        assert_eq!(instructed(&[], "api-work"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn messages_between_children_and_of_another_formation_are_not_counted() {
+        let record = vec![
+            message("a", "b", 1, "x"),
+            message("other", "c", 2, "y"),
+            message("c", "other", 3, "z"),
+            message("api-work", "api-work", 4, "w"),
+        ];
+        assert_eq!(instructed(&record, "api-work"), Vec::<String>::new());
+        let mixed = [record, vec![message("api-work", "a", 5, "go")]].concat();
+        assert_eq!(instructed(&mixed, "api-work"), names(&["a"]));
     }
 }

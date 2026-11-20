@@ -506,6 +506,7 @@ pub fn run() {
             formation::formation_delete,
             formation::formation_close_child,
             formation_message::formation_messages,
+            formation_message::formation_instructed,
             formation_page::formation_page_read,
             formation_reply::formation_page_answer,
             formation_remote::formation_consents,
