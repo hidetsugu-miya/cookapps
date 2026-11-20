@@ -664,6 +664,21 @@ fn calendar_arg(args: impl IntoIterator<Item = String>) -> bool {
     args.into_iter().any(|arg| arg == "--calendar")
 }
 
+/// The tools of the Claude pane of the Slack compose screen (S-4, S-23, S-27): the two that read and write the screen's fields and the one that posts, and no other. The pane runs in the `auto` permission mode (#1144), so a tool that trashes a mail, writes a connection or reads the mail would run with no question to the owner, and the pane reads a mail that someone else wrote.
+const SLACK_COMPOSE_TOOLS: [&str; 3] = ["screen_read", "screen_write", "slack_compose_post"];
+
+/// The tools of the Slack compose pane: `SLACK_COMPOSE_TOOLS` only, offered to the client that `mcp-slack-compose.json` of A-36 starts with `--slack-compose`.
+fn slack_compose_router() -> ToolRouter<Tsunagiai> {
+    let mut router = Tsunagiai::tool_router();
+    keep_only(&mut router, &SLACK_COMPOSE_TOOLS);
+    router
+}
+
+/// Whether `--slack-compose` is among `args`: the server then offers the tools of the Slack compose pane only.
+fn slack_compose_arg(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|arg| arg == "--slack-compose")
+}
+
 /// The tools of a Claude Code started by "Claude を起動" (A-16, A-45): `preview_open` only. That Claude Code can start with the text of a mail, a message or a Todo as its first prompt (A-9), and the plugin of A-45 gives it this server, so any other tool (a read of the mail, a trash, a post to Slack, a write of a connection) would be one an injected instruction could use.
 const PREVIEW_TOOLS: [&str; 1] = ["preview_open"];
 
@@ -1596,16 +1611,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let formation = formation_arg(std::env::args().skip(1))?;
     let calendar = calendar_arg(std::env::args().skip(1));
     let preview = preview_arg(std::env::args().skip(1));
+    let slack_compose = slack_compose_arg(std::env::args().skip(1));
     if calendar && formation.is_some() {
         return Err("--calendar と --formation は一緒に使えません".into());
     }
     if preview && (calendar || formation.is_some()) {
         return Err("--preview は --calendar とも --formation とも一緒に使えません".into());
     }
+    if slack_compose && (calendar || preview || formation.is_some()) {
+        return Err(
+            "--slack-compose は --calendar、--preview、--formation のどれとも一緒に使えません"
+                .into(),
+        );
+    }
     let server = Tsunagiai {
         auth: Auth::new(),
         dir: identity::config_dir()?,
-        router: if preview {
+        router: if slack_compose {
+            slack_compose_router()
+        } else if preview {
             preview_router()
         } else if calendar {
             calendar_router()
@@ -1630,13 +1654,13 @@ mod tests {
         event_done_answer, form_opened, form_refused, formation_arg, formation_start_arg,
         lsp_environment, preview_arg, preview_router, project_args, router, screen_read_answer,
         screen_text_answer, skill_get_answer, skill_list_answer, skill_save_answer, skill_summary,
-        todoist_answer, CalendarDeleteEventArgs, CalendarEventArgs, CalendarSetShownArgs,
-        CalendarShowSlotsArgs, CalendarUpdateEventArgs, DbProfileSaveArgs, FormationAgent,
-        FormationFilesArgs, FormationGitArgs, FormationLaunchArgs, FormationPlanArgs,
-        FormationReadArgs, FormationStatusArgs, FormationWorktreesArgs, LspServerArgs,
-        LspServerSaveArgs, LspServerSettings, LspSshHostArgs, NewEvent, PreviewOpenArgs,
-        ScreenReadArgs, ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs, SkillScreen,
-        TodoistAddTaskArgs, Tsunagiai,
+        slack_compose_arg, slack_compose_router, todoist_answer, CalendarDeleteEventArgs,
+        CalendarEventArgs, CalendarSetShownArgs, CalendarShowSlotsArgs, CalendarUpdateEventArgs,
+        DbProfileSaveArgs, FormationAgent, FormationFilesArgs, FormationGitArgs,
+        FormationLaunchArgs, FormationPlanArgs, FormationReadArgs, FormationStatusArgs,
+        FormationWorktreesArgs, LspServerArgs, LspServerSaveArgs, LspServerSettings,
+        LspSshHostArgs, NewEvent, PreviewOpenArgs, ScreenReadArgs, ScreenWriteArgs, Skill,
+        SkillGetArgs, SkillSaveArgs, SkillScreen, TodoistAddTaskArgs, Tsunagiai,
     };
 
     #[test]
@@ -2621,6 +2645,45 @@ mod tests {
         for none in [&[][..], &["calendar"], &["--calendar=1"], &["--calendars"]] {
             assert!(!calendar_arg(args(none)), "{none:?}");
         }
+    }
+
+    #[test]
+    fn the_slack_compose_flag_is_an_argument_of_its_own() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert!(slack_compose_arg(args(&["--slack-compose"])));
+        assert!(slack_compose_arg(args(&["--other", "--slack-compose"])));
+        for none in [
+            &[][..],
+            &["slack-compose"],
+            &["--slack-compose=1"],
+            &["--slack-composes"],
+            &["--calendar"],
+        ] {
+            assert!(!slack_compose_arg(args(none)), "{none:?}");
+        }
+    }
+
+    #[test]
+    fn the_slack_compose_pane_is_offered_its_three_tools_only_and_the_post_asks_each_time() {
+        let tools = slack_compose_router().list_all();
+        let mut names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["screen_read", "screen_write", "slack_compose_post"]);
+        // The tools of every other client are as they were, and the other panes are not offered the post.
+        assert!(tool_names(false).iter().any(|n| n == "trash"));
+        assert!(tool_names(false).iter().any(|n| n == "slack_compose_post"));
+        for other in [calendar_router().list_all(), preview_router().list_all()] {
+            assert!(!other.iter().any(|t| t.name == "slack_compose_post"));
+        }
+        assert!(!tool_names(true).iter().any(|n| n == "slack_compose_post"));
+        let post = tools
+            .iter()
+            .find(|t| t.name == "slack_compose_post")
+            .unwrap();
+        assert_eq!(
+            post.annotations.as_ref().unwrap().destructive_hint,
+            Some(true)
+        );
     }
 
     #[test]
