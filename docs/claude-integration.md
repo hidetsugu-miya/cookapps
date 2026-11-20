@@ -65,10 +65,15 @@ Claude Code は、開いているスレッドと、返信か新しいメール�
 
 Slack のスレッドの詳細の右側、Slack の画面の右のペイン、「Slack に貼る」の画面の Claude モード、Todo の案のページ、要約プロンプトの画面の右側は、どれも Claude Code のターミナルです。
 どれも、MCP サーバーは `tsunagiai-mcp` だけを渡し、組み込みの道具とスキルは渡しません。書くたびにターミナルで聞かれ、書いた内容は欄に入るだけで、投稿、追加、保存は自分で押します。
-「Slack に貼る」の画面の Claude モードだけは違います。
+「Slack に貼る」の画面の Claude モードは違います。
 Claude Code は、auto モード、Sonnet、effort high で起動し、欄を書くときは聞きません。
 渡すツールは `screen_read`、`screen_write`、`slack_compose_post` の 3 つで、読み書きできるのはこの画面の欄だけです。
 `slack_compose_post` で投稿するときは、そのたびにターミナルで聞かれます。
+Todo の案のページも違います。
+ページを出しただけでは起動せず、「相談する」を押すと起動します。
+Claude Code は、auto モード、Sonnet、effort high で起動し、欄を書くときは聞きません。
+渡すツールは `screen_read` と `screen_write` の 2 つで、読み書きできるのはそのページの案の名前と説明だけです。
+Todoist に足すのは、ページの追加ボタンだけです。
 くわしくは [Slack](slack.md) にあります。
 
 ## スキルのタブで Claude Code を動かす
