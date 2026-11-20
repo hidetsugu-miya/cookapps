@@ -42,9 +42,9 @@ interface Guard {
 const guards = new Set<Guard>();
 function flushAll() {
   for (const guard of guards) {
-    // A page that is gone from the document keeps nothing more.
+    guard.flush();
+    // A page that is gone from the document (a page drawn again takes its element away first) keeps nothing more, once what waited is written.
     if (!guard.anchor.isConnected) guards.delete(guard);
-    else guard.flush();
   }
 }
 window.addEventListener("beforeunload", (e) => {

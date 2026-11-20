@@ -4063,11 +4063,15 @@ describe("orchestration mode: the decision page of a child", () => {
   });
 
   it("takes away what an earlier page of the same child kept when the page is drawn, and leaves what is another child's", async () => {
+    // `boot` takes every kept answer away, so the entries are put after it and before the page is opened.
+    await openFlow([asking()], { formation_page_read: decisionPage({ questions: [QUESTION] }) });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
     await browser.execute(() => {
       localStorage.setItem("fp-answers:formation\nreq-login:deadbeef", "{}");
       localStorage.setItem("fp-answers:formation\nother:deadbeef", "{}");
     });
-    await openPage(decisionPage({ questions: [QUESTION] }));
+    await $(OPEN).click();
+    await expect($("#formation-page")).toBeDisplayed();
     expect(await browser.execute(() => Object.keys(localStorage).filter((k) => k.startsWith("fp-answers:")))).toEqual(["fp-answers:formation\nother:deadbeef"]);
   });
 
