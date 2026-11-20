@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.93.0
+
+A-45: 開発の画面で動く Claude Code が、worktree の HTML のファイルを、そのプロジェクトの作業ペインのプレビューのタブで開けるようにした（#984、#985）。Claude Code は、`tsunagiai-mcp` のツール `preview_open` で開くよう頼む。開くのは、Orca の一覧にある worktree の中の `.html` のファイルだけ。保存した環境の PC で動く Claude Code が頼んでも、タブはこの Mac のつなぎAIに開く。開発の画面を出していないときは、画面は切り替えず、タブだけを作る。
+
+A-16, A-45: 「Claude を起動」で始める Claude Code に、プレビューの開き方を教えるプラグインを付けた（#986）。HTML を書いたあとや頼まれたときに、Claude Code が自分でプレビューを開く。この Claude Code に渡すつなぎAIのツールは `preview_open` だけ。起動は Orca のターミナルで `claude --plugin-dir …` を動かす形になり、Orca の「Chat | CLI」の設定は効かなくなった。いつもターミナルで始まる。
+
+A-9: 「Orca に渡す」の最初の指示を、起動のコマンドに載せず、worktree の `.orca/drops/` に置いたファイルで渡すようにした（#986）。起動のコマンドがファイルを読み、すぐに消す。
+
 ## v0.92.7
 
 A-41: feature-dev のコードレビューのページから差分と説明の節を外し、題のすぐ下に、チームメイトのプルリクエストの URL と「開く」を出すようにした（#1137）。確かめたことや試してほしい操作は、プルリクエストの本文に書く。
