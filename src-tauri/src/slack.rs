@@ -225,8 +225,7 @@ fn valid_ts(ts: &str) -> bool {
         .is_some_and(|(sec, micro)| digits(sec) && digits(micro))
 }
 
-const BOT_TOKEN: &str =
-    "Bot User OAuth Token は使えません。「OAuth & Permissions」の User OAuth Token（xoxp- で始まる）を貼ってください";
+const BOT_TOKEN: &str = "Bot User OAuth Token は使えません。「OAuth & Permissions」の User OAuth Token（xoxp- で始まる）を貼ってください";
 
 /// A Bot User OAuth Token (`xoxb-`). It sees only the channels the bot has joined, so it is not accepted.
 fn is_bot_token(token: &str) -> bool {
@@ -1364,30 +1363,6 @@ pub fn pick_destination(chosen: &Value, candidates: &[Candidate]) -> Option<Targ
         .map(|c| c.target.clone())
 }
 
-/// The broadcast words (`here`, `channel`, `everyone`) that a text holds after `@` as `broadcast_mentions` reads them, so the ones that become mentions when the text is posted as a written one.
-fn broadcast_words(text: &str) -> HashSet<&'static str> {
-    let sent = broadcast_mentions(&text.replace('<', " "));
-    BROADCASTS
-        .into_iter()
-        .filter(|w| sent.contains(&format!("<!{w}>")))
-        .collect()
-}
-
-/// `text` with a full-width `＠` in the place of the `@` of each broadcast word (`broadcast_mentions`) that the owner's request does not hold (`broadcast_words`),
-/// so that a text Claude wrote makes no broadcast mention the owner did not ask for when it is posted as a written one.
-fn without_new_broadcasts(text: &str, instruction: &str) -> String {
-    let asked = broadcast_words(instruction);
-    map_broadcasts(text, |w| {
-        format!("{}{w}", if asked.contains(w) { '@' } else { '＠' })
-    })
-}
-
-/// Whether `text` is the written text of a card of `sent`, the list the screen sent (compared without the white space at the ends): the owner wrote it, or has seen it in the card.
-fn in_sent_card(text: &str, sent: &[SlackAction]) -> bool {
-    sent.iter()
-        .any(|a| !a.paste && a.text.trim() == text.trim())
-}
-
 /// Whether two destinations are the same channel or the same thread, whatever name each carries.
 fn same_place(a: &Target, b: &Target) -> bool {
     a.team_id == b.team_id && a.channel == b.channel && a.thread_ts == b.thread_ts
@@ -1425,13 +1400,10 @@ pub fn pending_targets(actions: &[SlackAction]) -> Vec<Target> {
 /// whose thread it continues, else `destination` is the number of a candidate (`pick_destination`), else it has nowhere to go yet; `text` is a written text, and without one it pastes the original message.
 /// Without such an array, a `destination` of the list goes into the chip of the first thing to do that is not posted.
 /// A destination the answer put there is Claude's (`by_claude`), unless the owner has chosen that place in a chip of a thing to do that is not posted.
-/// A written text that is not the text of a card of `actions` (`in_sent_card`) is one Claude wrote: its `@here`, `@channel` and `@everyone` that the owner's words (`instruction`, none for a write of the screen's fields) do not hold
-/// get a full-width `＠` (`without_new_broadcasts`), because "投稿" sends the text of a card as a written one, whose broadcast words become mentions.
 pub fn answered_actions(
     output: &Value,
     actions: &[SlackAction],
     candidates: &[Candidate],
-    instruction: &str,
 ) -> Option<Vec<SlackAction>> {
     let done = posted_count(actions);
     let pending = &actions[done..];
@@ -1460,13 +1432,7 @@ pub fn answered_actions(
                     .as_str()
                     .map(str::trim)
                     .filter(|t| !t.is_empty())
-                    .map(|t| {
-                        if in_sent_card(t, actions) {
-                            t.to_owned()
-                        } else {
-                            without_new_broadcasts(t, instruction)
-                        }
-                    });
+                    .map(str::to_owned);
                 SlackAction {
                     by_claude: target.as_ref().is_some_and(by_claude),
                     target,
@@ -1546,7 +1512,7 @@ pub fn compose_read(actions: &[SlackAction], candidates: &[Candidate]) -> Compos
 /// The cards after a write of the field `actions` of the compose screen (S-4, #734): `text` is a JSON array of 1 to `ACTIONS_MAX` items, the whole list of the cards that are not posted, in the order they are posted
 /// (the posted ones never change and are not written). An item is `{destination, after, text}`, as `answered_actions` reads it: `destination` the number of a candidate of the last read (`candidates`), `after` the number (from 1, over the whole list) of an earlier card whose thread it continues,
 /// not both, and `text` a written text (at most `POST_LIMIT` characters; left out, or blank, it pastes the original message). Other keys (the `no`, `posted` and `paste` of a read) are not read.
-/// A number that is outside its list is refused with the reason, and nothing changes. The cards are made by `answered_actions` (a destination put there is Claude's, `by_claude`; a written text keeps no `@here`, `@channel` or `@everyone`, which get a full-width `＠`, unless the owner typed that text in a card).
+/// A number that is outside its list is refused with the reason, and nothing changes. The cards are made by `answered_actions` (a destination put there is Claude's, `by_claude`; a written text is kept as it is, its `@here`, `@channel` and `@everyone` included, because the owner asked for the post and it is asked before it is sent, S-23).
 pub fn written_actions(
     text: &str,
     actions: &[SlackAction],
@@ -1585,7 +1551,9 @@ pub fn written_actions(
                 return Err(if listed == 0 {
                     "送り先の候補がありません。先に screen_read で読んでください".to_owned()
                 } else {
-                    format!("行うこと {no} の destination は、送り先の候補の番号（1 から {listed}）で書いてください")
+                    format!(
+                        "行うこと {no} の destination は、送り先の候補の番号（1 から {listed}）で書いてください"
+                    )
                 });
             }
         }
@@ -1613,7 +1581,7 @@ pub fn written_actions(
         }
     }
     Ok(
-        match answered_actions(&json!({ "actions": items }), actions, candidates, "") {
+        match answered_actions(&json!({ "actions": items }), actions, candidates) {
             Some(new) => actions[..done].iter().cloned().chain(new).collect(),
             None => actions.to_vec(),
         },
@@ -1929,7 +1897,7 @@ async fn send_post(
 
 /// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
 /// It is the one path of S-1: the "投稿" button (`slack_post`), which the owner presses or Claude Code asks for through `slack_compose_post` (S-23), ends here.
-/// `written` says that `text` is one written for a card of "行うこと" (by the owner, or by Claude Code, whose broadcast words `written_actions` took out): only then do its `@here`, `@channel` and `@everyone` become mentions (`PostForm::Written`); the mail's content is untrusted and is posted as text.
+/// `written` says that `text` is one written for a card of "行うこと" (by the owner, or by Claude Code through `written_actions`): only then do its `@here`, `@channel` and `@everyone` become mentions (`PostForm::Written`); the mail's content is untrusted and is posted as text.
 /// The answer is the time (`ts`) of the posted message, empty when Slack's answer had none.
 /// `dir` is the config folder when it could be found; without it the post still goes and only the remembering is skipped (and logged).
 pub(crate) async fn post_and_remember(
@@ -6973,7 +6941,9 @@ mod tests {
     #[test]
     fn a_reply_link_uses_its_thread_ts_as_the_parent() {
         assert_eq!(
-            parsed("https://example.slack.com/archives/C0123ABC/p1761785999000001?thread_ts=1761785520.123456&cid=C0123ABC"),
+            parsed(
+                "https://example.slack.com/archives/C0123ABC/p1761785999000001?thread_ts=1761785520.123456&cid=C0123ABC"
+            ),
             ("C0123ABC".into(), Some("1761785520.123456".into()))
         );
     }
@@ -11791,44 +11761,6 @@ mod tests {
     }
 
     #[test]
-    fn a_text_that_claude_wrote_keeps_only_the_broadcast_words_of_the_request() {
-        let sales = named("sales");
-        let list = listed(&[&sales]);
-        let current = [pasting(Some(&sales)), writing(0, " @everyone 見て ")];
-        let output = json!({"actions": [
-            {"destination": 1, "text": "@channel お知らせ @here、@everyone。a@here.example @hereafter"},
-            {"after": 1, "text": "@everyone 見て"},
-            {"after": 2, "text": "@everyone 追記"},
-        ]});
-        let texts = |instruction: &str| -> Vec<String> {
-            answered_actions(&output, &current, &list, instruction)
-                .unwrap()
-                .into_iter()
-                .map(|a| a.text)
-                .collect()
-        };
-        // The word of the request stays, the others get a full-width ＠; the text the owner typed in a card stays as it is.
-        assert_eq!(
-            texts("@here と書いて"),
-            [
-                "＠channel お知らせ @here、＠everyone。a@here.example @hereafter",
-                "@everyone 見て",
-                "＠everyone 追記",
-            ]
-        );
-        assert_eq!(
-            texts("書いて")[0],
-            "＠channel お知らせ ＠here、＠everyone。a@here.example @hereafter"
-        );
-        // What went into the screen holds no broadcast word that the request does not.
-        assert!(broadcast_words(&texts("書いて")[0]).is_empty());
-        assert_eq!(
-            without_new_broadcasts("@here@channel", "@channel"),
-            "＠here@channel"
-        );
-    }
-
-    #[test]
     fn an_answer_writes_the_things_to_do_that_are_not_posted() {
         let (sales, other) = (named("sales"), named("random"));
         let list = listed(&[&sales, &other]);
@@ -11842,7 +11774,7 @@ mod tests {
             {"after": 5, "destination": 9},
             {"after": 0, "destination": 1, "text": ""},
         ]});
-        let new = answered_actions(&output, &current, &list, "").unwrap();
+        let new = answered_actions(&output, &current, &list).unwrap();
         assert_eq!(
             new,
             vec![
@@ -11873,11 +11805,7 @@ mod tests {
             json!({"actions": []}),
             json!({"actions": "x"}),
         ] {
-            assert_eq!(
-                answered_actions(&output, &current, &list, ""),
-                None,
-                "{output}"
-            );
+            assert_eq!(answered_actions(&output, &current, &list), None, "{output}");
         }
     }
 
@@ -11890,7 +11818,7 @@ mod tests {
         };
         let list = listed(&[&sales, &other]);
         let current = [pasting(Some(&sales)), writing(0, "補足")];
-        let new = answered_actions(&json!({"destination": 2}), &current, &list, "").unwrap();
+        let new = answered_actions(&json!({"destination": 2}), &current, &list).unwrap();
         assert_eq!(
             new,
             vec![
@@ -11903,24 +11831,22 @@ mod tests {
         );
         // The destination the owner chose stays the owner's when the answer repeats it, and one Claude chose stays Claude's.
         assert_eq!(
-            answered_actions(&json!({"destination": 1}), &current, &list, ""),
+            answered_actions(&json!({"destination": 1}), &current, &list),
             None
         );
-        assert!(
-            answered_actions(&json!({"destination": 1}), &new, &list, "").unwrap()[0].by_claude
-        );
+        assert!(answered_actions(&json!({"destination": 1}), &new, &list).unwrap()[0].by_claude);
         assert_eq!(
-            answered_actions(&json!({"destination": 2}), &new, &list, ""),
+            answered_actions(&json!({"destination": 2}), &new, &list),
             None
         );
         // A number outside the list, and nothing left that is not posted.
         assert_eq!(
-            answered_actions(&json!({"destination": 3}), &current, &list, ""),
+            answered_actions(&json!({"destination": 3}), &current, &list),
             None
         );
         let done = [posted(pasting(Some(&sales)), "")];
         assert_eq!(
-            answered_actions(&json!({"destination": 2}), &done, &list, ""),
+            answered_actions(&json!({"destination": 2}), &done, &list),
             None
         );
         // The chips of the things to do that are not posted head the candidates.
@@ -12035,12 +11961,10 @@ mod tests {
     }
 
     #[test]
-    fn a_write_of_the_cards_gives_a_text_of_claude_no_broadcast_word_unless_the_owner_typed_that_text(
-    ) {
+    fn a_write_of_the_cards_keeps_the_broadcast_words_of_its_text() {
         let sales = named("sales");
         let list = listed(&[&sales]);
-        let owners = writing(0, "@here 見て");
-        let current = [pasting(Some(&sales)), owners.clone()];
+        let current = [pasting(Some(&sales)), writing(0, "@here 見て")];
         let text = json!([
             {"destination": 1},
             {"after": 1, "text": "@here 見て"},
@@ -12048,13 +11972,12 @@ mod tests {
         ])
         .to_string();
         let new = written_actions(&text, &current, &list).unwrap();
-        // A card the owner typed keeps its words; a new text gets a full-width ＠.
+        // The owner asked for the post and the post is asked before it is sent (S-23), so no word is changed.
         assert_eq!(new[1].text, "@here 見て");
-        assert_eq!(new[2].text, "＠channel と ＠everyone と a@here.example");
-        assert!(broadcast_words(&new[2].text).is_empty());
+        assert_eq!(new[2].text, "@channel と @everyone と a@here.example");
         let fresh = json!([{"destination": 1}, {"after": 1, "text": "@here 見て"}]).to_string();
         let new = written_actions(&fresh, &[pasting(Some(&sales))], &list).unwrap();
-        assert_eq!(new[1].text, "＠here 見て");
+        assert_eq!(new[1].text, "@here 見て");
     }
 
     #[test]
