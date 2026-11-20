@@ -865,7 +865,7 @@ function drawTitle() {
   drawnTitle = key;
   const title = $("orca-files-title");
   if (context === null || context.branch === null) {
-    title.textContent = context?.label ?? "";
+    title.replaceChildren(tag("span", "", context?.label ?? ""));
     return;
   }
   const button = tag("button", "orca-branch-btn", context.branch);
@@ -873,7 +873,8 @@ function drawTitle() {
   button.onclick = () => openBranches(button);
   const separator = " ・ ";
   const named = context.label.endsWith(separator + context.branch);
-  title.replaceChildren(named ? context.label.slice(0, context.label.length - context.branch.length) : `${context.label}${separator}`, button);
+  const name = tag("span", "", named ? context.label.slice(0, context.label.length - context.branch.length) : `${context.label}${separator}`);
+  title.replaceChildren(name, button);
 }
 
 // Draws the pane, unless it is what is drawn already.

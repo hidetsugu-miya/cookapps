@@ -3481,6 +3481,29 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_local_branches")).toEqual([]);
   });
 
+  it("keeps the branch button in a narrow heading and cuts its text with an ellipsis, so that it can still be pressed (A-25)", async () => {
+    const longBranch = "feat/a-very-long-branch-name-of-forty-characters";
+    const named = orcaOverview(
+      [orcaRow("example-app", "fix-login", "Write the docs", { minutes: 2 }), ...sample().slice(1)],
+      [orcaWorktree("example-app", "fix-login", { gitBranch: longBranch }), orcaWorktree("example-api", "main")],
+    );
+    await openFiles(branchFixtures({ orca_local_branches: [local(longBranch, { current: true }), local("main", { inUse: true })] }), named);
+    await expect(branchButton()).toHaveText(longBranch);
+    await browser.execute(() => {
+      document.getElementById("orca-files")!.style.width = "150px";
+    });
+    const look = await browser.execute(() => {
+      const button = document.querySelector<HTMLElement>(".orca-branch-btn")!;
+      const title = document.getElementById("orca-files-title")!.getBoundingClientRect();
+      const r = button.getBoundingClientRect();
+      return { shown: r.width > 0 && r.left >= title.left - 1 && r.right <= title.right + 1, cut: button.scrollWidth > button.clientWidth, ellipsis: getComputedStyle(button).textOverflow };
+    });
+    expect(look).toEqual({ shown: true, cut: true, ellipsis: "ellipsis" });
+    await branchButton().click();
+    await expect($('.orca-dest-pop[role="dialog"]')).toBeDisplayed();
+    expect(await waitForCalls("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }]);
+  });
+
   // The git worktrees of example-app (`orca_git_worktrees`): its own folder, which Orca lists, and one under `.claude/worktrees/` that only git has.
   const gitWorktree = (path: string, gitBranch: string, gitOnly: boolean): OrcaGitWorktree => ({ path, name: path.split("/").at(-1) ?? "", gitBranch, gitOnly });
   const GIT_ONLY = "/work/example-app/.claude/worktrees/work";
