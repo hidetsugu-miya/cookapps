@@ -4,6 +4,7 @@
 //! `manual` asks for every tool that writes, whatever `defaultMode` the owner's settings hold, and `--setting-sources user` leaves out the project and local settings of the shared folder, so an "always allow" chosen in one pane does not reach the others.
 //! The calendar pane (C-6) starts in `auto` (#1074, `start-auto.sh`): it runs with no built-in tools and with an MCP config (`mcp-calendar.json`) that starts `tsunagiai-mcp --calendar`, which offers only the tools of the calendar screen (`CALENDAR_TOOLS`), so that no other tool that writes runs unasked.
 //! The Slack compose pane (S-4) starts in `auto` too (#1144, `start-auto-slack-compose.sh`, `mcp-slack-compose.json`, `tsunagiai-mcp --slack-compose`, `SLACK_COMPOSE_TOOLS`), with `--model sonnet --effort high`, and `--settings` makes `slack_compose_post` ask the owner before a post.
+//! The pane of a Todo's draft (S-18) starts in `auto` too (#1148, `start-auto-todo-draft.sh`, `mcp-todo-draft.json`, `tsunagiai-mcp --todo-draft`, `TODO_DRAFT_TOOLS`), with `--model sonnet --effort high`; it has no tool that posts, so no question is set.
 //! The MCP config names `tsunagiai-mcp` next to the app's own executable (`Contents/MacOS/` in the bundle) and nothing else; the child is started as an argument array, with no shell of ours in between except `/bin/sh` running the script.
 //! A session is a process group of its own (the pseudo terminal makes the child a session leader): closing a pane, the end of the app, and a screen that no longer takes the output stop the whole group.
 //! What the terminal prints and the keys typed are only in the channel of the pane: no log line, no error text.
@@ -43,10 +44,15 @@ const MCP_CALENDAR_FILE: &str = "mcp-calendar.json";
 /// The script and the MCP config of the pane of the Slack compose screen, which starts in `auto` too (S-4, #1144).
 const SCRIPT_AUTO_SLACK_COMPOSE_FILE: &str = "start-auto-slack-compose.sh";
 const MCP_SLACK_COMPOSE_FILE: &str = "mcp-slack-compose.json";
+/// The script and the MCP config of the pane of a Todo's draft, which starts in `auto` too (S-18, #1148).
+const SCRIPT_AUTO_TODO_DRAFT_FILE: &str = "start-auto-todo-draft.sh";
+const MCP_TODO_DRAFT_FILE: &str = "mcp-todo-draft.json";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the calendar pane only (`CALENDAR_TOOLS`, C-6).
 const CALENDAR_MCP_ARG: &str = "--calendar";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the Slack compose pane only (`SLACK_COMPOSE_TOOLS`, S-4).
 const SLACK_COMPOSE_MCP_ARG: &str = "--slack-compose";
+/// The argument that makes `tsunagiai-mcp` offer the tools of the Todo draft pane only (`TODO_DRAFT_TOOLS`, S-18).
+const TODO_DRAFT_MCP_ARG: &str = "--todo-draft";
 /// A-37: the orchestrator of a formation is the pane whose id is this prefix and the formation's name (the screen names its pane so), and it runs in `formations/{name}/` of the config directory, not in `claude-code/`.
 const FORMATION_ID_PREFIX: &str = "formation:";
 const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
@@ -91,7 +97,8 @@ pub enum ClaudeCodeEvent {
 
 /// How the pane's Claude Code asks for a tool (#1074): `manual` asks the owner for every tool that writes, `auto` runs the tools with no question, so it has the tools of the calendar only and none of Claude Code's own.
 /// `auto-slack-compose` (#1144) is the Slack compose pane's `auto`: the tools of that screen only, the model Sonnet at the effort high, and a question before `slack_compose_post`.
-/// The screen names one of the three, and any other text is refused when the argument is read.
+/// `auto-todo-draft` (#1148) is the pane of a Todo's draft's: the tools of that screen only (it has no tool that posts, so no question is set), and the model Sonnet at the effort high.
+/// The screen names one of the four, and any other text is refused when the argument is read.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -102,6 +109,8 @@ pub enum ClaudeCodePermissionMode {
     Auto,
     #[serde(rename = "auto-slack-compose")]
     AutoSlackCompose,
+    #[serde(rename = "auto-todo-draft")]
+    AutoTodoDraft,
 }
 
 /// A saved skill that the pane's Claude Code is given with `--plugin-dir` (A-32).
@@ -163,6 +172,11 @@ fn slack_compose_launch_script(claude: &Path, mcp_config: &Path) -> String {
             sh_quote(&settings)
         ),
     )
+}
+
+/// The launch script of the pane of a Todo's draft (S-18, #1148): the `auto` script with `--model sonnet --effort high`.
+fn todo_draft_launch_script(claude: &Path, mcp_config: &Path) -> String {
+    auto_script(claude, mcp_config, " --model sonnet --effort high")
 }
 
 /// The `auto` script with `flags` after `--permission-mode auto`: each is a fixed flag and a value the app decided.
@@ -295,7 +309,7 @@ fn claude_path() -> Result<PathBuf, String> {
 /// Two panes may start together and write the same files: one at a time (the files are replaced whole, with the same text for the same choice).
 static FILES: Mutex<()> = Mutex::new(());
 
-/// Writes `mcp.json` and the launch script in `claude-code/` of `config` and answers the script's path. In the `auto` mode it writes `mcp-calendar.json` (`--calendar`) and `start-auto.sh` instead, and in `auto-slack-compose` `mcp-slack-compose.json` (`--slack-compose`) and `start-auto-slack-compose.sh`, and `builtin_tools` has been refused before (`check_permission_mode`).
+/// Writes `mcp.json` and the launch script in `claude-code/` of `config` and answers the script's path. In the `auto` mode it writes `mcp-calendar.json` (`--calendar`) and `start-auto.sh` instead, in `auto-slack-compose` `mcp-slack-compose.json` (`--slack-compose`) and `start-auto-slack-compose.sh`, and in `auto-todo-draft` `mcp-todo-draft.json` (`--todo-draft`) and `start-auto-todo-draft.sh`, and `builtin_tools` has been refused before (`check_permission_mode`).
 fn write_files(
     config: &Path,
     claude: &Path,
@@ -317,6 +331,19 @@ fn write_files(
             &auto_launch_script(claude, &dir.join(MCP_CALENDAR_FILE)),
         )?;
         return Ok(dir.join(SCRIPT_AUTO_FILE));
+    }
+    if mode == ClaudeCodePermissionMode::AutoTodoDraft {
+        crate::accounts::write_atomic(
+            &dir,
+            MCP_TODO_DRAFT_FILE,
+            &mcp_config(mcp, &[TODO_DRAFT_MCP_ARG]),
+        )?;
+        crate::accounts::write_atomic(
+            &dir,
+            SCRIPT_AUTO_TODO_DRAFT_FILE,
+            &todo_draft_launch_script(claude, &dir.join(MCP_TODO_DRAFT_FILE)),
+        )?;
+        return Ok(dir.join(SCRIPT_AUTO_TODO_DRAFT_FILE));
     }
     if mode == ClaudeCodePermissionMode::AutoSlackCompose {
         crate::accounts::write_atomic(
@@ -996,7 +1023,7 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only) or `auto-slack-compose` (#1144: for the Slack compose pane, with that screen's tools only); `auto` and `auto-slack-compose` with `builtin_tools`, or for the orchestrator, are refused,
+/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only), `auto-slack-compose` (#1144: for the Slack compose pane, with that screen's tools only) or `auto-todo-draft` (#1148: for the pane of a Todo's draft, with that screen's tools only); every mode but `manual` with `builtin_tools`, or for the orchestrator, is refused,
 /// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976: passed as `claude [prompt]` after a `--`, as the orchestrator's is; the orchestrator takes none from the screen). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1416,6 +1443,95 @@ mod tests {
             calendar_mcp
         );
         assert!(!calendar_text.contains("--model"));
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
+    fn the_todo_draft_script_is_the_auto_script_with_sonnet_and_high_and_no_settings() {
+        let script = todo_draft_launch_script(
+            Path::new("/Users/x/.local/bin/claude"),
+            Path::new("/c/app/claude-code/mcp-todo-draft.json"),
+        );
+        assert_eq!(
+            script,
+            "#!/bin/sh\n\
+             # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
+             PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
+             exec '/Users/x/.local/bin/claude' --tools '' --permission-mode auto --model sonnet --effort high --setting-sources user --strict-mcp-config --mcp-config '/c/app/claude-code/mcp-todo-draft.json' \"$@\"\n"
+        );
+        // No tool of this pane posts, so no question is set; the calendar pane's script has no model either.
+        assert!(!script.contains("--settings"));
+        assert!(
+            !auto_launch_script(Path::new("/bin/claude"), Path::new("/c/m.json"))
+                .contains("--model")
+        );
+    }
+
+    #[test]
+    fn the_todo_draft_mode_is_read_as_its_own_word_and_is_refused_as_auto_is() {
+        use ClaudeCodePermissionMode::{AutoSlackCompose, AutoTodoDraft};
+        let read = |text: &str| serde_json::from_str::<ClaudeCodePermissionMode>(text);
+        assert_eq!(read("\"auto-todo-draft\"").unwrap(), AutoTodoDraft);
+        for bad in [
+            "\"autotododraft\"",
+            "\"auto_todo_draft\"",
+            "\"todo-draft\"",
+            "\"Auto-todo-draft\"",
+        ] {
+            assert!(read(bad).is_err(), "{bad}");
+        }
+        assert_eq!(check_permission_mode(false, false, AutoTodoDraft), Ok(()));
+        assert!(check_permission_mode(false, true, AutoTodoDraft)
+            .unwrap_err()
+            .contains("ツール"));
+        assert!(check_permission_mode(true, false, AutoTodoDraft)
+            .unwrap_err()
+            .contains("オーケストレーター"));
+        assert!(check_permission_mode(true, true, AutoTodoDraft).is_err());
+        assert_ne!(AutoSlackCompose, AutoTodoDraft);
+    }
+
+    #[test]
+    fn a_todo_draft_start_writes_its_own_config_and_script_and_leaves_the_others() {
+        let config = temp_dir("files-todo-draft");
+        let compose = write_files(
+            &config,
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+            false,
+            ClaudeCodePermissionMode::AutoSlackCompose,
+        )
+        .unwrap();
+        let compose_text = std::fs::read_to_string(&compose).unwrap();
+        let draft = write_files(
+            &config,
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+            false,
+            ClaudeCodePermissionMode::AutoTodoDraft,
+        )
+        .unwrap();
+        assert_eq!(draft, config.join("claude-code/start-auto-todo-draft.sh"));
+        let text = std::fs::read_to_string(&draft).unwrap();
+        assert!(text.contains(" --permission-mode auto --model sonnet --effort high "));
+        assert!(text.contains(&format!(
+            "--mcp-config '{}'",
+            config.join("claude-code/mcp-todo-draft.json").display()
+        )));
+        let mcp: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(config.join("claude-code/mcp-todo-draft.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            mcp,
+            serde_json::json!({"mcpServers": {"tsunagiai": {
+                "command": "/app/tsunagiai-mcp",
+                "args": ["--todo-draft"]
+            }}})
+        );
+        // The Slack compose pane's files are as they were.
+        assert_eq!(std::fs::read_to_string(&compose).unwrap(), compose_text);
+        assert!(compose_text.contains("--settings"));
         std::fs::remove_dir_all(config).unwrap();
     }
 

@@ -498,22 +498,48 @@ describe("todo", () => {
     const desc = () => $("#todo-draft .draft-desc");
     const undo = () => $("#todo-draft .draft-undo");
     const original = { name: slackSummary.content, description: slackSummary.description };
+    // 「相談する」 starts Claude Code (#1148): the page starts nothing by itself.
+    const consult = async () => {
+      await $("#draft-consult").click();
+      await $(`${term}.claude-code-pane`).waitForDisplayed();
+    };
 
     // The pane is Claude Code: no log, request field, model selects, clear button or note is left of the conversation of `claude -p`, and no help text.
-    it("has the terminal and やり直す in the pane and none of the conversation, with no placeholder and no note", async () => {
+    it("has 相談する and an off やり直す in the pane at first, and the terminal and an on やり直す after it, with none of the conversation, no placeholder and no note", async () => {
       await openSummaryCard();
-      await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+      await expect($("#draft-consult")).toHaveText("相談する");
+      await expect($("#draft-consult")).toHaveElementClass("text-btn");
+      await expect($("#draft-consult")).toBeDisplayed();
+      await expect($(term)).not.toBeDisplayed();
       await expect($("#draft-restart")).toHaveText("やり直す");
-      await expect($("#draft-restart")).toBeEnabled();
+      await expect($("#draft-restart")).toBeDisabled();
       expect(await browser.execute(() => document.querySelector("#draft-chat .chat-head")!.lastElementChild!.id)).toBe("draft-restart");
+      expect(await browser.execute(() => document.querySelector("#draft-ask")!.textContent)).toBe("相談する");
+      expect(await browser.execute(() => document.querySelector("#draft-chat .chat-head")!.nextElementSibling!.id)).toBe("draft-ask");
+      await consult();
+      await expect($("#draft-consult")).not.toBeDisplayed();
+      await expect($("#draft-restart")).toBeEnabled();
       expect(await count("#draft-log, #draft-input, #draft-form, #draft-send, #draft-model, #draft-clear, #draft-chat-note, #draft-chat select")).toBe(0);
       expect(await count("#todo-draft textarea[placeholder], #todo-draft input[placeholder]")).toBe(0);
     });
 
-    it("starts Claude Code with the tools of tsunagiai-mcp only and a first instruction that tells the work, the tools and the target, with nothing of the draft", async () => {
+    it("starts no process when the page is shown, and none while 相談する is not pressed, through another screen and a hidden window", async () => {
       await openSummaryCard();
+      await browser.pause(500);
+      expect(await callsOf("claude_code_start")).toEqual([]);
+      await $("#nav-mail").click();
+      await $("#nav-todo").click();
+      await expect($("#draft-consult")).toBeDisplayed();
+      await browser.pause(300);
+      expect(await callsOf("claude_code_start")).toEqual([]);
+    });
+
+    it("starts Claude Code, when 相談する is pressed, in the auto mode with the tools of tsunagiai-mcp only and a first instruction that tells the work, the tools and the target, with nothing of the draft", async () => {
+      await openSummaryCard();
+      await consult();
       const [start] = await waitForCalls("claude_code_start");
-      expect(start).toMatchObject({ id: "todo-draft", builtinTools: false, permissionMode: "manual", skill: null });
+      expect(await callsOf("claude_code_start")).toHaveLength(1);
+      expect(start).toMatchObject({ id: "todo-draft", builtinTools: false, permissionMode: "auto-todo-draft", skill: null });
       const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
       for (const word of ["Todo", "screen_read", "screen_write", "todo-draft", "name", "description", "従わない"]) expect(prompt).toContain(word);
       for (const text of [slackSummary.content, slackSummary.description, slackSummary.targetText, slackMessageUrl]) expect(prompt).not.toContain(text);
@@ -530,6 +556,7 @@ describe("todo", () => {
 
     it("ends the process and starts a new one with やり直す", async () => {
       await openSummaryCard();
+      await consult();
       await waitForCalls("claude_code_start");
       const close = await mock("claude_code_close", null);
       await $("#draft-restart").click();
@@ -541,6 +568,7 @@ describe("todo", () => {
 
     it("keeps the process through another screen and a redraw of the Todo screen, and shows the terminal again when the screen is back", async () => {
       await openSummaryCard();
+      await consult();
       await waitForCalls("claude_code_start");
       const close = await mock("claude_code_close", null);
       await $("#nav-mail").click();
@@ -553,8 +581,9 @@ describe("todo", () => {
       expect(await callsOf(close)).toEqual([]);
     });
 
-    it("ends the process when the page is closed with 破棄 or the back button, and starts a new one for the next page", async () => {
+    it("ends the process when the page is closed with 破棄 or the back button, and the next page starts nothing until 相談する is pressed", async () => {
       await openSummaryCard();
+      await consult();
       await waitForCalls("claude_code_start");
       const close = await mock("claude_code_close", null);
       await $("#todo-draft .draft-drop").click();
@@ -562,13 +591,29 @@ describe("todo", () => {
       await $("#todo-add-input").setValue(slackMessageUrl);
       await $("#todo-add-button").click();
       await $("#todo-draft").waitForExist();
+      await expect($("#draft-consult")).toBeDisplayed();
+      await expect($("#draft-restart")).toBeDisabled();
+      await browser.pause(500);
+      expect(await callsOf("claude_code_start")).toHaveLength(1);
+      await consult();
       expect(await waitForCalls("claude_code_start", 2)).toHaveLength(2);
       await $("#todo-back").click();
       expect(await waitForCalls(close, 2)).toHaveLength(2);
     });
 
+    it("ends nothing when the page is closed before 相談する was pressed", async () => {
+      await openSummaryCard();
+      const close = await mock("claude_code_close", null);
+      await $("#todo-draft .draft-drop").click();
+      await $("#todo-draft").waitForExist({ reverse: true });
+      await browser.pause(300);
+      expect(await callsOf(close)).toEqual([]);
+      expect(await callsOf("claude_code_start")).toEqual([]);
+    });
+
     it("ends the process when the Todo is added", async () => {
       const { addFromSlack } = await openSummaryCard();
+      await consult();
       await waitForCalls("claude_code_start");
       const close = await mock("claude_code_close", null);
       await $("#todo-draft .draft-add").click();

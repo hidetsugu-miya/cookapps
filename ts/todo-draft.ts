@@ -1,7 +1,8 @@
 // The page that opens when Claude has summarised a Slack message (S-2), in the place of the Todo list (the task detail's place, `#todo-main`): the draft of the Todo on the left, shaped like the task detail (the name and the description, and beside them the project, the date and the labels),
 // 破棄 at the bottom left and the add button at the bottom right. Nothing is created until the add button is pressed.
 // The left part is `.draft-todo`; at its right, past a divider the user drags (`ts/split.ts`, 30 to 60% of the page, 40% at first), is the pane for Claude (S-18, `.draft-chat`): Claude Code in a terminal (A-36, ts/claude-code.ts), which reads and writes
-// the name and the description through the target "todo-draft" of ts/screen-bridge.ts. What it writes goes into the fields as it is, and 「元に戻す」 (`draft-undo`) takes it back. The process lives as long as the page: it ends when the page closes.
+// the name and the description through the target "todo-draft" of ts/screen-bridge.ts. What it writes goes into the fields as it is, and 「元に戻す」 (`draft-undo`) takes it back.
+// The pane shows 「相談する」 under its heading and starts nothing until it is pressed (#1148); Claude Code then runs in the `auto` permission mode with Sonnet at the effort high. The process lives as long as the page: it ends when the page closes, and the next page starts with 「相談する」 again.
 // The Todo header's back button (`#todo-back`, the one of the task detail) and 破棄 close it; Escape does not, so a draft is never lost by accident.
 // The project list beside it is inert while the page is open, so that no other list can be chosen under it.
 import type { Summary } from "./bindings/Summary";
@@ -24,8 +25,17 @@ export interface DraftHooks {
 }
 
 // The open draft: `page` is its node (it stays in the document while another screen is shown), `opener` where the focus returns, `discard` what 破棄 and the back button do.
-// `term` is the host of the terminal of its pane and `undo` the button that takes a write of Claude Code back.
-let open: { page: HTMLElement; opener: HTMLElement | null; discard: () => void; term: HTMLElement; undo: HTMLButtonElement } | null = null;
+// `ask` is 「相談する」 of its pane (shown until Claude Code is started), `term` the host of the terminal and `restart` 「やり直す」 (usable once started), and `undo` the button that takes a write of Claude Code back.
+let open: {
+  page: HTMLElement;
+  opener: HTMLElement | null;
+  discard: () => void;
+  ask: HTMLElement;
+  term: HTMLElement;
+  restart: HTMLButtonElement;
+  started: boolean;
+  undo: HTMLButtonElement;
+} | null = null;
 
 // Whether a draft is open.
 export const draftOpen = () => open !== null;
@@ -68,12 +78,23 @@ function refreshUndo() {
   open.undo.disabled = live.saving;
 }
 
-// Shows the terminal while the page is in view, and hides it (the process goes on) while it is not: another screen, or the window is hidden. The first show starts Claude Code.
+// After 「相談する」: shows the terminal while the page is in view, and hides it (the process goes on) while it is not: another screen, or the window is hidden. The first show starts Claude Code.
+// Before it nothing is started, and nothing is shown.
 export function syncDraftClaude() {
-  if (!open) return;
+  if (!open?.started) return;
   const host = open.term;
   if (document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
-  if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
+  if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, permissionMode: "auto-todo-draft", prompt: firstPrompt() }, OWNER);
+}
+
+// 「相談する」 was pressed: the terminal takes the button's place and Claude Code starts in it (it takes the keyboard, because it is new).
+function startDraftClaude() {
+  if (!open || open.started) return;
+  open.started = true;
+  open.ask.hidden = true;
+  open.term.hidden = false;
+  open.restart.disabled = false;
+  syncDraftClaude();
 }
 
 // The Todo screen is left (every way out goes through `setScreen`, ts/nav.ts).
@@ -224,7 +245,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   page.id = "todo-draft";
   page.setAttribute("aria-label", "Todo の案");
   page.tabIndex = -1;
-  const [pane, term] = claudePane();
+  const { pane, ask, term, restart } = claudePane();
   const split = tag("div", "split-bar");
   split.id = "draft-split";
   split.setAttribute("role", "separator");
@@ -279,30 +300,37 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   };
 
   undo.onclick = undoWrite;
-  open = { page, opener: document.activeElement as HTMLElement | null, discard, term, undo };
+  open = { page, opener: document.activeElement as HTMLElement | null, discard, ask, term, restart, started: false, undo };
   $("projects").inert = true;
   $("todo-main").append(page);
   // The page takes the list's place (and the title), and the back button shows.
   renderTodo();
   page.focus();
-  // The terminal takes the keyboard when Claude Code starts, because it is new.
-  syncDraftClaude();
 }
 
-// The pane for Claude: the head with the Claude mark, the title and 「やり直す」 at its right end, and the host of the terminal under it. Returns the pane and the host.
+// The pane for Claude: the head with the Claude mark, the title and 「やり直す」 at its right end (disabled until Claude Code is started), and under it 「相談する」, which the terminal takes the place of (`term`, hidden until then) when it is pressed.
 function claudePane() {
   const restart = tag("button", "text-btn chat-clear", "やり直す");
   restart.type = "button";
   restart.id = "draft-restart";
+  restart.disabled = true;
   const head = tag("div", "chat-head");
   head.insertAdjacentHTML("beforeend", CLAUDE_SVG);
   head.append("Claude", restart);
+  const consult = tag("button", "text-btn", "相談する");
+  consult.type = "button";
+  consult.id = "draft-consult";
+  consult.onclick = startDraftClaude;
+  const ask = tag("div");
+  ask.id = "draft-ask";
+  ask.append(consult);
   const term = tag("div");
   term.id = "draft-term";
+  term.hidden = true;
   const pane = tag("aside", "chat-pane draft-chat");
   pane.id = "draft-chat";
   pane.setAttribute("aria-label", "Claude");
-  pane.append(head, term);
+  pane.append(head, ask, term);
   // Ends the process and starts a new one in the same place. The button waits until the start has answered, because a restart pressed before would end the one that is starting.
   restart.onclick = () => {
     restart.disabled = true;
@@ -310,5 +338,5 @@ function claudePane() {
     syncDraftClaude();
     void claudeCodeStarted(ID).then(() => (restart.disabled = false));
   };
-  return [pane, term] as const;
+  return { pane, ask, term, restart };
 }
