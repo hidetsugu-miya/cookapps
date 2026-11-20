@@ -55,7 +55,7 @@ Always delete `{records}/approved.json` when a revision goes back to stage 4.
 
 1. When there is nothing to reflect (no choice on a decision, no answer on a residual finding, no disposition of a proposal), skip the next two bullets.
 2. Run [4-authoring](4-authoring.md) with the kind `decisions` once, with the owner's decisions and the reasons of the rejected and held proposals. When it returns `fix-not-applied`, send `BLOCKED design: the owner's decisions could not be reflected`, with the unapplied items, and stop. Mark the decisions `decided` in the ledger (set the status), and the declined residual findings stay `residual`.
-3. Launch `feature-dev:design-reviewer` once as the confirmation review of [5-review](5-review.md), step 5 (not codex), narrowed as "The pass that stage 6 sends back" says. Merge as step 2 of that file. When a must-fix finding is `unresolved` other than a residual finding that the owner declined, run the last fix of step 4 of that file once on it (the declined ones stay residual, not fixed again), and present again from step 1 of this file.
+3. Launch `feature-dev:design-reviewer` once as the confirmation review of [5-review](5-review.md), step 5, narrowed as "The pass that stage 6 sends back" says. Merge as step 2 of that file. When a must-fix finding is `unresolved` other than a residual finding that the owner declined, run the last fix of step 4 of that file once on it (the declined ones stay residual, not fixed again), and present again from step 1 of this file.
 4. Once no must-fix finding is left, the design approval is established. Record it:
 
    ```sh

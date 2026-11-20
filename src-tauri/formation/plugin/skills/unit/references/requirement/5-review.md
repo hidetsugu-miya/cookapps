@@ -53,8 +53,7 @@ Treat what it returns as claims to check against the deliverable and the sources
    - `change_base_path` and `target_nodes` when step 1 set them.
 3. Save the raw report as the review record, and take the new base version.
 4. Settle the result. A report with `status: review-incomplete` ends the pass: send `BLOCKED requirement: the review could not run: {its reason}` and stop. A report with `status: partial` is run once more over the range it says it did not read, and its findings are merged. When that run is also partial, send the same `BLOCKED` with what stayed unread.
-5. Ask codex for a second review, in this first pass only, as [codex-review](../shared/codex-review.md) says. The target is `requirement.json` and `technical-notes.md` of the case root, the request (`{scratch}/request.md`), and the look-for list: a request that is not reflected, a requirement that nobody asked for, a contradiction between requirements, a vague statement, a fact about the code that the code does not hold. Use its findings as that file says: check each against the deliverable and the sources. A finding that holds and meets the severity of the reviewer's report becomes a `MF-n`, one that holds with less severity an `RC-n`, and one that needs the owner's business judgment an `NR-n`, each numbered after the reviewer's largest number of that kind. When no review comes, go on and say so in your summary.
-6. Update the findings you keep from the report (and codex). Then branch on the count of `MF-n`:
+5. Update the findings you keep from the report. Then branch on the count of `MF-n`:
    - none: go to step 4.
    - one or more: go to step 2.
 
@@ -99,7 +98,6 @@ The writing run that reflected the owner's response is the driving run for the r
    - `previous_ledger`: your findings with their ids, locations and statuses,
    - `fix_summary`: the fix summary of the writing run that reflected the response, and of the fix of the last step 2,
    - `change_base_path` and `target_nodes` as settled.
-   Ask for no codex review in this step.
 4. Save the raw report, take the new base version, and update your findings. Handle `review-incomplete` and `partial` as in step 1.
 5. Branch on the count of new or unresolved `MF-n`:
    - none: if stage 6 sent you here from its route "approval with decisions", return to stage 6 without step 4, and complete from there. Otherwise go to step 4.

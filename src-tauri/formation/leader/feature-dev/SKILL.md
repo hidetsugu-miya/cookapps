@@ -41,7 +41,7 @@ The folder of this skill is `${CLAUDE_SKILL_DIR}`.
 2. Settle the repository that holds the case root, and whether the case is new: [case-root](references/case-root.md).
 3. Settle the next unit from `case.json`: [next-unit](references/next-unit.md). When every unit is complete, report and stop (the end of that file).
 4. Launch the child of that unit: [launch](references/launch.md).
-5. Serve the child until it reports that its unit is done: [messages](references/messages.md), with [pages](references/pages.md) for a decision page and [codex](references/codex.md) for a codex review. The patrol of the child (registered in step 4) runs meanwhile, and ends with the child.
+5. Serve the child until it reports that its unit is done: [messages](references/messages.md), with [pages](references/pages.md) for a decision page. The patrol of the child (registered in step 4) runs meanwhile, and ends with the child.
 6. Check `case.json` again, and go back to step 3.
 
 Do not stop between units to ask the owner whether to go on.

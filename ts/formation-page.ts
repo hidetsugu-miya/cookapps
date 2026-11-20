@@ -9,6 +9,7 @@ import type { ScopeGroup } from "./bindings/ScopeGroup";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
 import { drawBlocks, drawEvidence, fold } from "./formation-page-blocks.js";
+import { invoke } from "./ipc.js";
 
 interface Choice {
   key: string;
@@ -63,6 +64,10 @@ export function drawPage(page: DecisionPage, child: string, atMs: number, send: 
   const top = tag("header", "fp-top");
   top.append(tag("h2", "fp-title", page.title), tag("span", "fp-from", `${child} から`), tag("p", "fp-context", page.contextLabel));
   root.append(top);
+  if (page.pageKind === "code-review") {
+    const pr = pullRequest(page);
+    if (pr !== null) root.append(pr);
+  }
   if (page.pageKind !== "open-questions") root.append(changes(page));
   if (page.risks !== null) root.append(risks(page.risks.items, page.risks.evidence));
   if (page.approvalScope.length > 0) root.append(scope(page.approvalScope));
@@ -199,6 +204,43 @@ function sender(root: HTMLElement, send: Send, verdict: Verdict | null): HTMLEle
   };
   row.append(error, button);
   return row;
+}
+
+// The pull request of a code review, right under the title: its URL and 「開く」, which opens it in the default browser; with no pull request, the reason (`note`) in its place. The URL is the child's text, so only an `https` one gets the button (Rust opens http and https alone).
+function pullRequest(page: DecisionPage): HTMLElement | null {
+  const pr = page.pr;
+  if (pr === null) return null;
+  const node = tag("div", "fp-pr");
+  const url = pr.url;
+  if (url !== null) {
+    node.append(tag("code", "fp-ev-path fp-pr-url", url));
+    if (isHttps(url)) {
+      const error = tag("p", "fp-error pending fail");
+      error.setAttribute("role", "alert");
+      error.hidden = true;
+      const open = tag("button", "text-btn fp-pr-open", "開く");
+      open.type = "button";
+      open.onclick = () => {
+        error.hidden = true;
+        invoke("orca_open_url", { url }).catch((e) => {
+          error.textContent = String(e);
+          error.hidden = false;
+        });
+      };
+      node.append(open, error);
+    }
+  } else if (pr.note !== null) {
+    node.append(tag("p", "fp-p", pr.note));
+  }
+  return node.childElementCount === 0 ? null : node;
+}
+
+function isHttps(url: string): boolean {
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function section(heading: string, className = ""): HTMLElement {
@@ -382,20 +424,13 @@ function freeText(name: string): HTMLTextAreaElement {
   return text;
 }
 
-// 「参考」: what settled, how the quality loop went, the pull request and the earlier reply. A section with nothing is left out.
+// 「参考」: what settled, how the quality loop went and the earlier reply. A section with nothing is left out.
 function referenceOf(page: DecisionPage): HTMLElement | null {
   const parts: HTMLElement[] = [];
   if (page.settledDecisions.length > 0) parts.push(settled(page.settledDecisions));
   if (page.qualityLoop !== null) {
     const node = tag("div", "fp-ref");
     node.append(tag("h4", "fp-h", "品質チェックの結果"), tag("p", "fp-p", `実施回数: ${page.qualityLoop.rounds} 回`), tag("p", "fp-p", `解消した必ず直す指摘: ${page.qualityLoop.mustFixResolved} 件`));
-    parts.push(node);
-  }
-  if (page.pr !== null) {
-    const node = tag("div", "fp-ref");
-    node.append(tag("h4", "fp-h", "PR"));
-    if (page.pr.url !== null) node.append(tag("code", "fp-ev-path", page.pr.url));
-    if (page.pr.note !== null) node.append(tag("p", "fp-p", page.pr.note));
     parts.push(node);
   }
   if (page.previousReply !== null) {

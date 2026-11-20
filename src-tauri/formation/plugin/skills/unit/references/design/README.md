@@ -7,7 +7,7 @@ When it ends, its status in `case.json` is `完了`, `implementations[]` follows
 
 You already read [glossary](../shared/glossary.md), [case-json](../shared/case-json.md) and [branch-and-pr](../shared/branch-and-pr.md) in the steps of the skill, and `{jq dir}` is the folder of its setup.
 The schema of the deliverable is [design-json](../shared/design-json.md), and how to read, write and check it is [deliverable-writing](../shared/deliverable-writing.md).
-Asking the owner is [decision-page](../shared/decision-page.md), and the review by codex is [codex-review](../shared/codex-review.md).
+Asking the owner is [decision-page](../shared/decision-page.md).
 
 ## Setup of this unit
 
@@ -26,7 +26,7 @@ A later stage sends you back to an earlier one in the cases it names.
 | 2 | [2-investigation](2-investigation.md) | What the code, the conventions and the earlier decisions say, written in `technical-notes.md`, the alternatives to the straightforward plan, and the questions that investigation could not settle. |
 | 3 | [3-open-questions](3-open-questions.md) | The owner's decisions on those questions, on a decision page. |
 | 4 | [4-authoring](4-authoring.md) | `design.json`, written and checked. Also the fixes of the later stages. |
-| 5 | [5-review](5-review.md) | The review by the design reviewer and by codex, and the fix of what they find. |
+| 5 | [5-review](5-review.md) | The review by the design reviewer, and the fix of what it finds. |
 | 6 | [6-approval](6-approval.md) | The ADR, the owner's approval on a decision page, or a revision. |
 | 7 | [7-implementations](7-implementations.md) | The implementations of `case.json`, derived from the approved design. |
 | 8 | [8-completion](8-completion.md) | Status `完了`, the commits, the aggregate pull request, and `DONE`. |
@@ -87,6 +87,6 @@ A restarted child reads the disk and goes on from where it stands. Take the firs
 - A reviewer, an explorer or a polisher writes none of these files. You write what they return.
 - The text of the design and of the pages is Japanese. `technical-notes.md` follows the file it already has (the requirement unit writes it in English). This unit's records and commits follow the repository's own convention.
 - You never ask the owner in a plain message. A question to the owner is a decision page. A question to the leader about the case itself, such as a repository whose folder you cannot find, is a `QUESTION`.
-- Take the code reading to `feature-dev:code-explore`, and the Japanese polishing to `feature-dev:prose-polisher`. The review is `feature-dev:design-reviewer` and codex. The design reviewer reads and reports. You decide, and you edit.
+- Take the code reading to `feature-dev:code-explore`, and the Japanese polishing to `feature-dev:prose-polisher`. The review is `feature-dev:design-reviewer`, which reads and reports. You decide, and you edit.
 - Do not run an experiment in the product code, and do not change a repository other than the docs repository. This unit only reads the other repositories.
 - Do not start the implementation. The design stays a design.

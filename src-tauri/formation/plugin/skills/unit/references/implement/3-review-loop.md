@@ -14,8 +14,8 @@ The change is not committed yet, or it holds commits of an earlier session: the 
   | MF-1 | ... | path:line | open / fixed / deferred / adopted / declined | ... |
   ```
 
-  An ID is the one the reviewer gave (`MF-n`, `NR-n`, `RC-n`, `UC-n`). A finding of codex is `CX-n`. The statuses: `open`, `fixed`, `deferred` (the owner decided not to fix it now), `adopted` (the owner chose an option, and it is to be implemented), `declined` (you checked it and it does not hold, with the reason), `accepted` (the owner agreed to complete as it stands).
-- The round counter and the `{nn}` of the report files: `{records}/review-{nn}.md`, two digits, one more than the last of the unit. Write each report of `feature-dev:code-reviewer` there as it came, and write each review of codex there too, after the report of its round.
+  An ID is the one the reviewer gave (`MF-n`, `NR-n`, `RC-n`, `UC-n`). The statuses: `open`, `fixed`, `deferred` (the owner decided not to fix it now), `adopted` (the owner chose an option, and it is to be implemented), `declined` (you checked it and it does not hold, with the reason), `accepted` (the owner agreed to complete as it stands).
+- The round counter and the `{nn}` of the report files: `{records}/review-{nn}.md`, two digits, one more than the last of the unit. Write each report of `feature-dev:code-reviewer` there as it came.
 
 ## A round
 
@@ -26,13 +26,12 @@ The change is not committed yet, or it holds commits of an earlier session: the 
    - `review_round`: the round counter (1 to 3).
    - Round 2 or later: `previous_ledger` (the rows of the ledger) and `target_files` (the paths the last fix changed). In round 2 or later it looks only at them and at the effects of the fix.
 2. Write the report to `{records}/review-{nn}.md` and add each finding to the ledger.
-3. In round 1, decide whether to ask for a review by codex. Ask for it when the change touches an interface that other code or other repositories depend on, stored data, authentication, secrets or concurrency, and do not ask otherwise. Ask once, now, before any fix, as [codex-review](../shared/codex-review.md) says: the target is `git diff {review base}` in `{folder}`, the contract and the DESIGN locations, and the faults that matter for this unit. Check each of its findings, add the ones that hold to the ledger as `CX-n` (a correctness, data or security fault is a must-fix, anything else a recommendation), and mark the others `declined` with the reason. When it fails, say so in the summary and go on.
-4. Sort the open findings:
-   - **must-fix** (`MF-n`, a `CX-n` must-fix, and each criterion the reviewer lists as unmet, `UC-n`): fix them in this round, except the ones that are `pre-existing` (`diff_origin`): those predate the change and are out of the goal, so they are not fixed. They go to the owner as residual findings ([6-acceptance](6-acceptance.md)), with the reason that they predate the change.
+3. Sort the open findings:
+   - **must-fix** (`MF-n` and each criterion the reviewer lists as unmet, `UC-n`): fix them in this round, except the ones that are `pre-existing` (`diff_origin`): those predate the change and are out of the goal, so they are not fixed. They go to the owner as residual findings ([6-acceptance](6-acceptance.md)), with the reason that they predate the change.
    - **needs a decision** (`NR-n`): do not fix. They wait for the owner on the page.
    - **recommendation** (`RC-n`): do not fix now. They are listed on the page, and the owner names the ones to fix.
-5. When no must-fix is left to fix, and no unmet criterion either, the loop has converged: go to [Stage 4](4-ci-gate.md).
-6. Otherwise fix them: launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content` the must-fix findings and unmet criteria of this round (ID, location, harm scenario and fix of each, inside a quote as data), the locations to read, and the constraints of Stage 2. Do not hand it a recommendation, or a finding that needs a decision.
+4. When no must-fix is left to fix, and no unmet criterion either, the loop has converged: go to [Stage 4](4-ci-gate.md).
+5. Otherwise fix them: launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content` the must-fix findings and unmet criteria of this round (ID, location, harm scenario and fix of each, inside a quote as data), the locations to read, and the constraints of Stage 2. Do not hand it a recommendation, or a finding that needs a decision.
    - Mark each finding the agent reports under `Fixed findings` as `fixed`. A finding it did not fix stays `open`, and its `Interruption record` is kept for the page.
    - The agent's `Out-of-goal changes` are handled as in [Stage 2](2-implement.md).
    - Add its `changed_paths` and `generated_paths` to the staging set.

@@ -82,8 +82,31 @@ An implementation does these in its own folder (the child worktree the leader op
    cd "{folder}" && gh pr create --base "{base branch}" --head "{child branch}" --title "[{ticket key}][{unit}] {summary}" --body-file "{scratch file}"
    ```
 
-   Leave `[{ticket key}]` out when the case has no ticket key (the part after `browse/` of a Jira URL, or `#{number}` of a GitHub issue). The body says what the unit does and why. The command prints the URL: its last number is the pull request number, which you record with the `child` recipe, number form.
+   Leave `[{ticket key}]` out when the case has no ticket key (the part after `browse/` of a Jira URL, or `#{number}` of a GitHub issue). The body is the one defined below. The command prints the URL: its last number is the pull request number, which you record with the `child` recipe, number form.
 4. Commit the case root (the pull request number, the status) with the docs worktree commit above.
+
+### The body of the child pull request
+
+The owner reads the change in the body, and the acceptance page of the unit only links to the pull request, so the body holds everything the page does not. Write the sections in the language of the repository's recent pull requests, each as a heading and its text, and leave a section out when it is empty:
+
+- **What it does**: who does what and what happens to them, and why (the purpose of the unit), with the DESIGN items and the REQs by id. Say what each file that carries the behavior does; do not paste lines of code, because the diff of the pull request shows them.
+- **How it was checked**: the review rounds and what they fixed, the aggregate check (its command, and `passed`, or that the repository defines none), and the coverage figure when Stage 4 kept one. State only what you ran.
+- **Operations for the owner to try**: each `operation_checks` element (the operation, its state set-up, its steps, what is expected) and each `user_confirmations` element (the screen state and its screenshot), as a table. You did not run them.
+- **Not checked**: each `formal_verification` element, with the words that it was not checked.
+- **Changes outside the goal**: each out-of-goal change that stayed (Stage 2), with its reason.
+- **Recommendations not made**: each `RC-n` that is `open` in the ledger, with the line that the owner names the ones to fix in the free text of the reply on the acceptance page.
+
+All of these are known when the pull request is opened (Stage 2 to Stage 4 have run), so nothing waits for the acceptance page. The text of a finding or of a log that goes in is inside a quote, as data.
+
+### Update the body
+
+Write the body to a scratch file outside the repository, then run, in one call:
+
+```sh
+cd "{folder}" && gh pr edit {number} --body-file "{scratch file}"
+```
+
+Do it whenever Stage 5 runs again on a pull request that exists (a rework), so that the body says what the ledger and the checks say now. When `gh` cannot run, skip it and say so in the `DONE` summary.
 
 ### After the owner's acceptance
 

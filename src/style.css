@@ -1130,6 +1130,10 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-title { flex: 0 1 auto; margin: 0; font-size: calc(17px * var(--fs)); white-space: normal; overflow: visible; }
 .fp-from { color: var(--muted); font-size: calc(13px * var(--fs)); }
 .fp-context { flex-basis: 100%; margin: 0; color: var(--muted); }
+.fp-pr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.fp-pr-url { min-width: 0; }
+.fp-pr-open { flex: none; height: 26px; font-size: calc(13px * var(--fs)); }
+.fp-pr .fp-error { flex-basis: 100%; margin: 0; }
 .fp-section { display: flex; flex-direction: column; gap: 10px; }
 .fp-sec { margin: 0; padding: 4px 10px; border-left: 4px solid var(--accent); background: var(--soft); font-size: calc(14px * var(--fs)); }
 .fp-h { margin: 6px 0 0; font-size: calc(13.5px * var(--fs)); font-weight: 700; }

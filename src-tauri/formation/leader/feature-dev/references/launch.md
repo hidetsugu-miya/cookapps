@@ -104,7 +104,7 @@ Patrol of the child "{child name}". Read {skill folder}/references/messages.md, 
 ```
 
 `CronCreate` answers the ID of the schedule: keep it with the child's name, and never register a second patrol for a child that has one (`CronList` shows what is registered).
-The patrol is only for the child of this unit. A codex child of [codex](codex.md) is waited for by its marker file and has no patrol.
+The patrol is only for the child of this unit.
 A recurring schedule ends by itself after 7 days: when a unit runs longer than that, register it again.
 The patrol is deleted with `CronDelete` when the child's `DONE` holds, when the child reopens an earlier unit, and when you stop or close the child ([messages](messages.md)).
 
