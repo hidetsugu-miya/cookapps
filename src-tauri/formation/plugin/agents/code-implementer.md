@@ -18,6 +18,7 @@ The launch prompt carries these values.
 - `work_kind`: `initial` (a new implementation) or `fix` (a fix of findings).
 - `work_content`: the purpose, the constraints, the completion criteria, and pointers to what to read (design items, requirements, finding lists, an investigation result).
 - `repo_root`: the absolute path of the repository to work in.
+- `ui_reference_paths:` (optional): the absolute paths of UI reference images, one on each line. Open each with Read before you change a screen, implement to the layout, wording and values it shows, and list each one you opened under `References read`.
 - `test_policy`: `tdd` (write the tests first, see them fail, then implement) or `direct` (implement first). When it is missing, use `direct`.
 
 Run every shell command from `repo_root`, as `cd {repo_root} && ...`. The working directory does not persist between calls.
