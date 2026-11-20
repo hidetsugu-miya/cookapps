@@ -198,7 +198,8 @@ describe("calendar Claude pane: candidates of free time", () => {
     await expect($("#cal-slots-chip")).not.toBeDisplayed();
     expect(await askScreen("write", "calendar-slots", { slot1: slot(0, "10:00", "12:00"), slot2: slot(other, "13:00", "14:30") })).toEqual({ ok: true });
     await waitForCount(".cal-slot", 2);
-    expect(await frames()).toEqual([
+    // The frames are in the order of the columns, and the other day is the day before on a Saturday, so they are compared in the order of the candidates.
+    expect((await frames()).sort((a, b) => String(a.label).localeCompare(String(b.label)))).toEqual([
       { column: todayAt, top: 640, height: 127, inside: true, label: "候補1 10:00–12:00", border: "dashed", color: "rgb(217, 48, 37)", pointer: "none" },
       { column: otherAt, top: 832, height: 95, inside: true, label: "候補2 13:00–14:30", border: "dashed", color: "rgb(217, 48, 37)", pointer: "none" },
     ]);
