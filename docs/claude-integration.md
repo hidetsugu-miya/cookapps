@@ -146,7 +146,7 @@ Orca に保存した接続先のフォーメーションは別です。リーダ
 
 - 使えるのは、`claude` が入っているときです。見つからないときと、`tsunagiai-mcp` が見つからない（保存した接続先の PC では、置かれていない）ときは、ペインにそう出ます。
 - Claude Code は、設定フォルダの `formations/{フォーメーションの名前}/` で動き、セッションの名前はフォーメーションの名前です。起動のたびに、リーダーへの指示（`CLAUDE.md`）、MCP の設定、起動のスクリプト、空のプロジェクト設定（`.claude/settings.json`）と、リーダーの skill `feature-dev`（`.claude/skills/feature-dev/`。ここだけ、フォルダごと置き換え、ほかの skill には触れません）を書き直すので、リーダーが足した許可やフックは、次の起動には残りません。
-- フォーメーションを作るときに選んだプロジェクトがあれば、起動のたびに（再起動も）、それを最初の指示として渡します。プロジェクトの名前は、指示ではなく資料として引用の形で渡し、リーダーはあなたの指示を待ちます。
+- フォーメーションを作るときに選んだプロジェクトがあれば、起動のたびに、それを最初の指示として渡します。プロジェクトの名前は、指示ではなく資料として引用の形で渡し、リーダーはあなたの指示を待ちます。
 - 権限のモードは auto、effort は high で、組み込みの道具（Bash など）も使えます。道具やコマンドを使う前に確かめるかどうかは、Claude Code の auto モードが決めます。
 - MCP サーバーは `tsunagiai-mcp` だけです。リーダーにだけ、環境（この Mac と Orca に保存した接続先）ごとのリポジトリを読む `formation_environments`、リポジトリの worktree の一覧を読む `formation_worktrees`、フォルダの中を読む `formation_files`、ファイルの中身を読む `formation_read`、git の状態とブランチを読む `formation_git`、チームメイトを予定に入れる `formation_plan`、チームメイトを起動する `formation_launch`、チームメイトを終える `formation_close`、チームメイトの判断ページを調べてアプリに渡す `formation_page`、起動したチームメイトの様子（Orca の待ちの状態と、ターミナルの末尾）を読む `formation_status` を渡します。ほかに渡すのは読み取りのツール（`list_inbox`、`get_thread`、`list_events`、`db_profiles`）だけで、書き込みのツール（`archive`、`set_read`、`trash`、`db_profile_save`、`db_test`）と、言語サーバーのツール（`lsp_settings`、`lsp_server_save`、`lsp_server_delete`、`lsp_repo_ssh_host_set`）は渡しません。
 - `formation_launch` には環境、リポジトリ、チームメイトの名前、最初の指示を、`formation_plan` には環境とリポジトリを渡します。環境は、リーダーが動いている PC の `local` だけです。ほかの環境は、何も作らずに断ります（SendMessage が同じ PC の中でしか届かないためです）。ブランチ、ブランチの起点（`base`）、フォルダは、渡しても渡さなくてもかまいません。その環境に無いリポジトリは断り、候補を返します。
