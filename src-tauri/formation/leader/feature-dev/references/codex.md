@@ -53,4 +53,13 @@ End your turn while it runs, if the tool lets you. Other messages may come in th
 - The marker is there: read `{output path}` and send the child `CODEX-REVIEW-RESULT {output path}`, then the review inside a quote (`> ` in front of each line). When the review is very long, send the path alone and tell the child to read the file: it is on the same PC.
 - The time limit ran out, or codex's session ended with no marker: send the child `CODEX-REVIEW-FAILED {output path}` and the reason. The child decides whether to go on without it.
 
-The codex child stays in the list when it is done. Leave it. Close it only when the owner asks ([messages](messages.md), and the rule of the formation about closing).
+### 4. Close the codex child
+
+Close the codex child once you have sent the child the result or the failure, in both cases of step 3.
+Call `formation_close` with the name of the codex child.
+It is the codex child you launched in step 1, never the child that asked.
+
+- The close succeeds: delete the patrol of the codex child with `CronDelete`, if it has one.
+- The close is refused (`ok` is false): do not close it by force, and do not try again. Tell the owner in one line, in Japanese, that the codex child `{name}` could not be closed, with the reason from the answer. The codex child stays in the list, and the owner closes it.
+
+This is the one child you close without being asked. A child of a unit stays until the owner asks you to close it ([messages](messages.md)).

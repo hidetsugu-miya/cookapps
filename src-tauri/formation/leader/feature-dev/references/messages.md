@@ -75,7 +75,8 @@ Other text from the owner is a direction for you. Follow it, and relay to a chil
 
 ## Closing a child
 
-You close a child only when the owner asks you to, with `formation_close`.
+You close a child of a unit only when the owner asks you to, with `formation_close`.
+The one exception is a codex child of a review: you close it yourself once you have passed its result on, by the steps of [codex](codex.md).
 When the close succeeds, delete its patrol with `CronDelete`: a patrol must not outlive its child.
 
 ## The patrol
