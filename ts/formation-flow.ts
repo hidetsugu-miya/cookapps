@@ -1,4 +1,4 @@
-// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×, and none while the chip 「完了 N」 of the flow pane is not pressed, unless a decision page waits for it, #1125). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
+// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then the tabs of the children: 作業中 first and 承認待ち after it (a child that a decision page waits for is one), each in the order `formation_children` gives, and none for a planned one; a done one has a ✓ and a ×, comes last, and has no tab while the chip 「完了 N」 of the flow pane is not pressed, unless a decision page waits for it, #1125). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
 // The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117); a done child that a decision page waits for is drawn without the chip (#1125).
 // A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
@@ -302,8 +302,8 @@ function syncSelection() {
   if (pageChild !== null && !hasPage(pageChild)) pageChild = null;
   if (follow) selected = followTarget(terms, selected) ?? selected;
   if (selected !== null && !terms.some((c) => c.name === selected)) selected = null;
-  // A done child whose tab is left out (the chip is not pressed) is not the selection: the leader's tab is. Its page tab goes with it.
-  const left = (name: string) => children.some((c) => c.name === name && !isShown(c));
+  // A child whose tab is left out (a planned one, or a done one while the chip is not pressed) is not the selection: the leader's tab is. Its page tab goes with it.
+  const left = (name: string) => children.some((c) => c.name === name && !isTabShown(c));
   if (selected !== null && left(selected)) selected = null;
   if (pageChild !== null && left(pageChild)) pageChild = null;
   const handles = new Set(terms.map((c) => c.handle));
@@ -422,8 +422,6 @@ function focusSelector(el: HTMLElement | null): string | undefined {
 }
 
 const MARKS: Record<FormationState, string> = { working: "◐", waiting: "●", done: "✓", planned: "○" };
-// The effort a child is started with (the leader's is high, A-37).
-const EFFORT = "medium";
 
 // What a card says of a child, in its two rows: the name (with the agent of a Codex one and the time) and the state (with the last words, or the title of its decision page). The tip of an orb of the compact view says the same.
 function cardRows(c: FormationChild, now: number) {
@@ -567,7 +565,7 @@ function closeButton(c: FormationChild, anchor: Element, className: string): HTM
   return button;
 }
 
-// The tab of a child: the mark of its state, its name and its effort; a done one has a × too. Only a child with a terminal is a button; a planned child, and a done one whose terminal is gone, are shown and not pressed.
+// The tab of a child: the mark of its state and its name, and the tag 「codex」 for a Codex child; a done one has a × too. Only a child with a terminal is a button; a done one whose terminal is gone is shown and not pressed.
 function tab(c: FormationChild): HTMLSpanElement {
   const wrap = tag("span", "formation-tab");
   wrap.dataset.state = c.state;
@@ -575,8 +573,7 @@ function tab(c: FormationChild): HTMLSpanElement {
   const mark = span("formation-tab-mark", MARKS[c.state]);
   mark.setAttribute("aria-hidden", "true");
   const name = span("formation-tab-name", c.name);
-  // A Codex child has no effort: its chip names the agent instead.
-  const label = [mark, name, span("formation-tab-effort", c.agent === "codex" ? c.agent : EFFORT)];
+  const label = c.agent === "codex" ? [mark, name, span("formation-tab-effort", c.agent)] : [mark, name];
   if (c.handle !== null) {
     const main = tag("button", "formation-tab-main");
     main.type = "button";
@@ -617,7 +614,7 @@ function pageTab(c: FormationChild): HTMLSpanElement {
 // The tabs of the children, drawn again in place only when what they show changed; the leader's tab is always there.
 function drawTabs() {
   $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null && pageChild === null));
-  const shown = children.filter(isShown);
+  const shown = tabOrder(children.filter(isTabShown));
   const key = JSON.stringify([selected, pageChild, [...closing], shown.map((c) => [c.name, c.state, c.handle !== null, c.agent, c.pendingPage?.title ?? null])]);
   if (key === tabsKey) return;
   tabsKey = key;
@@ -628,6 +625,11 @@ function drawTabs() {
 }
 
 const showDone = () => doneShown.has(currentFormation() ?? "");
+
+// The tabs of the children: 作業中 first, then 承認待ち (a child that a decision page waits for is one too), then the done ones that are shown; the order of the read stays inside each. A planned child has no tab.
+const isTabShown = (c: FormationChild) => c.state !== "planned" && isShown(c);
+const tabRank = (c: FormationChild) => (c.state === "working" && c.pendingPage === null ? 0 : c.state === "done" && c.pendingPage === null ? 2 : 1);
+const tabOrder = (list: FormationChild[]) => list.map((c, i) => ({ c, i })).sort((a, b) => tabRank(a.c) - tabRank(b.c) || a.i - b.i).map(({ c }) => c);
 
 // Whether the card and the tab of `c` are drawn: a done child's only while the chip 「完了 N」 is pressed, unless a decision page waits for the owner (#1125).
 const isShown = (c: FormationChild) => c.state !== "done" || c.pendingPage !== null || showDone();
