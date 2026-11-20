@@ -6,7 +6,7 @@ description: Looks for improvements to つなぎAI (refactoring of ts/ and src-t
 # improvement-proposal
 
 One run files at most 3 issues ("Let the proposal agent file issues in a session, and decide what it may decide itself" in "Rules" at the end of this file).
-The owner starts it in a session; no job runs it (the job at 22:00 is retired, "Rules" at the end of this file). The night run of `ship` files one improvement of its own with a step of its own (`ship` step 3) and does not run this skill.
+The owner starts it in a session; no job runs it (the job at 22:00 is retired, "Rules" at the end of this file).
 Never implement, push or open a pull request.
 
 Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/"`.
@@ -23,18 +23,18 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 1. **Settle the limit.** A run keeps at most 3 candidates (step 7). No count of open proposals limits it: a candidate for the owner is not filed until the owner has decided it (steps 8 and 10).
 2. **Take the worktree** with `use-worktree.sh proposal/{YYYY-MM-DD-HHMMSS}` (`worktree.md`), and work in the path it prints. Temporary specs and `cargo test` run there, so the main checkout stays clean (`run-ci.sh` and `run-e2e.sh` refuse a dirty tree). On exit 3 the worktree cannot be taken: give the scouts the main checkout to read, and drop every candidate that needs a reproduction, because nothing may be run there.
-3. **Collect what is already known.** The number and title of every open issue (`gh issue list --state open --limit 200`) and of every closed issue with the `proposal` label (`gh issue list --state closed --label proposal --limit 200`), and of every Ideas Discussion of the owner, open and closed, the hand-over Discussion excluded. The Discussions are only material for checking that a candidate has not the same purpose.
+3. **Collect what is already known.** The number and title of every open issue (`gh issue list --state open --limit 200`) and of every closed issue with the `proposal` label (`gh issue list --state closed --label proposal --limit 200`), and of every Ideas Discussion of the owner, open and closed. The Discussions are only material for checking that a candidate has not the same purpose.
    ```sh
    nwo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"; owner="${nwo%/*}"; name="${nwo#*/}"
-   gh api graphql --paginate -f query='query($o:String!,$n:String!,$endCursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{number title category{name} author{login}}}}}' -f o="$owner" -f n="$name" | jq -s -r --arg owner "$owner" '.[].data.repository.discussions.nodes[] | select(.category.name == "Ideas" and .author.login == $owner and .title != "自走の引き継ぎ") | "#\(.number) \(.title)"'
+   gh api graphql --paginate -f query='query($o:String!,$n:String!,$endCursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{number title category{name} author{login}}}}}' -f o="$owner" -f n="$name" | jq -s -r --arg owner "$owner" '.[].data.repository.discussions.nodes[] | select(.category.name == "Ideas" and .author.login == $owner) | "#\(.number) \(.title)"'
    ```
    Together these are the list "of existing issues, closed proposals and Discussions" for the scouts.
 4. **Take photos for the UI evidence**, only when a screen is the evidence. Write a temporary spec with made-up data, the way `readme-product` does (`.claude/skills/readme-product/shots/`), run it with `npm run e2e:build` and `npm run e2e`, and delete the spec. Do not commit it. The photos stay in the scratchpad.
 5. **Launch the scouts in one message:** `refactor-scout`, `harness-scout` and `ux-scout`.
-   Each prompt carries the absolute worktree path, the list of step 3 and the limit of 5 candidates. `harness-scout` also gets the absolute paths of `.claude/nightly/` and of `logs/` (the hook logs) in the main checkout (the logs are not in the worktree), and the absolute path of the main checkout, whose `.claude/tools/handover.sh history 5` it runs. `ux-scout` also gets the photo paths.
+   Each prompt carries the absolute worktree path, the list of step 3 and the limit of 5 candidates. `harness-scout` also gets the absolute path of `logs/` (the hook logs) in the main checkout (the logs are not in the worktree). `ux-scout` also gets the photo paths.
 6. **Verify every candidate yourself.**
    - Drop a candidate that has the same purpose as an item of the step 3 list (an issue, a closed proposal, or a Discussion, open or closed).
-   - Open each `path:line` of the evidence and confirm it says what the candidate says. Drop what does not hold. For a log or hand-over passage, read it again and confirm that the event happened at least twice.
+   - Open each `path:line` of the evidence and confirm it says what the candidate says. Drop what does not hold. For a log passage, read it again and confirm that the event happened at least twice.
    - A candidate that is a bug follows "File a bug only after reproducing it" (`issues.md`); if it does not reproduce, drop it.
    - Drop a candidate out of scope, and a refactoring that would change behavior.
 7. **Sort the kept candidates.**
@@ -48,7 +48,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - A candidate for the owner that changes a screen carries a mockup, because the owner cannot choose from the text alone (at the owner's instruction, 2026-11-07). Before putting it to the owner, publish an Artifact that draws each option in the app's colors and shapes (`src/style.css`), with made-up data: start with `Artifact` `action: "quickstart"`, `intent: "other"`, then write the page and publish it. One Artifact per candidate. Give the owner its URL, and put it in the issue body, under the options, as `モック: {URL}` when the issue is filed. If the publish fails, put the candidate anyway and say that there is no mockup and why.
    - Keep personal information out of every body (`publishing.md`).
 9. **Give the worktree back**, without pushing: delete the temporary specs and anything else the run made, then `use-worktree.sh --park` from inside the worktree (it removes the worktree and also deletes the empty branch). It exits 3 when the tree is not clean: clean it, and say so in step 10 if it still does.
-10. **Report to the session.** Write: the issues filed (with the reason each was left to the AI), the candidates for the owner, put to the owner here (with the condition each matched, its options, the recommended one and the mockup URL, or why one is missing), the candidates dropped and why, and what was left (the cap of 3, a scout's failure). When the owner decides a candidate in the session, file it as step 8 says. No personal information in an issue. Post nothing to the hand-over Discussion.
+10. **Report to the session.** Write: the issues filed (with the reason each was left to the AI), the candidates for the owner, put to the owner here (with the condition each matched, its options, the recommended one and the mockup URL, or why one is missing), the candidates dropped and why, and what was left (the cap of 3, a scout's failure). When the owner decides a candidate in the session, file it as step 8 says. No personal information in an issue.
 
 ## Stop
 
@@ -62,12 +62,12 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 ### Let the proposal agent file issues in a session, and decide what it may decide itself
 
-`improvement-proposal` looks for improvements and files them as issues. The owner runs it in a session; no job runs it any more. The job at 22:00 (`nightly.sh improvement-proposal`) is retired (at the owner's instruction, 2026-11-12; #485), and the night run of `ship` takes one improvement of its own in a step of its own ("Run `ship` once a day at 00:30" in the "Rules" of `.claude/skills/ship/SKILL.md`).
+`improvement-proposal` looks for improvements and files them as issues. The owner runs it in a session; no job runs it any more. The job at 22:00 (`nightly.sh improvement-proposal`) is retired (at the owner's instruction, 2026-11-12; #485).
 It uses `refactor-scout` and `harness-scout`. Its scope is refactoring of `ts/` and `src-tauri/` that keeps behavior (`requirements/`, the E2E expectations and the `cargo test` expectations stay as they are), and the harness: hooks (not the permissions of `settings.local.json`), skills with the tools they run, and agents. UI and UX, new features and requirements, `docs/` and the README, versions and releases, personal settings and launchd are out of scope. `.claude/rules/` changes only to fix a statement that a change in scope made wrong.
 `ux-scout` runs only in a session, because UI and UX are a product decision.
 It only creates issues. It never implements or opens a pull request.
-Apart from the hand-over Discussion, the agents make no Discussion and read none to decide anything (at the owner's instruction, 2026-11-09); `improvement-proposal` reads the owner's older Ideas Discussions only to check that a proposal does not have the same purpose.
-The run reports to the session that started it, with no comment on the hand-over Discussion.
+The agents make no Discussion and read none to decide anything (at the owner's instruction, 2026-11-09); `improvement-proposal` reads the owner's older Ideas Discussions only to check that a proposal does not have the same purpose.
+The run reports to the session that started it.
 Give every proposal `proposal`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
 A candidate that `ux-scout` found goes to the owner: it is put to the owner in the session, with the problem, the evidence and the options, and filed as an issue only after the owner has decided it (at the owner's instruction, 2026-11-19; #1035: it replaces the issue with a label for the owner that was made when the proposal was filed, of 2026-11-09, which replaced a Discussion as the place to decide).
 A candidate that the AI may decide (a bug fix, a refactoring that keeps behavior, a statement that no longer matches the code or the requirements, a change that strengthens a gate) is an issue through `issue-plan`, and its body has a section `AI が決めたこと` that gives the reason. `ship` implements it like any issue.

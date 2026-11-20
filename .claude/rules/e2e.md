@@ -95,7 +95,7 @@ Bad:  add "core:default" to the `e2e` capability so that a new call stops being 
 `emitEvent` of `e2e/support.ts` makes the page call `event.emit`, so the page sends the event to itself and Rust is not on the way.
 A spec that uses it checks how the screen reacts to an event, and nothing about whether the event reaches the screen from `app.emit` of Rust (the permission, the event name, the target window).
 When a change adds or changes a feature that receives such an event, check once on the production path that the event arrives: through the socket, the Socket Mode task or the process that emits it, in the app a build makes (`tauri dev` or a release build, not the E2E build).
-In a session or a night run that cannot start the app, state in the pull request that this was not checked and what to check, and leave it to the owner (`issues.md`, "File a bug only after reproducing it").
+In a session that cannot start the app, state in the pull request that this was not checked and what to check, and leave it to the owner (`issues.md`, "File a bug only after reproducing it").
 
 ```text
 Good: the screen bridge asks the screen to read a field -> a spec with emitEvent checks the redraw, and `screen_read` through the socket is run once in the app built for the owner

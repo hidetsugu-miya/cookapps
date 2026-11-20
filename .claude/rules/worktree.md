@@ -4,10 +4,10 @@
 
 ### Work in a worktree of your own, one for each branch
 
-Every piece of work has its own worktree, `.claude/worktrees/{the branch name with / written as -}`: a session of the owner, a night run, the Release PR, each on its own branch (at the owner's instruction, 2026-11-19; #1006. It replaces the one worktree `.claude/worktrees/work` that they used in turn, of 2026-11-09; Discussion #293).
+Every piece of work has its own worktree, `.claude/worktrees/{the branch name with / written as -}`: a session of the owner, the Release PR, each on its own branch (at the owner's instruction, 2026-11-19; #1006. It replaces the one worktree `.claude/worktrees/work` that they used in turn, of 2026-11-09; Discussion #293).
 Several sessions therefore develop at the same time, each in its own worktree and with its own pull request, and the Release PR (`release/next`) carries what they merged.
 The worktree is made by `use-worktree.sh` when the work starts and deleted by `use-worktree.sh --park` when it ends, so a branch that is done leaves nothing behind.
-A piece of work that finds its branch in use does not touch it: a session tells the owner or the other session, and a nightly run writes it in the hand-over and goes on to what needs no worktree.
+A piece of work that finds its branch in use does not touch it: a session tells the owner or the other session.
 A branch is in use when its worktree is on another branch (the path is the same once `/` is written as `-`), or when another worktree has the branch checked out. `release/next` is one such branch: the session that gets there first prepares the Release PR, and a later one leaves it alone.
 
 ```text
@@ -31,7 +31,7 @@ Good: a session finds another session already working, and tells it before chang
 
 ### Add features and fix bugs on a branch of its own worktree
 
-Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. The night run's branch is `night/{YYYY-MM-DD}`, and it holds the commits of several issues. `improvement-proposal` works on `proposal/{date and time}`, which it does not push, and the Release PR is `release/next`.
+Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. A branch that a `ship` run takes holds the commits of several issues. `improvement-proposal` works on `proposal/{date and time}`, which it does not push, and the Release PR is `release/next`.
 Every branch reaches main through a pull request (`issues.md`).
 
 ### Take a worktree with `use-worktree.sh`, and give it back with `--park`
@@ -54,7 +54,7 @@ git worktree add -b feat/C-2 .claude/worktrees/feat-C-2 origin/main   # Bad: no 
 
 ### Claim an issue before you start it, so that two sessions do not start the same one
 
-An issue is started by the session that has claimed it: `plan-release.py claim --worktree {path of your worktree} {n}...`, run after the worktree is taken (`ship` step 6).
+An issue is started by the session that has claimed it: `plan-release.py claim --worktree {path of your worktree} {n}...`, run after the worktree is taken (`ship` step 4).
 A claim is the directory `.claude/claims/{n}/` of the main checkout, with the path of the owner's worktree in `owner`. It is made whole and renamed into place, and the claimants take turns under an exclusive `flock` of `.claude/claims/`, so only one session can make it, also when the claim is stale.
 `claim` refuses an issue that another worktree, which still exists, has claimed (stderr `#{n} claimed by {path}`, exit 3), and the session takes the next issue instead. A claim whose worktree is gone (its directory removed, which `git worktree list` marks `prunable`, included) is stale and is taken over.
 `plan-release.py next` leaves a claimed issue out of `start` and lists it in `claimed`, unless it is in `--mine` (the issues of this run). `use-worktree.sh --park` deletes the claims of its worktree, and nothing else does.
@@ -116,10 +116,10 @@ Bad:  rm -rf .claude/worktrees/feat-C-2 while another session works there
 
 The source holds no version (`versioning.md`: `0.0.0` in `Cargo.toml` and `Cargo.lock`, none in `tauri.conf.json`), and `scripts/check-version.sh` fails when a branch changes it (at the owner's instruction, 2026-11-09; Discussion #293).
 Only the Release PR writes `docs/features.md` and `CHANGELOG.md`, with the heading of the new version (`.claude/skills/release/SKILL.md`). The tag is made on its merge commit (`versioning.md`).
-If the branch of a night and the Release PR each wrote them, the same lines would conflict at every merge.
+If a feature's branch and the Release PR each wrote them, the same lines would conflict at every merge.
 
 ```text
-Good: commit only the implementation on night/2026-11-10 and merge its pull request; the Release PR writes `## v0.8.0` in CHANGELOG.md
+Good: commit only the implementation on fix/list-scroll and merge its pull request; the Release PR writes `## v0.8.0` in CHANGELOG.md
 Bad:  change the version in Cargo.toml inside feat/C-1
 ```
 
