@@ -17,7 +17,7 @@ Do not write a guess about performance. Do not make a candidate from a claim abo
 - Duplication within Rust, within TS, and between Rust and TS
 - Separate responsibilities mixed in one module or function
 - Violations of `.claude/rules/testing.md` (logic that needs a test and was put in TS moves to Rust)
-- Broken module boundaries (a dependency that does not fit the split that "Stack and layout" of `AGENTS.md` decides, an internal function that takes an `AppHandle`, and the like)
+- Broken module boundaries (a dependency that does not fit the split that "Stack and layout" of `AGENTS.md` and "Modules" of `src-tauri/AGENTS.md` decide, an internal function that takes an `AppHandle`, and the like)
 - Several places with the same cause, of which only one was fixed
 
 ## Blast radius
