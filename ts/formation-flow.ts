@@ -472,10 +472,10 @@ function card(c: FormationChild, now: number): HTMLLIElement {
 // The children that are told something and have not answered (and are not done): the orbs that are colored and that go up.
 const isInstructed = (c: FormationChild) => c.state !== "done" && instructed.includes(c.name);
 
-// The order of the orbs of the compact view; the one place that decides it: the children that were told something first, the newest instruction first (the order of `instructed`), and under them the others in the order of the cards.
+// The order of the orbs of the compact view; the one place that decides it: the children that were told something first, the newest instruction first (the order of `instructed`), and under them the others in the order of the cards (`flowOrder`).
 const compactOrder = (list: FormationChild[]): FormationChild[] => {
   const told = instructed.flatMap((name) => list.filter((c) => c.name === name && isInstructed(c)));
-  return [...told, ...list.filter((c) => !told.includes(c))];
+  return [...told, ...flowOrder(list.filter((c) => !told.includes(c)))];
 };
 
 // The orb of a child in the compact view: a circle with the first letter of its name, framed in the color of its state (a Codex child's has the blue ground and the tag 「cx」), and its name under it. It selects the child as its card does, and the card's content is its tip.
@@ -614,7 +614,7 @@ function pageTab(c: FormationChild): HTMLSpanElement {
 // The tabs of the children, drawn again in place only when what they show changed; the leader's tab is always there.
 function drawTabs() {
   $("formation-tab-leader-main").setAttribute("aria-selected", String(selected === null && pageChild === null));
-  const shown = tabOrder(children.filter(isTabShown));
+  const shown = flowOrder(children.filter(isTabShown));
   const key = JSON.stringify([selected, pageChild, [...closing], shown.map((c) => [c.name, c.state, c.handle !== null, c.agent, c.pendingPage?.title ?? null])]);
   if (key === tabsKey) return;
   tabsKey = key;
@@ -626,10 +626,14 @@ function drawTabs() {
 
 const showDone = () => doneShown.has(currentFormation() ?? "");
 
-// The tabs of the children: 作業中 first, then 承認待ち (a child that a decision page waits for is one too), then the done ones that are shown; the order of the read stays inside each. A planned child has no tab.
+// The order of the cards, the orbs and the tabs, the one place that decides it: 作業中 first, then 承認待ち (a child that a decision page waits for is one too), then 予定, then the done ones that are shown; the order of the read stays inside each.
+const flowRank = (c: FormationChild) => (c.pendingPage !== null ? 1 : c.state === "working" ? 0 : c.state === "waiting" ? 1 : c.state === "planned" ? 2 : 3);
+function flowOrder(list: FormationChild[]): FormationChild[] {
+  return list.map((c, i) => ({ c, i })).sort((a, b) => flowRank(a.c) - flowRank(b.c) || a.i - b.i).map(({ c }) => c);
+}
+
+// The tabs of the children, in `flowOrder`. A planned child has no tab.
 const isTabShown = (c: FormationChild) => c.state !== "planned" && isShown(c);
-const tabRank = (c: FormationChild) => (c.state === "working" && c.pendingPage === null ? 0 : c.state === "done" && c.pendingPage === null ? 2 : 1);
-const tabOrder = (list: FormationChild[]) => list.map((c, i) => ({ c, i })).sort((a, b) => tabRank(a.c) - tabRank(b.c) || a.i - b.i).map(({ c }) => c);
 
 // Whether the card and the tab of `c` are drawn: a done child's only while the chip 「完了 N」 is pressed, unless a decision page waits for the owner (#1125).
 const isShown = (c: FormationChild) => c.state !== "done" || c.pendingPage !== null || showDone();
@@ -684,7 +688,7 @@ function draw() {
     orbs.replaceChildren(...compactOrder(shown).map(orb));
   } else {
     orbs.replaceChildren();
-    list.replaceChildren(...shown.map((c) => card(c, now)));
+    list.replaceChildren(...flowOrder(shown).map((c) => card(c, now)));
   }
   $("formation-flow-arrow").toggleAttribute("hidden", shown.length === 0);
   body.scrollTop = top;

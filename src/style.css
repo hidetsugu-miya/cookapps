@@ -1226,6 +1226,12 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 #formation-flow-root { cursor: pointer; }
 #formation-flow-list { list-style: none; margin: 0 0 0 16px; padding: 10px 0 0 14px; border-left: 1.5px solid var(--chip-line); display: flex; flex-direction: column; gap: 8px; }
 #formation-flow-list li { position: relative; }
+/* The branch from the trunk to each card: thin and gray; thick and in the working color for a child that works. The working children come first, so the trunk from the leader down to the last of them is in that color too (the segments of the working cards, which join through the gaps). */
+#formation-flow-list li::before { content: ""; position: absolute; top: 16px; left: -15.5px; width: 15.5px; height: 1.5px; background: var(--chip-line); transform: translateY(-50%); pointer-events: none; }
+#formation-flow-list li[data-state="working"]::before { height: 2.5px; background: var(--agent-working); }
+#formation-flow-list li[data-state="working"]::after { content: ""; position: absolute; top: -8px; left: -16px; width: 2.5px; height: 24px; background: var(--agent-working); pointer-events: none; }
+#formation-flow-list li[data-state="working"]:first-child::after { top: -10px; height: 26px; }
+#formation-flow-list li[data-state="working"]:has(+ li[data-state="working"])::after { height: auto; bottom: -8px; }
 #formation-flow-list li:has(.formation-card-close) .formation-card { padding-right: 30px; }
 .formation-card-close { position: absolute; top: 6px; right: 7px; }
 .formation-card { display: grid; gap: 2px; width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 9px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; text-align: left; }
