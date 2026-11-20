@@ -119,7 +119,31 @@ Each entry has:
 - When the two trade-off lines narrow it to one option on the primary sources they cite: `decision_kind` is `fact`, `recommendation` is that option, and `recommendation_reason` names the trade-off line that decides it, with its citation. Run the overturning check on that ground. When the check overturns it, derive the recommendation again from what the check found.
 - Otherwise (the decider lies outside every source you can reach, the options are evenly matched, or the decider is product or operational policy): `decision_kind` is `value`, `recommendation` is the option the evidence at hand favors (never "undecided"), and `recommendation_reason` states that ground and why the trade-off lines cannot narrow it further.
 
-### 7. Write the notes
+### 7. Compare what only execution can settle
+
+Launch `feature-dev:design-prototyper` once for each open question whose `execution_probe` is not `null`, for the questions that do not depend on each other all in one message. A question whose observation concerns speed runs alone, after the others have returned, so that parallel runs do not disturb its measurement.
+Give each launch these values:
+
+- `observation`: the `execution_probe` sentence.
+- `options`: the question's `options`, each with its label and one line on what it does.
+- `baseline`: the baseline option of the skeleton alternatives for a `value` question, and the `recommendation` for a `fact` one.
+- `repo_root`: the repository the branch's code lives in.
+- `case_root`: `{case root}`.
+- `slug`: a lowercase kebab-case name of the branch, with no `{case root}/prototypes/{slug}/result.md` yet.
+
+The prototyper runs a minimal version of each option in a disposable worktree, changes no product code and no repository, and writes its evidence under `{case root}/prototypes/{slug}/`.
+It returns one JSON object: `status`, `verdict` (`adopted`, `no-difference` or `inconclusive`), `adopted_option`, `reason` and `result_path`.
+
+Handle each return:
+
+- When the final message is not one parsable JSON object, take the verdict from `{case root}/prototypes/{slug}/result.md` when it states one. Otherwise launch once more with the same values.
+- On `invalid-input`, correct the values as `reason` says and launch once more. When it comes back again, treat the branch as `inconclusive`.
+- `Read` `result_path` before you rely on the verdict. An `adopted` or a `no-difference` whose `result.md` shows no observed result for each option is `inconclusive`.
+- Keep the verdict and `adopted_option` with the question for [3-open-questions](3-open-questions.md), and add the `reason` and the `result_path` to its `background`. In stage 3 the verdicts `adopted` and `no-difference` settle the question (it is `compared`), and `inconclusive` leaves it for the owner.
+
+Where a question has no `execution_probe`, nothing runs. Run nothing else, and never run an experiment in the product code yourself.
+
+### 8. Write the notes
 
 Write what you found to `{case root}/technical-notes.md`: create the file when it does not exist, and otherwise add one section and leave the rest as it is. Write it in English, like the rest of the file.
 Add `code-facts-base.json` as described above.
@@ -159,7 +183,7 @@ Add `code-facts-base.json` as described above.
 Replace a section of an earlier run of this stage in place.
 Keep the shell commands of the counts next to their claims.
 
-### 8. The outcome
+### 9. The outcome
 
 The outcome is one of two.
 

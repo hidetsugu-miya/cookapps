@@ -112,7 +112,7 @@ The writing run that reflected the owner's response is the driving run for the r
    - the counts: the rounds that ran, and the number of must-fix findings that are `resolved`,
    - the `residual` must-fix findings, each with its id, title, location, the finding (`current` and `evidence` from the report), the reason it was not resolved, your `recommendation` (`fix` or `skip`) with its reason, and the objection when you raised one,
    - the `open` `NR-n` items, each with its location, `current`, options and recommendation. They are the decisions that wait for the owner.
-   A `withdrawn` item is not shown to the owner.
+   - the `withdrawn` `NR-n` items, as reference: [stage 6](6-approval.md) shows them as `withdrawn_needs_user_decision`, the withdrawn questions, and asks no answer. A `withdrawn` `RC-n` is not shown.
 3. Go to [stage 6](6-approval.md).
 
 Do not Read the whole deliverable to decide the range of a review or to decide that "nothing changed materially". The jq of step 1 decides it.

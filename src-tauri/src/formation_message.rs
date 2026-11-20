@@ -73,19 +73,23 @@ pub fn first_line(text: &str) -> String {
     cut
 }
 
-/// The settings that `claude --settings` takes to run the hook: after each SendMessage, `mcp --formation-message {formation}` (and `--from {child}` for a child, whose messages go to the leader). A name has passed `check_name`, so it is a word of its own in the shell.
+/// The settings that `claude --settings` takes to run the hook: after each SendMessage, `mcp --formation-message {formation}` (and `--from {child}` for a child, whose messages go to the leader). A child's settings also hold the permissions for the Figma server of its plugin (`formation_assets::figma_permissions`). A name has passed `check_name`, so it is a word of its own in the shell.
 pub fn hook_settings(mcp: &Path, formation: &str, from: Option<&str>) -> String {
     let mut command = format!("{} {FLAG} {formation}", sh_quote(&mcp.to_string_lossy()));
     if let Some(child) = from {
         command.push_str(&format!(" {FROM_FLAG} {child}"));
     }
-    serde_json::to_string_pretty(&json!({
+    let mut settings = json!({
         "hooks": {"PostToolUse": [{
             "matcher": MESSAGE_TOOL,
             "hooks": [{"type": "command", "command": command, "timeout": 10}]
         }]}
-    }))
-    .unwrap_or_default()
+    });
+    // A child runs in the auto mode and reads Figma through the plugin's server: its settings allow that server's read tools and deny its write tools (A-41, #1162).
+    if from.is_some() {
+        settings["permissions"] = crate::formation_assets::figma_permissions();
+    }
+    serde_json::to_string_pretty(&settings).unwrap_or_default()
 }
 
 /// The file of the leader's hook in the folder of its formation.
@@ -525,6 +529,12 @@ mod tests {
         assert_eq!(
             child["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
             "'/m/mcp' --formation-message api-work --from req"
+        );
+        // Only a child reads Figma, so only its settings carry the permissions for it.
+        assert!(leader.get("permissions").is_none());
+        assert_eq!(
+            child["permissions"],
+            crate::formation_assets::figma_permissions()
         );
     }
 

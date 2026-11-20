@@ -159,6 +159,11 @@ counts: MF {n}, NR {n}, RC {n}, excluded {n}
   - A (recommended): {label and detail}
   - B: {label and detail}
 - recommendation_reason: {why A}
+- trigger_conditions: {one or more lines, the conditions that must all hold for the problem to occur, in the order they come about; independent paths that each cause it go on one line joined by "or"}
+- likelihood: {frequent | occasional | rare}
+- likelihood_basis: {`実測: ` and the measured value with its source, or `推測: ` and the condition that settled the level}
+- occurrence_impact: {what happens to whom when it occurs, in the words of the user or the business}
+- detectability: {whether and where an occurrence is noticed (an exception notification, a log, the screen, or not at all), only when the code or the design states it; otherwise `未確認: 元の指摘に検知方法の記載がない`}
 
 ## Recommendation
 

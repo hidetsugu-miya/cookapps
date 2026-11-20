@@ -9,6 +9,7 @@ import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { Card } from "../ts/bindings/Card";
+import type { CardOption } from "../ts/bindings/CardOption";
 import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
 import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
 import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
@@ -96,6 +97,8 @@ export const timers = (periods: { orcaClock?: number; orcaMirror?: number; datab
 export async function boot(fixtures: Record<string, unknown> = {}) {
   // `refresh` returns once the reload is issued, so the old document may still say "complete": mark it and wait for a page without the mark.
   await browser.execute((data) => {
+    // The answers a decision page keeps in the browser (A-41) are not the next spec's.
+    for (const key of Object.keys(localStorage)) if (key.startsWith("fp-answers:")) localStorage.removeItem(key);
     sessionStorage.setItem("e2e-fixtures", JSON.stringify(data));
     (window as unknown as { __e2e_old_page__: boolean }).__e2e_old_page__ = true;
   }, fixtures);
@@ -796,8 +799,14 @@ export const decisionPage = (extra: Partial<DecisionPage> = {}): DecisionPage =>
   what: null,
   roots: {},
   previousReply: null,
+  restored: [],
+  terms: [],
+  hold: false,
+  clarifiedNumbers: [],
   questions: [],
   approvalScope: [],
+  designItems: [],
+  implementationOrder: [],
   changes: [],
   needsUserDecision: [],
   residualMustFix: [],
@@ -805,13 +814,18 @@ export const decisionPage = (extra: Partial<DecisionPage> = {}): DecisionPage =>
   adr: null,
   risks: null,
   settledDecisions: [],
+  withdrawnNeedsUserDecision: [],
+  noticed: [],
   qualityLoop: null,
   unmetCriteria: [],
+  screenVerifications: [],
+  policyDeviations: [],
+  notices: [],
   pr: null,
   ...extra,
 });
 
-// A card of a decision page: a `question` with no option, which `extra` fills in.
+// A card of a decision page: a `question` with no option, which `extra` fills in. A `screen-verification` card has `verification` (`verificationCard`).
 export const decisionCard = (number: string, extra: Partial<Card> = {}): Card => ({
   kind: "question",
   number,
@@ -825,13 +839,22 @@ export const decisionCard = (number: string, extra: Partial<Card> = {}): Card =>
   blocks: [],
   evidence: [],
   cards: [],
+  scene: null,
+  sceneImage: null,
+  occurrence: null,
+  conditions: [],
+  choiceDetails: {},
+  verification: null,
   ...extra,
 });
 
-// A launched child of a formation as `formation_list` lists it (A-37): its project (`repo`), the branch and the worktree it has under `/work/`, which tsunagiai made (`created`), and its terminal and agent (`handle`, `paneKey`, as the Orca rows of `orcaRow` name them).
-export const listedChild = (name: string, state: Exclude<FormationState, "planned">, extra: Partial<FormationListChild> = {}): FormationListChild => ({ name, repo: "example-api", branch: `formation/${name}`, path: `/work/${name}`, environment: "local", state, created: true, handle: `term_${name}`, paneKey: `tab_${name}:leaf_1`, terminal: true, ...extra });
+// An option of a card of a decision page: a letter and a label, which `extra` fills in (the fix, the unmet conditions, the image, the sample and the diagram).
+export const decisionOption = (key: string, label: string, detail: string | null = null, extra: Partial<CardOption> = {}): CardOption => ({ key, label, detail, fix: null, unmet: [], image: null, sample: null, diagram: null, ...extra });
 
-// A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca; `extra` gives those of a saved environment, with its `environment`), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state; `waiting: true` in `extra` is a leader that waits for input (#915).
+// A launched child of a formation as `formation_list` lists it (A-37): its project (`repo`), the branch and the worktree it has under `/work/`, which tsunagiai made (`created`), and its terminal and agent (`handle`, `paneKey`, as the Orca rows of `orcaRow` name them).
+export const listedChild = (name: string, state: Exclude<FormationState, "planned">, extra: Partial<FormationListChild> = {}): FormationListChild => ({ name, repo: "example-api", branch: `formation/${name}`, path: `/work/${name}`, environment: "local", state, created: true, handle: `term_${name}`, paneKey: `tab_${name}:leaf_1`, terminal: true, awaitingPage: false, ...extra });
+
+// A formation as `formation_list` answers it (A-37): its projects (by repository name, in this Mac's Orca; `extra` gives those of a saved environment, with its `environment`), the time it was made (`minutes` ago; none for one with no `formation.json`) and the number of its children in each state; `waiting: true` in `extra` is a leader that waits for input (#915), and `awaitingPage: true` a child that a decision page waits for (#1151).
 export const formationEntry = (name: string, extra: Partial<FormationEntry> & { minutes?: number; repos?: string[] } = {}): FormationEntry => {
   const { minutes, repos = [], ...rest } = extra;
   return {
@@ -842,6 +865,7 @@ export const formationEntry = (name: string, extra: Partial<FormationEntry> & { 
     counts: { planned: 0, waiting: 0, working: 0, done: 0 },
     children: [],
     waiting: false,
+    awaitingPage: false,
     ...rest,
   };
 };
@@ -1036,3 +1060,12 @@ export const fire = (kind: "paste" | "dragover" | "drop", selector: string, file
 
 // What `claude_summarize_handoff` answers (A-9): the points of the summary of the content.
 export const handoffSummary = (points: string[]): HandoffSummary => ({ points });
+
+// A `screen-verification` card of a decision page (#1155): a passed one with no image, which `extra` fills in (the result, the state setup, the steps and the images).
+export const verificationCard = (number: string, title: string, extra: Partial<NonNullable<Card["verification"]>> = {}): Card =>
+  decisionCard(number, {
+    kind: "screen-verification",
+    title,
+    summary: `${title}を見た`,
+    verification: { viewpoint: `${title}の観点`, stateSetup: null, result: "pass", basis: `${title}の根拠`, referenceImage: null, capturedImage: null, missingReason: null, steps: [], expected: null, ...extra },
+  });

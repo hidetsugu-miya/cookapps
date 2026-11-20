@@ -1,11 +1,11 @@
 //! The reply of a decision page (A-41): the answers the owner chose on the page of a child become the reply text, and the text goes into the leader's terminal under the line `判断ページの返信（{child}）`; the page is then no longer waiting.
 //!
-//! The reply text follows the reply format of the decision pages: a verdict line on an `approval` and a `code-review` page, then one block for each card that has an answer, the blocks and the verdict separated by one blank line. A block is `{number} {title}`, the answer line (`{key}. {label}` for a lettered option, the reply text of a fixed choice), and `補足: {text}`.
+//! The reply text follows the reply format of the decision pages: a verdict line on an `approval` and a `code-review` page, then one block for each card that has an answer, the blocks and the verdict separated by one blank line. A block is `{number} {title}`, the answer line (`{key}. {label}` for a lettered option, the reply text of a fixed choice, and on a `question` of a requirement the mark of 仮置き when the owner put the answer in for now), and `補足: {text}`. The same format read the other way is `restore`: the answers that the reply of an earlier page carries (`previous_reply`) become the answers a page starts from.
 //! Everything in the reply is the child's text or the owner's, so it goes into the terminal as one bracketed paste with its control characters taken out (a paste end that the text carries cannot close the paste early, and an Enter in the middle of a line cannot send half of it), and Enter follows only after the paste has ended.
 
 use std::{collections::HashSet, time::Duration};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// What the owner chose on one card of the page: the key of the choice (a lettered option's, or a fixed choice's) and the free text.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +27,8 @@ pub struct PageAnswer {
     pub card: String,
     pub choice: Option<String>,
     pub note: String,
+    /// The answer is put in for now, until the business side confirms it (only on a `question` of a requirement).
+    pub provisional: bool,
 }
 
 /// What the owner chose in the verdict box of an `approval` and a `code-review` page: to approve, or to ask for a revision.
@@ -39,26 +41,44 @@ pub enum PageVerdict {
     Revise,
 }
 
-/// The choices of a kind that every card of it has, as `(key, reply text)`: the lettered options of the card come before them.
-fn fixed(kind: CardKind) -> &'static [(&'static str, &'static str)] {
+/// The mark that ends the answer line of a `question` that the owner put in for now.
+const PROVISIONAL: &str = "（仮置き: ビジネス側に確認してから確定）";
+/// The fixed choice that a page with `hold` adds to its `question` cards, between `investigate` and `other`.
+const HOLD: (&str, &str) = (HOLD_KEY, "ビジネス側に確認する");
+const HOLD_KEY: &str = "hold";
+
+/// The choices of a kind that every card of it has, as `(key, reply text)`: the lettered options of the card come before them. A page with `hold` adds `hold` to a `question`.
+fn fixed(kind: CardKind, hold: bool) -> Vec<(&'static str, &'static str)> {
     match kind {
-        CardKind::Question => &[("investigate", "調べてから決めて"), ("other", "その他")],
-        CardKind::Nr => &[("other", "その他")],
-        CardKind::ReviewDecision => &[("defer", "今回は対応しない"), ("other", "その他")],
-        CardKind::MustFix => &[
+        CardKind::Question if hold => vec![
+            ("investigate", "調べてから決めて"),
+            HOLD,
+            ("other", "その他"),
+        ],
+        CardKind::Question => vec![("investigate", "調べてから決めて"), ("other", "その他")],
+        CardKind::Nr => vec![("other", "その他")],
+        CardKind::ReviewDecision => vec![("defer", "今回は対応しない"), ("other", "その他")],
+        CardKind::MustFix => vec![
             ("fix", "指摘のとおり修正する"),
             ("skip", "今回は対応しない"),
         ],
         CardKind::StructuralProposal => {
-            &[("approve", "承認"), ("reject", "却下"), ("hold", "保留")]
+            vec![("approve", "承認"), ("reject", "却下"), ("hold", "保留")]
         }
-        CardKind::Adr => &[("keep", "残す"), ("decline", "不要")],
-        CardKind::ReviewMustFix => &[
+        CardKind::Adr => vec![("keep", "残す"), ("decline", "不要")],
+        CardKind::ReviewMustFix => vec![
             ("fix", "修正して再レビューする"),
             ("accept", "現状で完了する"),
         ],
-        CardKind::UnmetCriterion => &[],
+        CardKind::UnmetCriterion | CardKind::ScreenVerification => Vec::new(),
     }
+}
+
+/// Whether the card can be put in for now: a `question` of an `open-questions` page of a requirement.
+fn provisional_card(page: &DecisionPage, card: &Card) -> bool {
+    page.page_kind == PageKind::OpenQuestions
+        && page.subject == Subject::Requirement
+        && card.kind == CardKind::Question
 }
 
 /// Whether a card of this kind must be answered before the reply can be sent.
@@ -91,7 +111,7 @@ fn asking_cards(page: &DecisionPage) -> Vec<&Card> {
     };
     groups
         .into_iter()
-        .filter(|card| !fixed(card.kind).is_empty())
+        .filter(|card| !fixed(card.kind, page.hold).is_empty())
         .collect()
 }
 
@@ -133,7 +153,11 @@ fn verdict(kind: PageKind, subject: Subject, chosen: PageVerdict) -> Result<&'st
 }
 
 /// One card's block, and whether its choice asks for a revision; `None` for a card with no answer (no choice, or `その他` with no text, and no note that counts).
-fn block_of(card: &Card, answer: Option<&PageAnswer>) -> Result<Option<(String, bool)>, String> {
+fn block_of(
+    page: &DecisionPage,
+    card: &Card,
+    answer: Option<&PageAnswer>,
+) -> Result<Option<(String, bool)>, String> {
     let Some(answer) = answer else {
         return Ok(None);
     };
@@ -142,12 +166,14 @@ fn block_of(card: &Card, answer: Option<&PageAnswer>) -> Result<Option<(String, 
     let text = match key {
         None => None,
         Some(key) => {
-            let fixed_text = fixed(card.kind).iter().find(|(k, _)| *k == key);
+            let fixed_text = fixed(card.kind, page.hold)
+                .into_iter()
+                .find(|(k, _)| *k == key);
             let option = lettered
                 .then(|| card.options.iter().find(|o| o.key == key))
                 .flatten();
             match (fixed_text, option) {
-                (Some((_, text)), _) => Some((*text).to_owned()),
+                (Some((_, text)), _) => Some(text.to_owned()),
                 (None, Some(option)) => {
                     Some(format!("{}. {}", option.key, one_line(&option.label)))
                 }
@@ -160,12 +186,27 @@ fn block_of(card: &Card, answer: Option<&PageAnswer>) -> Result<Option<(String, 
             }
         }
     };
-    // The free text of a lettered card counts only under `その他`; the other kinds' counts whatever is chosen.
-    let note = if lettered && key != Some("other") {
+    if answer.provisional && key.is_some() {
+        if !provisional_card(page, card) {
+            return Err(format!(
+                "カード「{}」には、仮置きを付けられません",
+                one_line(&card.number)
+            ));
+        }
+        if matches!(key, Some("investigate" | HOLD_KEY)) {
+            return Err(format!(
+                "カード「{}」の「調べてから決めて」と「ビジネス側に確認する」には、仮置きを付けられません",
+                one_line(&card.number)
+            ));
+        }
+    }
+    // The free text of a lettered card counts only under `その他` and `ビジネス側に確認する`; the other kinds' counts whatever is chosen.
+    let note = if lettered && !matches!(key, Some("other" | HOLD_KEY)) {
         String::new()
     } else {
         clean(&answer.note).trim().to_owned()
     };
+    // `その他` with no text is no answer; `ビジネス側に確認する` with no text is one.
     if note.is_empty() && (key.is_none() || key == Some("other")) {
         return Ok(None);
     }
@@ -174,7 +215,13 @@ fn block_of(card: &Card, answer: Option<&PageAnswer>) -> Result<Option<(String, 
         one_line(&card.number),
         one_line(&card.title)
     )];
-    lines.extend(text);
+    lines.extend(text.map(|text| {
+        if answer.provisional {
+            format!("{text}{PROVISIONAL}")
+        } else {
+            text
+        }
+    }));
     if !note.is_empty() {
         lines.push(format!("補足: {note}"));
     }
@@ -216,7 +263,7 @@ pub fn build_reply(
     let mut revising = Vec::new();
     for card in cards {
         let answer = answers.iter().find(|a| a.card == card.number);
-        match block_of(card, answer)? {
+        match block_of(page, card, answer)? {
             Some((block, asks)) => {
                 if asks {
                     revising.push(one_line(&card.number));
@@ -261,6 +308,144 @@ pub fn build_reply(
         return Err("返信にする答えがありません".to_owned());
     }
     Ok(parts.join("\n\n"))
+}
+
+// ---- reading a reply back: the answers a page starts from ----
+
+/// Every card of the page, the ones that take no answer included.
+fn all_cards(page: &DecisionPage) -> impl Iterator<Item = &Card> {
+    page.questions
+        .iter()
+        .chain(&page.needs_user_decision)
+        .chain(&page.residual_must_fix)
+        .chain(&page.structural_proposals)
+        .chain(page.adr.iter())
+        .chain(&page.unmet_criteria)
+        .chain(&page.screen_verifications)
+}
+
+/// The number without its trailing digits (`論点` of `論点1`, `MF-` of `MF-1`); none when nothing is left.
+fn prefix_of(number: &str) -> Option<&str> {
+    let prefix = number.trim_end_matches(|c: char| c.is_ascii_digit());
+    (!prefix.is_empty()).then_some(prefix)
+}
+
+/// Whether `word` heads a block of a reply: the number of a card of the page, or a prefix that some card's number has and digits (so the block of a card that is gone or renumbered is told from the block before it).
+fn is_card_word(page: &DecisionPage, word: &str) -> bool {
+    all_cards(page).any(|card| {
+        card.number == word
+            || prefix_of(&card.number).is_some_and(|prefix| {
+                word.strip_prefix(prefix).is_some_and(|rest| {
+                    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+                })
+            })
+    })
+}
+
+/// The choice of `card` that the answer line `line` names: its key, and whether the line carried the mark of 仮置き. The mark is read only on a card that can be put in for now, and is dropped on `調べてから決めて` and `ビジネス側に確認する`.
+fn choice_of(page: &DecisionPage, card: &Card, line: &str) -> Option<(String, bool)> {
+    let provisional_card = provisional_card(page, card);
+    let (line, marked) = match line.strip_suffix(PROVISIONAL) {
+        Some(rest) if provisional_card => (rest, true),
+        _ => (line, false),
+    };
+    let key = fixed(card.kind, page.hold)
+        .into_iter()
+        .find(|(_, text)| *text == line)
+        .map(|(key, _)| key.to_owned())
+        .or_else(|| {
+            card.kind.lettered().then(|| {
+                card.options
+                    .iter()
+                    .find(|o| format!("{}. {}", o.key, one_line(&o.label)) == line)
+                    .map(|o| o.key.clone())
+            })?
+        })?;
+    let marked = marked && !matches!(key.as_str(), "investigate" | HOLD_KEY);
+    Some((key, marked))
+}
+
+/// One block of a reply that belongs to a card: its answer line and its 補足 text.
+struct Restored<'a> {
+    card: &'a Card,
+    choice: Option<(String, bool)>,
+    note: Option<Vec<&'a str>>,
+}
+
+/// The answers that `page.previous_reply` carries for the cards of `page`, in the order of the reply (`previous_reply`, "Layout" of the reply format read the other way). A block starts at a line, after a blank line or at the top, that is a card's number alone or the number and a title; a heading that names no card of the page, the heading of a card in `clarified_numbers` and a verdict line end the block before and are read to the next heading and dropped. Its answer line is the first line that is the whole reply text of one of the card's choices; a line that is none is skipped. `補足:` and the lines after it up to the next heading are the free text, which a lettered card keeps only under `その他` and `ビジネス側に確認する`; any other card keeps it whatever is chosen. The verdict line is not an answer, and a card that comes twice keeps its first block.
+pub fn restore(page: &DecisionPage) -> Vec<PageAnswer> {
+    let Some(reply) = page.previous_reply.as_deref() else {
+        return Vec::new();
+    };
+    let cards = asking_cards(page);
+    let verdicts: Vec<&str> = match (page.page_kind, page.subject) {
+        (PageKind::Approval, Subject::Requirement) => {
+            vec!["要件定義を承認します", "要件定義の修正を依頼します"]
+        }
+        (PageKind::Approval, Subject::Design) => {
+            vec!["基本設計を承認します", "基本設計の修正を依頼します"]
+        }
+        (PageKind::CodeReview, _) => vec!["この変更を承認します", "修正を依頼します"],
+        _ => Vec::new(),
+    };
+    let reply = reply.replace("\r\n", "\n").replace('\r', "\n");
+    let mut blocks: Vec<Restored> = Vec::new();
+    let mut current: Option<Restored> = None;
+    let mut blank_before = true;
+    for line in reply.split('\n') {
+        let word = line.split(char::is_whitespace).next().unwrap_or("");
+        let heading = blank_before
+            && !word.is_empty()
+            && is_card_word(page, word)
+            && (word.len() == line.len() || line[word.len()..].starts_with(char::is_whitespace));
+        let verdict = blank_before && verdicts.contains(&line.trim_end());
+        if heading || verdict {
+            blocks.extend(current.take());
+            if heading {
+                current = cards
+                    .iter()
+                    .find(|card| card.number == word)
+                    .filter(|card| !page.clarified_numbers.contains(&card.number))
+                    .map(|card| Restored {
+                        card,
+                        choice: None,
+                        note: None,
+                    });
+            }
+        } else if let Some(block) = current.as_mut() {
+            if let Some(note) = block.note.as_mut() {
+                note.push(line);
+            } else if let Some(first) = line.strip_prefix("補足:") {
+                block.note = Some(vec![first.strip_prefix(' ').unwrap_or(first)]);
+            } else if block.choice.is_none() {
+                block.choice = choice_of(page, block.card, line.trim_end());
+            }
+        }
+        blank_before = line.trim().is_empty();
+    }
+    blocks.extend(current);
+    let mut answers: Vec<PageAnswer> = Vec::new();
+    for block in blocks {
+        if answers.iter().any(|a| a.card == block.card.number) {
+            continue;
+        }
+        let key = block.choice.as_ref().map(|(key, _)| key.as_str());
+        let note = block
+            .note
+            .map(|lines| lines.join("\n").trim().to_owned())
+            .filter(|_| !block.card.kind.lettered() || matches!(key, Some("other" | HOLD_KEY)))
+            .unwrap_or_default();
+        if key.is_none() && note.is_empty() {
+            continue;
+        }
+        answers.push(PageAnswer {
+            card: block.card.number.clone(),
+            choice: block.choice.as_ref().map(|(key, _)| key.clone()),
+            note,
+            provisional: block.choice.as_ref().is_some_and(|(_, marked)| *marked),
+        });
+    }
+    answers
 }
 
 /// What the leader's terminal gets: the line that tells whose reply it is, then the reply.
@@ -432,6 +617,11 @@ mod tests {
             key: key.to_owned(),
             label: label.to_owned(),
             detail: None,
+            fix: None,
+            unmet: Vec::new(),
+            image: None,
+            sample: None,
+            diagram: None,
         }
     }
 
@@ -453,6 +643,12 @@ mod tests {
             blocks: Vec::new(),
             evidence: Vec::new(),
             cards: Vec::new(),
+            scene: None,
+            scene_image: None,
+            occurrence: None,
+            conditions: Vec::new(),
+            choice_details: Default::default(),
+            verification: None,
         }
     }
 
@@ -465,8 +661,14 @@ mod tests {
             what: None,
             roots: Default::default(),
             previous_reply: None,
+            restored: Vec::new(),
+            terms: Vec::new(),
+            hold: false,
+            clarified_numbers: Vec::new(),
             questions: Vec::new(),
             approval_scope: Vec::new(),
+            design_items: Vec::new(),
+            implementation_order: Vec::new(),
             changes: Vec::new(),
             needs_user_decision: Vec::new(),
             residual_must_fix: Vec::new(),
@@ -474,8 +676,13 @@ mod tests {
             adr: None,
             risks: None,
             settled_decisions: Vec::new(),
+            withdrawn_needs_user_decision: Vec::new(),
+            noticed: Vec::new(),
             quality_loop: None,
             unmet_criteria: Vec::new(),
+            screen_verifications: Vec::new(),
+            policy_deviations: Vec::new(),
+            notices: Vec::new(),
             pr: None,
         }
     }
@@ -485,6 +692,7 @@ mod tests {
             card: card.to_owned(),
             choice: choice.map(str::to_owned),
             note: note.to_owned(),
+            provisional: false,
         }
     }
 
@@ -842,5 +1050,250 @@ mod tests {
         assert!(Sending::take("other-formation", "c").is_ok());
         drop(first);
         assert!(Sending::take("f-guard", "c").is_ok());
+    }
+
+    fn marked(card: &str, choice: &str, note: &str) -> PageAnswer {
+        PageAnswer {
+            provisional: true,
+            ..answer(card, Some(choice), note)
+        }
+    }
+
+    fn held() -> DecisionPage {
+        let mut page = questions();
+        page.hold = true;
+        page
+    }
+
+    #[test]
+    fn a_page_with_hold_has_the_row_between_investigate_and_other_and_an_empty_note_is_still_an_answer(
+    ) {
+        let reply = build_reply(
+            &held(),
+            &[
+                answer("論点1", Some("hold"), "  営業に聞く  "),
+                answer("論点2", Some("hold"), ""),
+            ],
+            None,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            reply,
+            "論点1 どちらにしますか\nビジネス側に確認する\n補足: 営業に聞く\n\n論点2 いつにしますか\nビジネス側に確認する"
+        );
+        // Without `hold` on the page the row does not exist.
+        let error = build_reply(
+            &questions(),
+            &[
+                answer("論点1", Some("hold"), ""),
+                answer("論点2", Some("A"), ""),
+            ],
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert_eq!(error, "カード「論点1」に選択肢「hold」はありません");
+        // The note of a lettered card is for `その他` and `ビジネス側に確認する` alone.
+        let reply = build_reply(
+            &held(),
+            &[
+                answer("論点1", Some("A"), "x"),
+                answer("論点2", Some("investigate"), "y"),
+            ],
+            None,
+            "",
+        )
+        .unwrap();
+        assert!(!reply.contains("補足"));
+    }
+
+    #[test]
+    fn a_provisional_answer_ends_its_line_with_the_mark_and_only_on_a_question_of_a_requirement() {
+        let reply = build_reply(
+            &held(),
+            &[
+                marked("論点1", "B", ""),
+                marked("論点2", "other", "自由な答え"),
+            ],
+            None,
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            reply,
+            "論点1 どちらにしますか\nB. 案 B（仮置き: ビジネス側に確認してから確定）\n\n論点2 いつにしますか\nその他（仮置き: ビジネス側に確認してから確定）\n補足: 自由な答え"
+        );
+        for choice in ["investigate", "hold"] {
+            let error = build_reply(
+                &held(),
+                &[marked("論点1", choice, ""), answer("論点2", Some("A"), "")],
+                None,
+                "",
+            )
+            .unwrap_err();
+            assert!(error.contains("仮置きを付けられません"), "{error}");
+        }
+        // A mark with no choice leaves the card unanswered.
+        let error = build_reply(
+            &questions(),
+            &[
+                PageAnswer {
+                    provisional: true,
+                    ..answer("論点1", None, "")
+                },
+                answer("論点2", Some("A"), ""),
+            ],
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert_eq!(error, "回答が必要なカードが未回答です: 論点1");
+        // A design page's question, and a card of another kind, cannot be put in for now.
+        let mut design = questions();
+        design.subject = Subject::Design;
+        assert!(build_reply(
+            &design,
+            &[marked("論点1", "A", ""), answer("論点2", Some("A"), "")],
+            None,
+            ""
+        )
+        .is_err());
+        let error = build_reply(
+            &approval(),
+            &[marked("MF-1", "skip", ""), answer("NR-1", Some("A"), "")],
+            Some(PageVerdict::Approve),
+            "",
+        )
+        .unwrap_err();
+        assert_eq!(error, "カード「MF-1」には、仮置きを付けられません");
+    }
+
+    fn replied(mut page: DecisionPage, reply: &str) -> Vec<PageAnswer> {
+        page.previous_reply = Some(reply.to_owned());
+        restore(&page)
+    }
+
+    fn restored(card: &str, choice: Option<&str>, note: &str, provisional: bool) -> PageAnswer {
+        PageAnswer {
+            provisional,
+            ..answer(card, choice, note)
+        }
+    }
+
+    #[test]
+    fn a_reply_that_this_page_made_restores_every_answer_it_carried() {
+        let mut page = held();
+        page.questions
+            .push(card(CardKind::Question, "論点3", "三つめ"));
+        let answers = [
+            marked("論点1", "B", ""),
+            answer("論点2", Some("hold"), "営業に聞く\n\n二段落め"),
+            answer("論点3", Some("other"), "自由な答え"),
+        ];
+        let reply = build_reply(&page, &answers, None, "").unwrap();
+        assert_eq!(replied(page, &reply), answers.to_vec());
+    }
+
+    #[test]
+    fn the_answers_of_an_approval_come_back_and_the_verdict_and_the_revision_are_not_answers() {
+        let page = approval();
+        let answers = [
+            answer("NR-1", Some("A"), ""),
+            answer("MF-1", Some("fix"), "ここを直す"),
+            answer("SP-1", Some("reject"), "理由"),
+            answer("ADR-1", Some("keep"), ""),
+        ];
+        let reply = build_reply(&page, &answers, Some(PageVerdict::Revise), "全体の直し").unwrap();
+        assert!(reply
+            .starts_with("基本設計の修正を依頼します\n\n修正してほしいこと\n全体の直し\n\nNR-1"));
+        assert_eq!(replied(page, &reply), answers.to_vec());
+    }
+
+    #[test]
+    fn a_card_that_the_page_no_longer_has_ends_the_block_before_it_and_its_lines_are_dropped() {
+        let reply = "論点1 どちらにしますか\nA. 案 A\n\n論点9 消えた問い\nB. 案 B\n補足: 別の答え\n\n論点2 いつにしますか\nB. 案 B";
+        assert_eq!(
+            replied(questions(), reply),
+            vec![
+                restored("論点1", Some("A"), "", false),
+                restored("論点2", Some("B"), "", false),
+            ]
+        );
+        // A word that is no card's prefix and digits is no heading: it is part of the 補足 before it.
+        let reply = "論点1 どちらにしますか\nその他\n補足: 一行め\n\n案2 は見送る\n\n論点2 いつにしますか\nA. 案 A";
+        assert_eq!(
+            replied(questions(), reply),
+            vec![
+                restored("論点1", Some("other"), "一行め\n\n案2 は見送る", false),
+                restored("論点2", Some("A"), "", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_card_to_explain_again_gets_nothing_back_and_a_card_that_comes_twice_keeps_its_first_block()
+    {
+        let reply = "論点1 どちらにしますか\nA. 案 A\n\n論点2 いつにしますか\nB. 案 B\n\n論点1 どちらにしますか\nB. 案 B";
+        let mut page = questions();
+        page.clarified_numbers = vec!["論点1".to_owned()];
+        assert_eq!(
+            replied(page, reply),
+            vec![restored("論点2", Some("B"), "", false)]
+        );
+        assert_eq!(
+            replied(questions(), reply),
+            vec![
+                restored("論点1", Some("A"), "", false),
+                restored("論点2", Some("B"), "", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_mark_of_provisional_is_read_only_where_the_card_can_have_it_and_never_on_investigate_or_hold(
+    ) {
+        let reply = "論点1 どちらにしますか\nB. 案 B（仮置き: ビジネス側に確認してから確定）\n\n論点2 いつにしますか\n調べてから決めて（仮置き: ビジネス側に確認してから確定）";
+        assert_eq!(
+            replied(questions(), reply),
+            vec![
+                restored("論点1", Some("B"), "", true),
+                restored("論点2", Some("investigate"), "", false),
+            ]
+        );
+        // A design page has no such check: the line names no choice and is skipped.
+        let mut design = questions();
+        design.subject = Subject::Design;
+        assert!(replied(design, reply).is_empty());
+        // `ビジネス側に確認する` is a choice only on a page with `hold`.
+        let reply = "論点1 どちらにしますか\nビジネス側に確認する\n補足: 営業に";
+        assert_eq!(
+            replied(held(), reply),
+            vec![restored("論点1", Some("hold"), "営業に", false)]
+        );
+        assert!(replied(questions(), reply).is_empty());
+    }
+
+    #[test]
+    fn the_free_text_of_a_card_with_no_lettered_option_comes_back_with_or_without_an_answer_line() {
+        let reply = "MF-1 直す\n補足: 見送る理由\n\nSP-1 構造\n却下\n補足: 理由";
+        assert_eq!(
+            replied(approval(), reply),
+            vec![
+                restored("MF-1", None, "見送る理由", false),
+                restored("SP-1", Some("reject"), "理由", false),
+            ]
+        );
+        // The free text of a lettered card comes back only with `その他`.
+        let reply = "論点1 どちらにしますか\nA. 案 A\n補足: 付かない";
+        assert_eq!(
+            replied(questions(), reply),
+            vec![restored("論点1", Some("A"), "", false)]
+        );
+    }
+
+    #[test]
+    fn a_page_with_no_previous_reply_restores_nothing() {
+        assert!(restore(&questions()).is_empty());
     }
 }

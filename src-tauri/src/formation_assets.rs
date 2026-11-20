@@ -57,11 +57,51 @@ pub(crate) fn ensure_plugin(dir: &Path, plugin: &[(&str, &str)]) -> Result<(), S
     Ok(())
 }
 
-/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path (`ensure_plugin`: a child's launch does not write 55 files again).
+/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path (`ensure_plugin`: a child's launch does not write every file again).
 pub fn write_plugin(config: &Path) -> Result<PathBuf, String> {
     let dir = plugin_dir(config);
     ensure_plugin(&dir, PLUGIN)?;
     Ok(dir)
+}
+
+/// The Figma tools of the plugin's server as a permission rule names them: `mcp__plugin_{plugin}_{server}__{tool}` (the plugin `feature-dev`, the server `figma` of its `.mcp.json`; Claude Code's documentation of permissions, "MCP").
+const FIGMA_RULE_PREFIX: &str = "mcp__plugin_feature-dev_figma__";
+
+/// The tools of the Figma server that only read, and that `figma-fetcher` uses: the only ones a child's settings allow.
+const FIGMA_READ_TOOLS: [&str; 3] = ["get_metadata", "get_design_context", "get_screenshot"];
+
+/// The tools of the Figma server that write into a file, a library or the account, as Figma's page of its tools lists them ("Write tools"): a child's settings deny them, and `figma-fetcher` lists them in `disallowedTools`. A tool that page adds later is not here, and what is not allowed is left to the classifier of the auto mode.
+const FIGMA_WRITE_TOOLS: [&str; 15] = [
+    "add_code_connect_map",
+    "create_generative_plugin",
+    "create_new_file",
+    "create_shader",
+    "generate_diagram",
+    "generate_figma_design",
+    "generate_image",
+    "generate_vector_illustration",
+    "html_to_figma",
+    "send_code_to_figma",
+    "send_code_connect_mappings",
+    "update_generative_plugin",
+    "update_shader",
+    "upload_assets",
+    "use_figma",
+];
+
+fn figma_rules(tools: &[&str]) -> Vec<String> {
+    tools
+        .iter()
+        .map(|tool| format!("{FIGMA_RULE_PREFIX}{tool}"))
+        .collect()
+}
+
+/// The `permissions` of a child's `--settings` (A-41, #1162): the read tools of the Figma server are allowed and its write tools are denied, because the child runs in the auto mode and a write would run with no question to the owner. A deny rule wins over every other.
+pub fn figma_permissions() -> serde_json::Value {
+    serde_json::json!({
+        "allow": figma_rules(&FIGMA_READ_TOOLS),
+        "deny": figma_rules(&FIGMA_WRITE_TOOLS),
+    })
 }
 
 static STAGING: AtomicUsize = AtomicUsize::new(0);
@@ -159,6 +199,61 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_childs_settings_allow_the_figma_read_tools_and_deny_its_write_tools() {
+        let permissions = figma_permissions();
+        let list = |key: &str| -> Vec<String> {
+            permissions[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|rule| rule.as_str().unwrap().to_owned())
+                .collect()
+        };
+        let (allow, deny) = (list("allow"), list("deny"));
+        assert_eq!(
+            allow,
+            [
+                "mcp__plugin_feature-dev_figma__get_metadata",
+                "mcp__plugin_feature-dev_figma__get_design_context",
+                "mcp__plugin_feature-dev_figma__get_screenshot"
+            ]
+        );
+        assert_eq!(deny.len(), FIGMA_WRITE_TOOLS.len());
+        assert!(deny.contains(&"mcp__plugin_feature-dev_figma__use_figma".to_owned()));
+        // A rule has no parenthesis (Claude Code skips an `mcp__` rule that has one), and no tool is in both lists.
+        for rule in allow.iter().chain(&deny) {
+            assert!(!rule.contains('(') && !rule.contains('*'), "{rule}");
+        }
+        assert!(allow.iter().all(|rule| !deny.contains(rule)));
+    }
+
+    #[test]
+    fn the_rules_name_the_server_of_the_plugin_and_figma_fetcher_lists_the_denied_tools() {
+        let file = |name: &str| PLUGIN.iter().find(|(path, _)| *path == name).unwrap().1;
+        let plugin: serde_json::Value =
+            serde_json::from_str(file(".claude-plugin/plugin.json")).unwrap();
+        let mcp: serde_json::Value = serde_json::from_str(file(".mcp.json")).unwrap();
+        let servers: Vec<&String> = mcp["mcpServers"].as_object().unwrap().keys().collect();
+        assert_eq!(servers, ["figma"]);
+        assert_eq!(
+            FIGMA_RULE_PREFIX,
+            format!("mcp__plugin_{}_figma__", plugin["name"].as_str().unwrap())
+        );
+        let fetcher = file("agents/figma-fetcher.md");
+        let line = fetcher
+            .lines()
+            .find(|line| line.starts_with("disallowedTools:"))
+            .unwrap();
+        let listed: Vec<&str> = line["disallowedTools:".len()..]
+            .split(',')
+            .map(str::trim)
+            .collect();
+        for rule in figma_rules(&FIGMA_WRITE_TOOLS) {
+            assert!(listed.contains(&rule.as_str()), "{rule}");
+        }
     }
 
     #[test]

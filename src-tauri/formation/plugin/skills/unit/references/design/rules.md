@@ -182,7 +182,7 @@ For each branch, ask what decides it.
 
 A branch qualifies when, after the investigation, two or more ways of building the same behavior remain, and one sentence names the observation that separates them (speed, behavior, timing, or what a library does). Appearance, wording, screen operation, the reading of a requirement and what policy decides do not qualify.
 
-This flow has no prototype stage. Do not decide such a branch by guess, and do not run an experiment in the product code. Put it to the owner as an open question ([3-open-questions](3-open-questions.md)): in `background` say what you investigated, what the sources leave open, and the one sentence of the observation that would separate the options. Give the options with their trade-offs and a recommendation from the evidence you have. When the owner answers, write the answer as the settled premise, and write in `key_decisions` that the observation was not run.
+Do not decide such a branch by reading alone, and do not run an experiment in the product code. Write its observation as the `execution_probe` of the open question ([2-investigation](2-investigation.md), steps 6 and 7), and `feature-dev:design-prototyper` runs a minimal version of each option in a disposable worktree and returns a verdict (`adopted`, `no-difference` or `inconclusive`) with its evidence under `prototypes/{slug}/` of the case root. A branch that the comparison settles (`adopted` or `no-difference`) is settled without asking the owner, and its `key_decisions` cites the `result.md` of the prototype. A branch that stays `inconclusive` is put to the owner as an open question ([3-open-questions](3-open-questions.md)), with what was run in `background`.
 
 ## Promises to verify formally
 

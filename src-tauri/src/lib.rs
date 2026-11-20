@@ -11,6 +11,7 @@ pub mod fonts;
 pub mod formation;
 pub mod formation_ask;
 pub mod formation_assets;
+pub mod formation_image;
 pub mod formation_message;
 pub mod formation_page;
 pub mod formation_remote;
@@ -510,6 +511,7 @@ pub fn run() {
             formation_message::formation_messages,
             formation_message::formation_instructed,
             formation_page::formation_page_read,
+            formation_page::formation_page_image,
             formation_reply::formation_page_answer,
             formation_remote::formation_consents,
             formation_remote::formation_consent,

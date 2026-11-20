@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, verificationCard, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -1347,6 +1347,55 @@ describe("orchestration mode: the list of the formations", () => {
     await browser.waitUntil(async () => (await mark()).labels[1] === "入力待ち");
   });
 
+  it("draws 判断待ち on the row of a child that a decision page waits for, in the color of an approval that waits, and on the row of its formation, and takes both off when the page is answered", async () => {
+    const pageList = (awaiting: boolean) =>
+      formationList([
+        formationEntry("formation"),
+        formationEntry("won-2485", {
+          awaitingPage: awaiting,
+          children: [listedChild("auth-api", "working"), listedChild("req-login", "done", { awaitingPage: awaiting }), listedChild("old-stop", "done", { terminal: false, awaitingPage: awaiting })],
+          counts: { planned: 0, waiting: 0, working: 1, done: 2 },
+        }),
+      ]);
+    await openList({ formation_list: pageList(true) }, null);
+    const look = () =>
+      browser.execute(() => {
+        const text = (e: Element | null) => e?.textContent ?? null;
+        const row = document.querySelector('#formation-list-feed .formation-row[data-formation="won-2485"]') as HTMLElement;
+        const children = [...document.querySelectorAll<HTMLElement>(".formation-child")].map((e) => {
+          const icon = e.querySelector<HTMLElement>(".orca-ic")!;
+          return { name: e.dataset.child, state: e.dataset.state, status: icon.dataset.status, label: icon.getAttribute("aria-label"), tag: text(e.querySelector(".formation-row-waiting")), color: getComputedStyle(e.querySelector(".formation-row-waiting") ?? e).color };
+        });
+        return { row: { waiting: row.dataset.waiting ?? null, tag: text(row.querySelector(".formation-row-waiting")) }, children, done: text(document.querySelector(".formation-done-count")), others: text(document.querySelector('.formation-row[data-formation="formation"] .formation-row-waiting')) };
+      });
+    const shown = await look();
+    expect(shown.row).toEqual({ waiting: "true", tag: "判断待ち" });
+    expect(shown.others).toBeNull();
+    // A done child that a page waits for, with or without its terminal, is drawn as a waiting one and is not one of the done.
+    expect(shown.children.map(({ name, state, status, label, tag }) => [name, state, status, label, tag])).toEqual([
+      ["auth-api", "working", "working", "作業中", null],
+      ["req-login", "waiting", "question", "判断待ち", "判断待ち"],
+      ["old-stop", "waiting", "question", "判断待ち", "判断待ち"],
+    ]);
+    expect(shown.done).toBeNull();
+    // The label has the color of the label 入力待ち.
+    expect(shown.children[1].color).toBe(shown.children[2].color);
+    await mock("formation_list", pageList(false));
+    await browser.waitUntil(async () => (await look()).row.tag === null);
+    const answered = await look();
+    expect(answered.children.map(({ name, state, tag }) => [name, state, tag])).toEqual([
+      ["auth-api", "working", null],
+      ["req-login", "standby", null],
+    ]);
+    expect(answered.done).toBe("完了 2");
+  });
+
+  it("puts 入力待ち before 判断待ち on a row whose leader waits and that has a child that a page waits for", async () => {
+    await openList({ formation_list: formationList([formationEntry("formation", { waiting: true, awaitingPage: true, children: [listedChild("req-login", "done", { awaitingPage: true })] })]) }, null);
+    expect(await textsOf(`${ROWS} .formation-row-waiting`)).toEqual(["入力待ち"]);
+    expect(await textsOf(".formation-child .formation-row-waiting")).toEqual(["判断待ち"]);
+  });
+
   it("marks the leader's tab with the dot of a waiting teammate while the shown formation's leader waits, and not otherwise", async () => {
     const waitingList = (waiting: boolean) => formationList([formationEntry("formation", { waiting }), formationEntry("won-2485", { waiting: !waiting })]);
     await openList({ formation_list: waitingList(true) });
@@ -2498,6 +2547,18 @@ const OPEN = '#formation-flow-list [data-open="req-login"]';
 const pageCall = () => callsOf("formation_page_read");
 // Whether a fold of the page is open.
 const folded = (selector: string) => browser.execute((s) => document.querySelector<HTMLDetailsElement>(s)!.open, selector);
+// The drawer on the right of the page (#1158): what a fold shows is in the panel in view, and the folds of one owner are its tabs.
+const DRAWER = "#formation-page .fp-drawer";
+const PANEL = `${DRAWER} .fp-dr-panel:not([hidden])`;
+const tab = (label: string) => $(DRAWER).$(`button=${label}`);
+const tabs = () => textsOf(`${DRAWER} .fp-dr-tab`);
+// The head of the drawer: 「{owner} — {fold}」.
+const drawerTitle = () => rawTextsOf(`${DRAWER} .fp-dr-title`);
+// Opens every row of 「参考」 (a row that opens in place), so that a button in it can be pressed.
+const openReferences = () =>
+  browser.execute(() => {
+    for (const row of document.querySelectorAll<HTMLDetailsElement>("#formation-page .fp-ref")) row.open = true;
+  });
 
 // Opens the page of `req-login`: the formation is shown with that child waiting on it, and 「開く」 is pressed.
 async function openPage(page = decisionPage(), children: unknown[] = [asking()]) {
@@ -2511,8 +2572,8 @@ const QUESTION = decisionCard("Q1", {
   title: "ログインに何回失敗したら止めるか",
   summary: "止める回数を決める",
   options: [
-    { key: "A", label: "5 回で 15 分止める", detail: "API の上限と同じ" },
-    { key: "B", label: "10 回で 15 分止める", detail: null },
+    decisionOption("A", "5 回で 15 分止める", "API の上限と同じ"),
+    decisionOption("B", "10 回で 15 分止める", null),
   ],
   recommendation: "A",
   recommendationReason: "今の API の上限と同じ",
@@ -2589,8 +2650,8 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect($(`${card} input[value="other"]`)).not.toBeSelected();
     await expect(cancel).toBeDisabled();
     await expect($(`${card} .fp-text`)).not.toBeDisplayed();
-    // The page's one button that sends is at its end.
-    expect(await textsOf("#formation-page button")).toEqual(["選択を取り消す", "リーダーに送る"]);
+    // The page's one button that sends is in the bottom bar, after 「次の未回答へ」 and 「TOP へ戻る」.
+    expect(await textsOf("#formation-page .fp-bar-bottom button")).toEqual(["次の未回答へ", "TOP へ戻る", "リーダーに送る"]);
   });
 
   it("gives the other kinds of card the fixed choices of their kind, and a field for a note", async () => {
@@ -2598,11 +2659,11 @@ describe("orchestration mode: the decision page of a child", () => {
       pageKind: "approval",
       subject: "design",
       what: "設計を承認します",
-      needsUserDecision: [decisionCard("NR-1", { kind: "nr", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      needsUserDecision: [decisionCard("NR-1", { kind: "nr", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
       adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
-      qualityLoop: { rounds: 2, mustFixResolved: 3 },
+      qualityLoop: { rounds: 2, fixCycles: 1, mustFixResolved: 3 },
     });
     await openPage(approval);
     const labels = (n: string) => textsOf(`#formation-page [data-card="${n}"] .fp-choice-label`);
@@ -2612,9 +2673,9 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await labels("ADR-1")).toEqual(["残す推奨", "不要"]);
     expect(await textsOf('#formation-page [data-card="SP-1"] .fp-note > span')).toEqual(["理由（却下・保留のとき）"]);
     expect(await textsOf('#formation-page [data-card="MF-1"] .fp-note > span')).toEqual(["補足（任意）"]);
-    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "ADR（設計判断の記録） 1 件", "あなたの判定"]);
-    await $("#formation-page .fp-reference > summary").click();
-    expect(await textsOf("#formation-page .fp-reference .fp-ref .fp-p")).toEqual(["実施回数: 2 回", "解消した必ず直す指摘: 3 件"]);
+    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "ADR（設計判断の記録） 1 件", "参考", "あなたの判定"]);
+    await $("#formation-page .fp-quality > summary").click();
+    expect(await textsOf("#formation-page .fp-reference .fp-quality .fp-p")).toEqual(["実施回数: 2 回", "MustFix 修正: 1 回", "解消した必ず直す指摘: 3 件"]);
   });
 
   it("draws a code review with its changes open, the unmet criterion with no answer, and the pull request", async () => {
@@ -2638,13 +2699,14 @@ describe("orchestration mode: the decision page of a child", () => {
   });
 
   it("shows the pull request of a code review under the title, and 「開く」 opens its URL in the default browser", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", qualityLoop: { rounds: 2, mustFixResolved: 3 }, pr: { url: "https://github.com/o/r/pull/7", note: null } }));
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", notices: ["集約の検査は通りました"], pr: { url: "https://github.com/o/r/pull/7", note: null } }));
     expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["https://github.com/o/r/pull/7"]);
     expect(await textsOf("#formation-page .fp-pr button")).toEqual(["開く"]);
     // Right after the header and before 「何が変わるか」.
     expect(await browser.execute(() => document.querySelector(".fp-top")?.nextElementSibling?.className)).toBe("fp-pr");
-    // 「参考」 holds the quality check and not the pull request.
-    await $("#formation-page .fp-reference > summary").click();
+    // 「参考」 holds the notices and not the pull request.
+    await $("#formation-page .fp-notices > summary").click();
+    expect(await textsOf("#formation-page .fp-reference .fp-p")).toEqual(["集約の検査は通りました"]);
     expect(await count("#formation-page .fp-reference .fp-ev-path")).toBe(0);
     const open = await mock("orca_open_url", null);
     await $("#formation-page .fp-pr button").click();
@@ -2679,7 +2741,7 @@ describe("orchestration mode: the decision page of a child", () => {
   it("draws the blocks, the facts and the evidence of a card behind 詳しく見る", async () => {
     const card = decisionCard("Q1", {
       background: "今の上限は 5 回",
-      facts: [{ label: "場所", value: "api/auth" }],
+      facts: [{ label: "場所", value: "api/auth", content: null }],
       blocks: [
         { type: "heading", text: "比べ方" },
         { type: "paragraph", text: "二つの案" },
@@ -2691,36 +2753,182 @@ describe("orchestration mode: the decision page of a child", () => {
       ],
       evidence: [
         { type: "excerpt", root: "deliverables", path: "design.md", start: 10, end: 12, highlight: [11], note: "ここが要", lines: ["一行め", "二行め", "三行め"] },
-        { type: "diff", summary: "文言を変えた", name: "a.txt", before: ["古い"], after: ["新しい"], note: null },
-        { type: "git-diff", summary: "回数を直した", root: "api", path: "lock.rb", base: "main", head: null, note: null, diff: "@@ -1 +1 @@\n-LIMIT = 5\n+LIMIT = 10\n keep", truncated: true },
-        { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-01", note: null, text: JSON.stringify({ id: "DESIGN-01", steps: ["a", "b"], deep: { n: 1 } }, null, 2) },
+        {
+          type: "diff",
+          summary: "文言を変えた",
+          name: "a.txt",
+          before_source: "設計書（現行）",
+          after_source: "基本設計 DESIGN-01",
+          note: null,
+          rows: [
+            { kind: "hunk", left_no: null, left: "@@ -1,2 +1,3 @@", left_mark: null, right_no: null, right: null, right_mark: null },
+            { kind: "context", left_no: 1, left: "同じ", left_mark: null, right_no: 1, right: "同じ", right_mark: null },
+            { kind: "change", left_no: 2, left: "古い文言", left_mark: [0, 2], right_no: 2, right: "新しい文言", right_mark: [0, 3] },
+            { kind: "change", left_no: null, left: null, left_mark: null, right_no: 3, right: "足した行", right_mark: null },
+          ],
+        },
+        { type: "current", note: "変更後は基本設計で決めます", excerpts: [{ type: "excerpt", root: "deliverables", path: "now.md", start: 3, end: 4, highlight: [3], note: null, lines: ["今の一行", "今の二行"] }] },
+        {
+          type: "git-diff",
+          summary: "回数を直した",
+          root: "api",
+          path: "lock.rb",
+          base: "main",
+          head: null,
+          note: null,
+          truncated: true,
+          rows: [
+            { kind: "hunk", left_no: null, left: "@@ -1,2 +1,2 @@", left_mark: null, right_no: null, right: null, right_mark: null },
+            { kind: "change", left_no: 1, left: "LIMIT = 5", left_mark: [8, 9], right_no: 1, right: "LIMIT = 10", right_mark: [8, 10] },
+            { kind: "context", left_no: 2, left: "keep", left_mark: null, right_no: 2, right: "keep", right_mark: null },
+          ],
+        },
+        {
+          type: "node",
+          root: "deliverables",
+          ref: "design.json#/designs/DESIGN-01",
+          note: null,
+          text: JSON.stringify(
+            {
+              id: "DESIGN-01",
+              name: "認証の上限",
+              kind: "api",
+              repository: "api",
+              release: 1,
+              requirements: ["REQ-01"],
+              depends_on: [{ id: "DESIGN-02", reason: "順番" }],
+              purpose: "上限を決める",
+              approach: "**回数**を数える",
+              ui_spec: null,
+              scope: { includes: "- 認証", excludes: "なし" },
+              acceptance: ["5 回で止まる"],
+              test_policy: "単体",
+              user_confirmations: [],
+              key_decisions: "回数は定数にする",
+              decisions: [{ subject: "回数", recommended: "A", reason: "短い", options: [{ label: "5 回", description: "今のまま" }, { label: "10 回", description: "緩める" }], impact: ["api", "web"] }],
+              extra_materials: [],
+              inapplicable_materials: [{ name: "画面資料", reason: "画面はない" }],
+            },
+            null,
+            2,
+          ),
+        },
       ],
     });
     await openPage(decisionPage({ questions: [card] }));
-    const more = '#formation-page [data-card="Q1"] .fp-more';
-    expect(await folded(more)).toBe(false);
-    await $(`${more} > summary`).click();
-    expect(await folded(more)).toBe(true);
+    // What 詳しく見る folds is not in the text of the card: it is in the drawer, which opens with the button, as the tabs 詳細 and 根拠 (and the tab of the fold inside 詳細).
+    expect(await count("#formation-page .fp-scroll .fp-facts, #formation-page .fp-scroll .fp-evidence, #formation-page .fp-scroll .fp-callout")).toBe(0);
+    await expect($(DRAWER)).not.toBeDisplayed();
+    await $('#formation-page [data-card="Q1"] > .fp-fold-btn').click();
+    await expect($(DRAWER)).toBeDisplayed();
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 詳細"]);
+    expect(await tabs()).toEqual(["詳細", "詳しい理由", "根拠"]);
+    const more = PANEL;
     expect(await textsOf(`${more} .fp-h`)).toEqual(["背景", "比べ方"]);
     expect(await textsOf(`${more} .fp-facts dt`)).toEqual(["場所"]);
     expect(await textsOf(`${more} .fp-facts dd`)).toEqual(["api/auth"]);
     expect(await textsOf(`${more} .fp-list li`)).toEqual(["一つめ", "二つめ"]);
     expect(await textsOf(`${more} .fp-callout`)).toEqual(["注意してください"]);
-    expect(await textsOf(`${more} .fp-table th`)).toEqual(["案", "回数"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-table td`)].map((e) => (e as HTMLElement).dataset.changed ?? ""), more)).toEqual(["", "true"]);
+    const blockTable = `${more} .fp-table:not(.fp-doc .fp-table)`;
+    expect(await textsOf(`${blockTable} th`)).toEqual(["案", "回数"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} td`)].map((e) => (e as HTMLElement).dataset.changed ?? ""), blockTable)).toEqual(["", "true"]);
     expect(await textsOf(`${more} > .fp-before-after .fp-side-caption`)).toEqual(["今", "直したあと"]);
-    expect(await textsOf(`${more} .fp-folded > summary`)).toEqual(["詳しい理由"]);
+    expect(await textsOf(`${more} > .fp-fold-btn`)).toEqual(["詳しい理由"]);
+    // The fold inside it is a tab of its own beside it.
+    await $(`${more} > .fp-fold-btn`).click();
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 詳しい理由"]);
+    expect(await textsOf(`${PANEL} .fp-p`)).toEqual(["畳んだ文"]);
+    await tab("根拠").click();
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 根拠"]);
     // An excerpt has the numbers of its lines, and marks the highlighted one.
-    expect(await textsOf(`${more} [data-evidence="excerpt"] .fp-ln`)).toEqual(["10", "11", "12"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} [data-evidence="excerpt"] .fp-line`)].map((e) => (e as HTMLElement).dataset.highlight ?? ""), more)).toEqual(["", "true", ""]);
-    expect(await textsOf(`${more} [data-evidence="excerpt"] .fp-ev-note`)).toEqual(["ここが要"]);
-    // A difference: the two sides, and a git diff with its added and removed lines marked.
-    expect(await textsOf(`${more} [data-evidence="diff"] .fp-side-caption`)).toEqual(["変更前", "変更後"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} [data-evidence="git-diff"] .fp-line`)].map((e) => (e as HTMLElement).dataset.kind), more)).toEqual(["hunk", "del", "ins", "ctx"]);
-    expect(await textsOf(`${more} [data-evidence="git-diff"] .fp-ev-range`)).toEqual(["main → 作業ツリー"]);
-    expect(await textsOf(`${more} [data-evidence="git-diff"] > .fp-ev-note`)).toEqual(["途中で切れています"]);
-    // A node is a tree of its values.
-    expect(await textsOf(`${more} [data-evidence="node"] .fp-leaf-value`)).toEqual(["DESIGN-01", "a", "b", "1"]);
+    const excerpt = `${more} .fp-evidence > [data-evidence="excerpt"]`;
+    expect(await textsOf(`${excerpt} .fp-ln`)).toEqual(["10", "11", "12"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-line`)].map((e) => (e as HTMLElement).dataset.highlight ?? ""), excerpt)).toEqual(["", "true", ""]);
+    expect(await textsOf(`${excerpt} .fp-ev-note`)).toEqual(["ここが要"]);
+    const kinds = (selector: string) => browser.execute((s) => [...document.querySelectorAll(s)].map((e) => (e as HTMLElement).dataset.kind), selector);
+    // A difference: its two sides side by side, the characters that changed marked, and where each side comes from.
+    const diff = `${more} [data-evidence="diff"]`;
+    expect(await textsOf(`${diff} > .fp-ev-summary`)).toEqual(["文言を変えた"]);
+    expect(await count(`${diff} .fp-diff-sides .fp-diff-row`)).toBe(3);
+    expect(await textsOf(`${diff} .fp-diff-sides .fp-diff-row .fp-ln`)).toEqual(["1", "1", "2", "2", "", "3"]);
+    expect(await textsOf(`${diff} .fp-diff-sides .fp-diff-row .fp-lc`)).toEqual(["同じ", "同じ", "古い文言", "新しい文言", "", "足した行"]);
+    expect(await kinds(`${diff} .fp-diff-sides .fp-diff-row .fp-line`)).toEqual(["ctx", "ctx", "del", "ins", "empty", "ins"]);
+    expect(await textsOf(`${diff} .fp-diff-sides .fp-diff-mark`)).toEqual(["古い", "新しい"]);
+    expect(await textsOf(`${diff} .fp-diff-sides > .fp-line[data-kind="hunk"]`)).toEqual(["@@ -1,2 +1,3 @@"]);
+    // The narrow view is one column: a line both share once, then the deletions of a run before its insertions.
+    expect(await kinds(`${diff} .fp-diff-column .fp-line`)).toEqual(["hunk", "ctx", "del", "ins", "ins"]);
+    expect(await textsOf(`${diff} > .fp-ev-note`)).toEqual(["変更前の出典: 設計書（現行）", "変更後の出典: 基本設計 DESIGN-01"]);
+    // What is there now, with the note of where the after-state is decided.
+    const current = `${more} [data-evidence="current"]`;
+    expect(await textsOf(`${current} > .fp-ev-summary`)).toEqual(["今のコード変更後は基本設計で決めます"]);
+    expect(await textsOf(`${current} .fp-badge`)).toEqual(["今のコード"]);
+    expect(await textsOf(`${current} [data-evidence="excerpt"] .fp-ln`)).toEqual(["3", "4"]);
+    // A git diff is drawn the same way, with the two revisions as its sources.
+    const git = `${more} [data-evidence="git-diff"]`;
+    expect(await kinds(`${git} .fp-diff-sides .fp-line`)).toEqual(["hunk", "del", "ins", "ctx", "ctx"]);
+    expect(await textsOf(`${git} .fp-diff-sides .fp-diff-mark`)).toEqual(["5", "10"]);
+    expect(await textsOf(`${git} .fp-ev-range`)).toEqual(["main → 作業ツリー"]);
+    expect(await textsOf(`${git} > .fp-ev-note`)).toEqual(["変更前の出典: api/lock.rb（main）", "変更後の出典: api/lock.rb（作業ツリー）", "途中で切れています"]);
+    // A node of design.json is drawn as the design item: its headings, its Markdown, its decision and its tables.
+    const node = `${more} [data-evidence="node"]`;
+    expect(await textsOf(`${node} .fp-doc > .fp-doc-title`)).toEqual(["DESIGN-01: 認証の上限"]);
+    expect(await textsOf(`${node} .fp-doc > .fp-muted`)).toEqual(["種別: api / 対象リポジトリ: api / リリース: 1 / 要件: REQ-01 / 依存先: DESIGN-02"]);
+    expect(await textsOf(`${node} .fp-doc-sub`)).toEqual(["目的", "アプローチ", "対象スコープ", "含む", "含まない", "完了条件", "テスト方針", "主要な設計判断", "選択肢と推奨案: 回数", "関連設計資料"]);
+    expect(await textsOf(`${node} .fp-md strong`)).toEqual(["回数"]);
+    expect(await textsOf(`${node} .fp-doc-block .fp-doc-list > li strong`)).toEqual(["(A) 5 回", "(B) 10 回"]);
+    expect(await textsOf(`${node} .fp-doc-block > .fp-doc-text`)).toEqual(["推奨案は (A) 5 回（採択）、推奨理由は次のとおり。", "選択肢:", "影響範囲: api（主区分） / web"]);
+    expect(await textsOf(`${node} .fp-table td`)).toEqual(["画面資料", "なし", "画面はない"]);
+  });
+
+  it("draws a node of requirement.json as the requirement, a shared material and an appendix, and any other node by its fields", async () => {
+    const node = (ref: string, value: unknown) => ({ type: "node" as const, root: "deliverables", ref, note: null, text: JSON.stringify(value, null, 2) });
+    const card = decisionCard("Q1", {
+      evidence: [
+        node("requirement.json#/requirements/REQ-01", {
+          id: "REQ-01",
+          name: "上限",
+          summary: "回数を決める",
+          expected_behaviors: ["5 回で止まる", "**10 回目**は通る"],
+          user_decisions: [{ id: "UD-01", title: "回数", body: "5 回にする", provisional: true }],
+          user_decision_refs: ["UD-09"],
+          related_appendices: [{ topic: "limits", role: "一覧" }],
+          extra_materials: [],
+          inapplicable_materials: [],
+        }),
+        node("requirement.json#/shared/limits", { topic: "limits", name: "上限の一覧", applies_to: [{ id: "REQ-01", role: "基準" }], body: "表です", user_decisions: [] }),
+        node("requirement.json#/appendices/limits", { topic: "limits", name: "上限の一覧", category: "集計", body: "- 五つ" }),
+        node("requirement.json#/requirements/REQ-01/user_decisions/UD-01", { id: "UD-01", title: "回数", body: "本文", provisional: false }),
+        node("requirement.json#/scope", { in_scope: "認証", design_scope: { api_contract: null }, list: ["a", "b"] }),
+      ],
+    });
+    await openPage(decisionPage({ questions: [card] }));
+    // A card with nothing for 詳細 opens 根拠 alone, with no tab to choose.
+    await $('#formation-page [data-card="Q1"] > .fp-fold-btn').click();
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 根拠"]);
+    await expect($(`${DRAWER} .fp-dr-tabs`)).not.toBeDisplayed();
+    const more = PANEL;
+    const at = (n: number) => `${more} .fp-evidence > .fp-ev:nth-child(${n})`;
+    expect(await textsOf(`${at(1)} .fp-doc > .fp-doc-title`)).toEqual(["REQ-01: 上限"]);
+    expect(await textsOf(`${at(1)} .fp-doc-sub`)).toEqual(["概要", "期待される動作", "関連 User Decision", "UD-01: 回数 仮置き（ビジネス側の確認待ち）", "関連要件資料"]);
+    expect(await textsOf(`${at(1)} .fp-doc-li`)).toEqual(["5 回で止まる", "10 回目は通る"]);
+    expect(await textsOf(`${at(1)} .fp-md strong`)).toEqual(["10 回目"]);
+    expect(await textsOf(`${at(1)} .fp-provisional`)).toEqual(["仮置き（ビジネス側の確認待ち）"]);
+    expect(await textsOf(`${at(1)} .fp-doc > .fp-doc-list > li`)).toEqual(["5 回で止まる", "10 回目は通る", "UD-09"]);
+    expect(await textsOf(`${at(1)} .fp-table td`)).toEqual(["limits", "あり", "一覧"]);
+    expect(await textsOf(`${at(2)} .fp-doc-title`)).toEqual(["上限の一覧 limits"]);
+    expect(await textsOf(`${at(2)} .fp-table th`)).toEqual(["適用 REQ", "本 REQ での位置づけ"]);
+    expect(await textsOf(`${at(2)} .fp-table td`)).toEqual(["REQ-01", "基準"]);
+    expect(await textsOf(`${at(2)} .fp-doc-sub`)).toEqual(["適用対象", "内容"]);
+    expect(await textsOf(`${at(3)} .fp-doc-title`)).toEqual(["上限の一覧 limits"]);
+    expect(await textsOf(`${at(3)} .fp-muted`)).toEqual(["種別: 集計"]);
+    expect(await textsOf(`${at(3)} .fp-md li`)).toEqual(["五つ"]);
+    expect(await textsOf(`${at(4)} .fp-doc-sub`)).toEqual(["UD-01: 回数"]);
+    expect(await count(`${at(4)} .fp-provisional`)).toBe(0);
+    // A node with no template of its own is its fields: an object as names and values, an array as a list, nothing as 「未設定」.
+    expect(await textsOf(`${at(5)} .fp-doc-root > .fp-doc-fields > dt`)).toEqual(["in_scope", "design_scope", "list"]);
+    expect(await textsOf(`${at(5)} .fp-doc-fields .fp-doc-fields dt`)).toEqual(["api_contract"]);
+    expect(await textsOf(`${at(5)} .fp-missing`)).toEqual(["未設定"]);
+    expect(await textsOf(`${at(5)} .fp-doc-list > li`)).toEqual(["a", "b"]);
   });
 
   it("puts the text of a page in as text and never as HTML", async () => {
@@ -2737,14 +2945,14 @@ describe("orchestration mode: the decision page of a child", () => {
 
   it("draws a diagram with Mermaid as an SVG, and shows the source as text when it cannot", async () => {
     const good = "flowchart TD\n  A[開始] --> B[終了]";
-    await openPage(decisionPage({ questions: [decisionCard("Q1", { options: [{ key: "A", label: "案", detail: null }], blocks: [{ type: "diagram", mermaid: good, caption: "流れ" }] })], changes: [] }));
+    await openPage(decisionPage({ questions: [decisionCard("Q1", { options: [decisionOption("A", "案", null)], blocks: [{ type: "diagram", mermaid: good, caption: "流れ" }] })], changes: [] }));
     const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
     await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
     expect(await count(`${box} svg`)).toBe(1);
     expect(await $(`${box} svg`).getAttribute("aria-label")).toBe("流れ");
     expect(await browser.execute((s) => document.querySelector(s)!.textContent, `${box} svg`)).toContain("開始");
     expect(await textsOf('#formation-page [data-card="Q1"] figcaption')).toEqual(["流れ"]);
-    // The app's icon rule (`svg { width: 20px }`) does not shrink the diagram: it is as wide as the smaller of the box and its own width (#1089).
+    // The app's icon rule (`svg { width: 20px }`) does not shrink the diagram, and the first diagram of a card that asks is stretched to the width of the card (#1089, #1154).
     const size = await browser.execute((s) => {
       const svg = document.querySelector(s) as SVGSVGElement;
       const box = svg.parentElement as HTMLElement;
@@ -2752,17 +2960,16 @@ describe("orchestration mode: the decision page of a child", () => {
       return {
         width: svg.getBoundingClientRect().width,
         boxWidth: box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
-        ownWidth: svg.viewBox.baseVal.width,
         fill: getComputedStyle(svg).fill,
         stroke: getComputedStyle(svg).stroke,
       };
     }, `${box} svg`);
     expect(size.width).not.toBe(20);
-    expect(Math.abs(size.width - Math.min(size.boxWidth, size.ownWidth))).toBeLessThan(1);
+    expect(Math.abs(size.width - size.boxWidth)).toBeLessThan(1);
     expect(size.stroke).toBe("none");
     expect(await browser.execute(() => document.querySelectorAll('script[src$="mermaid.min.js"]').length)).toBe(1);
     // The diagram is in the card, not behind 詳しく見る.
-    expect(await count('#formation-page [data-card="Q1"] .fp-more')).toBe(0);
+    expect(await count('#formation-page [data-card="Q1"] .fp-fold-btn')).toBe(0);
   });
 
   it("draws a diagram behind 詳しく見る only when that fold is first opened", async () => {
@@ -2771,7 +2978,7 @@ describe("orchestration mode: the decision page of a child", () => {
       decisionPage({
         questions: [
           decisionCard("Q1", {
-            options: [{ key: "A", label: "案", detail: null }],
+            options: [decisionOption("A", "案", null)],
             blocks: [
               { type: "diagram", mermaid: good, caption: "表の図" },
               { type: "diagram", mermaid: good, caption: "中の図" },
@@ -2782,13 +2989,13 @@ describe("orchestration mode: the decision page of a child", () => {
       }),
     );
     const boxes = '#formation-page [data-card="Q1"] .fp-diagram-box';
-    const inside = '#formation-page [data-card="Q1"] .fp-more .fp-diagram-box';
+    const inside = `${DRAWER} .fp-diagram-box`;
     await browser.waitUntil(async () => $(`${boxes}[data-drawn="true"]`).isExisting(), { timeoutMsg: "the diagram of the card was not drawn" });
     // The diagram in the closed fold waits: it is not drawn and has no SVG.
     expect(await $(inside).getAttribute("data-pending")).toBe("true");
     expect(await $(inside).getAttribute("data-drawn")).toBe(null);
     expect(await count(`${inside} svg`)).toBe(0);
-    await $('#formation-page [data-card="Q1"] .fp-more > summary').click();
+    await $('#formation-page [data-card="Q1"] > .fp-fold-btn').click();
     await browser.waitUntil(async () => (await $(inside).getAttribute("data-drawn")) === "true", { timeoutMsg: "the diagram was not drawn when the fold opened" });
     expect(await count(`${inside} svg`)).toBe(1);
     expect(await $(inside).getAttribute("data-pending")).toBe(null);
@@ -2797,12 +3004,297 @@ describe("orchestration mode: the decision page of a child", () => {
   it("shows the Mermaid source as text when the diagram cannot be drawn", async () => {
     const bad = "flowchart TD\n  A[開始 --> ((";
     await openPage(decisionPage({ questions: [decisionCard("Q1", { blocks: [{ type: "paragraph", text: "x" }, { type: "diagram", mermaid: bad, caption: null }] })] }));
-    await $('#formation-page [data-card="Q1"] .fp-more > summary').click();
     const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
     await browser.waitUntil(async () => (await $(box).getAttribute("data-failed")) === "true", { timeoutMsg: "the diagram did not fail" });
     expect(await count(`${box} svg`)).toBe(0);
     expect(await textsOf(`${box} .fp-diagram-source`)).toEqual([bad]);
     await expect($(`${box} .fp-diagram-source`)).toBeDisplayed();
+  });
+
+  // A card that asks of the earlier feature-dev: 「聞きたいこと」, the scene, the image of the screen, the flow, the choices and the details of each.
+  const FLOW = "flowchart LR\n  subgraph S[共通の手順]\n    a[予約を受け付ける] --> b[診察が終わる]\n  end\n  subgraph OA[案 A の流れ]\n    c[会計待ちにできる<br/>（病院ごと）]\n  end\n  b --> c\n  classDef shared fill:#e8eefb,stroke:#2f5bd3,color:#1b2a4a\n  classDef resolves fill:#e8f3ec,stroke:#2e7d4f,color:#17402a\n  class a,b shared\n  class c resolves\n  style S fill:#f6f8fd,stroke:#2f5bd3\n  style OA fill:#f4faf6,stroke:#2e7d4f";
+  const SHOT = { root: "deliverables", path: "ui/now.png", caption: "いまの画面" };
+  const ASKING = decisionCard("Q1", {
+    title: "会計待ちを選べるようにするか？",
+    summary: "要約は出さない",
+    scene: "診察を終えた予約を会計待ちにしようとしたとき、選べるかどうかが決まります。",
+    sceneImage: SHOT,
+    blocks: [
+      { type: "diagram", mermaid: FLOW, caption: null },
+      { type: "paragraph", text: "詳しい文" },
+    ],
+    conditions: [
+      { id: "KO-01", text: "予約を失わない" },
+      { id: "KO-02", text: "元に戻せる" },
+    ],
+    options: [
+      decisionOption("A", "選べるようにする", "選ぶと会計待ちになる", {
+        fix: "ステータスに会計待ちを足す",
+        sample: { text: "会計待ち", fontSize: 18, fontWeight: 700, color: "#2f5bd3" },
+        image: { root: "deliverables", path: "ui/after.png", caption: "直したあと" },
+        diagram: "flowchart LR\n  x[選ぶ] --> y[会計待ち]",
+      }),
+      decisionOption("B", "今のままにする", null, { unmet: [{ id: "KO-02", reason: "戻す手段がありません" }] }),
+    ],
+    recommendation: "A",
+    recommendationReason: "予約を失わないから",
+    choiceDetails: { investigate: "調べるあいだ予約は今のままです" },
+  });
+  const CARD_Q = '#formation-page [data-card="Q1"]';
+
+  it("opens a card that asks with 聞きたいこと, shows the scene and no summary, and draws the image of the screen in the card at 400px with 拡大する", async () => {
+    await openPage(decisionPage({ questions: [ASKING] }));
+    expect(await textsOf(`${CARD_Q} .fp-asks`)).toEqual(["聞きたいこと"]);
+    expect(await textsOf(`${CARD_Q} .fp-card-head > *`)).toEqual(["Q1", "聞きたいこと", "会計待ちを選べるようにするか？"]);
+    expect(await textsOf(`${CARD_Q} > .fp-p`)).toEqual(["診察を終えた予約を会計待ちにしようとしたとき、選べるかどうかが決まります。"]);
+    expect(await textsOf(`${CARD_Q} > .fp-h`)).toEqual(["具体的な場面", "あなたの回答"]);
+    expect(await browser.execute((s) => document.querySelector(s)!.textContent, CARD_Q)).not.toContain("要約は出さない");
+    // The image is in the card, never in a fold, and is read by its root and path.
+    expect(await count(`${CARD_Q} > .fp-image`)).toBe(1);
+    expect(await waitForCalls("formation_page_image", 1)).toEqual([{ name: "formation", child: "req-login", root: "deliverables", path: "ui/now.png" }]);
+    const picture = `${CARD_Q} > .fp-image img`;
+    await browser.waitUntil(async () => (await count(picture)) === 1);
+    const widthOf = () => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().width, picture);
+    expect(Math.round(await widthOf())).toBe(400);
+    expect(await textsOf(`${CARD_Q} > .fp-image figcaption`)).toEqual(["いまの画面"]);
+    await browser.waitUntil(async () => (await textsOf(`${CARD_Q} > .fp-image .fp-image-zoom`))[0] === "拡大する");
+    await $(`${CARD_Q} > .fp-image .fp-image-zoom`).click();
+    expect(await textsOf(`${CARD_Q} > .fp-image .fp-image-zoom`)).toEqual(["縮小する"]);
+    expect(await widthOf()).toBeGreaterThan(400);
+    await $(`${CARD_Q} > .fp-image .fp-image-zoom`).click();
+    expect(Math.round(await widthOf())).toBe(400);
+  });
+
+  it("draws the first diagram of a card that asks as wide as the card, in the colors of its classDef and subgraph styles, and keeps the line break of a label", async () => {
+    await openPage(decisionPage({ questions: [ASKING] }));
+    const box = `${CARD_Q} > .fp-diagram .fp-diagram-box`;
+    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
+    const drawn = await browser.execute((s) => {
+      const svg = document.querySelector(`${s} svg`) as SVGSVGElement;
+      const holder = svg.parentElement as HTMLElement;
+      const cs = getComputedStyle(holder);
+      const fillOf = (text: string) => {
+        const label = [...svg.querySelectorAll("g.node")].find((g) => g.textContent?.includes(text));
+        const shape = label?.querySelector("rect, polygon, path");
+        return shape ? getComputedStyle(shape).fill : null;
+      };
+      const cluster = [...svg.querySelectorAll("g.cluster")].find((g) => g.textContent?.includes("案 A の流れ"));
+      const joined = [...svg.querySelectorAll("g.node")].find((g) => g.textContent?.includes("会計待ちにできる"));
+      return {
+        width: svg.getBoundingClientRect().width,
+        boxWidth: holder.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        shared: fillOf("予約を受け付ける"),
+        resolves: fillOf("会計待ちにできる"),
+        cluster: cluster?.querySelector("rect") ? getComputedStyle(cluster.querySelector("rect")!).fill : null,
+        lines: joined ? [...joined.querySelectorAll("tspan")].map((t) => t.textContent) : [],
+        text: svg.textContent ?? "",
+      };
+    }, box);
+    expect(Math.abs(drawn.width - drawn.boxWidth)).toBeLessThan(1);
+    expect(drawn.shared).toBe("rgb(232, 238, 251)");
+    expect(drawn.resolves).toBe("rgb(232, 243, 236)");
+    expect(drawn.cluster).toBe("rgb(244, 250, 246)");
+    // `<br/>` is a line break, and is not drawn as the text `<br/>`.
+    expect(drawn.text).not.toContain("<br");
+    expect(drawn.lines.length).toBeGreaterThan(1);
+  });
+
+  it("opens 「この選択肢の詳細」 with the detail, 直し方, the sample in its style, the image, the diagram and the conditions the option fails, in that order", async () => {
+    await openPage(decisionPage({ questions: [ASKING] }));
+    const row = `${CARD_Q} [data-recommended="true"]`;
+    const details = `${row} .fp-detail`;
+    expect(await folded(details)).toBe(false);
+    // Nothing of the fold is read before it is opened.
+    expect(await count(`${details} img`)).toBe(0);
+    expect(await callsOf("formation_page_image")).toHaveLength(1);
+    await $(`${details} > summary`).click();
+    expect(await folded(details)).toBe(true);
+    expect(await browser.execute((s) => [...document.querySelector(s)!.children].slice(1).map((e) => e.className.split(" ")[0] || e.tagName.toLowerCase()), details)).toEqual(["fp-p", "fp-h", "fp-p", "fp-sample", "fp-image", "fp-diagram"]);
+    expect(await textsOf(`${details} .fp-h`)).toEqual(["直し方"]);
+    expect(await textsOf(`${details} .fp-p`)).toEqual(["選ぶと会計待ちになる", "ステータスに会計待ちを足す"]);
+    const sample = await browser.execute((s) => {
+      const frame = document.querySelector(`${s} .fp-sample-frame`) as HTMLElement;
+      const style = getComputedStyle(frame);
+      return { text: frame.textContent, size: style.fontSize, weight: style.fontWeight, color: style.color, note: document.querySelector(`${s} .fp-sample-note`)!.textContent };
+    }, details);
+    expect(sample).toEqual({ text: "会計待ち", size: "18px", weight: "700", color: "rgb(47, 91, 211)", note: "文字の大きさ 18px・太さ 700・色 #2f5bd3" });
+    await browser.waitUntil(async () => (await count(`${details} img`)) === 1, { timeoutMsg: "the image of the option was not read" });
+    expect(await waitForCalls("formation_page_image", 2)).toContainEqual({ name: "formation", child: "req-login", root: "deliverables", path: "ui/after.png" });
+    expect(await textsOf(`${details} .fp-image figcaption`)).toEqual(["直したあと"]);
+    await browser.waitUntil(async () => (await $(`${details} .fp-diagram-box`).getAttribute("data-drawn")) === "true", { timeoutMsg: "the diagram of the option was not drawn" });
+    // The option that fails a condition says which, and why.
+    const second = `${CARD_Q} .fp-choice:nth-child(3) .fp-detail`;
+    await $(`${second} > summary`).click();
+    expect(await textsOf(`${second} .fp-h`)).toEqual(["満たさない必須条件"]);
+    expect(await textsOf(`${second} .fp-unmet > *`)).toEqual(["KO-02 元に戻せる", "戻す手段がありません"]);
+    // A fixed choice has the details of its own key.
+    const fixed = `${CARD_Q} .fp-choice:nth-child(4) .fp-detail`;
+    await $(`${fixed} > summary`).click();
+    expect(await textsOf(`${fixed} .fp-p`)).toEqual(["調べるあいだ予約は今のままです"]);
+    expect(await count(`${CARD_Q} .fp-choice:nth-child(5) .fp-detail`)).toBe(0);
+  });
+
+  it("draws the conditions against the options as a table and the occurrence of the matter in 詳しく見る", async () => {
+    const card = decisionCard("ND-1", {
+      kind: "review-decision",
+      title: "待たせるか？",
+      scene: "ロックが取れないとき",
+      options: [decisionOption("A", "待たせる"), decisionOption("B", "すぐ失敗にする", null, { unmet: [{ id: "KO-01", reason: "失敗が増えます" }] })],
+      conditions: [{ id: "KO-01", text: "失敗を増やさない" }],
+      recommendation: "A",
+      recommendationReason: "r",
+      occurrence: { conditions: ["同じ予約を二人が同時に開く"], likelihood: "occasional", basis: "実測: 手元で 3 回に 1 回起きた", impact: "片方の変更が消える", detectability: "気づかない" },
+    });
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [card, { ...card, number: "ND-2", occurrence: { ...card.occurrence!, conditions: ["一つめ", "二つめ"], likelihood: "rare" } }] }));
+    // 詳細 holds the occurrence, and the table of the conditions is the tab 根拠 beside it.
+    const more = PANEL;
+    await $('#formation-page [data-card="ND-1"] > .fp-fold-btn').click();
+    expect(await tabs()).toEqual(["詳細", "根拠"]);
+    expect(await textsOf(`${more} .fp-h`)).toEqual(["発生条件", "発生頻度", "影響", "検知"]);
+    expect(await textsOf(`${more} .fp-meter-cells`)).toEqual(["■■□"]);
+    expect(await textsOf(`${more} .fp-meter-word`)).toEqual(["ときどき"]);
+    expect(await textsOf(`${more} > .fp-muted`)).toEqual(["実測: 手元で 3 回に 1 回起きた"]);
+    expect(await count(`${more} .fp-table`)).toBe(0);
+    await tab("根拠").click();
+    expect(await textsOf(`${more} .fp-table th`)).toEqual(["必須条件", "A", "B"]);
+    expect(await textsOf(`${more} .fp-table td`)).toEqual(["KO-01 失敗を増やさない", "満たす", "満たさない"]);
+    // Several conditions are a numbered list under the heading that says they must all hold.
+    const second = PANEL;
+    await $('#formation-page [data-card="ND-2"] > .fp-fold-btn').click();
+    expect(await drawerTitle()).toEqual(["ND-2 待たせるか？ — 詳細"]);
+    expect(await textsOf(`${second} .fp-h`)).toEqual(["発生条件（すべて重なったときだけ起きる）", "発生頻度", "影響", "検知"]);
+    expect(await textsOf(`${second} ol.fp-list li`)).toEqual(["一つめ", "二つめ"]);
+    expect(await textsOf(`${second} .fp-meter-cells`)).toEqual(["■□□"]);
+  });
+
+  it("shows an unmet release condition on the card that causes it, and in its own group only when no card of the page does", async () => {
+    const ask = decisionCard("ND-1", { kind: "review-decision", title: "待たせるか？", scene: "場面", options: [decisionOption("A", "待たせる")], recommendation: "A", recommendationReason: "r" });
+    const caused = decisionCard("UC-1", { kind: "unmet-criterion", title: "ロックを失わない", summary: "待たせないと失われます", cards: ["ND-1"] });
+    const alone = decisionCard("UC-2", { kind: "unmet-criterion", title: "全件が通る", summary: "一件落ちます", cards: [] });
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [ask], unmetCriteria: [caused, alone] }));
+    expect(await textsOf('#formation-page [data-card="ND-1"] > .fp-h')).toEqual(["具体的な場面", "反するリリース条件", "あなたの回答"]);
+    expect(await textsOf('#formation-page [data-card="ND-1"] .fp-cause')).toEqual(["ロックを失わない"]);
+    expect(await count('#formation-page [data-card="UC-1"]')).toBe(0);
+    expect(await count('#formation-page [data-card="UC-2"]')).toBe(1);
+  });
+
+  it("draws 「画面の AI 検証」 after the cards that need a decision: the failed and not-run cards open with their counts, the passed ones in a closed fold, and no answer", async () => {
+    const image = (root: string, path: string, caption: string) => ({ root, path, caption });
+    const ask = decisionCard("ND-1", { kind: "review-decision", title: "待たせるか？", scene: "場面", options: [decisionOption("A", "待たせる")], recommendation: "A", recommendationReason: "r" });
+    const failed = verificationCard("SV-1", "一覧", {
+      result: "fail",
+      stateSetup: "予約が 3 件ある",
+      steps: ["一覧を開く", "削除を押す"],
+      expected: "確認が出る",
+      basis: "確認が出ない",
+      referenceImage: image("deliverables", "ui-references/list.png", "見本"),
+      capturedImage: image("captures", "list.png", "撮影"),
+    });
+    const notRun = verificationCard("SV-2", "空の一覧", { result: "not-run", basis: "判定していません", missingReason: "ゴールの検証をしないで再開しました", referenceImage: image("screenshots", "empty.png", "空の見本") });
+    const passes = [
+      verificationCard("SV-3", "ヘッダー", { referenceImage: image("deliverables", "ui-references/head.png", "見本"), capturedImage: image("captures", "head.png", "撮影") }),
+      verificationCard("SV-4", "フッター", { capturedImage: image("captures", "foot.png", "撮影") }),
+    ];
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [ask], screenVerifications: [failed, notRun, ...passes] }));
+    const group = "#formation-page .fp-verifications";
+    expect(await textsOf("#formation-page .fp-group > .fp-sec")).toEqual(["判断が必要 1 件", "画面の AI 検証"]);
+    expect(await textsOf(`${group} .fp-verify-counts`)).toEqual(["不合格 1 件・未実施 1 件・合格 2 件"]);
+    // The failed and the not-run cards stand open at the top, each with its result tag; the passed ones wait in one closed fold and have no tag.
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} > .fp-card`)].map((e) => (e as HTMLElement).dataset.card), group)).toEqual(["SV-1", "SV-2"]);
+    expect(await textsOf(`${group} > .fp-card > .fp-card-head > .fp-result`)).toEqual(["不合格", "未実施"]);
+    expect(await textsOf(`${group} > .fp-verify-pass > summary`)).toEqual(["合格 2 件の内容を見る"]);
+    expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
+    expect(await count(`${group} > .fp-verify-pass .fp-result`)).toBe(0);
+    expect(await count(`${group} .fp-answer`)).toBe(0);
+    expect(await textsOf(`${group} > .fp-card:first-of-type > .fp-p`)).toEqual(["一覧を見た"]);
+    // No image is read before a fold is opened.
+    expect(await callsOf("formation_page_image")).toHaveLength(0);
+    const first = PANEL;
+    await $(`${group} [data-card="SV-1"] > .fp-fold-btn`).click();
+    expect(await drawerTitle()).toEqual(["SV-1 一覧 — 詳細"]);
+    expect(await textsOf(`${first} > .fp-h`)).toEqual(["確認したこと", "状態の作り方", "操作", "操作のあとに出るもの", "結果と根拠"]);
+    expect(await textsOf(`${first} > .fp-p`)).toEqual(["一覧の観点", "予約が 3 件ある", "確認が出る", "不合格 確認が出ない"]);
+    expect(await textsOf(`${first} ol.fp-list li`)).toEqual(["一覧を開く", "削除を押す"]);
+    expect(await textsOf(`${first} .fp-verify-col > .fp-h`)).toEqual(["参照画像", "撮影画像"]);
+    expect(await waitForCalls("formation_page_image", 2)).toEqual(expect.arrayContaining([
+      { name: "formation", child: "req-login", root: "deliverables", path: "ui-references/list.png" },
+      { name: "formation", child: "req-login", root: "captures", path: "list.png" },
+    ]));
+    await browser.waitUntil(async () => (await count(`${first} .fp-verify-col img`)) === 2, { timeoutMsg: "the two images were not drawn" });
+    // The two columns stand side by side.
+    const rects = await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-verify-col`)].map((e) => e.getBoundingClientRect()).map((r) => ({ left: Math.round(r.left), top: Math.round(r.top) })), first);
+    expect(rects[0].top).toBe(rects[1].top);
+    expect(rects[1].left).toBeGreaterThan(rects[0].left);
+    // A card that was not run says why in the place of the capture.
+    const second = PANEL;
+    await $(`${group} [data-card="SV-2"] > .fp-fold-btn`).click();
+    expect(await textsOf(`${second} > .fp-h`)).toEqual(["確認したこと", "結果と根拠"]);
+    expect(await textsOf(`${second} .fp-verify-col > .fp-h`)).toEqual(["参照画像", "撮影画像"]);
+    expect(await textsOf(`${second} .fp-missing`)).toEqual(["未取得: ゴールの検証をしないで再開しました"]);
+    expect(await waitForCalls("formation_page_image", 3)).toContainEqual({ name: "formation", child: "req-login", root: "screenshots", path: "empty.png" });
+    // The fold of the passed cards opens to cards that carry the images they have and no result tag.
+    await $(`${group} > .fp-verify-pass > summary`).click();
+    const pass = PANEL;
+    await $(`${group} [data-card="SV-4"] > .fp-fold-btn`).click();
+    expect(await textsOf(`${pass} .fp-verify-col > .fp-h`)).toEqual(["撮影画像"]);
+    expect(await textsOf(`${pass} > .fp-p`)).toEqual(["フッターの観点", "フッターの根拠"]);
+    expect(await waitForCalls("formation_page_image", 4)).toContainEqual({ name: "formation", child: "req-login", root: "captures", path: "foot.png" });
+  });
+
+  it("heads a group of passed cards alone with a note that no answer is needed, and draws it for a page that has only that group", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", screenVerifications: [verificationCard("SV-1", "一覧"), verificationCard("SV-2", "詳細")] }));
+    const group = "#formation-page .fp-verifications";
+    expect(await textsOf(`${group} .fp-verify-counts`)).toEqual(["すべて合格しました。回答は要りません。"]);
+    expect(await count(`${group} > .fp-card`)).toBe(0);
+    expect(await textsOf(`${group} > .fp-verify-pass > summary`)).toEqual(["合格 2 件の内容を見る"]);
+    expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
+  });
+
+  it("gives a fact its 「中身を見る」: a node as the deliverable draws it, Markdown formatted, a file as text and an image as an image, and no raw HTML", async () => {
+    const card = decisionCard("Q1", {
+      scene: "場面",
+      options: [decisionOption("A", "案")],
+      recommendation: "A",
+      recommendationReason: "r",
+      facts: [
+        { label: "設計", value: "第二の設計", content: { type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-02", text: JSON.stringify({ id: "DESIGN-02", name: "第二の設計", purpose: "目的の文" }, null, 2) } },
+        { label: "メモ", value: "議事", content: { type: "markdown", root: "deliverables", path: "memo.md", text: "# 見出し\n\n- 一つめ\n- 二つめ\n\n[外へ](https://example.com/a) [中へ](../x.md) <img src=x onerror=\"document.title=1\"><b>raw</b>\n" } },
+        { label: "ログ", value: "出力", content: { type: "text", root: "repo", path: "out.txt", text: "line 1\nline 2" } },
+        { label: "画面", value: "いまの画面", content: { type: "image", root: "deliverables", path: "ui/now.png", caption: "いまの画面" } },
+        { label: "なし", value: "引かない", content: null },
+      ],
+    });
+    await openPage(decisionPage({ questions: [card] }));
+    const open = () => $(`${CARD_Q} > .fp-fold-btn`).click();
+    await open();
+    expect(await textsOf(`${PANEL} .fp-facts dt`)).toEqual(["設計", "メモ", "ログ", "画面", "なし"]);
+    // Each fact that cites something has 「中身を見る」, whose content is a tab of the card beside 詳細.
+    expect(await textsOf(`${PANEL} .fp-facts .fp-fold-btn`)).toEqual(["中身を見る", "中身を見る", "中身を見る", "中身を見る"]);
+    expect(await tabs()).toEqual(["詳細", "中身を見る: 第二の設計", "中身を見る: 議事", "中身を見る: 出力", "中身を見る: いまの画面"]);
+    // The content of a fact is shown in its own tab, in a panel of its own.
+    const fact = PANEL;
+    for (const n of [1, 2, 3, 4]) {
+      await open();
+      await $(`${PANEL} .fp-facts dd:nth-of-type(${n}) > .fp-fold-btn`).click();
+      await browser.waitUntil(async () => (await count(`${DRAWER} .fp-dr-panel:not([hidden])`)) === 1);
+      if (n === 1) {
+        expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 中身を見る: 第二の設計"]);
+        expect(await textsOf(`${fact} .fp-doc > .fp-doc-title`)).toEqual(["DESIGN-02: 第二の設計"]);
+        expect(await textsOf(`${fact} .fp-md`)).toEqual(["目的の文"]);
+      }
+      if (n === 2) {
+        expect(await textsOf(`${fact} h1`)).toEqual(["見出し"]);
+        expect(await textsOf(`${fact} li`)).toEqual(["一つめ", "二つめ"]);
+        // A link to the web stays a link; one that is not http(s) is text only; raw HTML is no markup.
+        expect(await browser.execute((s) => [...document.querySelectorAll(`${s} a`)].map((a) => a.getAttribute("href")), fact)).toEqual(["https://example.com/a", null]);
+        expect(await count(`${fact} img, ${fact} b, ${fact} [onerror]`)).toBe(0);
+      }
+      if (n === 3) expect(await textsOf(`${fact} .fp-pre`)).toEqual(["line 1\nline 2"]);
+      if (n === 4) {
+        await browser.waitUntil(async () => (await count(`${fact} img`)) === 1, { timeoutMsg: "the image of the fact was not read" });
+        expect(await textsOf(`${fact} .fp-image-zoom`)).toEqual(["拡大する"]);
+      }
+    }
   });
 
   it("closes the tab when the mark is gone and shows the tab that was selected before", async () => {
@@ -2847,7 +3339,7 @@ describe("orchestration mode: the decision page of a child", () => {
 
   const SEND = "#formation-page .fp-send-btn";
   const SEND_ERROR = "#formation-page .fp-send .fp-error";
-  const QUESTION_2 = decisionCard("Q2", { title: "いつまでに決めるか", options: [{ key: "A", label: "今週", detail: null }], recommendation: "A", recommendationReason: "早い" });
+  const QUESTION_2 = decisionCard("Q2", { title: "いつまでに決めるか", options: [decisionOption("A", "今週", null)], recommendation: "A", recommendationReason: "早い" });
   const answerCalls = () => callsOf("formation_page_answer");
 
   it("sends what was chosen to the leader with the mark's time, and reads the questions' choices and free text as they stand", async () => {
@@ -2866,8 +3358,8 @@ describe("orchestration mode: the decision page of a child", () => {
         child: "req-login",
         atMs: MARK_AT,
         answers: [
-          { card: "Q1", choice: "B", note: "" },
-          { card: "Q2", choice: "other", note: "来週の頭" },
+          { card: "Q1", choice: "B", note: "", provisional: false },
+          { card: "Q2", choice: "other", note: "来週の頭", provisional: false },
         ],
         verdict: null,
         revision: "",
@@ -2884,7 +3376,7 @@ describe("orchestration mode: the decision page of a child", () => {
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
       adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
       unmetCriteria: [],
-      qualityLoop: { rounds: 2, mustFixResolved: 3 },
+      qualityLoop: { rounds: 2, fixCycles: 1, mustFixResolved: 3 },
     });
     await openPage(approval);
     await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
@@ -2898,9 +3390,9 @@ describe("orchestration mode: the decision page of a child", () => {
         child: "req-login",
         atMs: MARK_AT,
         answers: [
-          { card: "MF-1", choice: "skip", note: "" },
-          { card: "SP-1", choice: "reject", note: "重複は減らない" },
-          { card: "ADR-1", choice: null, note: "" },
+          { card: "MF-1", choice: "skip", note: "", provisional: false },
+          { card: "SP-1", choice: "reject", note: "重複は減らない", provisional: false },
+          { card: "ADR-1", choice: null, note: "", provisional: false },
         ],
         verdict: "approve",
         revision: "",
@@ -2938,8 +3430,8 @@ describe("orchestration mode: the decision page of a child", () => {
         child: "req-login",
         atMs: MARK_AT,
         answers: [
-          { card: "Q1", choice: "A", note: "" },
-          { card: "Q2", choice: "A", note: "" },
+          { card: "Q1", choice: "A", note: "", provisional: false },
+          { card: "Q2", choice: "A", note: "", provisional: false },
         ],
         verdict: null,
         revision: "",
@@ -2955,10 +3447,10 @@ describe("orchestration mode: the decision page of a child", () => {
       pageKind: "approval",
       subject: "design",
       what: "設計を承認します",
-      needsUserDecision: [decisionCard("NR-1", { kind: "nr", title: "どちらにするか", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+      needsUserDecision: [decisionCard("NR-1", { kind: "nr", title: "どちらにするか", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
-      qualityLoop: { rounds: 2, mustFixResolved: 3 },
+      qualityLoop: { rounds: 2, fixCycles: 1, mustFixResolved: 3 },
       ...extra,
     });
 
@@ -2966,8 +3458,9 @@ describe("orchestration mode: the decision page of a child", () => {
     await openPage(approvalPage());
     expect(await textsOf(`${VERDICT} .fp-sec`)).toEqual(["あなたの判定"]);
     expect(await textsOf(`${VERDICT} .fp-choice-label`)).toEqual(["基本設計を承認する", "基本設計の修正を依頼する"]);
-    // The verdict is below the cards and above the button, and nothing is chosen at first.
-    expect(await browser.execute((s) => document.querySelector(s)!.nextElementSibling!.className, VERDICT)).toBe("fp-send");
+    // The verdict is below the cards, at the end of the page, and the button is in the bottom bar. Nothing is chosen at first.
+    expect(await browser.execute((s) => document.querySelector(s)!.nextElementSibling, VERDICT)).toBe(null);
+    expect(await count("#formation-page .fp-bar-bottom .fp-send .fp-send-btn")).toBe(1);
     await expect(verdictRadio("approve")).not.toBeSelected();
     await expect(verdictRadio("revise")).not.toBeSelected();
     await expect($(SEND)).toBeDisabled();
@@ -3044,9 +3537,9 @@ describe("orchestration mode: the decision page of a child", () => {
         child: "req-login",
         atMs: MARK_AT,
         answers: [
-          { card: "NR-1", choice: null, note: "" },
-          { card: "MF-1", choice: "skip", note: "" },
-          { card: "SP-1", choice: null, note: "" },
+          { card: "NR-1", choice: null, note: "", provisional: false },
+          { card: "MF-1", choice: "skip", note: "", provisional: false },
+          { card: "SP-1", choice: null, note: "", provisional: false },
         ],
         verdict: "revise",
         revision: "画面の名前を直す\n二行目",
@@ -3085,7 +3578,7 @@ describe("orchestration mode: the decision page of a child", () => {
         subject: "code",
         what: "変更です",
         residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" })],
-        needsUserDecision: [decisionCard("RD-1", { kind: "review-decision", options: [{ key: "A", label: "案 A", detail: null }], recommendation: "A", recommendationReason: "単純" })],
+        needsUserDecision: [decisionCard("RD-1", { kind: "review-decision", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       }),
     );
     expect(await rawTextsOf(`${VERDICT} .fp-unanswered`)).toEqual(["答えていないカードは、この案で送ります: RMF-1 現状で完了する"]);
@@ -3135,6 +3628,542 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await count("#formation-page > *")).toBe(0);
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
   });
+
+  // The items of the page that the earlier decision pages had (#1156).
+  const REQ_CARD = (n: string) => decisionCard(n, { title: `論点 ${n}`, options: [decisionOption("A", "案 A", null), decisionOption("B", "案 B", null)], recommendation: "A", recommendationReason: "単純" });
+  const q = (n: string) => `#formation-page [data-card="${n}"]`;
+
+  it("gives a word of terms a tooltip in the body text, and not in a title", async () => {
+    await openPage(
+      decisionPage({
+        terms: [{ word: "与信", description: "支払いを先に押さえること" }],
+        questions: [decisionCard("Q1", { title: "与信を作るか？", scene: "与信が残った病院で、与信の取り消しを決めます", options: [decisionOption("A", "作る", null)], recommendation: "A", recommendationReason: "単純" })],
+      }),
+    );
+    expect(await textsOf(`${q("Q1")} .fp-scene .fp-term`)).toEqual(["与信", "与信"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-term`)].map((e) => e.getAttribute("title")), q("Q1"))).toEqual(["支払いを先に押さえること", "支払いを先に押さえること"]);
+    expect(await rawTextsOf(`${q("Q1")} .fp-scene`)).toEqual(["与信が残った病院で、与信の取り消しを決めます"]);
+    expect(await count(`${q("Q1")} .fp-card-title .fp-term`)).toBe(0);
+  });
+
+  it("adds ビジネス側に確認する between 調べてから決めて and その他 when the page sets hold, with a box of its own that is sent with the answer", async () => {
+    await openPage(decisionPage({ hold: true, questions: [REQ_CARD("Q1")] }));
+    expect(await textsOf(`${q("Q1")} .fp-choice-label`)).toEqual(["A案 A推奨", "B案 B", "調べてから決めて", "ビジネス側に確認する", "その他"]);
+    await expect($(`${q("Q1")} textarea[data-for="hold"]`)).not.toBeDisplayed();
+    await $(`${q("Q1")} input[value="hold"]`).click();
+    await $(`${q("Q1")} textarea[data-for="hold"]`).setValue("営業に聞く");
+    await expect($(`${q("Q1")} textarea[data-for="other"]`)).not.toBeDisplayed();
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [{ card: "Q1", choice: "hold", note: "営業に聞く", provisional: false }], verdict: null, revision: "" }]);
+  });
+
+  it("has no ビジネス側に確認する row when the page does not set hold", async () => {
+    await openPage(decisionPage({ questions: [REQ_CARD("Q1")] }));
+    expect(await textsOf(`${q("Q1")} .fp-choice-label`)).toEqual(["A案 A推奨", "B案 B", "調べてから決めて", "その他"]);
+  });
+
+  it("puts the check 仮置き under the choices of a question of a requirement, sends it with the choice, and turns it off with 調べてから決めて and ビジネス側に確認する", async () => {
+    await openPage(decisionPage({ hold: true, questions: [REQ_CARD("Q1")] }));
+    const mark = `${q("Q1")} .fp-provisional input`;
+    expect(await textsOf(`${q("Q1")} .fp-provisional`)).toEqual(["仮置き（ビジネス側の確認待ち）"]);
+    await $(`${q("Q1")} input[value="B"]`).click();
+    await $(mark).click();
+    await expect($(mark)).toBeSelected();
+    await expect($(`${q("Q1")} .fp-provisional`)).toHaveAttribute("data-on", "");
+    await $(`${q("Q1")} input[value="investigate"]`).click();
+    await expect($(mark)).not.toBeSelected();
+    await expect($(mark)).toBeDisabled();
+    await $(`${q("Q1")} input[value="hold"]`).click();
+    await expect($(mark)).toBeDisabled();
+    await $(`${q("Q1")} input[value="A"]`).click();
+    await expect($(mark)).toBeEnabled();
+    await expect($(mark)).not.toBeSelected();
+    await $(mark).click();
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [{ card: "Q1", choice: "A", note: "", provisional: true }], verdict: null, revision: "" }]);
+  });
+
+  it("clears the check with 選択を取り消す, and shows it on no other page", async () => {
+    await openPage(decisionPage({ questions: [REQ_CARD("Q1")] }));
+    await $(`${q("Q1")} input[value="A"]`).click();
+    await $(`${q("Q1")} .fp-provisional input`).click();
+    await $(`${q("Q1")} .fp-cancel`).click();
+    await expect($(`${q("Q1")} .fp-provisional input`)).not.toBeSelected();
+    await expect($(`${q("Q1")} .fp-cancel`)).toBeDisabled();
+  });
+
+  it("shows the check 仮置き on no page but an open-questions page of a requirement", async () => {
+    await openPage(decisionPage({ subject: "design", questions: [REQ_CARD("Q1")] }));
+    expect(await count(`${q("Q1")} input[type="radio"]`)).toBe(4);
+    expect(await count(`${q("Q1")} .fp-provisional`)).toBe(0);
+  });
+
+  it("starts from the answers that the earlier reply carried, says so until something changes, and sends them", async () => {
+    const restored = [
+      { card: "Q1", choice: "B", note: "", provisional: true },
+      { card: "Q2", choice: "hold", note: "営業に聞く", provisional: false },
+      { card: "Q3", choice: "other", note: "自由な答え", provisional: false },
+    ];
+    await openPage(decisionPage({ hold: true, previousReply: "（返信）", restored, questions: [REQ_CARD("Q1"), REQ_CARD("Q2"), REQ_CARD("Q3")] }));
+    await expect($(`${q("Q1")} input[value="B"]`)).toBeSelected();
+    await expect($(`${q("Q1")} .fp-provisional input`)).toBeSelected();
+    await expect($(`${q("Q2")} input[value="hold"]`)).toBeSelected();
+    await expect($(`${q("Q2")} textarea[data-for="hold"]`)).toHaveValue("営業に聞く");
+    await expect($(`${q("Q3")} textarea[data-for="other"]`)).toHaveValue("自由な答え");
+    await expect($(`${q("Q3")} textarea[data-for="other"]`)).toBeDisplayed();
+    expect(await textsOf("#formation-page .fp-restored")).toEqual(["前の返信文から回答を復元しました。"]);
+    // The earlier reply is not shown as text of the page.
+    expect(await count("#formation-page pre")).toBe(0);
+    await $(`${q("Q1")} input[value="A"]`).click();
+    expect(await count("#formation-page .fp-restored")).toBe(0);
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([
+      {
+        name: "formation",
+        child: "req-login",
+        atMs: MARK_AT,
+        answers: [
+          { card: "Q1", choice: "A", note: "", provisional: true },
+          { card: "Q2", choice: "hold", note: "営業に聞く", provisional: false },
+          { card: "Q3", choice: "other", note: "自由な答え", provisional: false },
+        ],
+        verdict: null,
+        revision: "",
+      },
+    ]);
+  });
+
+  it("restores the free text of a card with fixed choices whether or not it has a choice, and says nothing when nothing is restored", async () => {
+    const approval = approvalPage({ previousReply: "（返信）", restored: [{ card: "MF-1", choice: null, note: "見送る理由", provisional: false }] });
+    await openPage(approval);
+    await expect($('#formation-page [data-card="MF-1"] textarea[data-for="note"]')).toHaveValue("見送る理由");
+    expect(await count('#formation-page [data-card="MF-1"] input[type="radio"]:checked')).toBe(0);
+    expect(await count("#formation-page .fp-restored")).toBe(1);
+  });
+
+  it("says nothing of a restore when nothing was restored", async () => {
+    await openPage(approvalPage());
+    expect(await count("#formation-page .fp-restored")).toBe(0);
+  });
+
+  it("lists the design items and the order of implementation of a design approval, and keeps the heading of the group in 承認の対象", async () => {
+    const node = JSON.stringify({ id: "DESIGN-01", title: "最初", release: 2 }, null, 2);
+    await openPage(
+      approvalPage({
+        approvalScope: [
+          { heading: "設計項目", design: true, items: [] },
+          { heading: "共有の設計資料", design: false, items: [{ root: "deliverables", ref: "design.json#/shared/data-model", path: null, description: "データモデル", extras: [], text: "{}" }] },
+        ],
+        designItems: [
+          { id: "DESIGN-01", title: "最初。概要です", root: "deliverables", ref: "design.json#/designs/DESIGN-01", text: node, release: 2 },
+          { id: "DESIGN-02", title: "二つめ", root: "deliverables", ref: "design.json#/designs/DESIGN-02", text: null, release: null },
+        ],
+        implementationOrder: ["example-api", "example-web"],
+      }),
+    );
+    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "設計項目 2 件", "実装順序 2 件", "承認の対象", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "参考", "あなたの判定"]);
+    expect(await textsOf("#formation-page .fp-design-item > .fp-ev-path")).toEqual(["DESIGN-01", "DESIGN-02"]);
+    expect(await textsOf("#formation-page .fp-design-item > .fp-p")).toEqual(["最初。概要です（リリース 2）", "二つめ"]);
+    // Only the item whose node was read has 「中身を見る」.
+    expect(await textsOf("#formation-page .fp-design-item > .fp-fold-btn")).toEqual(["中身を見る"]);
+    expect(await textsOf("#formation-page .fp-order li")).toEqual(["example-api", "example-web"]);
+    // The group of the design items keeps its heading and says where the items are; the other group lists its item.
+    expect(await textsOf("#formation-page .fp-section:not(.fp-design-items) > .fp-h")).toEqual(["設計項目", "共有の設計資料"]);
+    expect(await textsOf("#formation-page .fp-section:not(.fp-design-items) > .fp-muted")).toEqual(["上の「設計項目」に並べています。"]);
+    expect(await textsOf("#formation-page .fp-section .fp-scope-item:not(.fp-design-item) .fp-ev-path")).toEqual(["design.json#/shared/data-model"]);
+  });
+
+  it("says what the approval covers in a fixed sentence by subject, under 承認の対象 and above the choice of the verdict", async () => {
+    await openPage(approvalPage({ subject: "requirement", approvalScope: [{ heading: "要件", design: false, items: [] }] }));
+    const sentence = "承認単位は requirement.json の全体です（technical-notes.md は内部調査資料のため承認対象外）。";
+    expect(await textsOf("#formation-page .fp-unit")).toEqual([sentence, sentence]);
+    expect(await browser.execute(() => document.querySelector(".fp-verdict .fp-unit")?.nextElementSibling?.tagName)).toBe("FIELDSET");
+  });
+
+  it("words the sentence of a design approval as the freezing of the design", async () => {
+    await openPage(approvalPage({ approvalScope: [{ heading: "設計", design: false, items: [] }] }));
+    const units = await textsOf("#formation-page .fp-unit");
+    expect(units).toHaveLength(2);
+    expect(units[0]).toContain("「契約」として凍結されます");
+    expect(units[0]).toContain("本承認が最後の承認です");
+  });
+
+  it("shows no sentence on a code review's verdict", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です" }));
+    expect(await count("#formation-page .fp-unit")).toBe(0);
+  });
+
+  it("puts the matters of an approval in 参考: the decisions that wait for the business side, the withdrawn questions, what was noticed and the quality loop", async () => {
+    await openPage(
+      approvalPage({
+        subject: "requirement",
+        settledDecisions: [
+          { id: "UD-01", decision: "与信は 1 日で戻す", reason: "運用が決めた", evidence: [], provisional: true },
+          { id: "UD-02", decision: "宛名は付ける", reason: "要望", evidence: [], provisional: false },
+        ],
+        withdrawnNeedsUserDecision: [{ number: "NR-3", title: "目標値", withdrawalReason: "回答で決まった" }],
+        noticed: [{ title: "RC-1", text: "文言が揺れています", evidence: [] }],
+        qualityLoop: { rounds: 2, fixCycles: null, mustFixResolved: 3 },
+      }),
+    );
+    // 「参考」 is a heading with one row for each matter; a row opens in place, closed at first, with its heading as an h3 in the row.
+    expect(await textsOf("#formation-page .fp-reference > .fp-sec")).toEqual(["参考"]);
+    expect(await textsOf("#formation-page .fp-reference .fp-ref > summary > h3")).toEqual(["ビジネス側の確認待ち", "決まったこと", "取り下げた質問", "目標外の事柄", "品質チェックの結果"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLDetailsElement>("#formation-page .fp-ref")].map((d) => d.open))).toEqual([false, false, false, false, false]);
+    await openReferences();
+    expect(await textsOf("#formation-page .fp-awaiting .fp-settled")).toEqual(["UD-01与信は 1 日で戻す理由: 運用が決めた"]);
+    expect(await textsOf("#formation-page .fp-settled-list .fp-settled")).toEqual(["UD-01与信は 1 日で戻す理由: 運用が決めた仮置き（ビジネス側の確認待ち）", "UD-02宛名は付ける理由: 要望"]);
+    expect(await textsOf("#formation-page .fp-withdrawn .fp-settled")).toEqual(["NR-3目標値取り下げた理由: 回答で決まった"]);
+    expect(await textsOf("#formation-page .fp-noticed .fp-muted")).toEqual(["名指しで依頼したものだけ直します。"]);
+    expect(await textsOf("#formation-page .fp-noticed .fp-p")).toEqual(["文言が揺れています"]);
+    // The answer form of a noticed matter: none.
+    expect(await count("#formation-page .fp-noticed input, #formation-page .fp-noticed textarea")).toBe(0);
+    expect(await textsOf("#formation-page .fp-quality .fp-p")).toEqual(["実施回数: 2 回", "解消した必ず直す指摘: 3 件"]);
+  });
+
+  it("does not list a provisional decision of a design as waiting for the business side", async () => {
+    await openPage(approvalPage({ settledDecisions: [{ id: "UD-01", decision: "決めた", reason: "理由", evidence: [], provisional: true }] }));
+    expect(await count("#formation-page .fp-awaiting")).toBe(0);
+    expect(await count('#formation-page .fp-settled[data-provisional="true"]')).toBe(0);
+  });
+
+  it("puts the departures from the contract, the notices and the noticed matters of a code review in 参考, with the pull request still under the title", async () => {
+    await openPage(
+      decisionPage({
+        pageKind: "code-review",
+        subject: "code",
+        what: "変更です",
+        policyDeviations: [{ type: "paragraph", text: "契約と違い、検査を足しました" }],
+        notices: ["集約の検査は通りました", "カバレッジは 91%"],
+        noticed: [{ title: "FV-bound-1", text: "上限を 5 から 4 にしました", evidence: [] }],
+        pr: { url: "https://github.com/o/r/pull/7", note: null },
+      }),
+    );
+    await openReferences();
+    expect(await textsOf("#formation-page .fp-reference .fp-ref > summary > h3")).toEqual(["実装方針からの変更", "お知らせ", "目標外の事柄"]);
+    expect(await textsOf("#formation-page .fp-deviations .fp-p")).toEqual(["契約と違い、検査を足しました"]);
+    expect(await textsOf("#formation-page .fp-notices .fp-p")).toEqual(["集約の検査は通りました", "カバレッジは 91%"]);
+    expect(await textsOf("#formation-page .fp-noticed .fp-p")).toEqual(["上限を 5 から 4 にしました"]);
+    expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["https://github.com/o/r/pull/7"]);
+  });
+
+  it("draws the evidence of a noticed matter under 根拠を見る", async () => {
+    await openPage(
+      decisionPage({
+        pageKind: "code-review",
+        subject: "code",
+        what: "変更です",
+        noticed: [{ title: "OG-1", text: "範囲外の変更です", evidence: [{ type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-01", note: "元の記録", text: "{}" }] }],
+      }),
+    );
+    await openReferences();
+    expect(await textsOf("#formation-page .fp-noticed .fp-fold-btn")).toEqual(["根拠を見る"]);
+    // The evidence is not in the text: it is in the drawer, headed by the matter.
+    expect(await count("#formation-page .fp-scroll .fp-ev-note")).toBe(0);
+    await $("#formation-page .fp-noticed .fp-fold-btn").click();
+    expect(await drawerTitle()).toEqual(["OG-1 — 根拠"]);
+    expect(await textsOf(`${PANEL} .fp-ev-note`)).toEqual(["元の記録"]);
+  });
+
+  // The drawer, the bars, the references and the kept answers of the earlier feature-dev's pages (#1158).
+  const MEMO = { type: "markdown" as const, root: "deliverables", path: "memo.md", text: "# メモ\n\n`repo/src/lock.rb:11` を直す。`other.rb` は別。\n" };
+  const LOCK = { type: "excerpt" as const, root: "repo", path: "src/lock.rb", start: 10, end: 12, highlight: [11], note: null, lines: ["def lock", "  wait 5", "end"] };
+  const FOLDED = decisionCard("Q1", {
+    background: "今の上限は 5 回",
+    facts: [{ label: "メモ", value: "議事", content: MEMO }],
+    evidence: [LOCK],
+    options: [decisionOption("A", "案")],
+    recommendation: "A",
+    recommendationReason: "r",
+  });
+
+  it("shows 詳しく見る in the drawer on the right, headed by the card, with the tabs 詳細 and 根拠, and closes it with × and with Escape", async () => {
+    await openPage(decisionPage({ questions: [FOLDED] }));
+    const button = `${q("Q1")} > .fp-fold-btn`;
+    await expect($(DRAWER)).not.toBeDisplayed();
+    await $(button).click();
+    await expect($(DRAWER)).toBeDisplayed();
+    // It stands on the right of the pane, over the page, and at least 420px wide.
+    const box = await browser.execute((d) => {
+      const drawer = document.querySelector(d)!.getBoundingClientRect();
+      const pane = document.getElementById("formation-page")!.getBoundingClientRect();
+      return { right: Math.round(drawer.right - pane.right), top: Math.round(drawer.top - pane.top), wide: drawer.width >= 419 };
+    }, DRAWER);
+    expect(box).toEqual({ right: 0, top: 0, wide: true });
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 詳細"]);
+    expect(await tabs()).toEqual(["詳細", "中身を見る: 議事", "根拠"]);
+    await expect(tab("詳細")).toHaveAttribute("aria-selected", "true");
+    expect(await textsOf(`${PANEL} .fp-h`)).toEqual(["背景"]);
+    await tab("根拠").click();
+    await expect(tab("根拠")).toHaveAttribute("aria-selected", "true");
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 根拠"]);
+    expect(await count(`${PANEL} [data-evidence="excerpt"]`)).toBe(1);
+    expect(await count(`${DRAWER} .fp-dr-panel:not([hidden])`)).toBe(1);
+    // The × closes it, and the button that opened it has the focus again.
+    await $(`${DRAWER} .fp-dr-close`).click();
+    await expect($(DRAWER)).not.toBeDisplayed();
+    expect(await browser.execute((b) => document.activeElement === document.querySelector(b), button)).toBe(true);
+    // Escape closes it, and nothing else does.
+    await $(button).click();
+    await expect($(DRAWER)).toBeDisplayed();
+    await $("#formation-page .fp-title").click();
+    await expect($(DRAWER)).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(DRAWER)).not.toBeDisplayed();
+  });
+
+  it("shows the file that a code name points at, with the lines it names marked, and 「← 戻る」 brings the fold back when the name was in a fold", async () => {
+    await openPage(decisionPage({ questions: [FOLDED] }));
+    await $(`${q("Q1")} > .fp-fold-btn`).click();
+    await $(`${PANEL} .fp-facts .fp-fold-btn`).click();
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 中身を見る: 議事"]);
+    // A name of a file that the page holds, with its lines, is a link; any other name stays code.
+    expect(await browser.execute((p) => [...document.querySelectorAll(`${p} code`)].map((c) => c.classList.contains("fp-fileref")), PANEL)).toEqual([true, false]);
+    await $(`${PANEL} code.fp-fileref`).click();
+    expect(await drawerTitle()).toEqual(["repo/src/lock.rb:11"]);
+    // The page holds lines 10 to 12 only, so a gap mark stands before them.
+    expect(await textsOf(`${DRAWER} .fp-dr-lines .fp-ln`)).toEqual(["…", "10", "11", "12"]);
+    expect(await rawTextsOf(`${DRAWER} .fp-dr-lines .fp-lc`)).toEqual(["", "def lock", "  wait 5", "end"]);
+    expect(await browser.execute((d) => [...document.querySelectorAll(`${d} .fp-dr-lines .fp-line`)].map((l) => (l as HTMLElement).dataset.highlight ?? ""), DRAWER)).toEqual(["", "", "true", ""]);
+    // Only the lines the page holds: it says so.
+    expect(await rawTextsOf(`${DRAWER} .fp-dr-note`)).toEqual(["この画面に載せている行のみ"]);
+    await expect($(`${DRAWER} .fp-dr-back`)).toBeDisplayed();
+    await $(`${DRAWER} .fp-dr-back`).click();
+    expect(await drawerTitle()).toEqual(["Q1 質問 Q1 — 中身を見る: 議事"]);
+    expect(await count(`${PANEL} code.fp-fileref`)).toBe(1);
+    // The path in the head of an excerpt is such a name too.
+    await tab("根拠").click();
+    await $(`${PANEL} .fp-ev-head code.fp-fileref`).click();
+    expect(await drawerTitle()).toEqual(["repo/src/lock.rb"]);
+    expect(await textsOf(`${DRAWER} .fp-dr-lines .fp-ln`)).toEqual(["…", "10", "11", "12"]);
+    await $(`${DRAWER} .fp-dr-close`).click();
+    await expect($(DRAWER)).not.toBeDisplayed();
+  });
+
+  it("shows a listed file of the page whole from a code name in the text, with no way back", async () => {
+    await openPage(
+      approvalPage({
+        approvalScope: [{ heading: "要件", design: false, items: [{ root: "deliverables", ref: null, path: "requirement.md", description: "要件の本文", extras: [], text: "# 要件\n二行目\n三行目" }] }],
+      }),
+    );
+    const name = "#formation-page .fp-scope-item .fp-ev-path";
+    await expect($(name)).toHaveElementClass("fp-fileref");
+    await $(name).click();
+    expect(await drawerTitle()).toEqual(["requirement.md"]);
+    expect(await textsOf(`${DRAWER} .fp-dr-lines .fp-lc`)).toEqual(["# 要件", "二行目", "三行目"]);
+    expect(await count(`${DRAWER} .fp-dr-lines [data-highlight]`)).toBe(0);
+    await expect($(`${DRAWER} .fp-dr-back`)).not.toBeDisplayed();
+    await expect($(`${DRAWER} .fp-dr-note`)).not.toBeDisplayed();
+  });
+
+  it("shows the label of the page and a link to each section in the top bar, marks the one being read, and opens the section of a link", async () => {
+    await openPage(approvalPage({ settledDecisions: [{ id: "UD-01", decision: "決めた", reason: "理由", evidence: [], provisional: false }] }));
+    const bar = "#formation-page .fp-bar-top";
+    expect(await textsOf(`${bar} .fp-context`)).toEqual(["要件定義 · 未決事項"]);
+    expect(await textsOf(`${bar} .fp-nav a`)).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "参考", "あなたの判定"]);
+    await browser.waitUntil(async () => (await browser.execute((b) => [...document.querySelectorAll(`${b} .fp-nav a`)].map((a) => a.getAttribute("aria-current") ?? ""), bar)).join() === "location,,,,,", { timeoutMsg: "the first section was not marked" });
+    // A link goes to its section (the address of the page is `#{id}`), and a row of 「参考」 opens when its address is taken.
+    await $(bar).$("a=参考").click();
+    expect(await browser.execute(() => location.hash)).toBe("#fp-req-login-reference");
+    await browser.execute(() => {
+      location.hash = "fp-req-login-ref-settled";
+    });
+    await browser.waitUntil(() => folded("#formation-page .fp-settled-list"), { timeoutMsg: "the row of the address did not open" });
+    expect(await folded("#formation-page .fp-quality")).toBe(false);
+  });
+
+  it("counts the required and the optional answers in the bottom bar, with the progress and 「次の未回答へ」, and 「TOP へ戻る」 goes to the top", async () => {
+    await openPage(approvalPage());
+    const bar = "#formation-page .fp-bar-bottom";
+    expect(await textsOf(`${bar} .fp-count`)).toEqual(["必須 0 / 1 件", "任意 0 / 2 件"]);
+    const progress = $(`${bar} .fp-progress`);
+    await expect(progress).toHaveAttribute("role", "progressbar");
+    await expect(progress).toHaveAttribute("aria-valuemax", "3");
+    await expect(progress).toHaveAttribute("aria-valuenow", "0");
+    // 「次の未回答へ」 goes to the first required card that has no answer, then to the first optional one.
+    const focused = () => browser.execute(() => document.activeElement?.closest<HTMLElement>("[data-card]")?.dataset.card ?? "");
+    // Pressed in the page: the driver's click focuses the button it clicked after the handler ran, which would take the focus from the card (a real press leaves it there).
+    const pressNext = () => browser.execute((b) => document.querySelector<HTMLElement>(`${b} .fp-next`)!.click(), bar);
+    await pressNext();
+    expect(await focused()).toBe("MF-1");
+    await $('#formation-page [data-card="SP-1"] input[value="reject"]').click();
+    expect(await textsOf(`${bar} .fp-count`)).toEqual(["必須 0 / 1 件", "任意 1 / 2 件"]);
+    await expect(progress).toHaveAttribute("aria-valuenow", "1");
+    expect(await browser.execute((b) => document.querySelector<HTMLElement>(`${b} .fp-progress-fill`)!.style.width, bar)).toBe("33%");
+    await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
+    expect(await textsOf(`${bar} .fp-count`)).toEqual(["必須 1 / 1 件", "任意 1 / 2 件"]);
+    await pressNext();
+    expect(await focused()).toBe("NR-1");
+    await $('#formation-page [data-card="NR-1"] input[value="A"]').click();
+    // With every card answered it goes to the button that sends, or to the verdict while none is chosen.
+    await pressNext();
+    await expect($(VERDICT)).toBeDisplayedInViewport();
+    await verdictRadio("approve").click();
+    await pressNext();
+    expect(await browser.execute(() => document.activeElement?.classList.contains("fp-send-btn"))).toBe(true);
+    await $(`${bar} .fp-to-top`).click();
+    expect(await browser.execute(() => document.querySelector(".fp-scroll")!.scrollTop)).toBe(0);
+  });
+
+  it("does not count 「その他」 with no text as an answer", async () => {
+    await openPage(decisionPage({ questions: [QUESTION] }));
+    const bar = "#formation-page .fp-bar-bottom";
+    await $(`${q("Q1")} input[value="other"]`).click();
+    expect(await textsOf(`${bar} .fp-count`)).toEqual(["必須 0 / 1 件"]);
+    await $(`${q("Q1")} .fp-text`).setValue("5 回と 10 回の間");
+    expect(await textsOf(`${bar} .fp-count`)).toEqual(["必須 1 / 1 件"]);
+    await $(`${q("Q1")} .fp-cancel`).click();
+    expect(await textsOf(`${bar} .fp-count`)).toEqual(["必須 0 / 1 件"]);
+  });
+
+  it("draws no count, progress or 「次の未回答へ」 on a page with no answer form", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です" }));
+    expect(await count("#formation-page .fp-bar-bottom .fp-count, #formation-page .fp-bar-bottom .fp-progress, #formation-page .fp-bar-bottom .fp-next")).toBe(0);
+    expect(await textsOf("#formation-page .fp-bar-bottom button")).toEqual(["TOP へ戻る", "リーダーに送る"]);
+  });
+
+  it("keeps the answers as they are entered and puts them back when the page is drawn again, and forgets them once they are sent", async () => {
+    await openPage(decisionPage({ questions: [QUESTION, QUESTION_2] }));
+    const kept = () => browser.execute(() => Object.keys(localStorage).filter((k) => k.startsWith("fp-answers:")).length);
+    expect(await kept()).toBe(0);
+    // The answers are written a moment after the last entry, not at each one.
+    const keptIs = (n: number) => browser.waitUntil(async () => (await kept()) === n, { timeoutMsg: `the kept answers were not ${n}` });
+    await $(`${q("Q1")} input[value="B"]`).click();
+    await keptIs(1);
+    // Taking every answer back keeps nothing.
+    await $(`${q("Q1")} .fp-cancel`).click();
+    await keptIs(0);
+    await $(`${q("Q1")} input[value="B"]`).click();
+    await $(`${q("Q2")} input[value="other"]`).click();
+    await $(`${q("Q2")} .fp-text`).setValue("来週の頭");
+    await keptIs(1);
+    // The mark of the page changes: it is drawn anew, and starts from what was kept.
+    await mock("formation_children", [asking({ pendingPage: { title: "要件の未決事項", atMs: MARK_AT + 60_000 } })]);
+    await browser.waitUntil(async () => (await count("#formation-page .fp-restored")) === 1, { timeoutMsg: "the answers were not put back" });
+    expect(await textsOf("#formation-page .fp-restored")).toEqual(["前回この画面で入力した回答を復元しました。"]);
+    await expect($(`${q("Q1")} input[value="B"]`)).toBeSelected();
+    await expect($(`${q("Q2")} textarea[data-for="other"]`)).toHaveValue("来週の頭");
+    expect(await textsOf("#formation-page .fp-bar-bottom .fp-count")).toEqual(["必須 2 / 2 件"]);
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toEqual([
+      {
+        name: "formation",
+        child: "req-login",
+        atMs: MARK_AT + 60_000,
+        answers: [
+          { card: "Q1", choice: "B", note: "", provisional: false },
+          { card: "Q2", choice: "other", note: "来週の頭", provisional: false },
+        ],
+        verdict: null,
+        revision: "",
+      },
+    ]);
+    // Once sent, nothing of it is kept.
+    await browser.waitUntil(async () => (await kept()) === 0, { timeoutMsg: "the answers were kept after the send" });
+  });
+
+  it("takes away what an earlier page of the same child kept when the page is drawn, and leaves what is another child's", async () => {
+    // `boot` takes every kept answer away, so the entries are put after it and before the page is opened.
+    await openFlow([asking()], { formation_page_read: decisionPage({ questions: [QUESTION] }) });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await browser.execute(() => {
+      localStorage.setItem("fp-answers:formation\nreq-login:deadbeef", "{}");
+      localStorage.setItem("fp-answers:formation\nother:deadbeef", "{}");
+    });
+    await $(OPEN).click();
+    await expect($("#formation-page")).toBeDisplayed();
+    expect(await browser.execute(() => Object.keys(localStorage).filter((k) => k.startsWith("fp-answers:")))).toEqual(["fp-answers:formation\nother:deadbeef"]);
+  });
+
+  it("keeps the verdict and its writing too", async () => {
+    await openPage(approvalPage());
+    await verdictRadio("revise").click();
+    await $(`${VERDICT} .fp-revision`).setValue("名前を直す");
+    await $('#formation-page [data-card="SP-1"] input[value="hold"]').click();
+    await mock("formation_children", [asking({ pendingPage: { title: "要件の未決事項", atMs: MARK_AT + 60_000 } })]);
+    await browser.waitUntil(async () => (await count("#formation-page .fp-restored")) === 1, { timeoutMsg: "the answers were not put back" });
+    await expect(verdictRadio("revise")).toBeSelected();
+    await expect($(`${VERDICT} .fp-revision`)).toHaveValue("名前を直す");
+    await expect($('#formation-page [data-card="SP-1"] input[value="hold"]')).toBeSelected();
+  });
+
+  it("works when the browser keeps nothing, and asks before the window is left only while it holds answers that could not be kept", async () => {
+    await openFlow([asking()], { formation_page_read: decisionPage({ questions: [QUESTION] }) });
+    await browser.waitUntil(async () => (await cardNames()).length === 1);
+    await browser.execute(() => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key.startsWith("fp-answers:")) throw new Error("the quota is full");
+        return set.call(this, key, value);
+      };
+    });
+    await $(OPEN).click();
+    await expect($("#formation-page")).toBeDisplayed();
+    // The page works all the same.
+    const leave = () =>
+      browser.execute(() => {
+        const e = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+      });
+    expect(await leave()).toBe(false);
+    await $(`${q("Q1")} input[value="A"]`).click();
+    expect(await leave()).toBe(true);
+    await $(`${q("Q1")} .fp-cancel`).click();
+    expect(await leave()).toBe(false);
+    await $(`${q("Q1")} input[value="A"]`).click();
+    await $(SEND).click();
+    expect(await waitForCalls("formation_page_answer", 1)).toHaveLength(1);
+  });
+
+  it("asks nothing before the window is left when the answers are kept", async () => {
+    await openPage(decisionPage({ questions: [QUESTION] }));
+    await $(`${q("Q1")} input[value="A"]`).click();
+    expect(
+      await browser.execute(() => {
+        const e = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+      }),
+    ).toBe(false);
+  });
+
+  it("marks a change by a form besides its color: a label on a changed cell, a bar and a mark on a highlighted line", async () => {
+    const card = decisionCard("Q1", {
+      blocks: [{ type: "table", header: ["案", "回数"], rows: [[{ text: "A", changed: false }, { text: "5", changed: true }]] }],
+      evidence: [LOCK],
+    });
+    await openPage(decisionPage({ questions: [card] }));
+    await $(`${q("Q1")} > .fp-fold-btn`).click();
+    const cell = `${PANEL} .fp-table td[data-changed="true"]`;
+    expect(await browser.execute((c) => getComputedStyle(document.querySelector(c)!, "::before").content, cell)).toBe('"変更"');
+    expect(await browser.execute((c) => getComputedStyle(document.querySelector(c)!).borderLeftWidth, cell)).toBe("4px");
+    await tab("根拠").click();
+    const line = `${PANEL} .fp-line[data-highlight="true"]`;
+    expect(await browser.execute((l) => getComputedStyle(document.querySelector(l)!).borderLeftWidth, line)).toBe("4px");
+    expect(await browser.execute((l) => getComputedStyle(document.querySelector(`${l} .fp-ln`)!, "::before").content, line)).toBe('"▶"');
+  });
+
+  it("draws the choices as cards with a border that stands out, and gives every control of the page one ring of 2px at the accent color", async () => {
+    await openPage(decisionPage({ questions: [FOLDED] }));
+    const border = await browser.execute(() => getComputedStyle(document.querySelector(".fp-choice")!).borderTopColor);
+    expect(border).toBe(await resolved("--muted"));
+    // The ring is the rule of `:focus-visible`, which WebDriver's keys do not set in WKWebView, so the rule is read from the style sheet.
+    const rule = await browser.execute(() => {
+      for (const sheet of document.styleSheets) {
+        for (const r of sheet.cssRules) {
+          if (r instanceof CSSStyleRule && r.selectorText.includes("#formation-page :is(button") && r.selectorText.includes(":focus-visible")) {
+            return { selector: r.selectorText, outline: r.style.getPropertyValue("outline") };
+          }
+        }
+      }
+      return null;
+    });
+    expect(rule).not.toBeNull();
+    for (const part of ["2px", "solid", "var(--accent)"]) expect(rule!.outline).toContain(part);
+    for (const control of ["button", "a", "summary", "input", "textarea", '[role="link"]', '[role="tab"]']) expect(rule!.selector).toContain(control);
+  });
+
 });
 
 // A-37: the launched children under the row of their formation in the list.

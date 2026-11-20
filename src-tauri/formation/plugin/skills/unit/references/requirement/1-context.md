@@ -68,10 +68,13 @@ When the request names a GitHub pull request (`github.com/{owner}/{repo}/pull/{n
 
 ## Step 3: the UI references
 
-Find every UI reference in: the request, the owner's guidance, the ticket, and `requirement.json` when it exists. A UI reference is a design file URL (for example a Figma URL) or a UI image or screenshot.
+Find every UI reference in: the request, the owner's guidance, the reopen record of step 1, the ticket, and `requirement.json` when it exists. A UI reference is a design file URL (for example a Figma URL) or a UI image or screenshot.
+A reference whose source the notes' section "UI reference" already holds, with its screenshots under `ui-references/`, is already taken in: do not fetch it again.
 
-- An image the owner or the ticket gave: copy it into `{case root}/ui-references/`, with a file name that says what it shows, and `Read` it. It goes into the notes of stage 2.
-- A design file URL: when a tool of this session reads that kind of file, use it and keep the screens, the layout, the texts and the transitions it returns. When none does, do not guess the screens: stage 2 puts it on the open-question list as "the design exists, and it could not be read, so please check it again".
+- An image the owner or the ticket gave: copy it into `{case root}/ui-references/` and `Read` it ([figma](figma.md), "Images"). It goes into the notes of stage 2.
+- A Figma URL: launch `feature-dev:figma-fetcher` for each URL, as [figma](figma.md) says ("The launch"). It saves each screen's screenshot under `{case root}/ui-references/`, and returns the screens, the layout, the tokens and the transitions. Keep them, with the saved paths, for stage 2. When the sign-in is missing, ask as [figma](figma.md) says ("When the sign-in is missing").
+- A design file URL of another kind: when a tool of this session reads that kind of file, use it and keep the screens, the layout, the texts and the transitions it returns.
+- A design that could not be read: do not guess the screens. Stage 2 puts it on the open-question list as "the design exists, and it could not be read, so please check it again" ([figma](figma.md), "When a design could not be read").
 
 ## Step 4: the base branch
 

@@ -2,11 +2,39 @@
 import type { Block } from "./Block";
 import type { CardKind } from "./CardKind";
 import type { CardOption } from "./CardOption";
+import type { Condition } from "./Condition";
 import type { Evidence } from "./Evidence";
 import type { Fact } from "./Fact";
+import type { ImageRef } from "./ImageRef";
+import type { Occurrence } from "./Occurrence";
+import type { ScreenVerification } from "./ScreenVerification";
 
 export type Card = { kind: CardKind, number: string, title: string, summary: string, options: Array<CardOption>, recommendation: string | null, recommendationReason: string | null, background: string | null, facts: Array<Fact>, blocks: Array<Block>, evidence: Array<Evidence>, 
 /**
  * The numbers of the cards that cause an `unmet-criterion` card.
  */
-cards: Array<string>, };
+cards: Array<string>, 
+/**
+ * 「具体的な場面」: the situation the decision plays out in, and why the question arises.
+ */
+scene: string | null, 
+/**
+ * The screenshot of the screen the scene is about; only on a card that asks.
+ */
+sceneImage: ImageRef | null, 
+/**
+ * When the matter arises and how much it matters; on `review-decision`, and on `nr` of a design page.
+ */
+occurrence: Occurrence | null, 
+/**
+ * Every condition the decision requires the options to meet; the `unmet` of an option names them.
+ */
+conditions: Array<Condition>, 
+/**
+ * The trade-offs of a fixed choice, by its key.
+ */
+choiceDetails: { [key in string]: string }, 
+/**
+ * What a `screen-verification` card shows; only on that kind.
+ */
+verification: ScreenVerification | null, };

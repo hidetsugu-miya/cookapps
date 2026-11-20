@@ -85,7 +85,7 @@ An appendix holds no final judgment that binds the requirements or the implement
 
 ### screens and the screen flow (optional)
 
-A screen: `id` (screen id), `name`, `device`, `status` (`新規` / `変更` / `既存`), `image` (the path of its picture under `ui-references/`, relative to the case root, or `null`), `req_ids` (array of `REQ-NN`), `changes` (md or `null`).
+A screen: `id` (screen id), `name`, `device`, `status` (`新規` / `変更` / `既存`), `image` (the path of its picture under `ui-references/`, relative to the case root, or `null`; the picture of a Figma screen is `ui-references/{node id with the colon written as a hyphen}.png`), `req_ids` (array of `REQ-NN`), `changes` (md or `null`).
 A flow row: `kind` (`normal` or `branch`), `title`, `request_step` (`{quote, source}` for a `normal` row, `null` for a `branch` row), `condition` (md, for a `branch` row), `path` (array of `{screen, op, condition, handoff}`), `verdict` (`一致` / `不一致` for a `normal` row, `null` for a `branch` row).
 `path[].screen` is a `screens[].id`, or `null` where the destination is not settled; `handoff` is optional.
 

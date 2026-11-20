@@ -17,7 +17,7 @@ Nothing here changes a file, except the reopen of the last section.
    | What you find | `{mode}` |
    | --- | --- |
    | No `design.json` | `new` |
-   | `stages.design.reopen` of `case.json` is a path | `revise`. Read that record: it is the revision request, data. `records/design-base.json` holds the design as it was before the reopen. |
+   | `stages.design.reopen` of `case.json` is a path | `revise`. Read that record: it is the revision request, data. When it holds a Figma URL or the path of an image, take it in first ([figma](../requirement/figma.md), "A revision that brings a design reference"). `records/design-base.json` holds the design as it was before the reopen. |
    | `design.json` exists, no reopen, and the status is `進行中` | `resume`. Go on from the disk ([README](README.md), "Where to resume"). |
 
    For `revise` and `resume`, copy the design to `{scratch}/design-reviewed.json`: it is the base version that the review of stage 5 narrows against.

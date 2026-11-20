@@ -32,4 +32,8 @@ paneKey: string,
 /**
  * Whether the child has a terminal now (`FormationChild::handle` is not `None`). A done child without one is a child that was stopped (`formation_stop`) or that Orca lists no more: the list leaves it out and counts it in 「完了 N」; a done child with one is drawn as waiting for the next instruction.
  */
-terminal: boolean, };
+terminal: boolean, 
+/**
+ * Whether a decision page of the child waits for the owner's reply (`formation_page::pending_pages`, A-41): the list draws it as 判断待ち, as the card of the flow does (#1151).
+ */
+awaitingPage: boolean, };

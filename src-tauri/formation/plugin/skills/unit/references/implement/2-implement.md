@@ -15,7 +15,7 @@ The agent reads `design.json` itself, so give it locations, not copies.
   1. The purpose, from the contract.
   2. The constraints: the repository's rules that bind the work ("Constraints" of `{contract}`), the `scope.excludes` of the item, and the instruction not to run the aggregate check, a whole-suite run, an end-to-end run or a full build.
   3. The completion criteria: the `acceptance` elements of the item, word for word.
-  4. What to read: `{contract}`, and the locations of the DESIGN item, its REQs, the shared materials and the appendices ("Items" of the contract). Say how to read a location: `{case root}/design.json#/designs/DESIGN-05` is `jq '.designs[] | select(.id == "DESIGN-05")' "{case root}/design.json"`, and the same for `requirement.json` and `.requirements[]`. Add the screenshots to open.
+  4. What to read: `{contract}`, and the locations of the DESIGN item, its REQs, the shared materials and the appendices ("Items" of the contract). Say how to read a location: `{case root}/design.json#/designs/DESIGN-05` is `jq '.designs[] | select(.id == "DESIGN-05")' "{case root}/design.json"`, and the same for `requirement.json` and `.requirements[]`. Give the screenshots to open as the input `ui_reference_paths:`, the absolute path of each one on its own line: the ones that `user_confirmations` name and the ones a `ui_spec` lists (relative to the case root). Say that it implements to what they show (display items, wording, display conditions and their variations, dimensions, colors, fonts), that it lists each one it opened under `References read`, and that it does not bring a screen up to check it: the goal verification of Stage 4 judges whether a screen meets its goal.
   5. For a redo: the reopen record's path and its reason, inside a quote as data.
   6. The state of the folder when it already holds work: the output of `git -C "{folder}" status --porcelain` and of `git -C "{folder}" log --oneline "refs/remotes/origin/{base branch}..HEAD"`, so that the agent continues from it.
 
@@ -27,6 +27,7 @@ Keep for Stage 4 and Stage 5, from each report:
 
 - `changed_paths` and `generated_paths`, the union over the launches. It is the staging set.
 - `Out-of-goal changes`, `References read`, and the verification lines (tests, lint and type check, coverage).
+- The screenshots you handed over that its `References read` lacks. When one is missing, launch the agent once more with the same prompt and, added to it, the line `The previous launch did not report reading every linked screenshot.` Do not launch again for a shortfall that this launch leaves: keep it, with the screenshot's path, for the goal verification ([goal-verification](goal-verification.md), "The items").
 
 ## Branch on the report
 
@@ -48,7 +49,13 @@ When it must stay (a change the criteria cannot be met without), keep it in a li
 ## Verification the agent does
 
 The agent runs targeted tests and lint for the files it changed, and measures coverage.
-It does not run the aggregate check. Stage 4 does.
+It does not run the aggregate check, it does not bring a screen up, and it runs no formal check. Stage 4 runs the aggregate check, then the formal checks again where later changes touch them, then the goal verification of the screens.
 When a verification line says `unidentified` for a kind the repository has, find the command in the repository's documents and launch the agent again with it.
+
+## Formal verification
+
+Run "Running a cycle" of [formal-verification](formal-verification.md) once the implementation is done.
+It checks the promises of the `formal_verification` elements of the unit's DESIGN items, keeps the existing checks under `verification/formal/` in step with the changed code, and fixes a bug it finds (at most 3 fixes).
+Its paths join the staging set, and [Stage 3](3-review-loop.md) reviews the fixes and the checks with the implementation.
 
 Then go to [Stage 3](3-review-loop.md).

@@ -23,6 +23,8 @@ const STATUS_OF: Record<FormationState, OrcaStatus> = { working: "working", wait
 const LOCAL = "local";
 // The label at the right of a row whose leader waits for input, as Orca's list words it (`STATUS_LABELS.question` of orca.ts, which imports this file).
 const WAITING_LABEL = "入力待ち";
+// The label of a child that a decision page waits for, and of the formation that has one, as the card of the flow words it (`PAGE_LABEL` of formation-flow.ts, A-41, #1151).
+const PAGE_LABEL = "判断待ち";
 
 // The name of the formation the screen shows: none at each start of the app, in memory only.
 let current: string | null = null;
@@ -245,10 +247,10 @@ function row(f: FormationEntry, done: number): HTMLDivElement {
   // The menu and its confirmation are anchored on the name, which the button's own state does not touch.
   line.oncontextmenu = (e) => openRowMenu(f, name, e);
   node.append(tag("i", "formation-row-dot"), name);
-  // The leader waits for input: the dot is filled and a label says so (`FormationEntry.waiting`, #915).
-  if (f.waiting) {
+  // The leader waits for input (`FormationEntry.waiting`, #915), or a child waits for the owner's reply to a decision page (`awaitingPage`, #1151): the dot is filled and a label says so, the leader's first.
+  if (f.waiting || f.awaitingPage) {
     node.dataset.waiting = "true";
-    node.append(span("formation-row-waiting", WAITING_LABEL));
+    node.append(span("formation-row-waiting", f.waiting ? WAITING_LABEL : PAGE_LABEL));
   }
   line.append(node);
   // The number of the done children, the stopped ones too; it is only a count, and none is drawn for a formation that has no done child.
@@ -277,12 +279,17 @@ function childRow(f: FormationEntry, c: FormationListChild): HTMLButtonElement {
   node.type = "button";
   node.dataset.childOf = f.name;
   node.dataset.child = c.name;
-  const standby = isStandby(c);
-  node.dataset.state = standby ? "standby" : c.state;
+  const standby = isStandby(c) && !c.awaitingPage;
+  // A child that a decision page waits for looks as one that waits for an approval, whatever its terminal says, as its card in the flow does.
+  node.dataset.state = c.awaitingPage ? "waiting" : standby ? "standby" : c.state;
   const text = tag("span", "formation-child-text");
   const where = c.branch === "" ? c.repo : `${c.repo} ・ ${c.branch}`;
   text.append(span("formation-child-name", c.name), span("formation-child-where", where));
-  node.append(standby ? statusIcon("idle", STANDBY_LABEL) : statusIcon(STATUS_OF[c.state], STATE_LABELS[c.state]), text);
+  node.append(c.awaitingPage ? statusIcon(STATUS_OF.waiting, PAGE_LABEL) : standby ? statusIcon("idle", STANDBY_LABEL) : statusIcon(STATUS_OF[c.state], STATE_LABELS[c.state]), text);
+  if (c.awaitingPage) {
+    node.dataset.page = "true";
+    node.append(span("formation-row-waiting", PAGE_LABEL));
+  }
   node.onclick = () => openChild(f.name, c.name);
   return node;
 }
@@ -290,9 +297,10 @@ function childRow(f: FormationEntry, c: FormationListChild): HTMLButtonElement {
 // A formation with its children: a formation that has some to draw has the arrow at the left of its row (the one of a project, A-8), and its children under it while it is open. A done child with no terminal was stopped, and is not drawn (it is in the count of 「完了 N」 only).
 function item(f: FormationEntry): HTMLDivElement {
   const wrap = tag("div", "formation-item");
-  const done = f.children.filter((c) => c.state === "done");
+  // A done child that a page waits for is drawn as waiting for it, and is not counted as done (as the flow does).
+  const done = f.children.filter((c) => c.state === "done" && !c.awaitingPage);
   wrap.append(row(f, done.length));
-  const shown = f.children.filter((c) => c.state !== "done" || c.terminal);
+  const shown = f.children.filter((c) => c.state !== "done" || c.terminal || c.awaitingPage);
   if (shown.length === 0) return wrap;
   const open = !folded.has(f.name);
   const arrow = tag("button", "icon-btn orca-arrow");
@@ -336,7 +344,7 @@ function draw() {
   const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
-  const key = JSON.stringify([current, [...deleting], [...folded], formations.map((f) => [f.name, f.projects, f.waiting, f.children.map((c) => [c.name, c.repo, c.branch, c.state, c.terminal])])]);
+  const key = JSON.stringify([current, [...deleting], [...folded], formations.map((f) => [f.name, f.projects, f.waiting, f.awaitingPage, f.children.map((c) => [c.name, c.repo, c.branch, c.state, c.terminal, c.awaitingPage])])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.
