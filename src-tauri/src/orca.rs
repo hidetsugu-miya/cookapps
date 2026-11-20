@@ -1268,6 +1268,21 @@ pub(crate) fn ps_args(environment: Option<&str>) -> Vec<String> {
     )
 }
 
+/// `orca worktree ps` with `--agent-wait`: each agent row of a live terminal also says whether the agent waits for the user (`agentWait`: `null` when Orca looked and it does not, an object with its `source` when it does; the key is missing when Orca could not tell).
+pub(crate) fn ps_wait_args(environment: Option<&str>) -> Vec<String> {
+    with_environment(
+        args_of(&[
+            "worktree",
+            "ps",
+            "--limit",
+            WORKTREE_LIMIT,
+            "--agent-wait",
+            "--json",
+        ]),
+        environment,
+    )
+}
+
 fn terminals_args(environment: Option<&str>) -> Vec<String> {
     with_environment(args_of(&["terminal", "list", "--json"]), environment)
 }
@@ -4377,6 +4392,18 @@ mod tests {
         assert_eq!(
             ps_args(None),
             ["worktree", "ps", "--limit", "200", "--json"]
+        );
+        assert_eq!(
+            ps_wait_args(Some("local")),
+            [
+                "worktree",
+                "ps",
+                "--limit",
+                "200",
+                "--agent-wait",
+                "--json",
+                "--environment=local"
+            ]
         );
         assert_eq!(terminals_args(None), ["terminal", "list", "--json"]);
         assert_eq!(
