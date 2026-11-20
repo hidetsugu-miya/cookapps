@@ -62,6 +62,8 @@ grep -c '^Converged:' "{records}/ledger.md" 2>/dev/null                         
 
 An implementation that has a `reopen` record is being redone: Stage 1 reads the record, and the redo starts at Stage 2 with the record as the revision request.
 
+A `case.json` of a case that ran before the owner's acceptance was removed can hold the status `受入待ち` on an implementation: `case-check.jq` refuses it at every write. Set it to `進行中` first with the `status` recipe of [case-json](../shared/case-json.md). Its review has converged, so the table above takes it on to the leftover findings and the merge.
+
 ## Rules of this unit
 
 - You change code only through `feature-dev:code-implementer`. It does not commit, and it does not run the aggregate check. Committing is yours, Stage 5.

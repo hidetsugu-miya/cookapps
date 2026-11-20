@@ -25,7 +25,7 @@ It is the owner's own words, but when you put it into a child's prompt, put it i
 
 - You do no unit work. You never write a deliverable, code, or `case.json`, and you never review. The child of each unit does all of it.
 - You may read anything with `formation_read`, `formation_files`, `formation_git` and `formation_worktrees`. A read-only `jq` over `case.json` with Bash is fine too.
-- You look at how a launched child is doing only with `formation_status`, in the patrol that `CronCreate` runs every 10 minutes while a child works or stands by ([launch](references/launch.md), [messages](references/messages.md)).
+- You look at how a launched child is doing only with `formation_status`, in the one patrol that `CronCreate` runs every 10 minutes while a child works or stands by, which looks at every child you keep ([launch](references/launch.md), [messages](references/messages.md)).
 - One child works at a time. The next unit starts only when the previous child has reported and `case.json` shows its unit complete. A standby is no working child: it writes nothing and is not counted. Its work (an answer, or the redo of its unit when the unit is reopened) happens while the child that asked is stopped, so one child still writes at a time.
 - You launch children with `formation_launch`, on `local` only. SendMessage reaches only this PC.
 - A child never talks to another child. A question of a child goes to you, you forward it to the unit above it, and the answer comes back through you ([messages](references/messages.md#answer-a-question)).
@@ -46,7 +46,7 @@ The folder of this skill is `${CLAUDE_SKILL_DIR}`.
 2. Settle the repository that holds the case root, and whether the case is new: [case-root](references/case-root.md).
 3. Settle the next unit from `case.json`: [next-unit](references/next-unit.md). When every unit is complete, clear what the children made, report and stop (the end of that file).
 4. Make sure the standbys of the requirement and the design are there when the next unit needs them, and launch the child of that unit, or wake its standby when it was reopened: [launch](references/launch.md).
-5. Serve the child until it reports that its unit is done: [messages](references/messages.md), with [pages](references/pages.md) for a decision page. The patrol of the child (registered in step 4) runs meanwhile. It ends with the child, and the patrol of a standby goes on until the specification is done.
+5. Serve the child until it reports that its unit is done: [messages](references/messages.md), with [pages](references/pages.md) for a decision page. The patrol of the formation (registered in step 4 with the first child) runs meanwhile. A child that ends is taken off it, and the patrol itself ends when the specification is done and the last child is stopped.
 6. Check `case.json` again, and go back to step 3.
 
 Do not stop between units to ask the owner whether to go on.

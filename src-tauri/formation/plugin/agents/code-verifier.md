@@ -78,6 +78,7 @@ For each item, in order:
 
 When the run stops before every item is settled (the app dies, the environment is gone), settle each item you did not reach as `not-run`, with what stopped it as `missing_reason`.
 Stop the processes that you started.
+When `docker` is installed, list the containers, volumes and networks before you bring the app up and again after the last item (`docker container ls -a --format '{{.Names}}'`, `docker volume ls -q`, `docker network ls --format '{{.Name}}'`). Those that are in the second list and not in the first, and that your own start of the app made, are `docker_objects` of the report. Leave out one you cannot tie to your run. You remove none of them.
 
 ## Return
 
@@ -99,6 +100,9 @@ screens:
 worktree_changes:
   - {paths of repo_root that the run left changed or new, sorted}
 
+docker_objects:
+  - {kind: docker-container | docker-volume | docker-network, name: {the exact name Docker knows it by}}
+
 interruption_record: {only when verification is verification-blocked}
   - attempt {n}: {command} - {failure} - {recovery applied} - {hypothesis}
   - presumed cause: {text}
@@ -106,4 +110,4 @@ interruption_record: {only when verification is verification-blocked}
 
 - One `screens` element for each item, in the order of the launch, an item the run stopped before included.
 - `verification-failed` when at least one item is `fail`. `verification-passed` when every item is settled and none is `fail` (a `not-run` is not a pass: say it in the item). `verification-blocked` when the launch was refused, or when every item is `not-run`.
-- `observations` is `[]` when an item has none. `worktree_changes` is `[]` when the run left nothing in the working tree.
+- `observations` is `[]` when an item has none. `worktree_changes` is `[]` when the run left nothing in the working tree. `docker_objects` is `[]` when the run made none.

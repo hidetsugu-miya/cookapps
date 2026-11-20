@@ -51,7 +51,7 @@ Every `{...}` in the references is a value you fill in, never text to type as it
    - [branch-and-pr](references/shared/branch-and-pr.md): where each unit commits, and the branches and pull requests.
 2. Read `case.json` and find your unit in it. Check it against the situation, in this order:
    - `case.json` does not exist, your unit is `requirement`, and your first instruction says the case is new: create it as [case-json](references/shared/case-json.md) says ("Create a new case"), then go on.
-   - Your first instruction says to reopen a unit first: do the reopen of [case-json](references/shared/case-json.md) now, with the owner's words as the reason, then go on.
+   - Your first instruction says to reopen a unit first, and you are not here from a `RESUME` ([standby](references/shared/standby.md); a `RESUME` does the reopen it names, or none, and your first instruction's old reason is not used again): do the reopen of [case-json](references/shared/case-json.md) now, with the owner's words as the reason, then go on.
    - Your role is `standby`, and your unit is `完了`: stand by ([standby](references/shared/standby.md)), and do nothing else.
    - Your unit is not `完了`, and no unit before it is unfinished: go on.
    - Otherwise (your unit is `完了`, or an earlier unit is not, or your role is `standby` and your unit is not `完了`): send `BLOCKED` (below) and stop.

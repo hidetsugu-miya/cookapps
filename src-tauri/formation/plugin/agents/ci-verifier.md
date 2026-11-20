@@ -42,11 +42,11 @@ When no command can be found, run nothing and return `status: undefined`, `failu
 ### Step 2: Run it
 
 1. Make a run directory: `mktemp -d` (use the system temp directory). Say its path in the report.
-2. Record the tracked-file state before the run: `git -C {repo_root} status --porcelain --untracked-files=no > {run_dir}/before.txt`.
+2. Record the tracked-file state before the run: `git -C {repo_root} status --porcelain --untracked-files=no > {run_dir}/before.txt`. When `docker` is installed, record the Docker objects too, so that you can tell afterwards what the run made: `docker container ls -a --format '{{.Names}}' > {run_dir}/docker-before.txt`, `docker volume ls -q >> {run_dir}/docker-before.txt` and `docker network ls --format '{{.Name}}' >> {run_dir}/docker-before.txt`.
 3. Run the command from `repo_root` in the background (Bash with `run_in_background: true`), so it can outlast one call, with all output in a log and its exit code in a file:
    `cd {repo_root} && sh -c '{command}' > {run_dir}/ci.log 2>&1; echo $? > {run_dir}/exit_code`
 4. Wait for it to end. You are told when the background command exits. Do not end your turn before that, and do not read `ci.log` over and over to follow progress. Allow it up to 55 minutes. After that, stop waiting and return `status: failed`, `failure_kind: timeout`, saying how long you waited.
-5. Read `{run_dir}/exit_code`. Record the state after the run the same way into `{run_dir}/after.txt`, and compare it with `before.txt`. The tracked paths that differ are `mutated_paths`.
+5. Read `{run_dir}/exit_code`. Record the state after the run the same way into `{run_dir}/after.txt`, and compare it with `before.txt`. The tracked paths that differ are `mutated_paths`. Record the Docker objects again the same way, and those that are in the second list and not in the first, that your command (or a repair of Step 4) made, are `docker_objects`: say in `kind` whether each is a container, a volume or a network. Leave out one you cannot tie to your run, and one that was there before. With no `docker`, `docker_objects` is `[]`.
 
 ### Step 3: Judge
 
@@ -82,8 +82,10 @@ aggregate_ci:
   tree_mutated: {true | false}
   mutated_paths:
     - {tracked paths the run changed}
+  docker_objects:
+    - {kind: docker-container | docker-volume | docker-network, name: {the exact name Docker knows it by}}
   coverage_line_percent: {a number the log or a coverage report from this run shows, or null}
 ```
 
 The only combinations are: `passed` with `none`, `undefined` with `none`, `failed` with `none` (a code failure), `failed` with `environment`, and `failed` with `timeout`.
-`environment_fixes` and `mutated_paths` are `[]` when empty. Report `coverage_line_percent` only from a figure the run printed or wrote. Never estimate it.
+`environment_fixes`, `mutated_paths` and `docker_objects` are `[]` when empty. Report `coverage_line_percent` only from a figure the run printed or wrote. Never estimate it.

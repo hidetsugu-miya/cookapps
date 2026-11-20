@@ -25,8 +25,10 @@ A matter of the environment (a missing folder, a ticket or a design file you can
 ## The question
 
 Send `QUESTION {unit} {Q-id}: {question}` to the leader, with the options and your recommendation on the next lines, and stop until the answer comes.
-`{Q-id}` is `Q-` and two digits, `Q-01`, `Q-02`, and so on in the order you ask them in this run.
-One point has one id. When you ask the same point again, because the answer did not settle it, use the same id. A new point gets a new id.
+`{Q-id}` is `Q-` and two digits, `Q-01`, `Q-02`, and so on, in the order the points of your unit were asked over the whole case, not in this run: a child that starts again must not use an id that an earlier child of the unit used.
+The ids of your unit are in `{case root}/records/{unit}/questions.md` (for an implementation `{unit}` is its key, as `{records}` is), one line `Q-NN {the point in a few words}` for each point asked. Make the file and the folder when they are missing.
+For a new point, read the file, take the number after the largest one in it (`Q-01` when it is empty or missing), and append the line before you send the `QUESTION`. The file is a record of the unit: it is committed with the unit's other records.
+One point has one id. When you ask the same point again, because the answer did not settle it, use the same id and append nothing. A new point gets a new id.
 The leader counts by id: the same id a second time stops the loop and goes to the owner. So never put two points under one id, and never give a new id to a point that was already asked.
 Say what you read and where (a path and a line), so that the answer need not read it again.
 

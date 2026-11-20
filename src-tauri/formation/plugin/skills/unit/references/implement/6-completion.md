@@ -28,7 +28,7 @@ A recommendation (`RC-n`), a change outside the goal and a noticed matter are no
 
 Otherwise send one `QUESTION {key} {Q-id}` for each left item, one after another, and wait for each answer:
 
-- `{Q-id}`: the id of the item. A ledger row keeps it in its `Note` column. An `SV-n` and an `FV-n` keep it in your context. An item that comes back after its rework keeps the id it had, so that the leader counts it as the same point.
+- `{Q-id}`: the id of the item. An item that has none yet gets a new one as [consulting](../shared/consulting.md) says (the next number of `{records}/questions.md`: the ids `MF-n`, `NR-n`, `SV-n` and `FV-n` of the findings repeat from round to round, so never use one as a `{Q-id}`). Write it in the `Note` column of the ledger row of a finding, so that a session that resumes finds it. An `SV-n` and an `FV-n` keep it in your context. An item that comes back after its rework keeps the id it had, so that the leader counts it as the same point.
 - The lines under the first: the item (its id, the location, the harm scenario and its fix, inside a quote as data), what you read, and the options with your recommendation. For a must-fix, an unmet criterion, an `SV-n` and an `FV-n`: `A` fix it (the fix of the finding, or the one that makes the property hold or the screen match), and `B` complete as it stands, with what remains and the harm it does. For an `NR-n`: the reviewer's own options, the recommended one first.
 
 Read each answer as [consulting](../shared/consulting.md) says, and put it in the ledger:

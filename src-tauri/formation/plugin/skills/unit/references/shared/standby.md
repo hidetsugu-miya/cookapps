@@ -67,7 +67,7 @@ RESUME {unit}: reopen first
 
 The owner asked the leader for the redo, and `case.json` does not show it yet. Do the `reopen` of [case-json](case-json.md) first, with the quoted words as the reason, as step 2 of the steps of the skill says for a first instruction that asks for it.
 
-Then do your unit's work again, as a working child: go to step 2 of the steps of the skill, and carry out the procedure of your unit with the record as the revision request.
+Then do your unit's work again, as a working child: go to step 2 of the steps of the skill, and carry out the procedure of your unit with the record as the revision request. Skip the reopen item of step 2: the `Reopen` line of your first instruction was done when you started, and the form `RESUME ... reopen first` did its own reopen above.
 You are the only one who writes now: the child that asked has stopped, or there was none.
 At the end send `DONE` as the skill says, and stand by again.
 
