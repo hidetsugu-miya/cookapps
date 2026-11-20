@@ -2584,7 +2584,7 @@ describe("slack list: posting to a channel (S-21)", () => {
   });
 });
 
-// The Claude pane of the Slack screen (S-24): on the right of the unread list, the watch and a channel's history, not in a thread.
+// The Claude pane of the Slack screen (S-24): on the right of the unread list, the watch and a channel's history, not in a thread. It is closed at first and shows the question; the ✳ and 「相談する」 open it and start Claude Code (#1103).
 describe("slack list: the Claude Code pane (S-24)", () => {
   const pane = "#slack-claude";
   const term = "#slack-claude-term";
@@ -2636,10 +2636,25 @@ describe("slack list: the Claude Code pane (S-24)", () => {
       times,
     );
 
-  async function openPane() {
+  // A press with the pointer actions, as the terminal takes the keyboard from the press (the driver's element click would focus the button again).
+  const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
+  // The pane is closed at first: the ✳ opens it and starts the process.
+  const openClaude = async () => {
+    await press($("#slack-tool-claude"));
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+  };
+
+  // The Slack screen with the unread list, the pane still closed.
+  async function openScreen() {
     await openList(timeline(unreadSample(), { side: sideSample() }));
     await waitForCount("#slack-feed .feed-row", 3);
     await mock("slack_thread", slackThread([threadMessage(slackTs(20), "Alice Example", "first")]));
+  }
+
+  // The same, with the pane open.
+  async function openPane() {
+    await openScreen();
+    await openClaude();
   }
 
   async function openHistory() {
@@ -2650,7 +2665,111 @@ describe("slack list: the Claude Code pane (S-24)", () => {
     await browser.waitUntil(async () => (await editable()) === "true");
   }
 
-  it("is open from the start in the unread list and the watch, with a divider that has its range, a band for a head with やり直す, and the terminal under it, and none of the conversation", async () => {
+  it("is closed at first with the question and 相談する under the ✳, and no process runs", async () => {
+    await openScreen();
+    await expect($(pane)).toBeDisplayed();
+    await expect($("#slack-claude-ask p")).toHaveText("Claude に相談しますか？");
+    await expect($("#slack-claude-open")).toHaveText("相談する");
+    await expect($("#slack-claude-open")).toHaveElementClass("text-btn");
+    await expect($(`${pane} .chat-head`)).not.toBeDisplayed();
+    await expect($("#slack-claude-restart")).not.toBeDisplayed();
+    await expect($(term)).not.toBeDisplayed();
+    await expect($("#slack-tool-claude")).toBeDisplayed();
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-label", "Claude に相談");
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#slack-claude-split")).toBeDisplayed();
+    // The question is centered in the pane under the row of the ✳.
+    const at = await browser.execute(() => {
+      const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const [pane, tools, ask] = ["#slack-claude", "#slack-tools", "#slack-claude-ask"].map(box);
+      return { under: Math.abs(ask.top - tools.bottom) <= 1, right: Math.abs(tools.right - pane.right) <= 1 };
+    });
+    expect(at).toEqual({ under: true, right: true });
+    // Showing the watch, a channel's history and a thread, and a hidden window, start nothing.
+    await showWatch();
+    await showUnread();
+    await mock("slack_channel_history", historySample());
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", 3);
+    await $("#sc-feed .feed-thread-open").click();
+    await expect($("#slack-thread")).toBeDisplayed();
+    await $("#st-back").click();
+    await browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+    await browser.pause(500);
+    // The thread has a process of its own (S-7): only this pane's start is counted.
+    expect(await starts()).toEqual([]);
+    await expect($("#slack-claude-ask")).toBeDisplayed();
+  });
+
+  it("opens with 相談する, starts the process once and gives the terminal the keyboard", async () => {
+    await openScreen();
+    await press($("#slack-claude-open"));
+    await browser.waitUntil(async () => (await starts()).length === 1);
+    await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#slack-claude-ask")).not.toBeDisplayed();
+    await expect($(`${pane} .chat-head`)).toBeDisplayed();
+    await expect($("#slack-claude-restart")).toBeDisplayed();
+    // A press in the terminal afterwards starts nothing more.
+    await press($(term));
+    await browser.pause(500);
+    expect((await starts()).length).toBe(1);
+  });
+
+  it("opens and closes with the ✳: the close ends the process and shows the question, and the next open starts a new one with the same first instruction", async () => {
+    await openScreen();
+    const close = await mock("claude_code_close", null);
+    await openClaude();
+    await browser.waitUntil(async () => (await starts()).length === 1);
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await press($("#slack-tool-claude"));
+    await expect($("#slack-claude-ask")).toBeDisplayed();
+    await expect($(`${pane} .chat-head`)).not.toBeDisplayed();
+    await expect($(term)).not.toBeDisplayed();
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "false");
+    expect((await callsOf(close)).filter((c) => (c as { id: string }).id === "slack-claude")).toHaveLength(1);
+    // While it is closed, moving through the screen and a hidden window start nothing.
+    await showWatch();
+    await showUnread();
+    await browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+    await browser.pause(500);
+    expect((await starts()).length).toBe(1);
+    await press($("#slack-claude-open"));
+    await browser.waitUntil(async () => (await starts()).length === 2);
+    const [first, second] = await starts();
+    expect(second).toMatchObject({ id: "slack-claude", builtinTools: false, skill: null, prompt: (first as unknown as { prompt: string }).prompt });
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
+  });
+
+  it("opens, closes and starts nothing while closed in a narrow window too, with the pane under the body", async () => {
+    await resize(NARROW);
+    await openScreen();
+    expect(await places()).toMatchObject({ below: true, under: true, list: true });
+    await expect($("#slack-claude-ask")).toBeDisplayed();
+    await expect($("#slack-tool-claude")).toBeDisplayed();
+    expect(await starts()).toEqual([]);
+    const close = await mock("claude_code_close", null);
+    await press($("#slack-claude-open"));
+    await browser.waitUntil(async () => (await starts()).length === 1);
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    expect(await places()).toMatchObject({ below: true, under: true });
+    await press($("#slack-tool-claude"));
+    await expect($("#slack-claude-ask")).toBeDisplayed();
+    await expect($("#slack-tool-claude")).toHaveAttribute("aria-pressed", "false");
+    expect((await callsOf(close)).filter((c) => (c as { id: string }).id === "slack-claude")).toHaveLength(1);
+    // Widened and narrowed while closed: nothing starts.
+    await resize(WIDE);
+    await browser.waitUntil(async () => !(await places()).below, { timeoutMsg: "the pane did not go to the right" });
+    await resize(NARROW);
+    await browser.waitUntil(async () => (await places()).below, { timeoutMsg: "the pane did not go under the body" });
+    await browser.pause(500);
+    expect((await starts()).length).toBe(1);
+    await expect($("#slack-claude-ask")).toBeDisplayed();
+  });
+
+  it("shows, once open, in the unread list and the watch, a divider that has its range, a head with やり直す, and the terminal under it, and none of the conversation", async () => {
     await openPane();
     await expect($(pane)).toBeDisplayed();
     await expect($("#slack-claude-split")).toBeDisplayed();
@@ -2664,9 +2783,9 @@ describe("slack list: the Claude Code pane (S-24)", () => {
     expect(await count(`${pane} .chat-head > svg`)).toBe(1);
     const head = await browser.execute(() => {
       const style = getComputedStyle(document.querySelector("#slack-claude .chat-head")!);
-      return { line: style.borderBottomWidth, filled: style.backgroundColor !== "rgba(0, 0, 0, 0)" };
+      return { height: Math.round(parseFloat(style.height)), line: style.borderBottomWidth };
     });
-    expect(head).toEqual({ line: "2px", filled: true });
+    expect(head).toEqual({ height: 48, line: "1px" });
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
     expect(await count("#slack-claude-log, #slack-claude-input, #slack-claude-form, #slack-claude-send, #slack-claude-model, #slack-claude-clear, #slack-claude-chat-note")).toBe(0);
     // The pane sits at the right of the body.
@@ -2677,7 +2796,7 @@ describe("slack list: the Claude Code pane (S-24)", () => {
     await expect($("#slack-claude-split")).toBeDisplayed();
   });
 
-  it("is open in the history of a channel, and gives way to the pane of the thread while a thread is shown", async () => {
+  it("shows the open pane in the history of a channel, and gives way to the pane of the thread while a thread is shown", async () => {
     await openPane();
     await mock("slack_channel_history", historySample());
     await pressChannel();
