@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.93.1
+
+S-4, S-23, A-36: 「Slack に貼る」の画面の Claude Code を、auto モード、Sonnet、effort high で起動するようにした（#1144）。元のメッセージとカードを書くときは、ターミナルで聞かず、すぐ欄に入れる。書いた内容は、今までどおり「元に戻す」で戻せる。投稿だけは、`slack_compose_post` を使うたびにターミナルで聞く。この Claude Code に渡すツールは `screen_read`、`screen_write`、`slack_compose_post` の 3 つだけで、読み書きできるのはこの画面の欄だけ。
+
+S-4: 「Slack に貼る」の画面で、Claude Code がカードに書いた `@here`、`@channel`、`@everyone` を、全角の `＠` に替えず、書いたまま入れるようにした（#1146）。そのまま投稿すると、一斉メンションになる。
+
+S-2, S-18, A-36: Todo の案のページは、出しただけでは Claude Code を起動しないようにした（#1148）。右のペインの「相談する」を押すと起動する。Claude Code は、auto モード、Sonnet、effort high で動く。渡すツールは `screen_read` と `screen_write` の 2 つだけで、読み書きできるのはそのページの案の名前と説明だけ。書くときはターミナルで聞かず、すぐ欄に入れる。書いた内容は「元に戻す」で戻せる。Todoist に足すのは、今までどおりページの追加ボタンだけ。
+
+A-8: 開発の画面のプロジェクトの一覧で、作業中のセッションがフォーメーションのチームメイトのものだけのプロジェクトを、起動中のプロジェクトの最後、「起動していない N 件」のすぐ上に並べるようにした（#1145）。止まっていない自分のセッションがあるプロジェクトは、今までどおりの位置に並ぶ。
+
 ## v0.93.0
 
 A-45: 開発の画面で動く Claude Code が、worktree の HTML のファイルを、そのプロジェクトの作業ペインのプレビューのタブで開けるようにした（#984、#985）。Claude Code は、`tsunagiai-mcp` のツール `preview_open` で開くよう頼む。開くのは、Orca の一覧にある worktree の中の `.html` のファイルだけ。保存した環境の PC で動く Claude Code が頼んでも、タブはこの Mac のつなぎAIに開く。開発の画面を出していないときは、画面は切り替えず、タブだけを作る。
