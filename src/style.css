@@ -1121,10 +1121,8 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 #formation-teammate-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* A decision page of a child (A-41): in the middle pane under the tab 「判断: {title}」, in place of a terminal. The tab and the card use the color of a child that waits. */
 .formation-tab-page .formation-tab-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; font-family: inherit; }
-.formation-card-open { position: absolute; right: 8px; bottom: 7px; height: 22px; padding: 0 10px; border: 0; border-radius: 11px; background: var(--agent-question); color: var(--on-accent); font: inherit; font-size: calc(11px * var(--fs)); font-weight: 700; cursor: pointer; }
-.formation-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.formation-card-open[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--agent-question); }
-#formation-flow-list li:has(.formation-card-open) .formation-card-row + .formation-card-row { padding-right: 56px; }
+.formation-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: 700; }
+.formation-card-open { flex: none; margin-left: auto; padding: 0 10px; border-radius: 11px; background: var(--agent-question); color: var(--on-accent); font-size: calc(11px * var(--fs)); font-weight: 700; line-height: 22px; }
 #formation-page { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--surface); font-size: calc(14px * var(--fs)); line-height: 1.7; }
 /* The page is a top bar, what scrolls, a bottom bar, and the drawer on the right over them (#1158). */
 .fp-shell { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -1348,10 +1346,12 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 #formation-flow-head .formation-done[hidden] { display: none; }
 #formation-flow-size { flex: none; margin-left: auto; color: var(--muted); }
 #formation-flow-size[aria-pressed="true"], #formation-flow-size[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
-#formation-follow { flex: none; color: var(--muted); }
-#formation-follow[aria-pressed="true"], #formation-follow[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
 #formation-flow-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box; padding: 14px 12px; }
 #formation-flow-error { margin: 0 0 10px; overflow-wrap: anywhere; }
+/* The cards of the decision pages that wait (A-41): a heading line, a card for each page, and a line under the group that parts it from the leader's card. */
+#formation-flow-pages { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+#formation-flow-pages-title { margin: 0 0 8px; color: var(--agent-question); font-size: calc(11px * var(--fs)); font-weight: 700; }
+#formation-flow-page-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 #formation-flow-root { cursor: pointer; }
 #formation-flow-list { list-style: none; margin: 0 0 0 16px; padding: 10px 0 0 14px; border-left: 1.5px solid var(--chip-line); display: flex; flex-direction: column; gap: 8px; }
 #formation-flow-list li { position: relative; }
@@ -1393,11 +1393,13 @@ button.formation-card { cursor: pointer; }
 #formation-flow[data-compact="true"] #formation-flow-head { flex-wrap: wrap; justify-content: center; align-content: center; gap: 4px; padding: 6px 4px; }
 #formation-flow[data-compact="true"] #formation-flow-head h2 { display: none; }
 #formation-flow[data-compact="true"] #formation-flow-size { order: 0; margin-left: 0; }
-#formation-flow[data-compact="true"] #formation-follow { order: 1; }
 #formation-flow[data-compact="true"] .formation-done { order: 2; padding: 0 8px; }
 #formation-flow[data-compact="true"] #formation-flow-body { padding: 14px 0; overflow-x: hidden; }
 #formation-flow[data-compact="true"] #formation-flow-error { margin: 0 6px 10px; font-size: calc(11px * var(--fs)); }
 #formation-flow-compact { display: flex; flex-direction: column; align-items: center; }
+#formation-flow-page-orbs { list-style: none; margin: 0 0 12px; padding: 0 0 12px; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+#formation-flow-page-orbs:empty { display: none; }
+#formation-flow-page-orbs li { width: 100%; display: flex; justify-content: center; }
 #formation-flow-orbs { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 #formation-flow-orbs li { width: 100%; display: flex; justify-content: center; }
 #formation-flow-arrow { flex: none; width: 20px; height: 26px; margin: 4px 0 8px; color: var(--muted); }
