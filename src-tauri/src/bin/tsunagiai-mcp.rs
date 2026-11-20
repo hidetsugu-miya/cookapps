@@ -18,7 +18,7 @@ use tsunagiai_lib::{
     formation::{self, FormationAgent, PlannedChild},
     formation_ask, formation_message, formation_page, formation_server, gmail, identity,
     lsp::{self, LspServerSettings},
-    orca_preview,
+    orca_preview, preview_plugin,
     screen_bridge::{self, Request as ScreenRequest},
     skills::{self, Skill, SkillScreen},
     todoist,
@@ -705,6 +705,13 @@ fn project_args(args: impl IntoIterator<Item = String>) -> Result<Vec<String>, S
         }
     }
     Ok(projects)
+}
+
+/// Writes the plugin of A-45 in the config folder of this machine, with this `tsunagiai-mcp` as its server, and answers its folder.
+fn write_preview_plugin() -> Result<std::path::PathBuf, String> {
+    let mcp =
+        std::env::current_exe().map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))?;
+    preview_plugin::write_plugin(&identity::config_dir()?, &mcp)
 }
 
 /// Writes the files of the orchestrator of `name` in the config folder of this machine and runs its script in place of this process, with this `tsunagiai-mcp` as the server of its `mcp.json`, and `projects` as its first instruction. It returns only when that failed, with the message.
@@ -1544,6 +1551,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
+        }
+    }
+    // The plugin of "Claude を起動" (A-45, #986): it writes `preview-plugin/` for this `tsunagiai-mcp`, prints its path and serves no MCP.
+    if preview_plugin::requested(std::env::args().skip(1)) {
+        match write_preview_plugin() {
+            Ok(dir) => {
+                println!("{}", dir.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
     }
     match formation_start_arg(std::env::args().skip(1)) {

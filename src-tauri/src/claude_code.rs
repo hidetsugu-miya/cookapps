@@ -108,7 +108,7 @@ pub fn claude_code_dir(config: &Path) -> PathBuf {
 }
 
 /// The text of `mcp.json`: the one MCP server, `tsunagiai-mcp` at `mcp`, started with `args`.
-fn mcp_config(mcp: &Path, args: &[&str]) -> String {
+pub(crate) fn mcp_config(mcp: &Path, args: &[&str]) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "mcpServers": { MCP_NAME: { "command": mcp.to_string_lossy(), "args": args } }
     }))
@@ -215,7 +215,7 @@ fn mcp_binary(exe: &Path) -> PathBuf {
 }
 
 /// `tsunagiai-mcp` for `exe`, or why there is none (a development build has it only after `cargo build --bin tsunagiai-mcp`).
-fn checked_mcp_binary(exe: &Path) -> Result<PathBuf, String> {
+pub(crate) fn checked_mcp_binary(exe: &Path) -> Result<PathBuf, String> {
     let path = mcp_binary(exe);
     if path.is_file() {
         return Ok(path);

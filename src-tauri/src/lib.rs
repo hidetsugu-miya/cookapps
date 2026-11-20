@@ -43,6 +43,7 @@ pub mod orca_panes;
 pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod preview_plugin;
 pub mod screen_bridge;
 pub mod side_menu;
 pub mod skills;
