@@ -1058,7 +1058,7 @@ button.status:hover { filter: brightness(.95); }
 #formation-list-error { flex: none; margin: 4px 8px 0; overflow-wrap: anywhere; }
 #formation-list-feed { min-height: 0; overflow-y: auto; padding: 0 8px; }
 .formation-item { position: relative; }
-/* A line holds the row, a button, and at its right the chip of the done children and the number of the children, outside the button (#1112); the ground of the hover and of the selected row is the line's. */
+/* A line holds the row, a button, and at its right the count of the done children and the number of the children, outside the button (#1112); the ground of the hover and of the selected row is the line's. */
 .formation-line { display: flex; align-items: center; margin-bottom: 1px; border-radius: 8px; }
 .formation-line:hover { background: var(--hover); }
 .formation-line:has(.formation-row[aria-pressed="true"]) { background: var(--soft); }
@@ -1073,7 +1073,9 @@ button.status:hover { filter: brightness(.95); }
 .formation-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 /* The number of the launched children at the right end of the row (after the label while the leader waits), in the pill of the subagents of a session. */
 .formation-row-count { flex: none; margin-right: 10px; cursor: pointer; padding: 0 7px; border-radius: 9px; background: var(--effort-high-bg); color: var(--effort-high); font-size: calc(11px * var(--fs)); font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
-/* The chip 「完了 N」 before the number, a `.chip`; pressed (the done children are shown) it has the colors of a pressed chip of the screens. */
+/* The count 「完了 N」 before the number, a `.chip` that is not pressed (#1133); the chip of the flow pane is `.formation-done`. */
+.formation-done-count { flex: none; margin-right: 6px; }
+/* The chip 「完了 N」 of the flow pane's heading, a `.chip`; pressed (the done children are shown) it has the colors of a pressed chip of the screens. */
 .formation-done { flex: none; margin-right: 6px; font-family: inherit; cursor: pointer; }
 .formation-done:hover { border-color: var(--accent); }
 .formation-done[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); color: var(--accent-text); }
@@ -1345,6 +1347,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-mark.failed, .orca-mark.interrupted { width: 6px; height: 6px; }
 .orca-mark.failed { background: var(--agent-failed); }
 .orca-mark.interrupted { background: var(--agent-muted); }
+/* A child of a formation that is done and still has its terminal (#1133): a gray ring, which a working child's turning ring and a done child's filled dot are told from. */
+.formation-child[data-state="standby"] .orca-mark.idle { box-sizing: content-box; background: transparent; border: 2px solid var(--agent-muted); }
 @media (prefers-reduced-motion: reduce) { .orca-mark.working { animation: none; } }
 /* A row of the project view. */
 .orca-project { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }

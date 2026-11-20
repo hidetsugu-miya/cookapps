@@ -3723,6 +3723,8 @@ pub struct FormationListChild {
     pub handle: String,
     /// The `paneKey` of its agent in `orca worktree ps` (`Launch::pane_key`).
     pub pane_key: String,
+    /// Whether the child has a terminal now (`FormationChild::handle` is not `None`). A done child without one is a child that was stopped (`formation_stop`) or that Orca lists no more: the list leaves it out and counts it in 「完了 N」; a done child with one is drawn as waiting for the next instruction.
+    pub terminal: bool,
 }
 
 /// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed.
@@ -3742,6 +3744,7 @@ fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationL
                 created: launch.created,
                 handle: launch.handle.clone(),
                 pane_key: launch.pane_key.clone(),
+                terminal: row.handle.is_some(),
             })
         })
         .collect()
@@ -9164,6 +9167,14 @@ mod tests {
         assert_eq!(rows[2].handle, None);
         assert_eq!(listed[1].handle, "term_m");
         assert_eq!(listed[1].pane_key, "tab-m:leaf");
+        // The terminal is not the record's handle: the row has none once Orca lists the child no more.
+        assert!(!listed[1].terminal);
+        assert!(!listed[0].terminal);
+        // A done child that Orca still lists has its terminal.
+        let alive = ps_of(vec![agent("tab-k:leaf", "done", None)]);
+        let rows = rows_of(&records, &alive);
+        assert_eq!(rows[1].state, FormationState::Done);
+        assert!(listed_children(&records, &rows)[0].terminal);
     }
 
     #[test]
