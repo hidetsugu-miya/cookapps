@@ -3407,6 +3407,28 @@ describe("orchestration mode: the children's worktrees in the projects", () => {
     expect(await textsOf("#orca-feed .orca-stopped-toggle")).toEqual(["起動していない 1 件"]);
   });
 
+  it("puts a project that works with nothing but a child's sessions last among the running projects, above the link of the ones that are not running, and keeps a project with an own working session where it was", async () => {
+    // `api` works with the child's session alone and enters the working group first (the read lists it first); `web` works with its own session; `docs` has a session that is done; `blank` has none.
+    const rows = [childRow(), orcaRow("web", "main", "Web session"), orcaRow("docs", "main", "Docs session", { group: "done" })];
+    const worktrees = [...trees(), orcaWorktree("web", "main"), orcaWorktree("docs", "main"), orcaWorktree("blank", "main")];
+    const keys = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project, #orca-feed .orca-stopped-toggle")].map((e) => e.dataset.key));
+    await openScreen({ orca_overview: orcaOverview(rows, worktrees) }, async () => (await formationMarks()).length === 1);
+    expect(await keys()).toEqual(["proj_web", "proj_docs", "proj_api", "stopped-toggle"]);
+    expect(await textsOf("#orca-feed .orca-stopped-toggle")).toEqual(["起動していない 1 件"]);
+    // The project stays a running one: it is not under the link, and it has its mark.
+    expect(await formationMarks()).toEqual(["フォーメーション 1"]);
+    // An own session of the project that works too puts it back among the working projects, where the read listed it.
+    await mock("orca_overview", orcaOverview([childRow(), ownRow(), ...rows.slice(1)], worktrees));
+    await browser.waitUntil(async () => (await keys())[0] === "proj_api", { timeout: 15_000 });
+    expect(await keys()).toEqual(["proj_api", "proj_web", "proj_docs", "stopped-toggle"]);
+    // An own session that asks a question has not stopped either: the project stays where the read listed it.
+    await mock("orca_overview", orcaOverview([childRow(), ...rows.slice(1)], worktrees));
+    await browser.waitUntil(async () => (await keys())[0] === "proj_web", { timeout: 15_000 });
+    await mock("orca_overview", orcaOverview([childRow(), ownRow({ group: "waiting" }), ...rows.slice(1)], worktrees));
+    await browser.waitUntil(async () => (await keys())[0] === "proj_api", { timeout: 15_000 });
+    expect(await keys()).toEqual(["proj_api", "proj_web", "proj_docs", "stopped-toggle"]);
+  });
+
   it("draws every session of the project when no child of the record is in its worktrees", async () => {
     await openScreen({ formation_list: formationList([formationEntry("formation")]) }, async () => (await sessionNames()).length === 3);
     expect(await sessionNames()).toEqual(["main", "child-a", "child-a"]);

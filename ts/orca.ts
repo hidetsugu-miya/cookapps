@@ -539,11 +539,25 @@ function trackWorking() {
   for (const id of worksOpen) if (!live.has(id)) worksOpen.delete(id);
 }
 
-// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them).
+// The projects that work with nothing but a launched child's sessions (A-8): a working session, every working session a child's, and no session of the owner's that has not stopped (it may ask a question or wait). Found once for each drawing.
+let childOnly = new Set<string>();
+function trackChildOnly() {
+  const working = new Set<string>();
+  const own = new Set<string>();
+  for (const r of mix.rows) {
+    if (!isChildSession(r)) {
+      if (!isStopped(r)) own.add(r.projectKey);
+    } else if (r.status === "working") working.add(r.projectKey);
+  }
+  childOnly = new Set([...working].filter((k) => !own.has(k)));
+}
+
+// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them). The working projects that work with a child's sessions alone go last, so that they sit above the link of the projects that are not running.
 function projectRows(): OrcaProject[] {
   const all = mix.projects;
   const rest = all.filter((p) => !workingOrder.includes(p.key));
-  return [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...rest.filter((p) => p.sessions > 0), ...rest.filter((p) => p.sessions === 0)];
+  const pick = (keys: string[]) => keys.flatMap((k) => all.filter((p) => p.key === k));
+  return [...pick(workingOrder.filter((k) => !childOnly.has(k))), ...rest.filter((p) => p.sessions > 0), ...rest.filter((p) => p.sessions === 0), ...pick(workingOrder.filter((k) => childOnly.has(k)))];
 }
 
 // The search text (A-19), trimmed, and as a regular expression (`partMatcher` of dom.ts: special characters escaped, a case-folded part of a name). The expression is made once for each drawing (null while nothing is typed); its capture group serves `split` below.
@@ -610,11 +624,12 @@ function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, o
 // Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
   trackWorking();
+  trackChildOnly();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, ownTabs(k)]));
   const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
-  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key)];
+  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key), childOnly.has(p.key)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
