@@ -91,7 +91,8 @@ async function reread(rows: Row[], extra: Partial<Parameters<typeof orcaOverview
   const overview = await mock("orca_overview", read);
   await showAgain();
   await waitForCalls(overview);
-  const drawn = read.projects.map((p) => `${p.key}:${p.status}`).sort();
+  // A project that is not running (the gray dot, no session) is left out under the link (A-8).
+  const drawn = read.projects.filter((p) => p.status !== "idle" || p.sessions > 0).map((p) => `${p.key}:${p.status}`).sort();
   await browser.waitUntil(
     async () => JSON.stringify((await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].map((r) => `${r.dataset.key}:${(r.querySelector(".orca-ic") as HTMLElement).dataset.status}`))).sort()) === JSON.stringify(drawn),
     { timeoutMsg: "the list of projects did not draw the read" },
@@ -990,13 +991,13 @@ describe("orca: projects", () => {
 
   it("starts with the projects: a status icon and the name, and no number of sessions", async () => {
     await openOrca(withTerminals());
-    // The working projects come first (example-app, example-web), then the rest as the read lists them.
-    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
-    // example-app has a running agent and a shell, example-api a waiting agent, example-lib a done one, example-idle nothing.
-    expect(await projectStatuses()).toEqual(["working", "working", "question", "done", "idle"]);
+    // The working projects come first (example-app, example-web), then the rest as the read lists them; example-idle (nothing) is under the link.
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib"]);
+    // example-app has a running agent and a shell, example-api a waiting agent, example-lib a done one.
+    expect(await projectStatuses()).toEqual(["working", "working", "question", "done"]);
     // The number of sessions is not drawn on the row (the counts are on the session rows).
     expect(await count("#orca-feed .orca-n")).toBe(0);
-    expect(await textsOf("#orca-feed .orca-project")).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
+    expect(await textsOf("#orca-feed .orca-project")).toEqual(["example-app", "example-web", "example-api", "example-lib"]);
   });
 
   it("puts the stopped projects (a session, not working) under the working ones and above those with no session, each group in the order of the read", async () => {
@@ -1004,7 +1005,72 @@ describe("orca: projects", () => {
     const byName = (name: string) => overview.projects.find((p) => p.name === name)!;
     // The read lists a project with no session before the stopped ones (example-api waits, example-lib is done), and the working one last.
     await openOrca({ ...overview, projects: [byName("example-idle"), byName("example-api"), byName("example-lib"), byName("example-app"), byName("example-web")] });
+    // The one with no session is under the link, last.
+    await stoppedLink().click();
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
+  });
+
+  // The link under the running projects (A-8): the projects whose icon is the gray dot, with no session and no terminal, are left out until it is pressed.
+  const stoppedLink = () => $("#orca-feed .orca-stopped-toggle");
+  const listed = () => browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project-name, #orca-feed .orca-stopped-toggle")].map((n) => n.textContent));
+
+  it("leaves out the projects that are not running, and draws under the running ones a link with their number", async () => {
+    await openOrca(withTerminals());
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib"]);
+    expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していない 1 件"]);
+    await expect(stoppedLink()).toHaveAttribute("aria-expanded", "false");
+    await expect($("#orca-feed .orca-project[data-key=\"proj_example-idle\"]")).not.toExist();
+  });
+
+  it("opens the projects that are not running under the link, which then hides them, and keeps it through a read", async () => {
+    await openOrca(withTerminals(), timers({ orcaClock: 1000 }));
+    await stoppedLink().click();
+    await expect(stoppedLink()).toHaveAttribute("aria-expanded", "true");
+    expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していないものを隠す", "example-idle"]);
+    expect(await projectStatuses()).toEqual(["working", "working", "question", "done", "idle"]);
+    // A read of the clock draws the list again, and it stays open.
+    const overview = await mock("orca_overview", withTerminals());
+    await waitForCalls(overview);
+    await browser.pause(300);
+    expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していないものを隠す", "example-idle"]);
+    await stoppedLink().click();
+    expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していない 1 件"]);
+  });
+
+  it("draws no link when every project is running, and only the link when none is", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()));
+    await expect(stoppedLink()).not.toExist();
+    await openOrca(orcaOverview([], [orcaWorktree("example-idle", "main"), orcaWorktree("example-rest", "main")]));
+    expect(await listed()).toEqual(["起動していない 2 件"]);
+    await expect($("#orca-feed")).not.toHaveText(expect.stringContaining("プロジェクトがありません"));
+  });
+
+  it("keeps the selected project in the list even when it is not running", async () => {
+    await openOrca(withTerminals());
+    await stoppedLink().click();
+    await project("example-idle").click();
+    await expect(project("example-idle")).toHaveAttribute("aria-pressed", "true");
+    // The selected project is a row of the list and none is left out, so there is no link.
+    expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
+    // Another selection leaves it out again, with the link open as it was.
+    await project("example-lib").click();
+    expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していないものを隠す", "example-idle"]);
+  });
+
+  it("puts an icon at the left of each of the headings 「フォーメーション」 and 「プロジェクト」, and a line above the row of 「プロジェクト」", async () => {
+    await openOrca(withTerminals());
+    expect(await count("#orca-formations .orca-list-head svg")).toBe(1);
+    expect(await count("#orca-projects-head .orca-list-head svg")).toBe(1);
+    const look = await browser.execute(() => {
+      const projects = getComputedStyle(document.getElementById("orca-projects")!);
+      const icon = document.querySelector("#orca-projects-head .orca-list-head svg")!.getBoundingClientRect();
+      const head = document.querySelector("#orca-projects-head .orca-list-head")!.getBoundingClientRect();
+      return { line: projects.borderTopWidth, style: projects.borderTopStyle, iconLeft: icon.left, headLeft: head.left, iconWidth: icon.width };
+    });
+    expect(look.line).toBe("1px");
+    expect(look.style).toBe("solid");
+    expect(look.iconWidth).toBeGreaterThan(0);
+    expect(look.iconLeft).toBeLessThan(look.headLeft + 40);
   });
 
   it("does not draw the list again when only the time of activity of a project moved", async () => {
@@ -1098,6 +1164,7 @@ describe("orca: projects", () => {
 
   it("says a project has no session, with the tab strip empty", async () => {
     await openOrca(withTerminals());
+    await $("#orca-feed .orca-stopped-toggle").click();
     await project("example-idle").click();
     await expect($(".orca-empty")).toBeDisplayed();
     await expect($(".orca-empty")).toHaveText("セッションはありません");
@@ -3057,6 +3124,8 @@ describe("orca: search the list (A-19)", () => {
       terminals: [orcaTerminal("example-app", "zsh")],
     });
   const ALL = ["example-app", "example-web", "example-api", "example-lib", "example-idle"];
+  // What the list draws while nothing is typed: example-idle is not running, so it is left out under the link (A-8).
+  const RUNNING = ALL.slice(0, 4);
   const input = () => $("#orca-search-input");
   const names = () => textsOf("#orca-feed .orca-project-name");
   const focusedId = () => browser.execute(() => document.activeElement?.id ?? "");
@@ -3080,7 +3149,7 @@ describe("orca: search the list (A-19)", () => {
             return rows.every((r) => r.querySelector(".orca-project-name")!.textContent!.toLowerCase().includes(needle) && r.querySelector("b") !== null);
           },
           needle,
-          ALL.length,
+          RUNNING.length,
         ),
       { timeoutMsg: "the list never changed with the search" },
     );
@@ -3123,7 +3192,32 @@ describe("orca: search the list (A-19)", () => {
     expect(field.top).toBeGreaterThanOrEqual(before.head.top - 1);
     expect(field.bottom).toBeLessThanOrEqual(before.head.bottom + 1);
     expect((await rectOf("#orca-feed")).top).toBe(before.feed.top);
+    expect(await names()).toEqual(RUNNING);
+  });
+
+  it("finds a project that is not running with no link drawn, and brings the list back as it was when the text is cleared", async () => {
+    await openOrca(overview());
+    const link = $("#orca-feed .orca-stopped-toggle");
+    await expect(link).toHaveText("起動していない 1 件");
+    await search("idle");
+    expect(await names()).toEqual(["example-idle"]);
+    await expect(link).not.toExist();
+    // Every project that holds the text is listed, those that are not running among them, whether the link was open or not.
+    await search("example");
     expect(await names()).toEqual(ALL);
+    await expect(link).not.toExist();
+    await browser.execute(() => document.getElementById("orca-search-clear")!.click());
+    expect(await names()).toEqual(RUNNING);
+    await expect(link).toHaveText("起動していない 1 件");
+    // Opened before the search, opened after it.
+    await link.click();
+    await expect(link).toHaveText("起動していないものを隠す");
+    await search("idle");
+    expect(await names()).toEqual(["example-idle"]);
+    await expect(link).not.toExist();
+    await browser.execute(() => document.getElementById("orca-search-clear")!.click());
+    expect(await names()).toEqual(ALL);
+    await expect(link).toHaveText("起動していないものを隠す");
   });
 
   it("has the clear button only while something is typed", async () => {
@@ -3137,14 +3231,14 @@ describe("orca: search the list (A-19)", () => {
 
   it("narrows the list to the rows whose name holds the text, case ignored, in the order of the list", async () => {
     await openOrca(overview());
-    expect(await names()).toEqual(ALL);
+    expect(await names()).toEqual(RUNNING);
     await search("E-A");
     expect(await names()).toEqual(["example-app", "example-api"]);
     // The text is trimmed, and a blank text is no search.
     await search("  app ");
     expect(await names()).toEqual(["example-app"]);
     await search("   ");
-    expect(await names()).toEqual(ALL);
+    expect(await names()).toEqual(RUNNING);
   });
 
   it("makes the letters that match bold, at every place in the name", async () => {
@@ -3167,7 +3261,7 @@ describe("orca: search the list (A-19)", () => {
       expect(await count("#orca-feed .orca-project")).toBe(0);
     }
     await $("#orca-search-clear").click();
-    expect(await names()).toEqual(ALL);
+    expect(await names()).toEqual(RUNNING);
   });
 
   it("does not say the projects are missing while the search finds none of those there are", async () => {
@@ -3242,7 +3336,7 @@ describe("orca: search the list (A-19)", () => {
     await openOrca(overview());
     await search("app");
     await browser.keys("Escape");
-    expect(await names()).toEqual(ALL);
+    expect(await names()).toEqual(RUNNING);
     expect(await focusedId()).not.toBe("orca-search-input");
     // The field is closed and the heading's row is back; the next opening shows no text.
     await expect($("#orca-search")).not.toBeDisplayed();
@@ -3276,7 +3370,7 @@ describe("orca: search the list (A-19)", () => {
     // The page's own press (the driver's click focuses the button after the page's handler ran, which no real press does).
     await browser.execute(() => document.getElementById("orca-search-clear")!.click());
     await expect(input()).toHaveValue("");
-    expect(await names()).toEqual(ALL);
+    expect(await names()).toEqual(RUNNING);
     expect(await focusedId()).toBe("orca-search-input");
   });
 
@@ -3317,7 +3411,7 @@ describe("orca: search the list (A-19)", () => {
     await browser.execute(() => document.querySelector<HTMLElement>(".orca-term-box:not([hidden]) .xterm-helper-textarea")!.focus());
     await cmdJ();
     expect(await focusedId()).toBe("orca-search-input");
-    expect(await names()).toEqual(ALL);
+    expect(await names()).toEqual(RUNNING);
   });
 
   it("does not take J without Cmd, with Shift or with Alt, nor Cmd+J on another screen", async () => {
@@ -3908,7 +4002,8 @@ describe("orca: add a project (A-38)", () => {
     expect(await callsOf(here)).toHaveLength(1);
     await expect(pop()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
-    await waitForCount("#orca-feed .orca-project", 5);
+    // The new project has no session, so it is under the link (A-8).
+    await expect($("#orca-feed .orca-stopped-toggle")).toHaveText("起動していない 1 件");
     await expect($(CARDS)).not.toExist();
   });
 

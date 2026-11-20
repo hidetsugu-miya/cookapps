@@ -708,13 +708,13 @@
         </header>
         <div id="orca-notice"></div>
         <div id="orca-formations">
-          <h2 class="orca-list-head">フォーメーション</h2>
+          <h2 class="orca-list-head"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>フォーメーション</h2>
           <p id="formation-list-error" class="pending fail" role="alert" hidden></p>
           <div id="formation-list-feed"></div>
         </div>
         <div id="orca-projects">
           <div id="orca-projects-head">
-            <h2 class="orca-list-head">プロジェクト</h2>
+            <h2 class="orca-list-head"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="2"/><path d="M14 13h3M7 13h3"/><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2z"/></svg>プロジェクト</h2>
             <button id="orca-search-open" class="icon-btn" type="button" aria-label="検索">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
             </button>
@@ -797,6 +797,7 @@
       <aside id="formation-flow" aria-label="流れ">
         <header id="formation-flow-head" data-tauri-drag-region>
           <h2>流れ</h2>
+          <button id="formation-flow-done" class="chip formation-done" type="button" aria-pressed="false" hidden></button>
           <button id="formation-follow" class="icon-btn" type="button" aria-label="自動で追う" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
         </header>
         <div id="formation-flow-body">

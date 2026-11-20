@@ -1308,9 +1308,15 @@ describe("orca: files and editor (A-18)", () => {
       extra,
     );
 
+  // example-idle is not running (A-8), so the list keeps it under the link until the link is pressed.
+  const pickIdle = async () => {
+    await $("#orca-feed .orca-stopped-toggle").click();
+    await project("example-idle").click();
+  };
+
   it("shows the main worktree of the selected project when it has no tab, and the selected tab's worktree once a project with a tab is selected", async () => {
     await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root() });
-    await project("example-idle").click();
+    await pickIdle();
     await expect($(".orca-empty")).toHaveText("セッションはありません");
     await filesToggle().click();
     await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
@@ -1325,7 +1331,7 @@ describe("orca: files and editor (A-18)", () => {
 
   it("opens a file of the main worktree in a tab when the project has no tab", async () => {
     await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 } });
-    await project("example-idle").click();
+    await pickIdle();
     await filesToggle().click();
     await waitForCount("#orca-files-tree .orca-file", 4);
     const read = await mock("orca_file_read", text("fn main() {}\n"));
@@ -1337,7 +1343,7 @@ describe("orca: files and editor (A-18)", () => {
 
   it("keeps the open folders and does not read the root again when the first file of a project with no tab is opened", async () => {
     await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 } });
-    await project("example-idle").click();
+    await pickIdle();
     await filesToggle().click();
     await waitForCount("#orca-files-tree .orca-file", 4);
     const inner = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));

@@ -20,6 +20,6 @@ createdAt: number | null, counts: ChildCounts,
  */
 children: Array<FormationListChild>, 
 /**
- * Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`list_core` with the titles); the list of `list_with` and the answer of `formation_create` have `false`.
+ * Whether the formation's leader waits for the owner's answer: it asked a question (the mark of `formation_ask_owner`) and its terminal's title says `✳` (`title_waits`, #915, #1105). `formation_list` fills it (`list_core` with the leaders); the list of `list_with` and the answer of `formation_create` have `false`.
  */
 waiting: boolean, };

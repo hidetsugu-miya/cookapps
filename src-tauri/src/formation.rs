@@ -20,6 +20,7 @@ use ts_rs::TS;
 use crate::{
     accounts,
     auth::config_dir,
+    formation_ask::{self, Verdict},
     formation_page::{self, PageRecord, PendingPage},
     formation_remote,
     formation_server::{Client, RemoteChildren},
@@ -2914,14 +2915,15 @@ fn pull_env_from_pc(
     .unwrap_or_else(|e| items.iter().map(|_| Err(e.clone())).collect())
 }
 
-/// What the screen's read of the PC of a saved environment answers: the records of the formations (`PulledRecords`) and, for each formation in the same order, the decision pages that its PC records (A-41, `pages.json`; none for a formation whose record could not be read).
+/// What the screen's read of the PC of a saved environment answers: the records of the formations (`PulledRecords`) and, for each formation in the same order, the decision pages that its PC records (A-41, `pages.json`; none for a formation whose record could not be read) and the time of the mark that its leader asked the owner a question (#1105, `asked-owner.json`; none for no mark, and for a formation whose record could not be read).
 #[derive(Clone)]
 struct PulledEnv {
     records: Vec<Result<Vec<Child>, String>>,
     pages: Vec<Vec<PageRecord>>,
+    asked: Vec<Option<u64>>,
 }
 
-/// `pull_env_from_pc`, and the pages of each formation whose record was read, asked on the same connection (A-41): the screen's poll opens one connection for the environment, not one more for the pages. A page that cannot be read leaves no mark, and the records are still answered.
+/// `pull_env_from_pc`, and the pages and the mark of a question of each formation whose record was read, asked on the same connection (A-41, #1105): the screen's poll opens one connection for the environment, not one more for them. A page or a mark that cannot be read is none, and the records are still answered.
 fn pull_env_with_pages_from_pc(
     environment: &str,
     open: &impl AsyncFn(&str) -> Result<Client, String>,
@@ -2934,18 +2936,26 @@ fn pull_env_with_pages_from_pc(
             .await
             .map(|answer| records_of(items, answer))?;
         let mut pages = Vec::with_capacity(items.len());
+        let mut asked = Vec::with_capacity(items.len());
         for (formation, record) in items.iter().zip(&records) {
-            pages.push(if record.is_ok() {
-                client.pages_read(formation).await.unwrap_or_default()
+            if record.is_ok() {
+                pages.push(client.pages_read(formation).await.unwrap_or_default());
+                asked.push(client.asked_read(formation).await.unwrap_or_default());
             } else {
-                Vec::new()
-            });
+                pages.push(Vec::new());
+                asked.push(None);
+            }
         }
-        Ok(PulledEnv { records, pages })
+        Ok(PulledEnv {
+            records,
+            pages,
+            asked,
+        })
     })
     .unwrap_or_else(|e| PulledEnv {
         records: items.iter().map(|_| Err(e.clone())).collect(),
         pages: items.iter().map(|_| Vec::new()).collect(),
+        asked: items.iter().map(|_| None).collect(),
     })
 }
 
@@ -3469,11 +3479,32 @@ fn screen_read(args: &[String], timeout: Duration) -> Result<Value, String> {
 /// The title that the pane of this Mac's leader last wrote (`ClaudeCode::formation_title`).
 type LocalTitle<'a> = dyn Fn(&str) -> Option<String> + 'a;
 
+/// What the list reads of this Mac's leaders: the title of the pane of each (`title`), and how a mark of a question is taken away (`clear`: the environment, the formation and the time of the mark; a failure leaves the mark, and the next poll clears it again). `seen` holds the marks that were seen with `✳` (`formation_ask::Seen`).
+struct Leaders<'a> {
+    title: &'a LocalTitle<'a>,
+    seen: &'a formation_ask::Seen,
+    clear: &'a dyn Fn(&str, &str, u64),
+}
+
 /// A read of the records of several formations of one saved environment over one connection, as the screen's polls make it: the environment, and the names of the formations. It answers in the order of the formations.
-type PullEnv<'a> = dyn Fn(&str, &[String]) -> PulledRecords + Sync + 'a;
+type PullEnv<'a> = dyn Fn(&str, &[String]) -> ListPull + Sync + 'a;
 
 /// What such a read answers: for each formation, the children of its record, or why they could not be read.
 type PulledRecords = Vec<Result<Vec<Child>, String>>;
+
+/// What the list takes from the read of one saved environment: the records, and for each formation the time of the mark of a question of its leader (#1105).
+struct ListPull {
+    records: PulledRecords,
+    asked: Vec<Option<u64>>,
+}
+
+impl From<PulledRecords> for ListPull {
+    /// Records with no mark of a question.
+    fn from(records: PulledRecords) -> Self {
+        let asked = records.iter().map(|_| None).collect();
+        Self { records, asked }
+    }
+}
 
 /// The formations of saved environments that have a record on their PC, grouped by environment: the names, in order. A formation of this Mac, and one whose orchestrator was never started on its PC (`Meta::orchestrator_terminal`), has none.
 fn pc_groups(metas: &[(String, Meta)]) -> BTreeMap<String, Vec<String>> {
@@ -3651,7 +3682,7 @@ pub struct FormationEntry {
     pub counts: ChildCounts,
     /// The children that were launched, in the order of the record (`listed_children`): a planned child is not in it. The list draws them under the formation's row, and the number of them is the number it shows.
     pub children: Vec<FormationListChild>,
-    /// Whether the formation's leader waits for the owner's input (`title_waits` of its terminal's title, #915). `formation_list` fills it (`list_core` with the titles); the list of `list_with` and the answer of `formation_create` have `false`.
+    /// Whether the formation's leader waits for the owner's answer: it asked a question (the mark of `formation_ask_owner`) and its terminal's title says `✳` (`title_waits`, #915, #1105). `formation_list` fills it (`list_core` with the leaders); the list of `list_with` and the answer of `formation_create` have `false`.
     pub waiting: bool,
 }
 
@@ -3672,19 +3703,19 @@ fn list_with(config: &Path, read: &Read<'_>, pull: &PullEnv<'_>) -> Result<Forma
     list_core(config, read, pull, None)
 }
 
-/// The formations, in order of name, with their projects, when they were created and how many children are in each state. With `local_title` (the title of the pane of this Mac's leader) it also sets `waiting` (#915): the title of this Mac's leader is `local_title`'s, and that of a saved environment's leader (`Meta::orchestrator_terminal`) is read from that Orca's `orca terminal list` of every terminal (`all_terminals_args`), once for each environment, side by side with the records of the PCs (the same scope); a terminal list that cannot be read, a leader that was never started and one that is not listed are not waiting. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it. The records of the formations of a saved environment are read over one connection for the environment (`pull`), the environments side by side, and `orca environment list` is read at most once, and only when a record could not be read.
+/// The formations, in order of name, with their projects, when they were created and how many children are in each state. With `leaders` it also sets `waiting` (#915, #1105): a leader waits when its mark of a question is there (`formation_ask`: this Mac's own file, and for a saved environment the one its PC's server answers with the records) and its title says `✳` (`formation_ask::judge`); a mark whose leader was seen waiting and no longer is is taken away (`Leaders::clear`). The title of this Mac's leader is `leaders.title`'s, and that of a saved environment's leader (`Meta::orchestrator_terminal`) is read from that Orca's `orca terminal list` of every terminal (`all_terminals_args`), once for each environment, side by side with the records of the PCs (the same scope); a terminal list that cannot be read, a leader that was never started and one that is not listed have no known title, so they are not waiting and clear nothing. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it. The records of the formations of a saved environment are read over one connection for the environment (`pull`), the environments side by side, and `orca environment list` is read at most once, and only when a record could not be read.
 fn list_core(
     config: &Path,
     read: &Read<'_>,
     pull: &PullEnv<'_>,
-    local_title: Option<&LocalTitle<'_>>,
+    leaders: Option<&Leaders<'_>>,
 ) -> Result<FormationList, String> {
     migrate_legacy(config)?;
     let metas = read_metas(config, &formation_names(config, None));
     let groups = pc_groups(&metas);
     // The reads of the PCs block on the runtime that `list_with` runs in (`on_pc`), and a thread of the scope has none of its own.
     let runtime = tokio::runtime::Handle::try_current().ok();
-    let (pulled, terminals): (Vec<(&String, PulledRecords)>, BTreeMap<&String, Value>) =
+    let (pulled, terminals): (Vec<(&String, ListPull)>, BTreeMap<&String, Value>) =
         std::thread::scope(|scope| {
             let runs: Vec<_> = groups
                 .iter()
@@ -3701,7 +3732,7 @@ fn list_core(
                 .collect();
             let seen: Vec<_> = groups
                 .keys()
-                .filter(|_| local_title.is_some())
+                .filter(|_| leaders.is_some())
                 .map(|environment| {
                     let run = scope
                         .spawn(move || read(&all_terminals_args(environment), SAVED_PS_TIMEOUT));
@@ -3713,7 +3744,7 @@ fn list_core(
                 .map(|(environment, run)| {
                     let items = groups[environment].len();
                     let answer = run.join().unwrap_or_else(|_| {
-                        vec![Err("Orca の読み取りが止まりました".into()); items]
+                        vec![Err("Orca の読み取りが止まりました".into()); items].into()
                     });
                     (environment, answer)
                 })
@@ -3752,7 +3783,7 @@ fn list_core(
                     pulled
                         .iter()
                         .find(|(e, _)| **e == environment)
-                        .map(|(_, a)| &a[at])
+                        .map(|(_, a)| &a.records[at])
                 });
             let children = match answer {
                 Some(answer) => {
@@ -3785,14 +3816,34 @@ fn list_core(
         let (own, rest) = rows.split_at(children.len());
         rows = rest;
         let environment = formation_environment(&meta.projects);
-        let waiting = local_title.is_some_and(|local_title| {
-            if environment == LOCAL {
-                local_title(&name).is_some_and(|title| title_waits(&title))
+        let waiting = leaders.is_some_and(|leaders| {
+            let (mark, title) = if environment == LOCAL {
+                (
+                    formation_ask::read(config, &name),
+                    (leaders.title)(&name).map(|title| title_waits(&title)),
+                )
             } else {
-                meta.orchestrator_terminal
+                let mark = groups
+                    .get(&environment)
+                    .and_then(|items| items.iter().position(|f| *f == name))
+                    .and_then(|at| {
+                        let (_, pulled) = pulled.iter().find(|(e, _)| **e == environment)?;
+                        pulled.asked.get(at).copied().flatten()
+                    });
+                let title = meta
+                    .orchestrator_terminal
                     .as_deref()
                     .zip(terminals.get(&environment))
-                    .is_some_and(|(handle, list)| terminal_waits(list, handle))
+                    .and_then(|(handle, list)| terminal_waits(list, handle));
+                (mark, title)
+            };
+            match leaders.seen.settle(&name, mark, title) {
+                Verdict::Waiting(_) => true,
+                Verdict::Clear(at) => {
+                    (leaders.clear)(&environment, &name, at);
+                    false
+                }
+                Verdict::NoMark | Verdict::Keep => false,
             }
         });
         formations.push(FormationEntry {
@@ -3819,13 +3870,15 @@ pub(crate) fn title_waits(title: &str) -> bool {
     title.trim_start().starts_with(WAITING_MARK)
 }
 
-/// Whether the terminal `handle` is in `list` (`orca terminal list`, its `result`) and its title says it waits for input. Orca follows the title that the program writes (OSC 0) also for a terminal that was made with `--title` (measured on the floating terminal, 2026-11-18).
-fn terminal_waits(list: &Value, handle: &str) -> bool {
-    list["terminals"].as_array().into_iter().flatten().any(|t| {
-        orca::text_of(t, "handle") == Some(handle)
-            && t["orphaned"] != true
-            && orca::text_of(t, "title").is_some_and(title_waits)
-    })
+/// Whether the title of the terminal `handle` of `list` (`orca terminal list`, its `result`) says it waits for input; none when the terminal is not listed, is orphaned or has no title. Orca follows the title that the program writes (OSC 0) also for a terminal that was made with `--title` (measured on the floating terminal, 2026-11-18).
+fn terminal_waits(list: &Value, handle: &str) -> Option<bool> {
+    list["terminals"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|t| orca::text_of(t, "handle") == Some(handle) && t["orphaned"] != true)
+        .and_then(|t| orca::text_of(t, "title"))
+        .map(title_waits)
 }
 
 /// The environment of `wanted` among `view`, by its name or its id: exactly one, and one whose repositories were read.
@@ -4404,7 +4457,7 @@ pub async fn formation_orchestrator(
     .await?
 }
 
-/// The formations of the screen (A-37): each with its projects, when it was created, the number of its children in each state and whether its leader waits for input (#915).
+/// The formations of the screen (A-37): each with its projects, when it was created, the number of its children in each state and whether its leader waits for the owner's answer to a question (#915, #1105).
 #[tauri::command]
 pub async fn formation_list(
     app: tauri::AppHandle,
@@ -4415,11 +4468,32 @@ pub async fn formation_list(
     let claude = sessions.inner().clone();
     orca::blocking(move || {
         let open = pc_connect(&dir, &version, false);
+        let pulled = |environment: &str, items: &[String]| {
+            let pulled = screen_pull_env(environment, items, &open);
+            ListPull {
+                records: pulled.records,
+                asked: pulled.asked,
+            }
+        };
+        // A mark of a saved environment is taken away on its PC, over a connection of its own: it happens once for a question.
+        let clear = |environment: &str, name: &str, at: u64| {
+            let _ = if environment == LOCAL {
+                formation_ask::clear_if(&dir, name, at).map(|_| ())
+            } else {
+                on_pc(environment, &open, PC_RECORD_WAIT, async |client| {
+                    client.asked_clear(name, at).await.map(|_| ())
+                })
+            };
+        };
         list_core(
             &dir,
             &screen_read,
-            &|environment, items| screen_pull_env(environment, items, &open).records,
-            Some(&|name| claude.formation_title(name)),
+            &pulled,
+            Some(&Leaders {
+                title: &|name| claude.formation_title(name),
+                seen: &formation_ask::SEEN,
+                clear: &clear,
+            }),
         )
     })
     .await?
@@ -4536,7 +4610,7 @@ mod tests {
     }
 
     /// The same for the screen's list, which reads the records of an environment over one connection.
-    fn no_pull_env(_: &str, _: &[String]) -> Vec<Result<Vec<Child>, String>> {
+    fn no_pull_env(_: &str, _: &[String]) -> ListPull {
         panic!("no PC is asked")
     }
 
@@ -11335,7 +11409,7 @@ mod tests {
         let list = blocking(move || {
             let cli = Pc::with(Vec::new());
             list_with(&mac, &|args, _| cli.read(args), &|environment, items| {
-                pull_env_from_pc(environment, &open, PC_RECORD_WAIT, items)
+                pull_env_from_pc(environment, &open, PC_RECORD_WAIT, items).into()
             })
         })
         .await
@@ -11352,11 +11426,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_screens_read_of_an_environment_takes_the_decision_pages_over_the_same_connection()
-    {
+    async fn the_screens_read_of_an_environment_takes_the_pages_and_the_marks_over_the_same_connection(
+    ) {
         let pc = PcServer::start("pc-pages");
         write_children(&pc.config, "api-work", &[planned("a", "api")]).unwrap();
         write_children(&pc.config, "docs-work", &[planned("b", "docs")]).unwrap();
+        formation_ask::mark(&pc.config, "docs-work", 8).unwrap();
         let page = json!({"child": "a", "path": "/p.json", "title": "t", "page_kind": "approval", "subject": "design", "at": 5});
         std::fs::write(
             dir(&pc.config, "api-work").join("pages.json"),
@@ -11388,6 +11463,8 @@ mod tests {
         // A formation with no pages, and one that the PC has no record of, have none.
         assert!(pulled.pages[1].is_empty());
         assert!(pulled.pages[2].is_empty());
+        // The mark of a question comes on the same connection: only `docs-work` has one.
+        assert_eq!(pulled.asked, [None, Some(8), None]);
     }
 
     #[tokio::test]
@@ -11400,6 +11477,7 @@ mod tests {
         .await;
         assert!(pulled.records.iter().all(|r| r.is_err()));
         assert_eq!(pulled.pages, [Vec::<PageRecord>::new(), Vec::new()]);
+        assert_eq!(pulled.asked, [None, None]);
     }
 
     /// A read of the screen's list as it was asked for: the environment, and the name of each formation.
@@ -11458,7 +11536,7 @@ mod tests {
                 None => Ok(self.record.lock().unwrap().clone()),
             }
         }
-        fn pull_env(&self, environment: &str, items: &[String]) -> Vec<Result<Vec<Child>, String>> {
+        fn pull_env(&self, environment: &str, items: &[String]) -> ListPull {
             self.envs
                 .lock()
                 .unwrap()
@@ -11466,7 +11544,8 @@ mod tests {
             items
                 .iter()
                 .map(|formation| self.pull(environment, formation))
-                .collect()
+                .collect::<Vec<_>>()
+                .into()
         }
         fn drop(
             &self,
@@ -11975,7 +12054,8 @@ mod tests {
                         items
                             .iter()
                             .map(|_| Ok(vec![planned("a", "api")]))
-                            .collect()
+                            .collect::<Vec<_>>()
+                            .into()
                     })
                 })
                 .await
@@ -12522,48 +12602,95 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_waits_when_it_is_listed_with_a_title_that_says_so() {
+    fn the_title_of_a_listed_terminal_says_whether_it_waits_and_an_unlisted_one_has_none() {
         let list = json!({"terminals": [
             {"handle": "term_a", "title": "✳ api-work", "orphaned": false},
             {"handle": "term_b", "title": "◐ api-work", "orphaned": false},
             {"handle": "term_c", "title": "✳ api-work", "orphaned": true},
             {"handle": "term_d"},
         ]});
-        assert!(terminal_waits(&list, "term_a"));
-        assert!(!terminal_waits(&list, "term_b"));
-        assert!(!terminal_waits(&list, "term_c"));
-        assert!(!terminal_waits(&list, "term_d"));
-        assert!(!terminal_waits(&list, "term_gone"));
-        assert!(!terminal_waits(&json!({}), "term_a"));
+        assert_eq!(terminal_waits(&list, "term_a"), Some(true));
+        assert_eq!(terminal_waits(&list, "term_b"), Some(false));
+        assert_eq!(terminal_waits(&list, "term_c"), None);
+        assert_eq!(terminal_waits(&list, "term_d"), None);
+        assert_eq!(terminal_waits(&list, "term_gone"), None);
+        assert_eq!(terminal_waits(&json!({}), "term_a"), None);
+    }
+
+    /// What the list of the leaders of a test does: the titles of this Mac's panes, the marks that were seen, and the clears that were asked (environment, formation, time).
+    struct Panes {
+        seen: formation_ask::Seen,
+        cleared: Mutex<Vec<(String, String, u64)>>,
+    }
+
+    impl Panes {
+        fn new() -> Self {
+            Self {
+                seen: formation_ask::Seen::default(),
+                cleared: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn list(
+            &self,
+            config: &Path,
+            read: &Read<'_>,
+            pull: &PullEnv<'_>,
+            title: &LocalTitle<'_>,
+        ) -> FormationList {
+            let clear = |environment: &str, name: &str, at: u64| {
+                self.cleared
+                    .lock()
+                    .unwrap()
+                    .push((environment.into(), name.into(), at));
+            };
+            list_core(
+                config,
+                read,
+                pull,
+                Some(&Leaders {
+                    title,
+                    seen: &self.seen,
+                    clear: &clear,
+                }),
+            )
+            .unwrap()
+        }
+    }
+
+    fn waiting_of(list: &FormationList) -> Vec<(&str, bool)> {
+        list.formations
+            .iter()
+            .map(|f| (f.name.as_str(), f.waiting))
+            .collect()
     }
 
     #[test]
-    fn the_leader_of_this_mac_waits_by_the_title_of_its_pane() {
+    fn the_leader_of_this_mac_waits_with_its_mark_and_the_title_of_its_pane() {
         let config = temp_dir("waiting-local");
         for name in ["idle", "busy", "untitled", "none"] {
             create_with(&config, name, &[], &two_environments(), 1).unwrap();
         }
+        // The title of every pane says `✳`: only the formations that have a mark wait.
+        for name in ["idle", "busy", "untitled"] {
+            formation_ask::mark(&config, name, 5).unwrap();
+        }
         let titles = |name: &str| match name {
-            "idle" => Some("✳ Claude Code".to_owned()),
+            "idle" | "none" => Some("✳ Claude Code".to_owned()),
             "busy" => Some("◑ Claude Code".to_owned()),
             "untitled" => Some(String::new()),
             _ => None,
         };
+        let panes = Panes::new();
         // This Mac's leaders ask no Orca for their titles.
-        let list = list_core(
+        let list = panes.list(
             &config,
             &|args, _| panic!("no Orca is asked: {args:?}"),
             &no_pull_env,
-            Some(&titles),
-        )
-        .unwrap();
-        let waiting: Vec<_> = list
-            .formations
-            .iter()
-            .map(|f| (f.name.as_str(), f.waiting))
-            .collect();
+            &titles,
+        );
         assert_eq!(
-            waiting,
+            waiting_of(&list),
             [
                 ("busy", false),
                 ("idle", true),
@@ -12571,11 +12698,46 @@ mod tests {
                 ("untitled", false)
             ]
         );
+        // `busy` was not at its prompt yet and `untitled` has a title that is not `✳`: no mark is taken away before it was seen waiting.
+        assert!(panes.cleared.lock().unwrap().is_empty());
+        assert_eq!(formation_ask::read(&config, "busy"), Some(5));
         std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
-    fn the_leader_of_a_saved_environment_waits_by_the_title_of_its_recorded_terminal() {
+    fn the_mark_of_this_macs_leader_is_cleared_once_when_it_works_again_after_it_waited() {
+        let config = temp_dir("waiting-clear");
+        create_with(&config, "api-work", &[], &two_environments(), 1).unwrap();
+        formation_ask::mark(&config, "api-work", 5).unwrap();
+        let title = std::cell::RefCell::new("◐ api-work".to_owned());
+        let panes = Panes::new();
+        let poll = || {
+            panes.list(
+                &config,
+                &|args, _| panic!("no Orca is asked: {args:?}"),
+                &no_pull_env,
+                &|_| Some(title.borrow().clone()),
+            )
+        };
+        // The leader is writing its question.
+        assert!(!poll().formations[0].waiting);
+        *title.borrow_mut() = "✳ api-work".to_owned();
+        assert!(poll().formations[0].waiting);
+        assert!(poll().formations[0].waiting);
+        assert!(panes.cleared.lock().unwrap().is_empty());
+        // The owner answered.
+        *title.borrow_mut() = "⠂ api-work".to_owned();
+        assert!(!poll().formations[0].waiting);
+        assert_eq!(
+            *panes.cleared.lock().unwrap(),
+            [("local".to_owned(), "api-work".to_owned(), 5)]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_leader_of_a_saved_environment_waits_with_its_mark_and_the_title_of_its_recorded_terminal(
+    ) {
         let config = temp_dir("waiting-saved");
         let started = |name: &str, handle: &str| {
             unstarted_remote_formation(&config, name);
@@ -12587,6 +12749,7 @@ mod tests {
         started("idle", "term_idle");
         started("busy", "term_busy");
         started("closed", "term_closed");
+        started("quiet", "term_quiet");
         unstarted_remote_formation(&config, "unstarted");
         let calls = Mutex::new(Vec::new());
         let read = |args: &[String], limit: Duration| {
@@ -12594,33 +12757,65 @@ mod tests {
             Ok(json!({"terminals": [
                 {"handle": "term_idle", "title": "✳ idle", "orphaned": false},
                 {"handle": "term_busy", "title": "◐ busy", "orphaned": false},
+                {"handle": "term_quiet", "title": "✳ quiet", "orphaned": false},
             ]}))
         };
-        let list = list_core(
-            &config,
-            &read,
-            &|_, items| items.iter().map(|_| Ok(Vec::new())).collect(),
-            Some(&|_| None),
-        )
-        .unwrap();
-        let waiting: Vec<_> = list
-            .formations
-            .iter()
-            .map(|f| (f.name.as_str(), f.waiting))
-            .collect();
+        // The PC answers the marks of the formations that it reads: the groups are in the order of the names (`busy`, `closed`, `idle`, `quiet`).
+        let pull = |_: &str, items: &[String]| ListPull {
+            records: items.iter().map(|_| Ok(Vec::new())).collect(),
+            asked: items
+                .iter()
+                .map(|name| (name != "quiet").then_some(5))
+                .collect(),
+        };
+        let panes = Panes::new();
+        let list = panes.list(&config, &read, &pull, &|_| None);
+        // `quiet` has no mark, `busy` is not at its prompt, `closed` is not listed.
         assert_eq!(
-            waiting,
+            waiting_of(&list),
             [
                 ("busy", false),
                 ("closed", false),
                 ("idle", true),
+                ("quiet", false),
                 ("unstarted", false)
             ]
         );
-        // One read of every terminal of that Orca for the three leaders, with the time of a saved environment.
+        // One read of every terminal of that Orca for the four leaders, with the time of a saved environment.
         assert_eq!(
             *calls.lock().unwrap(),
             [(all_terminals_args("mac-studio"), SAVED_PS_TIMEOUT)]
+        );
+        // Nothing is cleared while no leader was seen waiting and then working.
+        assert!(panes.cleared.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_mark_of_a_saved_environments_leader_is_cleared_on_its_pc_when_it_works_again() {
+        let config = temp_dir("waiting-saved-clear");
+        unstarted_remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_a".into());
+        })
+        .unwrap();
+        let title = Mutex::new("✳ api-work");
+        let read = |_: &[String], _: Duration| {
+            Ok(json!({"terminals": [
+                {"handle": "term_a", "title": *title.lock().unwrap(), "orphaned": false},
+            ]}))
+        };
+        let pull = |_: &str, items: &[String]| ListPull {
+            records: items.iter().map(|_| Ok(Vec::new())).collect(),
+            asked: items.iter().map(|_| Some(9)).collect(),
+        };
+        let panes = Panes::new();
+        assert!(panes.list(&config, &read, &pull, &|_| None).formations[0].waiting);
+        *title.lock().unwrap() = "◐ api-work";
+        assert!(!panes.list(&config, &read, &pull, &|_| None).formations[0].waiting);
+        assert_eq!(
+            *panes.cleared.lock().unwrap(),
+            [("mac-studio".to_owned(), "api-work".to_owned(), 9)]
         );
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -12633,13 +12828,16 @@ mod tests {
             m.orchestrator_terminal = Some("term_idle".into());
         })
         .unwrap();
-        let list = list_core(
+        let panes = Panes::new();
+        let list = panes.list(
             &config,
             &|_, _| Err("no answer".into()),
-            &|_, items| items.iter().map(|_| Ok(Vec::new())).collect(),
-            Some(&|_| None),
-        )
-        .unwrap();
+            &|_, items| ListPull {
+                records: items.iter().map(|_| Ok(Vec::new())).collect(),
+                asked: items.iter().map(|_| Some(5)).collect(),
+            },
+            &|_| None,
+        );
         assert!(!list.formations[0].waiting);
         std::fs::remove_dir_all(&config).unwrap();
     }

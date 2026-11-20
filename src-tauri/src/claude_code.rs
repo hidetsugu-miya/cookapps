@@ -1771,6 +1771,7 @@ mod tests {
             "formation_read",
             "formation_git",
             "オーナーに聞きます",
+            "formation_ask_owner",
             "SendMessage",
             "AskUserQuestion",
             "英小文字、数字、ハイフン",
