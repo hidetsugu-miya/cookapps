@@ -61,6 +61,7 @@ pub mod yomiyasu_gate;
 use std::{sync::Mutex, time::Duration};
 
 use tauri::{AppHandle, Manager, State};
+#[cfg(not(feature = "e2e"))]
 use tauri_plugin_opener::OpenerExt;
 
 /// Where ts-rs writes the types the frontend shares (`#[ts(export_to = crate::BINDINGS)]`), on `cargo test`.
@@ -200,6 +201,10 @@ fn navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             ) {
                 Navigation::Allow => return true,
                 Navigation::Browser => {
+                    // The E2E build only stops the navigation: a made-up address of a spec must never open in the developer's browser.
+                    #[cfg(feature = "e2e")]
+                    let _ = webview;
+                    #[cfg(not(feature = "e2e"))]
                     if let Err(e) = webview.opener().open_url(url.as_str(), None::<&str>) {
                         gmail::log_failure("navigation", "-", format!("ブラウザを開けません: {e}"));
                     }
