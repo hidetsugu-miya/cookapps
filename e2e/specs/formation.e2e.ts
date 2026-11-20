@@ -3487,21 +3487,51 @@ describe("orchestration mode: the done children of the flow pane", () => {
     await expect($('#formation-tabs-mates [data-child="web-update"]')).toHaveAttribute("aria-selected", "true");
   });
 
-  it("leaves out the tab of a decision page with its child's tab, and shows it with it", async () => {
+  it("leaves out the tab of a decision page with its child's tab, and shows it with it, once no decision page waits", async () => {
     const page = { title: "要件の未決事項", atMs: MARK_AT };
-    await openFlow([formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working")], { formation_page_read: decisionPage() }, true);
+    await openFlow([formationChild("req-login", "done", { minutes: 5, pendingPage: null }), formationChild("web-update", "working")], { formation_page_read: decisionPage() }, true);
     await browser.waitUntil(async () => (await cardNames()).length === 1);
     expect(await tabNames()).toEqual(["web-update"]);
     await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["req-login", "web-update"]);
+    // The decision page is drawn with its child while the chip is pressed, and stays when it is pressed again (#1125).
+    await mock("formation_children", [formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working")]);
+    await browser.waitUntil(async () => (await count(PAGE_TAB)) === 1);
     expect(await tabNames()).toEqual(["req-login", "判断: 要件の未決事項", "web-update"]);
     await $(PAGE_TAB).click();
     await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
     await expect($("#formation-page")).toBeDisplayed();
     await $(FLOW_DONE).click();
+    expect(await tabNames()).toEqual(["req-login", "判断: 要件の未決事項", "web-update"]);
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    // The page is answered: its mark is gone, and the done child is left out again.
+    await mock("formation_children", [formationChild("req-login", "done", { minutes: 5, pendingPage: null }), formationChild("web-update", "working")]);
+    await browser.waitUntil(async () => (await count(PAGE_TAB)) === 0);
     expect(await tabNames()).toEqual(["web-update"]);
-    expect(await count(PAGE_TAB)).toBe(0);
     await expect($("#formation-page")).not.toBeDisplayed();
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("draws the card, the 開く and the tabs of a done child that a decision page waits for with no press on the chip, and does not count it", async () => {
+    const page = { title: "要件の未決事項", atMs: MARK_AT };
+    const children = () => [formationChild("req-login", "done", { minutes: 5, pendingPage: page }), formationChild("web-update", "working"), formationChild("old-one", "done", { minutes: 40 })];
+    await openFlow(children(), { formation_page_read: decisionPage() }, true);
+    await browser.waitUntil(async () => (await cardNames()).length === 2);
+    expect(await cardNames()).toEqual(["req-login", "web-update"]);
+    expect(await tabNames()).toEqual(["req-login", "判断: 要件の未決事項", "web-update"]);
+    expect(await chip()).toEqual(["完了 1", "false"]);
+    await expect($('#formation-flow-list [data-name="req-login"] .formation-card-open')).toBeDisplayed();
+    await $('#formation-flow-list [data-name="req-login"] .formation-card-open').click();
+    await expect($(PAGE_TAB)).toHaveAttribute("aria-selected", "true");
+    await expect($("#formation-page")).toBeDisplayed();
+    // Pressed, the chip shows the other done child too, and the number stays.
+    await $(FLOW_DONE).click();
+    expect(await cardNames()).toEqual(["req-login", "web-update", "old-one"]);
+    expect(await chip()).toEqual(["完了 1", "true"]);
+    // With no other done child the chip is not drawn.
+    await mock("formation_children", [children()[0], children()[1]]);
+    await browser.waitUntil(async () => (await chip()) === null);
+    expect(await cardNames()).toEqual(["req-login", "web-update"]);
   });
 
   it("presses the chip when a done child's row of the list is pressed, so that its tab is drawn", async () => {

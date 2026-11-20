@@ -1,5 +1,5 @@
-// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×, and none while the chip 「完了 N」 of the flow pane is not pressed). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
-// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117).
+// The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×, and none while the chip 「完了 N」 of the flow pane is not pressed, unless a decision page waits for it, #1125). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
+// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117); a done child that a decision page waits for is drawn without the chip (#1125).
 // A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
 // The pane has two views, 「標準」 (the cards above) and 「コンパクト」 (78px wide: the leader as one orb, one arrow under it, and each child as one orb with its name under it; the card's content comes in a tip while the pointer or the focus is on an orb), switched by the button `#formation-flow-size` of the heading. The one chosen is kept in the page's `localStorage`, so it stays when the app starts again. The compact view also reads `formation_instructed` with each read of the children (#1087): the children that the leader told something and that have not answered are colored and go up under the leader's orb, sliding there.
@@ -629,13 +629,14 @@ function drawTabs() {
 
 const showDone = () => doneShown.has(currentFormation() ?? "");
 
-// Whether the card and the tab of `c` are drawn: a done child's only while the chip 「完了 N」 is pressed.
-const isShown = (c: FormationChild) => c.state !== "done" || showDone();
+// Whether the card and the tab of `c` are drawn: a done child's only while the chip 「完了 N」 is pressed, unless a decision page waits for the owner (#1125).
+const isShown = (c: FormationChild) => c.state !== "done" || c.pendingPage !== null || showDone();
 
 // The chip 「完了 N」 in the heading: none while no child is done; pressed, the cards and the tabs of the done children are shown.
 function drawDoneChip() {
   const chip = $("formation-flow-done");
-  const done = children.filter((c) => c.state === "done").length;
+  // Only the done children that the chip leaves out: one that a decision page waits for is drawn without it.
+  const done = children.filter((c) => c.state === "done" && c.pendingPage === null).length;
   chip.hidden = done === 0;
   // The compact view has the room of a short chip: the mark and the number, with the words as its name.
   chip.textContent = compact ? `✓${done}` : `完了 ${done}`;
