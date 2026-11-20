@@ -995,6 +995,7 @@ button.status:hover { filter: brightness(.95); }
    The Slack thread has the three parts of `.split-main` too, with the Claude pane a third to a half as wide (`--chat-w`). */
 #slack-main { flex: 1; min-height: 0; display: flex; }
 .split-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
+.split-main.dragging-row { cursor: row-resize; }
 /* The two heads (the terminal's and the edit part's) are one height, `--slack-head`. The edit part has three parts: a head, a part that scrolls, and a foot fixed at the bottom (`--slack-foot`). */
 #slack-compose { --slack-foot: calc(89px + 60px * var(--fs)); --slack-head: 48px; }
 #slack-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -1883,6 +1884,15 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 /* S-24: the Claude pane on the right of the list, the watch and a channel's history: 30% of the screen at first, between 25% and 40% (ts/split.ts; the clamp holds the same range). Its head is the band of T-7: --soft with a 2px line of --accent. */
 #slack-claude { flex: none; width: clamp(25%, var(--slack-claude-w, 30%), 40%); min-height: 0; }
 #slack-claude .chat-head { box-sizing: border-box; min-height: var(--header-h); padding: 0 16px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+/* S-24, S-7: where the body's column (`#slack-pane`) would be under 600px with Claude on its right, `ts/slack-claude.ts` gives `#slack-screen` the class `below`: Claude goes under that column (the list of channels stays whole on the left). `#slack-work` is not a box while Claude is on the right.
+   In the list, the watch and a channel's history the pane of S-24 is 30% to 45% of the column's height (`--slack-claude-h`, the plain ratio that `ts/split.ts` writes, used as a flex-grow so that no height has to be known; the range is held here too). While a thread is shown the pane of S-24 is hidden, and a thread has the pane of S-7 inside it, so the column is all its own. */
+#slack-work { display: contents; }
+#slack-screen.below #slack-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#slack-screen.below #slack-pane { flex-grow: calc(1 - clamp(0.3, var(--slack-claude-h, 0.3), 0.45)); flex-shrink: 1; flex-basis: 0; }
+#slack-screen.below:has(#slack-thread:not([hidden])) #slack-pane { flex-grow: 1; }
+#slack-screen.below #slack-claude { width: auto; flex-grow: clamp(0.3, var(--slack-claude-h, 0.3), 0.45); flex-shrink: 1; flex-basis: 0; }
+#slack-screen.below #slack-claude-split, #slack-screen.below #reply-split { width: auto; height: 7px; border-left: 0; border-top: 1px solid var(--line); cursor: row-resize; }
+#slack-screen.below #slack-claude-split span, #slack-screen.below #reply-split span { width: 32px; height: 3px; }
 #slack-pending { padding: 8px 32px 0; }
 #slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed, #sc-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
@@ -1971,6 +1981,11 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #st-detail { grid-column: 1; }
 #reply-split { grid-row: 1 / -1; grid-column: 2; }
 #reply-chat { grid-column: 3; }
+/* S-7, the thread under the narrow window: the thread (down to the reply field) and the pane are two parts of a column, a third to a half of its height for the pane (`--chat-h`), and nothing is shared between their rows (no subgrid). */
+#slack-screen.below #slack-thread { display: flex; flex-direction: column; }
+#slack-screen.below #st-detail { display: flex; flex-direction: column; flex-grow: calc(1 - clamp(0.3333, var(--chat-h, 0.3333), 0.5)); flex-shrink: 1; flex-basis: 0; }
+#slack-screen.below #reply-chat { display: flex; flex-direction: column; width: auto; flex-grow: clamp(0.3333, var(--chat-h, 0.3333), 0.5); flex-shrink: 1; flex-basis: 0; }
+#slack-screen.below #reply-term { flex: 1; }
 #st-body { min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 #st-reply .composer-foot, #sc-reply .composer-foot { justify-content: flex-end; }
 .icon-btn.chat-send-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }

@@ -1771,7 +1771,22 @@ describe("slack thread: Claude Code", () => {
   });
 });
 
+// The window's width. The E2E window is 1200px wide, where the pane is under the thread (S-7, "Under the thread"); the specs of the lines and the width of the right side run in a wide one.
+const NARROW = 1200;
+const WIDE = 1600;
+let windowHeight = 0;
+const resize = async (width: number) => {
+  await browser.setWindowSize(width, windowHeight);
+  await browser.waitUntil(async () => (await browser.execute(() => innerWidth)) === width, { timeoutMsg: `the window did not get ${width}px` });
+};
+const rememberHeight = async () => {
+  windowHeight = (await browser.getWindowSize()).height;
+};
+
 describe("slack thread: the lines of the two sides", () => {
+  before(rememberHeight);
+  beforeEach(() => resize(WIDE));
+  after(() => resize(NARROW));
   const edge = (selector: string, side: "top" | "bottom") => browser.execute((s, k) => document.querySelector(s)!.getBoundingClientRect()[k], selector, side);
   // The line under the headers is one, and the terminal starts under it and goes down to the bottom with the reply field.
   const aligned = async () => {
@@ -1795,6 +1810,9 @@ describe("slack thread: the lines of the two sides", () => {
 });
 
 describe("slack thread: the divider", () => {
+  before(rememberHeight);
+  beforeEach(() => resize(WIDE));
+  after(() => resize(NARROW));
   const share = () =>
     browser.execute(() => document.getElementById("reply-chat")!.getBoundingClientRect().width / document.getElementById("slack-thread")!.getBoundingClientRect().width);
   const press = (key: string) =>
@@ -1834,5 +1852,114 @@ describe("slack thread: the divider", () => {
     await expect($("#reply-split")).toHaveAttribute("aria-valuenow", "40");
     // The compose screen's divider is another one, still at its own start.
     expect(await browser.execute(() => document.getElementById("slack-split")!.getAttribute("aria-valuenow"))).toBe("45");
+  });
+});
+
+// S-7, "Under the thread": in a narrow window the pane is under the thread, down to the reply field, with the divider lying down.
+describe("slack thread: the pane under the thread", () => {
+  before(rememberHeight);
+  beforeEach(() => resize(NARROW));
+  after(() => resize(NARROW));
+  // Where the pane is: the thread (down to its reply field) and the pane as the screen lays them out.
+  const places = () =>
+    browser.execute(() => {
+      const rect = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const [thread, detail, split, chat, reply] = ["#slack-thread", "#st-detail", "#reply-split", "#reply-chat", "#st-reply"].map(rect);
+      return {
+        below: document.getElementById("slack-screen")!.classList.contains("below"),
+        // The pane is under the thread, as wide as it, and the divider is between them; the reply field is the last thing of the thread, over the divider.
+        under: Math.abs(detail.bottom - split.top) <= 1 && Math.abs(split.bottom - chat.top) <= 1 && Math.abs(chat.left - detail.left) <= 1 && Math.abs(chat.width - detail.width) <= 1 && reply.bottom <= split.top + 1,
+        // The pane is on the right of the thread, with the divider between them.
+        beside: Math.abs(detail.right - split.left) <= 1 && Math.abs(split.right - chat.left) <= 1 && Math.abs(chat.top - detail.top) <= 1,
+        widthShare: chat.width / thread.width,
+        heightShare: chat.height / thread.height,
+        splitHeight: split.height,
+      };
+    });
+  const key = (k: string, times = 1) =>
+    browser.execute(
+      (name, n) => {
+        for (let i = 0; i < n; i++) document.getElementById("reply-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+      },
+      k,
+      times,
+    );
+
+  it("puts the pane under the thread in a narrow window: the divider lying down at a third of the height, the reply field over it, and the pane of the list gone", async () => {
+    await openDetail();
+    const at = await places();
+    expect(at).toMatchObject({ below: true, under: true });
+    // The divider is 7px high and lies down; the pane has a third of the height, the least (the divider is not in it).
+    expect(at.splitHeight).toBe(7);
+    expect(at.heightShare).toBeGreaterThan(0.31);
+    expect(at.heightShare).toBeLessThan(0.35);
+    const split = $("#reply-split");
+    await expect(split).toBeDisplayed();
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await expect(split).toHaveAttribute("aria-label", "Claude の高さ");
+    await expect(split).toHaveAttribute("aria-valuemin", "33");
+    await expect(split).toHaveAttribute("aria-valuemax", "50");
+    await expect(split).toHaveAttribute("aria-valuenow", "33");
+    await expect($("#slack-claude")).not.toBeDisplayed();
+    // The pane is whole: the tabs and やり直す in its header, and the terminal under it down to the bottom.
+    await expect($("#reply-chat .chat-head")).toBeDisplayed();
+    await expect($(`#reply-term.claude-code-pane`)).toBeDisplayed();
+    const bottom = await browser.execute(() => Math.abs(document.getElementById("reply-term")!.getBoundingClientRect().bottom - document.getElementById("reply-chat")!.getBoundingClientRect().bottom) <= 1);
+    expect(bottom).toBe(true);
+    // The reply field still grows without moving the pane's place.
+    await lines(12);
+    expect(await places()).toMatchObject({ under: true });
+  });
+
+  it("changes the height of the pane between a third and a half of the thread with the divider, and keeps it apart from the width on the right", async () => {
+    await openDetail();
+    const split = $("#reply-split");
+    const share = async () => (await places()).heightShare;
+    // The arrow keys: Up widens, Down narrows, and Left and Right do nothing while it lies down.
+    await key("ArrowLeft", 5);
+    await expect(split).toHaveAttribute("aria-valuenow", "33");
+    await key("ArrowUp", 20);
+    await expect(split).toHaveAttribute("aria-valuenow", "50");
+    expect(await share()).toBeGreaterThan(0.47);
+    expect(await share()).toBeLessThan(0.51);
+    await key("ArrowRight", 5);
+    await expect(split).toHaveAttribute("aria-valuenow", "50");
+    await key("ArrowDown", 30);
+    await expect(split).toHaveAttribute("aria-valuenow", "33");
+    // A drag up: the pointer 80px higher than the divider widens the pane by about that.
+    const before = await browser.execute(() => document.getElementById("reply-chat")!.getBoundingClientRect().height);
+    await browser.action("pointer").move({ origin: split }).down().move({ origin: split, x: 0, y: -80 }).up().perform();
+    await browser.waitUntil(async () => Number(await split.getAttribute("aria-valuenow")) > 33, { timeoutMsg: "the drag did not widen the pane" });
+    const after = await browser.execute(() => document.getElementById("reply-chat")!.getBoundingClientRect().height);
+    expect(after - before).toBeGreaterThan(50);
+    // The height is kept while the width is not touched: on the right the divider stands again at a third, and narrowing brings the height back.
+    await key("ArrowDown", 30);
+    await key("ArrowUp", 5);
+    await expect(split).toHaveAttribute("aria-valuenow", "43");
+    await resize(WIDE);
+    await expect(split).toHaveAttribute("aria-orientation", "vertical");
+    await expect(split).toHaveAttribute("aria-label", "Claude の幅");
+    await expect(split).toHaveAttribute("aria-valuenow", "33");
+    expect(await places()).toMatchObject({ below: false, beside: true });
+    expect((await places()).widthShare).toBeCloseTo(1 / 3, 2);
+    await resize(NARROW);
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await expect(split).toHaveAttribute("aria-valuenow", "43");
+    expect(await places()).toMatchObject({ below: true, under: true });
+  });
+
+  it("goes under the thread and back to the right with the width of the window, keeping the process of the thread", async () => {
+    await openDetail();
+    await browser.waitUntil(async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread").length === 1);
+    const close = await mock("claude_code_close", null);
+    await resize(WIDE);
+    await browser.waitUntil(async () => !(await places()).below, { timeoutMsg: "the pane did not go to the right" });
+    await expect($("#reply-term.claude-code-pane")).toBeDisplayed();
+    await resize(NARROW);
+    await browser.waitUntil(async () => (await places()).below, { timeoutMsg: "the pane did not go under the thread" });
+    await expect($("#reply-term.claude-code-pane")).toBeDisplayed();
+    await browser.pause(500);
+    expect(((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread")).toHaveLength(1);
+    expect((await callsOf(close)).filter((c) => (c as { id: string }).id === "slack-thread")).toEqual([]);
   });
 });

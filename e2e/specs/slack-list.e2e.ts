@@ -2594,6 +2594,48 @@ describe("slack list: the Claude Code pane (S-24)", () => {
   // The starts of this pane's process: the thread has a process of its own.
   const starts = async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-claude");
 
+  // The window's width. The E2E window is 1200px wide, where the pane is under the body (S-24, "Under the body"); the specs of the right side run in a wide one.
+  const NARROW = 1200;
+  const WIDE = 1600;
+  let height = 0;
+  const resize = async (width: number) => {
+    await browser.setWindowSize(width, height);
+    await browser.waitUntil(async () => (await browser.execute(() => innerWidth)) === width, { timeoutMsg: `the window did not get ${width}px` });
+  };
+  before(async () => {
+    height = (await browser.getWindowSize()).height;
+  });
+  // Each spec starts in the wide window, where the pane is on the right; the specs of the narrow one narrow it themselves.
+  beforeEach(() => resize(WIDE));
+  after(() => resize(NARROW));
+  // Where the pane is: the body's column and the pane as the screen lays them out.
+  const places = () =>
+    browser.execute(() => {
+      const rect = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const [screen, side, pane, split, claude] = ["#slack-screen", "#slack-side", "#slack-pane", "#slack-claude-split", "#slack-claude"].map(rect);
+      return {
+        below: document.getElementById("slack-screen")!.classList.contains("below"),
+        // The pane is under the body's column, as wide as it, and the divider is between them.
+        under: Math.abs(pane.bottom - split.top) <= 1 && Math.abs(split.bottom - claude.top) <= 1 && Math.abs(claude.left - pane.left) <= 1 && Math.abs(claude.width - pane.width) <= 1,
+        // The pane is on the right of the body's column, with the divider between them.
+        beside: Math.abs(pane.right - split.left) <= 1 && Math.abs(split.right - claude.left) <= 1 && Math.abs(claude.top - pane.top) <= 1,
+        // The list of channels keeps the whole height, on the left of both.
+        list: Math.abs(side.height - screen.height) <= 1 && side.right <= pane.left && side.right <= claude.left,
+        widthShare: claude.width / screen.width,
+        heightShare: claude.height / screen.height,
+        splitHeight: split.height,
+      };
+    });
+  // A key sent to the divider, as the other specs of the dividers do.
+  const key = (k: string, times = 1) =>
+    browser.execute(
+      (name, n) => {
+        for (let i = 0; i < n; i++) document.getElementById("slack-claude-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+      },
+      k,
+      times,
+    );
+
   async function openPane() {
     await openList(timeline(unreadSample(), { side: sideSample() }));
     await waitForCount("#slack-feed .feed-row", 3);
@@ -2650,6 +2692,111 @@ describe("slack list: the Claude Code pane (S-24)", () => {
     await expect($("#slack-channel")).toBeDisplayed();
     await expect($(pane)).toBeDisplayed();
     await expect($("#slack-claude-split")).toBeDisplayed();
+  });
+
+  it("puts the pane under the body's column in a narrow window, in the unread list, the watch and a history: the divider lying down at 30% of the height, and the list of channels whole on the left", async () => {
+    await resize(NARROW);
+    await openPane();
+    const at = await places();
+    expect(at).toMatchObject({ below: true, under: true, list: true });
+    // The divider is 7px high and lies down; the pane has 30% of the height, the least (the divider is not in it).
+    expect(at.splitHeight).toBe(7);
+    expect(at.heightShare).toBeGreaterThan(0.27);
+    expect(at.heightShare).toBeLessThan(0.31);
+    const split = $("#slack-claude-split");
+    await expect(split).toBeDisplayed();
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await expect(split).toHaveAttribute("aria-label", "Claude の高さ");
+    await expect(split).toHaveAttribute("aria-valuemin", "30");
+    await expect(split).toHaveAttribute("aria-valuemax", "45");
+    await expect(split).toHaveAttribute("aria-valuenow", "30");
+    // The pane is whole: its head with やり直す and the terminal, with no way to close it added.
+    await expect($(`${pane} .chat-head`)).toBeDisplayed();
+    await expect($("#slack-claude-restart")).toBeDisplayed();
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    // The same under the watch and under the history of a channel.
+    await showWatch();
+    expect(await places()).toMatchObject({ below: true, under: true, list: true });
+    await showUnread();
+    await mock("slack_channel_history", historySample());
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", 3);
+    expect(await places()).toMatchObject({ below: true, under: true, list: true });
+    await expect($(pane)).toBeDisplayed();
+  });
+
+  it("goes under the body and back to the right with the width of the window, keeping the process, and follows the width of the list of channels", async () => {
+    await resize(NARROW);
+    await openHistory();
+    await browser.waitUntil(async () => (await starts()).length === 1);
+    const close = await mock("claude_code_close", null);
+    expect((await places()).below).toBe(true);
+    // Widened: the pane is on the right, 30% of the screen, with its divider standing, and nothing started or ended.
+    await resize(WIDE);
+    await browser.waitUntil(async () => !(await places()).below, { timeoutMsg: "the pane did not go to the right" });
+    expect(await places()).toMatchObject({ beside: true, list: true });
+    expect((await places()).widthShare).toBeCloseTo(0.3, 2);
+    await expect($("#slack-claude-split")).toHaveAttribute("aria-orientation", "vertical");
+    await expect($("#slack-claude-split")).toHaveAttribute("aria-label", "Claude の幅");
+    await expect($("#slack-claude-split")).toHaveAttribute("aria-valuenow", "30");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await resize(NARROW);
+    await browser.waitUntil(async () => (await places()).below, { timeoutMsg: "the pane did not go under the body" });
+    expect(await places()).toMatchObject({ under: true, list: true });
+    await browser.pause(500);
+    expect((await starts()).length).toBe(1);
+    expect((await callsOf(close)).filter((c) => (c as { id: string }).id === "slack-claude")).toEqual([]);
+    // The list of channels takes its width off the body's column: at 1500px the pane stays on the right while the list is 15% of the screen, and goes under the body when the list is widened to 40%.
+    const share = (ratio: number) => browser.execute((r) => document.getElementById("slack-screen")!.style.setProperty("--side-w", String(r)), `${ratio * 100}%`);
+    await resize(1500);
+    await share(0.15);
+    await browser.waitUntil(async () => !(await places()).below, { timeoutMsg: "the pane did not stay on the right with a narrow list of channels" });
+    await share(0.4);
+    await browser.waitUntil(async () => (await places()).below, { timeoutMsg: "the pane did not go under the body with a wide list of channels" });
+    expect(await places()).toMatchObject({ under: true, list: true });
+  });
+
+  it("changes the height of the pane under the body between 30% and 45% with the divider, and keeps it apart from the width on the right", async () => {
+    await resize(NARROW);
+    await openPane();
+    const split = $("#slack-claude-split");
+    const share = async () => (await places()).heightShare;
+    // The arrow keys: Up widens, Down narrows, and Left and Right do nothing while it lies down.
+    await key("ArrowLeft", 5);
+    await expect(split).toHaveAttribute("aria-valuenow", "30");
+    await key("ArrowUp", 10);
+    await expect(split).toHaveAttribute("aria-valuenow", "45");
+    expect(await share()).toBeGreaterThan(0.42);
+    expect(await share()).toBeLessThan(0.46);
+    await key("ArrowRight", 5);
+    await expect(split).toHaveAttribute("aria-valuenow", "45");
+    await key("ArrowDown", 20);
+    await expect(split).toHaveAttribute("aria-valuenow", "30");
+    expect(await share()).toBeLessThan(0.31);
+    // A drag up: the pointer 80px higher than the divider widens the pane by about that.
+    const before = await browser.execute(() => document.getElementById("slack-claude")!.getBoundingClientRect().height);
+    await browser.action("pointer").move({ origin: split }).down().move({ origin: split, x: 0, y: -80 }).up().perform();
+    await browser.waitUntil(async () => Number(await split.getAttribute("aria-valuenow")) > 30, { timeoutMsg: "the drag did not widen the pane" });
+    const after = await browser.execute(() => document.getElementById("slack-claude")!.getBoundingClientRect().height);
+    expect(after - before).toBeGreaterThan(50);
+    expect(Number(await split.getAttribute("aria-valuenow"))).toBeLessThanOrEqual(45);
+    // The height is kept while the width is not touched: on the right the width is 30% and the divider stands again, and narrowing brings the height back.
+    await key("ArrowDown", 20);
+    await key("ArrowUp", 5);
+    await expect(split).toHaveAttribute("aria-valuenow", "40");
+    await resize(WIDE);
+    await expect(split).toHaveAttribute("aria-orientation", "vertical");
+    await expect(split).toHaveAttribute("aria-valuenow", "30");
+    expect((await places()).widthShare).toBeCloseTo(0.3, 2);
+    await key("ArrowLeft", 3);
+    await expect(split).toHaveAttribute("aria-valuenow", "36");
+    await resize(NARROW);
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await expect(split).toHaveAttribute("aria-valuenow", "40");
+    expect(await share()).toBeGreaterThan(0.37);
+    expect(await share()).toBeLessThan(0.41);
+    await resize(WIDE);
+    await expect(split).toHaveAttribute("aria-valuenow", "36");
   });
 
   it("starts Claude Code with the tools of tsunagiai-mcp only and a first instruction that tells the work, the tools and the target, with nothing of the channel", async () => {

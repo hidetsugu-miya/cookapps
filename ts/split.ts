@@ -2,7 +2,7 @@
 // the list of the Orca screen (on the left, 15% to 50%), and the right side of the Todo screen (on the right, 30% to 45%). It sets that pane's width as a ratio of `main`, so a resized window keeps it.
 // Each divider keeps its own ratio in memory. The CSS (`.split-chat`, `#slack-compose-claude`, `#orca-list`, `#todo-side`) holds the range too.
 // A divider can also lie down (`lying`, `lie()`): the pane then sits under the rest (`side: "right"`) or over it (`side: "left"`), and the divider sets its height as a ratio of `main`, with a ratio, a range and a property of its own,
-// so the Todo screen puts Claude under the tasks in a narrow window (T-7) and the Slack screen can do the same.
+// so the Todo screen puts Claude under the tasks in a narrow window (T-7), and the Slack screen does the same with the pane of the list and the one of the thread (S-24, S-7).
 const KEY_STEP = 0.02;
 
 // One way a divider sets its pane: the pane's share of `main` and what bounds it, and the CSS property that carries it.
@@ -58,6 +58,8 @@ export function initSplit(main: HTMLElement, split: HTMLElement, { side = "right
     down.preventDefault();
     const pointer = down.pointerId;
     main.classList.add("dragging");
+    // Lying down, the drag moves up and down: the cursor of the whole screen follows it.
+    main.classList.toggle("dragging-row", vertical);
     // The box is read once; the writes of a drag are gathered into one per animation frame.
     const box = main.getBoundingClientRect();
     let pending: number | null = null;
@@ -76,7 +78,7 @@ export function initSplit(main: HTMLElement, split: HTMLElement, { side = "right
       if (e.pointerId !== pointer) return;
       cancelAnimationFrame(frame);
       flush();
-      main.classList.remove("dragging");
+      main.classList.remove("dragging", "dragging-row");
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("pointerup", end, true);
       document.removeEventListener("pointercancel", end, true);
