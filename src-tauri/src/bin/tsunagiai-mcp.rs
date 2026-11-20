@@ -664,6 +664,21 @@ fn calendar_arg(args: impl IntoIterator<Item = String>) -> bool {
     args.into_iter().any(|arg| arg == "--calendar")
 }
 
+/// The tools of a Claude Code started by "Claude を起動" (A-16, A-45): `preview_open` only. That Claude Code can start with the text of a mail, a message or a Todo as its first prompt (A-9), and the plugin of A-45 gives it this server, so any other tool (a read of the mail, a trash, a post to Slack, a write of a connection) would be one an injected instruction could use.
+const PREVIEW_TOOLS: [&str; 1] = ["preview_open"];
+
+/// The tools of the plugin of A-45: `PREVIEW_TOOLS` only, offered to the client that its `.mcp.json` starts with `--preview`.
+fn preview_router() -> ToolRouter<Tsunagiai> {
+    let mut router = Tsunagiai::tool_router();
+    keep_only(&mut router, &PREVIEW_TOOLS);
+    router
+}
+
+/// Whether `--preview` is among `args`: the server then offers the tool of the plugin of A-45 only.
+fn preview_arg(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|arg| arg == "--preview")
+}
+
 /// The name that follows `flag` in `args`, or none when `flag` is not there. The flag alone, or a name that is not a formation's name (`formation::check_name`), is an error.
 fn formation_name_after(
     args: impl IntoIterator<Item = String>,
@@ -1195,8 +1210,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Open an HTML file of a worktree as a preview tab in the development screen of the app (つなぎAI), so that the owner sees the page you wrote without looking for the file. Give the absolute path of the worktree (the folder you are working in) and the path of the file from it, for example worktree \"/Users/me/work/app\" and file \"docs/report.html\". Only an .html file (whatever the case) inside the worktree opens, and no part of its path may start with a dot. The worktree must be one that Orca lists for the project; any other is refused by the app. The tab is opened in the app of the owner, also when this Claude Code runs on another PC that the app is connected to, and the answer only says that the app took the request: the owner looks at the screen. It saves and sends nothing outside the app. It fails, in Japanese, when the path breaks a rule above, or when the app is not running, is not connected to this PC, or refuses the request (the answer says what each way answered).",
-        annotations(read_only_hint = true)
+        description = "Open an HTML file of a worktree as a preview tab in the development screen of the app (つなぎAI), so that the owner sees the page you wrote without looking for the file. Give the absolute path of the worktree (the folder you are working in) and the path of the file from it, for example worktree \"/Users/me/work/app\" and file \"docs/report.html\". Only an .html file (whatever the case) inside the worktree opens, and no part of its path may start with a dot. The worktree must be one that Orca lists for the project; any other is refused by the app. The tab is opened in the app of the owner, also when this Claude Code runs on another PC that the app is connected to, and the answer only says that the app took the request: the owner looks at the screen. It saves and sends nothing outside the app. It fails, in Japanese, when the path breaks a rule above, or when the app is not running, is not connected to this PC, or refuses the request (the answer says what each way answered)."
     )]
     async fn preview_open(
         &self,
@@ -1581,13 +1595,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let formation = formation_arg(std::env::args().skip(1))?;
     let calendar = calendar_arg(std::env::args().skip(1));
+    let preview = preview_arg(std::env::args().skip(1));
     if calendar && formation.is_some() {
         return Err("--calendar と --formation は一緒に使えません".into());
+    }
+    if preview && (calendar || formation.is_some()) {
+        return Err("--preview は --calendar とも --formation とも一緒に使えません".into());
     }
     let server = Tsunagiai {
         auth: Auth::new(),
         dir: identity::config_dir()?,
-        router: if calendar {
+        router: if preview {
+            preview_router()
+        } else if calendar {
             calendar_router()
         } else {
             router(formation.is_some())
@@ -1608,15 +1628,15 @@ mod tests {
     use super::{
         calendar_answer, calendar_arg, calendar_router, compose_post_answer, db_test_answer,
         event_done_answer, form_opened, form_refused, formation_arg, formation_start_arg,
-        lsp_environment, project_args, router, screen_read_answer, screen_text_answer,
-        skill_get_answer, skill_list_answer, skill_save_answer, skill_summary, todoist_answer,
-        CalendarDeleteEventArgs, CalendarEventArgs, CalendarSetShownArgs, CalendarShowSlotsArgs,
-        CalendarUpdateEventArgs, DbProfileSaveArgs, FormationAgent, FormationFilesArgs,
-        FormationGitArgs, FormationLaunchArgs, FormationPlanArgs, FormationReadArgs,
-        FormationStatusArgs, FormationWorktreesArgs, LspServerArgs, LspServerSaveArgs,
-        LspServerSettings, LspSshHostArgs, NewEvent, PreviewOpenArgs, ScreenReadArgs,
-        ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs, SkillScreen, TodoistAddTaskArgs,
-        Tsunagiai,
+        lsp_environment, preview_arg, preview_router, project_args, router, screen_read_answer,
+        screen_text_answer, skill_get_answer, skill_list_answer, skill_save_answer, skill_summary,
+        todoist_answer, CalendarDeleteEventArgs, CalendarEventArgs, CalendarSetShownArgs,
+        CalendarShowSlotsArgs, CalendarUpdateEventArgs, DbProfileSaveArgs, FormationAgent,
+        FormationFilesArgs, FormationGitArgs, FormationLaunchArgs, FormationPlanArgs,
+        FormationReadArgs, FormationStatusArgs, FormationWorktreesArgs, LspServerArgs,
+        LspServerSaveArgs, LspServerSettings, LspSshHostArgs, NewEvent, PreviewOpenArgs,
+        ScreenReadArgs, ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs, SkillScreen,
+        TodoistAddTaskArgs, Tsunagiai,
     };
 
     #[test]
@@ -1903,7 +1923,11 @@ mod tests {
         for name in ["worktree", "file"] {
             assert!(properties.get(name).is_some(), "{name}: {properties}");
         }
-        assert_eq!(open.annotations.clone().unwrap().read_only_hint, Some(true));
+        // It opens a tab that runs the page's scripts in a frame, so it is not marked as one that only reads.
+        assert!(open
+            .annotations
+            .as_ref()
+            .is_none_or(|a| a.read_only_hint != Some(true)));
         let args = |value: serde_json::Value| serde_json::from_value::<PreviewOpenArgs>(value);
         assert!(args(serde_json::json!({"worktree": "/w", "file": "a.html"})).is_ok());
         for bad in [
@@ -1920,6 +1944,35 @@ mod tests {
             .list_all()
             .iter()
             .any(|t| t.name == "preview_open"));
+    }
+
+    #[test]
+    fn the_preview_flag_is_an_argument_of_its_own() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert!(preview_arg(args(&["--preview"])));
+        assert!(preview_arg(args(&["--other", "--preview"])));
+        for none in [
+            &[][..],
+            &["preview"],
+            &["--preview=1"],
+            &["--previews"],
+            &["--preview-plugin"],
+        ] {
+            assert!(!preview_arg(args(none)), "{none:?}");
+        }
+    }
+
+    #[test]
+    fn the_plugin_of_a_claude_launch_is_offered_preview_open_and_nothing_else() {
+        let names: Vec<String> = preview_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert_eq!(names, ["preview_open"]);
+        // The tools of every other client are as they were.
+        assert!(tool_names(false).iter().any(|n| n == "preview_open"));
+        assert!(tool_names(false).iter().any(|n| n == "trash"));
     }
 
     #[cfg(unix)]

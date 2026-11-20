@@ -878,10 +878,15 @@ function openPlace(place: DefinitionOpen) {
 }
 
 // A request to open an HTML preview (A-45, #985), from a Claude Code through the app (a push of a saved environment's PC, or the screen bridge of this PC): the file is a tab of the project that has the worktree, in the preview, and the tab is selected when that project is the one selected. The request is data from outside, so Rust checks it again (`orca_preview_check`: the file A-31 opens, a worktree of the list read just now), and the list held here must have the worktree (it is read again once when it lacks it, for a worktree that was made a moment ago). The screen is not switched and no project is selected for it: another project, or a formation selected, only gets the tab; a screen that is not shown has it ready when it is shown again.
+// The screen answers once the check has passed, and opens the tab after the answer: the read of the list may take longer than the wait of the bridge (5 seconds), and a tool that failed on the wait would leave a tab that opens later. A refusal after the answer is a card (A-28).
 async function openPreview(fields: Fields) {
   const [path, relative, environment] = [fields.path ?? "", fields.relative ?? "", fields.environment || null];
   if (view === null) throw new Error("開発の画面の一覧をまだ読めていません");
   await invoke("orca_preview_check", { path, relative, environment });
+  void openCheckedPreview(path, relative, environment).catch((e) => showFailure("orca", e instanceof Error ? e.message : e));
+}
+
+async function openCheckedPreview(path: string, relative: string, environment: string | null) {
   const find = () => mix.worktrees.find((w) => w.path === path && placeOf(w) === environment);
   let worktree = find();
   if (worktree === undefined) {

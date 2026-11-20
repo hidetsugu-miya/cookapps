@@ -4341,7 +4341,9 @@ describe("orca: Claude Code opens an HTML preview (A-45)", () => {
     await ready();
     await pickProject("example-app");
     const answer = await askScreen("write", "preview-open", { ...request, environment: "Studio" });
-    expect(answer).toEqual({ ok: false, error: "そのフォルダは、一覧のプロジェクトにありません" });
+    // The screen answers once the check has passed; the worktree that the list lacks is a card after it.
+    expect(answer).toEqual({ ok: true });
+    await expect($(CARD)).toHaveText("そのフォルダは、一覧のプロジェクトにありません");
     expect(await callsOf("orca_preview_check")).toEqual([{ ...checkArgs, environment: "Studio" }]);
     expect(await tabTitles()).not.toContain("page.html");
     expect(await read()).toEqual([]);
@@ -4352,10 +4354,25 @@ describe("orca: Claude Code opens an HTML preview (A-45)", () => {
     await pickProject("example-app");
     const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
     const answer = await askScreen("write", "preview-open", { path: "/work/elsewhere", relative: "page.html" });
-    expect(answer).toEqual({ ok: false, error: "そのフォルダは、一覧のプロジェクトにありません" });
+    expect(answer).toEqual({ ok: true });
+    await expect($(CARD)).toHaveText("そのフォルダは、一覧のプロジェクトにありません");
     expect(await callsOf(overview)).toHaveLength(1);
     expect(await tabTitles()).not.toContain("page.html");
     expect(await read()).toEqual([]);
+  });
+
+  it("answers once the check has passed, while the read of the list for a worktree it lacks is still waiting, and opens the tab after it", async () => {
+    await ready();
+    await pickProject("example-app");
+    const made = orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" });
+    const overview = await mock("orca_overview", holds);
+    const answer = await askScreen("write", "preview-open", { path: "/work/example-app-b", relative: "page.html" });
+    expect(answer).toEqual({ ok: true });
+    expect(await callsOf(overview)).toHaveLength(1);
+    expect(await callsOf("orca_file_read")).toEqual([]);
+    await release(overview, orcaOverview(sample(), [...worktrees(), made]));
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await tabTitles()).toContain("page.html");
   });
 
   it("opens nothing when the check of Rust refuses, and the answer holds its reason", async () => {
