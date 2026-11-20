@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI とレビューの合格記録を確かめ、release/next の push は E2E の記録も確かめる（検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
 # E2E は機能の PR では回さず、Release PR の準備のときに 1 回回す（#1023）。機能のブランチの push は E2E の記録を見ない。
-# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、check-ci.sh、check-e2e.sh、check-release-e2e.sh、release-only-diff.sh、range-check.sh、check-range-check.sh、record-review.sh、plan-release*.py、nightly-limit.sh、use-worktree.sh、ensure-deps.sh、handover.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
+# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、check-ci.sh、check-e2e.sh、check-release-e2e.sh、release-only-diff.sh、range-check.sh、check-range-check.sh、record-review.sh、plan-release*.py、use-worktree.sh、ensure-deps.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
 # 検査する checkout は hook 入力の cwd（先頭の cd DIR && か cd DIR; と、git の -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
@@ -72,7 +72,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
     && gate "pre-git.sh の自己テスト" "$top/.claude/tools/check-pre-git.sh"
   grep -q -E '^\.claude/(hooks/record-review\.sh|tools/(range-check|check-range-check|check-ci)\.sh)$' <<< "$changed" \
     && gate "range-check.sh の自己テスト" "$top/.claude/tools/check-range-check.sh"
-  grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree|ensure-deps|handover)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(use-worktree|ensure-deps)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"
   # New commits need run-ci.sh's passing record for HEAD and the pass record, written by release-verifier or range-check.sh (.claude/rules/review.md).
   # A push of release/next also needs run-e2e.sh's passing record (check-release-e2e.sh): E2E runs once, when the Release PR is prepared, not for a feature's PR (#1023).

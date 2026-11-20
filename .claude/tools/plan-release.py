@@ -13,15 +13,14 @@ Usage:
 
 `snapshot` prints the open issues the planner orders, and first closes as not planned the open issues of other authors (the pull requests are left alone), with a fixed comment and without reading their title or body (a failed close is told on stderr and does not stop it). `apply` leaves out of the plan the closed issues, the fixed ones and the parents (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
-`start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out).
+`start` lists the issues a run may begin, in the order of the plan.
 `claim` is how a session or a run tells the others that it took an issue: it makes `.claude/claims/{n}/owner` in the main checkout, holding the path of the worktree that works on it, and `next` leaves an issue whose owner worktree still exists out of `start` and lists it in `claimed`.
 `claim` refuses an issue whose owner is another worktree that still exists (stderr says `#{n} claimed by {path}`, exit 3, and it still claims the others); a claim whose worktree is gone is stale and is taken over; `use-worktree.sh --park` deletes the claims of its worktree.
 A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
 `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
 (open, not in hand, no sub-issue, no parent, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
 `split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "parts": [{"title", "body", "labels", "points_reason"}]}; a `milestone` key is refused.
-It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes `solo` and `session` when they are missing,
-creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
+It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
 a failure stops it with the numbers made, and a second run keeps the parts that are already open sub-issues of the issue under the same title. With no parts it only puts the label `whole` on the issue (a big issue kept as one).
 `release` prints the changes that wait for the merge of the Release PR, the Release PR,
 the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the parents (a parent is a feature, not a version) whose sub-issues are all closed and released.
@@ -108,19 +107,6 @@ ALL_POINTS = ("point:1", "point:2", "point:3", "point:5", "point:8")
 def quick_bug(issue):
     """A bug of 1, 2 or 3 points goes to the front of its tier; a bug of 5 or 8 points does not."""
     return has(issue, "bug") and any(has(issue, label) for label in QUICK_POINTS)
-
-
-def solo(issue):
-    """A member of a unit that is a release of its own: an issue of 8 points, or a part (`solo`) of a point:8 issue that `issue-plan` split.
-    The unit is that one point:8 issue, or all the `solo` parts of one parent. Only the night run keeps a unit apart from everything else (.claude/skills/ship/SKILL.md, "Rules"):
-    `nightly-limit.sh` and `build_next` do so when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner does not."""
-    return has(issue, "point:8") or has(issue, "solo")
-
-
-def session(issue):
-    """An issue the night run does not start: the owner implements it in a session, in one go (the label `session`, put on the owner's word; issues.md).
-    It is in the order like any issue. `build_next` and `nightly-limit.sh` leave it out when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner starts it."""
-    return has(issue, "session")
 
 
 def urgent(issue):
@@ -457,15 +443,13 @@ def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
     ]
 
 
-def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, claimed=None):
+def build_next(issues, pr_closing, mine=frozenset(), plan=None, claimed=None):
     """What a run does with the open issues. A run works in one worktree on one branch, so there is no parallel set: `start` is the queue.
-    `mine`: the issues the previous hand-over lists as this run's own; they are `in_progress` (continue them first).
+    `mine`: the issues this run already has in hand; they are `in_progress` (continue them first).
     `claimed`: {issue number: the worktree that holds the claim}, only the claims whose worktree still exists (`read_claims`); another session works on those issues, so they are not in `start`, and `claimed` lists them.
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
-    An issue with an open blocker is left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
-    (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (.claude/skills/ship/SKILL.md, "Rules"): it may bundle issues of any units.
-    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the merge of its Release PR, and nothing new begins before it (the rest of its unit included); the night run only.
+    An issue with an open blocker is left out. A session may bundle issues of any points in one pull request (.claude/skills/ship/SKILL.md).
     `waiting` are the changes that wait for the release. A parent is in none of the lists: its parts are.
     """
     position = plan_positions(plan)
@@ -486,10 +470,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, clai
         "claimed": [],
         "held": [],
         "blocked": [],
-        "waits_for_release": [],
-        "waits_for_session": [],
         "waiting": [dict(brief(i), closed_at=i.closed_at) for i in waiting],
-        "stop": None,
     }
     startable = []
     for i in sorted((i for i in issues if i.state == "open" and not is_parent(i)), key=lambda i: (i.created_at, i.number)):
@@ -501,15 +482,8 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, clai
             out["held"].append(dict(brief(i), reason="pull request open"))
         elif i.blocked_by:
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
-        elif night and session(i):
-            out["waits_for_session"].append(i.number)
-        elif night and solo(i) and waiting:
-            out["waits_for_release"].append(i.number)
         else:
             startable.append(i)
-    if night and any(solo(i) for i in waiting):
-        out["stop"] = "a point:8 change (or a part of one, labelled solo) waits until its Release PR is merged; start nothing new"
-        return out
     startable.sort(key=start_key)
     out["start"] = [brief(i) for i in startable]
     return out
@@ -521,7 +495,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True, clai
 def release_facts(issues, release_pr, last_tag):
     """The figures a run needs to prepare the Release PR.
     `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
-    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; a session tells the owner at once; the night run merges the Release PR itself.
+    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; a session tells the owner at once.
     `minor`: a change adds a requirement ID (.claude/skills/release/SKILL.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
     changes = release_changes(issues)
     labels = (release_pr or {}).get("labels", [])
@@ -534,7 +508,6 @@ def release_facts(issues, release_pr, last_tag):
         ],
         "release_pr": release_pr and {k: release_pr[k] for k in ("number", "title", "url")},
         "urgent": "urgency:high" in labels or any(urgent(i) or (has(i, "bug") and has(i, "importance:high")) for i in changes),
-        "solo": any(solo(i) for i in changes),
         "minor": minor,
         "version": format_version(bump(base, minor)) if changes else None,
     }
@@ -542,10 +515,10 @@ def release_facts(issues, release_pr, last_tag):
 
 def with_tag_due(facts, due):
     """Adds `tag_due` to the facts. While a tag is due (the Release PR has been merged and the tag is not made), what is counted from the last tag is the merged Release PR itself,
-    so `changes`, `urgent`, `solo`, `minor` and `version` are emptied: the tag comes first, and `release` runs again after it."""
+    so `changes`, `urgent`, `minor` and `version` are emptied: the tag comes first, and `release` runs again after it."""
     facts["tag_due"] = due
     if due:
-        facts.update(changes=[], urgent=False, solo=False, minor=False, version=None)
+        facts.update(changes=[], urgent=False, minor=False, version=None)
     return facts
 
 
@@ -609,8 +582,6 @@ def stranger_comment():
 
 # ---- pure: split ----
 
-SOLO_DESCRIPTION = "a part of a point:8 issue: the parts are a release of their own"
-SESSION_DESCRIPTION = "夜の実行は取らない。オーナーのセッションでまとめて実装する"
 WHOLE_DESCRIPTION = "a big issue kept as one, not split into parts"
 
 
@@ -669,8 +640,6 @@ def split_problems(spec, parent, owner, repo_labels, kept):
         problems.append(f"#{n} already has a parent")
     if (parent.get("sub_issues_summary") or {}).get("total", 0) > 0 and not any(p["title"] in kept for p in spec["parts"]):
         problems.append(f"#{n} already has sub-issues that are none of these parts")
-    parent_labels = [label["name"] for label in parent.get("labels", [])]
-    big = "point:8" in parent_labels
     known = set(repo_labels)
     titles = Counter(p["title"] for p in spec["parts"])
     for title, c in sorted(titles.items()):
@@ -684,12 +653,8 @@ def split_problems(spec, parent, owner, repo_labels, kept):
         elif marks[0] not in QUICK_POINTS:
             problems.append(f"{where}: {marks[0]} is more than point:3")
         for label in part["labels"]:
-            if label not in ("solo", "session") and label not in known:
+            if label not in known:
                 problems.append(f"{where}: the label '{label}' does not exist")
-        if big and "solo" not in part["labels"]:
-            problems.append(f"{where}: #{n} is point:8, so every part needs the label solo")
-        if "session" in parent_labels and "session" not in part["labels"]:
-            problems.append(f"{where}: #{n} has session, so every part needs the label session")
     return problems
 
 
@@ -1089,7 +1054,7 @@ def cmd_next(args):
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
     plan = read_plan(saved_plan_path())
     claimed = read_claims(claims_dir(git_common_dir()), live_worktrees(worktree_list()))
-    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan, night=bool(os.environ.get("NIGHTLY_DEADLINE_EPOCH")), claimed=claimed), ensure_ascii=False, indent=2))
+    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan, claimed=claimed), ensure_ascii=False, indent=2))
 
 
 def cmd_unsplit(args):
@@ -1187,12 +1152,6 @@ def cmd_split(args):
             gh("issue", "edit", str(n), "--add-label", "whole")
             print(f"labelled #{n} whole; it was not split")
             return
-        if any("solo" in p["labels"] for p in spec["parts"]) and "solo" not in repo_labels:
-            gh("label", "create", "solo", "--description", SOLO_DESCRIPTION)
-            print("made label solo")
-        if any("session" in p["labels"] for p in spec["parts"]) and "session" not in repo_labels:
-            gh("label", "create", "session", "--description", SESSION_DESCRIPTION)
-            print("made label session")
         for part in spec["parts"]:
             if part["title"] in kept:
                 made.append(kept[part["title"]])
@@ -1230,10 +1189,10 @@ def main(argv=None):
     a.add_argument("--dry-run", action="store_true")
     a.set_defaults(fn=cmd_apply)
     n = sub.add_parser("next")
-    n.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
+    n.add_argument("--mine", default="", help="issue numbers this run already has in hand, such as 140,141")
     n.set_defaults(fn=cmd_next)
     u = sub.add_parser("unsplit")
-    u.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
+    u.add_argument("--mine", default="", help="issue numbers this run already has in hand, such as 140,141")
     u.set_defaults(fn=cmd_unsplit)
     sp = sub.add_parser("split")
     sp.add_argument("file")

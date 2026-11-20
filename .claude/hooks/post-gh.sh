@@ -26,7 +26,7 @@ if [ "$merge" -eq 1 ]; then
   rc=$?
   if [ "$rc" -eq 0 ]; then
     msgs+=("gh pr merge のあとに plan-release.py release を実行しました:"$'\n'"$out")
-    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます。夜間の実行が今マージした直後なら、run が見えなくても手でタグを打たず、watch-ci.sh {tag_due.commit} で待ちます（release スキル（.claude/skills/release/SKILL.md）の手順 B）。リリースを待つ変更があれば、Release PR は 00:30 の実行か、オーナーに頼まれたセッションが用意します（release スキルの手順 A。なければ作り、あれば本文を更新します。マージするのは、00:30 の実行ではその実行自身（オーナーのアカウント）、セッションではオーナーです）。")
+    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます（release スキル（.claude/skills/release/SKILL.md）の手順 B）。リリースを待つ変更があれば、Release PR はオーナーに頼まれたセッションが用意します（release スキルの手順 A。なければ作り、あれば本文を更新します。マージするのはオーナーです）。")
   else
     msgs+=("gh pr merge のあとに plan-release.py release を実行しましたが、失敗しました（exit ${rc}）:"$'\n'"$out")
   fi

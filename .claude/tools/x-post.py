@@ -3,7 +3,7 @@
 auth  : by the owner, in front of the Mac Studio. Client ID and Client Secret come from the secret item, the browser asks for the owner's consent
         (OAuth 2.0 Authorization Code Flow with PKCE, S256), and the refresh token goes to the keychain.
 check : reads the text of a post from a file or stdin and checks it mechanically. Exit 0, or exit 1 with one reason per line on stderr.
-send  : `send file tag`. Refuses a tag that is not newer than .claude/x-posted of the main checkout (and a night run when that file is missing), before any network. Then the same check,
+send  : `send file tag`. Refuses a tag that is not newer than .claude/x-posted of the main checkout (and the scheduled run of the x-post skill when that file is missing), before any network. Then the same check,
         refreshes the access token, writes the new refresh token back to the keychain, posts, and writes tag into .claude/x-posted. Exit 2 on a failure of the config, the secret item or the keychain, or of a token or of the post,
         exit 3 when the post got no answer (it may have been made; tag is written and the post is not sent again).
 
@@ -473,7 +473,7 @@ def parse_tag(text):
 
 
 def check_tag(tag):
-    """Refuses, before any network, a tag that is not newer than the last posted one, and a night run with no record of it."""
+    """Refuses, before any network, a tag that is not newer than the last posted one, and a scheduled run with no record of it."""
     new = parse_tag(tag)
     if new is None:
         raise Fail("タグが v0.{minor}.{patch} の形でない", 1)
@@ -481,8 +481,8 @@ def check_tag(tag):
     try:
         last = parse_tag(path.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
-        if os.environ.get("NIGHTLY_DEADLINE_EPOCH"):
-            raise Fail(".claude/x-posted がない夜間実行は投稿しない（初回はオーナーが端末で send を手で実行する）", 1)
+        if os.environ.get("X_POST_SCHEDULED"):
+            raise Fail(".claude/x-posted がない定期実行は投稿しない（初回はオーナーが端末で send を手で実行する）", 1)
         return
     except (OSError, UnicodeDecodeError):
         raise Fail(".claude/x-posted を読めない", 1)

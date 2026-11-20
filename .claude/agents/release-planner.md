@@ -1,6 +1,6 @@
 ---
 name: release-planner
-description: "Decides the order of the tsunagiai issues. Reads the bodies of the open issues and the code they relate to, and returns the order and the dependencies as JSON, each with a reason, from how the issues relate. Decides neither a version number nor the time of a release (the Release PR is merged by the night run, or by the owner in a session). Edits nothing. Launched inside the steps of issue-plan, at the start of ship and when the owner asks for a reorder."
+description: "Decides the order of the tsunagiai issues. Reads the bodies of the open issues and the code they relate to, and returns the order and the dependencies as JSON, each with a reason, from how the issues relate. Decides neither a version number nor the time of a release (the Release PR is merged by the owner in a session). Edits nothing. Launched inside the steps of issue-plan, at the start of ship and when the owner asks for a reorder."
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -42,7 +42,6 @@ There are four tiers, decided by urgency and importance. In order: (1) `urgency`
 - The only issues that may be put before a `bug` issue with one of `point:1`, `point:2` and `point:3` are the issues of an upper tier or of a higher priority, the issues of the same kind in the same tier and priority, and the dependencies of that issue (or of an issue before it). Do not bring a bug of `point:5` or `point:8` forward. `plan-release.py` rejects an order that does not follow this.
 - An issue of `fixed` can only be written as a dependency.
 - An open parent that has parts (it is in neither `free` nor `fixed`; it is a number written in the `parent` of other issues) can only be written as a dependency. A part does not write its own parent as a dependency (the parent does not close until all its parts are out).
-- Order the issues with `session` by the same rules as the others. `session` only shows that the night run does not start the issue, and is no reason to change the order.
 - Write a one-line reason in `reasons` for an issue that has a relation and for an issue that moved from the base order.
 
 ## Output format

@@ -40,7 +40,7 @@ Bad:  launch release-verifier on a HEAD whose CI failed, only to rate the findin
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
 
-The range is `@{u}..HEAD`, or `origin/main..HEAD` when there is no upstream. The pull request of a night run holds the commits of several issues (up to 20 points), and it is reviewed once, as one range (at the owner's instruction, 2026-11-09; Discussion #293).
+The range is `@{u}..HEAD`, or `origin/main..HEAD` when there is no upstream. The pull request of a `ship` run holds the commits of several issues, and it is reviewed once, as one range (at the owner's instruction, 2026-11-09; Discussion #293).
 Always launch performance-reviewer and code-reviewer.
 Launch security-reviewer only when the diff touches any of the following.
 - Authentication, tokens, the keychain
@@ -118,10 +118,9 @@ Bad:  the same finding -> High, because any spec gap is High
 The blocking ones are security Critical and High, performance High, and code review High.
 When the first round fails, fix the blocking findings and, in the same fix, the non-blocking findings (Medium and Low) that serve the goal of the change, and send the fix to the next round (at the owner's instruction, 2026-11-12; #485. It replaces the instruction of 2026-10-29, "do not fix non-blocking findings during the review", which cost a second pass of the same files after the verdict).
 The second-round reviewers get the whole diff of that fix, the non-blocking fixes included.
-When a round passes, fix nothing more: push with the non-blocking findings (Medium and Low) that are left, in a session and in a night run alike (at the owner's instruction, 2026-11-19; #1012. It replaces the part of the instructions of 2026-10-29 and of 2026-11-12, #485, that had them fixed after the pass and sent through `range-check.sh`: in the night runs of 2026-11-13 to 2026-11-19, 3 of 5 ran CI and E2E once more for a Low fix after the pass, which added 5.0 to 11.2 minutes, and the run that left its Low alone added none).
+When a round passes, fix nothing more: push with the non-blocking findings (Medium and Low) that are left (at the owner's instruction, 2026-11-19; #1012. It replaces the part of the instructions of 2026-10-29 and of 2026-11-12, #485, that had them fixed after the pass and sent through `range-check.sh`: in the night runs of 2026-11-13 to 2026-11-19, 3 of 5 ran CI and E2E once more for a Low fix after the pass, which added 5.0 to 11.2 minutes, and the run that left its Low alone added none).
 A non-blocking finding that first appears in the second round or later is left the same way.
-List each finding that was not fixed (its ID, `path:line` and a one-line gist) in the completion report. A night run's completion report stays in its local log (`.claude/nightly/ship-{date}.log`), so the list is kept there.
-In the hand-over of a night run write only how many were left, never their IDs, locations or gists: the hand-over Discussion is public, and review findings stay local (`issues.md`, "Reach main only through a pull request with `Closes #n`"). Do not ask the owner.
+List each finding that was not fixed (its ID, `path:line` and a one-line gist) in the completion report. Review findings stay local and go to no public place (`issues.md`, "Reach main only through a pull request with `Closes #n`"). Do not ask the owner.
 Decline a finding that does not serve the goal in the first-round fix, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
 When a finding has several ways to fix it, choose the recommended one and state it in the completion report.
 
@@ -131,7 +130,6 @@ Good: round 1 passes with a Low -> push, and list the Low in the completion repo
 Good: round 2 finds a new Low -> pass -> push, and list the Low in the completion report
 Bad:  round 1 fails with a High and a Low, and the Low is left unfixed
 Bad:  pass -> fix the Low -> run-ci.sh again -> push
-Bad:  a night run writes the ID, `path:line` and gist of a security Low in the hand-over Discussion (write the count only)
 Bad:  pass -> push with the Low left, and ask the owner whether to fix it
 ```
 
