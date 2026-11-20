@@ -1008,12 +1008,16 @@ describe("orchestration mode: the session of a child", () => {
     expect(await browser.execute(() => document.getElementById("formation-teammate-term")!.contains(document.activeElement))).toBe(true);
   });
 
-  it("stops reading the terminal of a child that is gone from the list, and draws the next one", async () => {
+  it("stops reading the terminal of a child that is gone from the list, opens no other tab by itself, and reads the next one when its card is pressed", async () => {
     await openSession(mixed());
     await waitForCalls("orca_terminal_read");
     await mock("formation_children", [formationChild("batch-update", "working")]);
     await browser.waitUntil(async () => (await cardNames()).join() === "batch-update");
     await mock("orca_terminal_read", ["$ next"]);
+    await browser.pause(MIRROR * 3);
+    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    await expect($("#formation-term")).toBeDisplayed();
+    await card("batch-update").click();
     await browser.waitUntil(async () => (await readHandles()).join() === "term_batch-update");
     await browser.pause(MIRROR * 3);
     expect(await readHandles()).toEqual(["term_batch-update"]);
