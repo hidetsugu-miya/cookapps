@@ -1189,6 +1189,7 @@ describe("orca: projects", () => {
   describe("the sessions under a project (A-8)", () => {
     const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
     // The row of a session is the name of its worktree (A-8); its title is the tab's.
+    // The row is the git branch of the worktree at the session's path (A-8): the plain terminal of `withTerminals` is at the path of the feat/a worktree, so its row says feat/a whatever branch it came with.
     const sessionNames = () => textsOf("#orca-feed .orca-session .orca-session-title");
     const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-session="${id}"]`);
     const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
@@ -1200,7 +1201,7 @@ describe("orca: projects", () => {
         ["arrow:proj_example-api", "false"],
         ["arrow:proj_example-lib", "false"],
       ]);
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a"]);
       // The arrow is at the left of the row, before the status icon.
       const left = await browser.execute(() => {
         const r = (e: Element) => e.getBoundingClientRect();
@@ -1212,7 +1213,7 @@ describe("orca: projects", () => {
     it("opens a project with its sessions under it without closing the others, so that several are open at once", async () => {
       await openOrca(withTerminals());
       // example-app works, so it is open at first; its sessions have the status icon and the title.
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a"]);
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session .orca-ic")].map((i) => [i.dataset.status, i.getAttribute("aria-label")]))).toEqual([
         ["working", "作業中"],
         ["done", "起動中"],
@@ -1220,19 +1221,41 @@ describe("orca: projects", () => {
       await project("example-api").click();
       await expect(arrow("example-api")).toHaveAttribute("aria-expanded", "true");
       await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main", "example-api ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a", "main"]);
       expect(await count("#orca-feed .orca-sessions")).toBe(2);
       // The arrow of a project that is not selected opens it and does not select it.
       await arrow("example-lib").click();
       await expect(arrow("example-lib")).toHaveAttribute("aria-expanded", "true");
       await expect(project("example-lib")).toHaveAttribute("aria-pressed", "false");
       await expect(project("example-api")).toHaveAttribute("aria-pressed", "true");
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main", "example-api ・ main", "example-lib ・ feature/x"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a", "main", "feature/x"]);
       // A session of a project that is not selected selects its project and its tab.
       await sessionOf(claudeTab("example-lib")).click();
       await expect(project("example-lib")).toHaveAttribute("aria-pressed", "true");
       expect(await pressedSessions()).toEqual([claudeTab("example-lib")]);
       await expect(selectedTab()).toHaveText(expect.stringContaining("Opened the pull request."));
+    });
+
+    it("draws a session row as the git branch of its worktree alone, and as the worktree's name when it has no branch or the session is a terminal with no worktree listed", async () => {
+      const trees = [orcaWorktree("example-app", "fix-login", { gitBranch: "feat/login" }), orcaWorktree("example-api", "detached", { gitBranch: "" })];
+      await openOrca(orcaOverview([orcaRow("example-app", "fix-login", "Write the docs"), orcaRow("example-api", "detached", "Fix the API")], trees, { terminals: [orcaTerminal("example-app", "zsh", { branch: "scratch", path: "/work/elsewhere" })] }));
+      // Both projects work, so both are open. The repository is the project row's, so no row repeats it; the plain terminal's worktree is not listed, so it keeps the name it came with.
+      expect([...(await sessionNames())].sort()).toEqual(["detached", "feat/login", "scratch"]);
+    });
+
+    it("cuts a long branch name with an ellipsis before the counts of the row", async () => {
+      const longBranch = `feat/${"very-long-branch-name-".repeat(8)}end`;
+      await openOrca(orcaOverview([orcaRow("example-app", "main", "Write the docs", { subagents: 2 })], [orcaWorktree("example-app", "main", { gitBranch: longBranch })]));
+      const look = await browser.execute(() => {
+        const row = document.querySelector("#orca-feed .orca-session")!;
+        const title = row.querySelector<HTMLElement>(".orca-session-title")!;
+        const style = getComputedStyle(title);
+        return { text: title.textContent, overflow: style.textOverflow, minWidth: style.minWidth, clipped: title.scrollWidth > title.clientWidth, titleRight: title.getBoundingClientRect().right, countsLeft: row.querySelector(".orca-session-counts")!.getBoundingClientRect().left, rowRight: row.getBoundingClientRect().right };
+      });
+      expect(look.text).toBe(longBranch);
+      expect(look).toMatchObject({ overflow: "ellipsis", minWidth: "0px", clipped: true });
+      expect(look.titleRight).toBeLessThanOrEqual(look.countsLeft);
+      expect(look.countsLeft).toBeLessThanOrEqual(look.rowRight);
     });
 
     it("draws a session row one level in from its project: its icon and title right of the project's name", async () => {
@@ -1254,24 +1277,24 @@ describe("orca: projects", () => {
     });
 
     it("draws a session row as the name of its worktree, whatever its latest message is, and the tab as the title", async () => {
-      const read = (latest: string | null, branch = "feat/a") => orcaOverview([orcaRow("example-app", branch, "Gmail返信エディター", { latest }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      const read = (latest: string | null, branch = "feat/a") => orcaOverview([orcaRow("example-app", branch, "Gmail返信エディター", { latest }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], [orcaWorktree("example-app", branch), orcaWorktree("example-api", "main")]);
       await openOrca(read("返信欄を直しました"));
       await project("example-api").click();
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-api ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "main"]);
       await sessionOf(claudeTab("example-app")).click();
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
       // The owner sends the next instruction: the row stays the name of the worktree, and no tag of the message is drawn.
       const next = await mock("orca_overview", read("<b>次の指示</b>"));
       await showAgain();
       await waitForCalls(next);
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-api ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "main"]);
       expect(await count("#orca-feed .orca-session-title b")).toBe(0);
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
       // A session that works in another branch is drawn again with the name of that worktree.
       const moved = await mock("orca_overview", read(null, "feat/b"));
       await showAgain();
       await waitForCalls(moved);
-      await browser.waitUntil(async () => (await sessionNames())[0] === "example-app ・ feat/b", { timeoutMsg: "the row did not draw the new worktree" });
+      await browser.waitUntil(async () => (await sessionNames())[0] === "feat/b", { timeoutMsg: "the row did not draw the new worktree" });
       expect(await tabTitles()).toEqual(["Gmail返信エディター"]);
     });
 
@@ -1452,12 +1475,12 @@ describe("orca: projects", () => {
       await expect($(".orca-term")).toBeDisplayed();
       await arrow("example-app").click();
       await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a"]);
       // Pressing the closed project's row opens it too.
       await arrow("example-app").click();
       await expect($("#orca-feed .orca-session")).not.toExist();
       await project("example-app").click();
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a"]);
     });
 
     describe("the working projects", () => {
@@ -1506,7 +1529,7 @@ describe("orca: projects", () => {
         expect(await expanded("w-b")).toBe("true");
         expect(await expanded("w-d")).toBe("false");
         expect(await expanded("w-q")).toBe("false");
-        expect(await sessionNames()).toEqual(["w-a ・ main", "w-b ・ main"]);
+        expect(await sessionNames()).toEqual(["main", "main"]);
       });
 
       it("opens a project again when it starts to work after the user closed it, and leaves it closed while it keeps working", async () => {
@@ -1609,7 +1632,7 @@ describe("orca: projects", () => {
       await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash"), orcaTerminal("example-app", "zsh")] }));
       await showAgain();
       await browser.waitUntil(async () => (await sessionNames()).length === 3, { timeoutMsg: "the new terminal never became a session row" });
-      expect(await sessionNames()).toEqual(["example-app ・ feat/a", "example-app ・ main", "example-app ・ main"]);
+      expect(await sessionNames()).toEqual(["feat/a", "feat/a", "feat/a"]);
       expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
     });
 
@@ -3276,7 +3299,7 @@ describe("orca: search the list (A-19)", () => {
     await mock("orca_terminal_read", ["$ ls"]);
     await project("example-app").click();
     await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
-    expect(await textsOf("#orca-feed .orca-session .orca-session-title")).toEqual(["example-app ・ feat/a", "example-app ・ main"]);
+    expect(await textsOf("#orca-feed .orca-session .orca-session-title")).toEqual(["feat/a", "feat/a"]);
     await search("api");
     expect(await names()).toEqual(["example-api"]);
     await expect($("#orca-feed .orca-session")).not.toExist();
@@ -3286,7 +3309,7 @@ describe("orca: search the list (A-19)", () => {
     await expect($("#orca-feed")).toHaveText("一致するプロジェクトがありません");
     await $("#orca-search-clear").click();
     await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
-    expect(await textsOf("#orca-feed .orca-session .orca-session-title")).toEqual(["example-app ・ feat/a", "example-app ・ main"]);
+    expect(await textsOf("#orca-feed .orca-session .orca-session-title")).toEqual(["feat/a", "feat/a"]);
   });
 
   it("puts the line on the first row, and moves it with Down and Up to the ends", async () => {
