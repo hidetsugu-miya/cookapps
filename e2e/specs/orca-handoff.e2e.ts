@@ -156,7 +156,8 @@ describe("orca handoff", () => {
     await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
     await expect($(MAIL.pane)).not.toBeDisplayed();
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
-    await expect($("#mail-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    // The pane of Claude was closed (M-10), and is shown as it was.
+    await expect($("#mail-tool-claude")).toHaveAttribute("aria-pressed", "false");
     await expect($("#mail-claude")).toBeDisplayed();
   });
 

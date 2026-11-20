@@ -10,7 +10,7 @@ import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, linkTextUrls, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
 import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
-import { addMailKey, initMailClaude, syncMailClaude } from "./mail-claude.js";
+import { addMailKey, initMailClaude, openMailClaude, syncMailClaude, toggleMailClaude } from "./mail-claude.js";
 import { linkify, mailText } from "./mail-text.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -405,21 +405,22 @@ export function initThread() {
       const t = opened.current;
       return $("thread").hidden || !t ? null : { key: `mail:${t.account}/${t.id}`, card: () => mailCard(t.subject, t.messages) };
     },
-    // The right side shows Claude Code or the pane to Orca, and the two icons say which.
+    // The right side shows the pane of Claude or the pane to Orca; the two icons say which, and syncMailClaude draws the ✳ (pressed only while Claude is open and shown).
     onOpen: (open) => {
       $("mail-handoff").hidden = !open;
       $("mail-claude").hidden = open;
-      $("mail-tool-claude").setAttribute("aria-pressed", String(!open));
       $("mail-tool-orca").setAttribute("aria-pressed", String(open));
       syncMailClaude();
     },
   });
-  // Pressing the icon of the pane that is shown does nothing; the other switches to it.
+  // Pressing the icon of Orca while its pane is shown does nothing. The ✳ opens and closes the pane of Claude; from the pane to Orca it shows Claude open (M-10, #1106).
   $("mail-tool-orca").onclick = () => {
     if ($("mail-handoff").hidden) handoff.toggle();
   };
   $("mail-tool-claude").onclick = () => {
-    if (!$("mail-handoff").hidden) handoff.toggle();
+    if ($("mail-handoff").hidden) return toggleMailClaude();
+    handoff.toggle();
+    openMailClaude();
   };
   initSplit($("mail-screen"), $("mail-split"), { initial: 0.4 });
   $("back").onclick = goBack;

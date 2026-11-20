@@ -163,7 +163,7 @@
     <div id="mail-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="右のペインの幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="40" tabindex="0" hidden><span></span></div>
     <div id="mail-side" class="split-chat" hidden>
       <div id="mail-tools" data-tauri-drag-region="deep">
-        <button id="mail-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="true">
+        <button id="mail-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
         </button>
         <button id="mail-tool-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" disabled>
@@ -171,11 +171,15 @@
         </button>
       </div>
       <aside id="mail-claude" class="chat-pane" aria-label="Claude">
-        <div class="chat-head">
+        <div id="mail-claude-ask">
+          <p>Claude に相談しますか？</p>
+          <button id="mail-claude-open" type="button" class="text-btn">相談する</button>
+        </div>
+        <div class="chat-head" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
           <button id="mail-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
         </div>
-        <div id="mail-claude-term"></div>
+        <div id="mail-claude-term" hidden></div>
       </aside>
       <aside id="mail-handoff" class="ho-pane" aria-label="Orca に渡す" hidden></aside>
     </div>
@@ -663,11 +667,20 @@
         </div>
         <div id="slack-claude-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="25" aria-valuemax="40" aria-valuenow="30" tabindex="0"><span></span></div>
         <aside id="slack-claude" class="chat-pane" aria-label="Claude">
-          <div class="chat-head">
+          <div id="slack-tools" data-tauri-drag-region="deep">
+            <button id="slack-tool-claude" class="icon-btn" aria-label="Claude に相談" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+            </button>
+          </div>
+          <div id="slack-claude-ask">
+            <p>Claude に相談しますか？</p>
+            <button id="slack-claude-open" type="button" class="text-btn">相談する</button>
+          </div>
+          <div class="chat-head" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
             <button id="slack-claude-restart" type="button" class="text-btn chat-clear">やり直す</button>
           </div>
-          <div id="slack-claude-term"></div>
+          <div id="slack-claude-term" hidden></div>
         </aside>
       </div>
     </section>

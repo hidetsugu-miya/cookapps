@@ -1777,7 +1777,10 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #mail-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 #mail-claude { flex: 1; min-height: 0; }
 #mail-claude .chat-head, #mail-handoff .ho-head { box-sizing: border-box; height: 48px; }
+/* M-10: the pane is closed at first and shows the question, as the Todo's does (T-7); open, the terminal fills what is left of the pane's height. */
 #mail-claude-term { flex: 1; min-height: 0; }
+#mail-claude-ask { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+#mail-claude-ask p { margin: 0; color: var(--ink-soft); }
 #mail-handoff { flex: 1; }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's side is 40% wide at first, at least 400px; the Todo's right side (T-7) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
@@ -1903,7 +1906,16 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #slack-list, #slack-channel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* S-24: the Claude pane on the right of the list, the watch and a channel's history: 30% of the screen at first, between 25% and 40% (ts/split.ts; the clamp holds the same range). Its head is the band of T-7: --soft with a 2px line of --accent. */
 #slack-claude { flex: none; width: clamp(25%, var(--slack-claude-w, 30%), 40%); min-height: 0; }
-#slack-claude .chat-head { box-sizing: border-box; min-height: var(--header-h); padding: 0 16px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+/* S-24: the first row of the pane is the band of the ✳ (as high as every header, --header-h, so that its line meets the headers of the body); under it, while the pane is open, the heading of Claude's pane (48px, as in T-7 and M-10) and the terminal; closed, the question takes the place of both. */
+#slack-tools { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 16px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#slack-tools .icon-btn { width: var(--header-btn); height: var(--header-btn); border-radius: 50%; color: var(--claude); }
+#slack-tools .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#slack-tools .icon-btn:hover:not(:disabled) { background: var(--hover); }
+#slack-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+#slack-claude .chat-head { box-sizing: border-box; height: 48px; }
+#slack-claude-term { flex: 1; min-height: 0; }
+#slack-claude-ask { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+#slack-claude-ask p { margin: 0; color: var(--ink-soft); }
 /* S-24, S-7: where the body's column (`#slack-pane`) would be under 600px with Claude on its right, `ts/slack-claude.ts` gives `#slack-screen` the class `below`: Claude goes under that column (the list of channels stays whole on the left). `#slack-work` is not a box while Claude is on the right.
    In the list, the watch and a channel's history the pane of S-24 is 30% to 45% of the column's height (`--slack-claude-h`, the plain ratio that `ts/split.ts` writes, used as a flex-grow so that no height has to be known; the range is held here too). While a thread is shown the pane of S-24 is hidden, and a thread has the pane of S-7 inside it, so the column is all its own. */
 #slack-work { display: contents; }

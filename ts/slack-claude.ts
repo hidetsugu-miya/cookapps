@@ -1,7 +1,8 @@
 // The Claude pane of the Slack screen (S-24): Claude Code in a terminal (A-36, ts/claude-code.ts) on the right of the unread list, the watch and a channel's history, with the tools of tsunagiai-mcp only (no built-in tools).
 // It reads the channel whose history is open (`slack_channel_read`) and reads and writes the post field (`screen_read` and `screen_write` of the target "slack-channel", ts/slack-channel.ts); the owner posts with the arrow of the field, or Claude Code asks for it with `slack_compose_post` of S-23 on the compose screen only.
-// The pane's elements are in `index.html` (`slack-claude-term`, the host of the terminal, and `slack-claude-restart`); view.ts says when the pane may be in view (every view of the Slack screen but a thread, which has its own, S-7).
-// There is one process for the whole screen. It starts with the first show, goes on while the pane is hidden (a thread, another screen, the window hidden) and when another channel is chosen, and ends with 「やり直す」 or the app.
+// The pane's elements are in `index.html` (`slack-claude-term`, the host of the terminal, `slack-claude-restart`, the question `slack-claude-ask` and the ✳ `slack-tool-claude`); view.ts says when the pane may be in view (every view of the Slack screen but a thread, which has its own, S-7).
+// The pane is closed at first and shows the question 「Claude に相談しますか？」 with 「相談する」; nothing starts while it is closed. The ✳ of the pane opens and closes it (the owner's decision of 2026-11-20, #1103, as T-7 has it, #1055).
+// Open, there is one process for the whole screen. It goes on while the pane is hidden (a thread, another screen, the window hidden) and when another channel is chosen, and ends with 「やり直す」, with the close of the pane, or with the app.
 import { claudeCodeStarted, closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { initSplit, type SplitHandle } from "./split.js";
@@ -51,11 +52,37 @@ function layoutSlack() {
   for (const follow of followers) follow(below);
 }
 
-// Shows the terminal while the pane is in view, and hides it (the process goes on) while it is not: a thread, another screen, or the window is hidden. The first show starts Claude Code.
+// Whether the pane is open, in memory only. While it is closed no show, hide or visibilitychange starts anything.
+let open = false;
+
+// Draws the two states: the question and the ✳ not pressed, or the heading and the terminal and the ✳ pressed.
+function drawSlackClaude() {
+  $("slack-claude-ask").hidden = open;
+  $("slack-claude").querySelector<HTMLElement>(".chat-head")!.hidden = !open;
+  $("slack-claude-term").hidden = !open;
+  $("slack-tool-claude").setAttribute("aria-pressed", String(open));
+}
+
+// While the pane is open, shows the terminal while the pane is in view, and hides it (the process goes on) while it is not: a thread, another screen, or the window is hidden. A process that ended by itself is started anew by the next show.
 export function syncSlackClaude() {
+  if (!open) return;
   const host = $("slack-claude-term");
   if (document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
   if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
+}
+
+// Opens the pane: shows the terminal, which starts the process and takes the keyboard because it is new.
+function openSlackClaude() {
+  open = true;
+  drawSlackClaude();
+  syncSlackClaude();
+}
+
+// Closes the pane: ends the process; the next open starts a new one.
+function closeSlackClaude() {
+  open = false;
+  closeClaudeCode(ID, OWNER);
+  drawSlackClaude();
 }
 
 export function initSlackClaude() {
@@ -67,6 +94,8 @@ export function initSlackClaude() {
     syncSlackClaude();
     void claudeCodeStarted(ID).then(() => (restart.disabled = false));
   };
+  $("slack-claude-open").onclick = openSlackClaude;
+  $("slack-tool-claude").onclick = () => (open ? closeSlackClaude() : openSlackClaude());
   document.addEventListener("visibilitychange", syncSlackClaude);
   // 30% of the screen at first, between 25% and 40% (the CSS holds the same range). Under the body it is the height, 30% to 45% of the column, kept apart from the width.
   split = initSplit($("slack-screen"), $("slack-claude-split"), { min: 0.25, max: 0.4, initial: 0.3, property: "--slack-claude-w", lying: { min: 0.3, max: 0.45, property: "--slack-claude-h" } });
