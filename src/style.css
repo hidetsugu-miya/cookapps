@@ -1216,6 +1216,8 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 #formation-flow-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
 #formation-flow-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #formation-flow-head h2 { flex: none; }
+#formation-flow-head .formation-done { margin-right: 0; }
+#formation-flow-head .formation-done[hidden] { display: none; }
 #formation-follow { flex: none; margin-left: auto; color: var(--muted); }
 #formation-follow[aria-pressed="true"], #formation-follow[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
 #formation-flow-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box; padding: 14px 12px; }

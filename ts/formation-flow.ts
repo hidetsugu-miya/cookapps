@@ -1,5 +1,5 @@
 // The tabs and the right pane of the orchestration (A-37). The tabs are in the header of the middle pane: the leader first, then a tab for each child in the order `formation_children` gives (a planned one dashed and not pressable, a done one with a ✓ and a ×). The tab that is selected shows its terminal under the strip: the leader's (formation.ts) or the child's, a terminal of the Orca of the child's environment, streamed when the Orca screen streams that environment (A-12), else mirrored (A-8), as the Orca screen's terminals are.
-// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab.
+// The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113); their tabs stay.
 // A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
 // 「自動で追う」 is off when a formation is opened, so the middle pane stays on the leader, where the owner types; pressed on, it moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
@@ -34,6 +34,8 @@ let notice: string | null = null;
 let terms: FormationChild[] = [];
 let selected: string | null = null;
 let follow = false;
+// The formations whose done children's cards are shown (in memory only, kept apart from the list's, #1113); they are left out until the chip 「完了 N」 of the heading is pressed.
+const doneShown = new Set<string>();
 // The child whose decision page the middle pane shows in place of a terminal (null: a terminal does). The selected tab stays as it was under it, and is shown again when the page closes.
 let pageChild: string | null = null;
 // The child whose row in the list of the formations was pressed (A-37): its tab is selected by the next read that lists it with a terminal, and a read that does not drops it.
@@ -512,6 +514,17 @@ function drawTabs() {
   if (focused) box.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
 }
 
+const showDone = () => doneShown.has(currentFormation() ?? "");
+
+// The chip 「完了 N」 in the heading: none while no child is done; pressed, the cards of the done children are shown.
+function drawDoneChip() {
+  const chip = $("formation-flow-done");
+  const done = children.filter((c) => c.state === "done").length;
+  chip.hidden = done === 0;
+  chip.textContent = `完了 ${done}`;
+  chip.setAttribute("aria-pressed", String(showDone()));
+}
+
 function draw() {
   const now = Date.now();
   if (watching === "list") return;
@@ -524,7 +537,8 @@ function draw() {
   const said = failure ?? notice;
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
-  const key = JSON.stringify([selected, pageChild, [...closing], children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null])]);
+  drawDoneChip();
+  const key = JSON.stringify([selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null])]);
   if (key === treeKey) return;
   treeKey = key;
   // The cards are drawn again in place: the scroll and the focus stay where they were.
@@ -532,7 +546,7 @@ function draw() {
   const top = body.scrollTop;
   const list = $("formation-flow-list");
   const focused = focusSelector(list.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null);
-  list.replaceChildren(...children.map((c) => card(c, now)));
+  list.replaceChildren(...children.filter((c) => c.state !== "done" || showDone()).map((c) => card(c, now)));
   body.scrollTop = top;
   if (focused) list.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
   // A selection that moved (the follow moves it too) is brought into the view of the cards and the tabs; the focus stays where it was.
@@ -547,6 +561,11 @@ function draw() {
 export function initFormationFlow() {
   $("formation-tab-leader-main").onclick = selectLeader;
   $("formation-flow-root").onclick = selectLeader;
+  $("formation-flow-done").onclick = () => {
+    const formation = currentFormation() ?? "";
+    if (!doneShown.delete(formation)) doneShown.add(formation);
+    draw();
+  };
   $("formation-follow").onclick = () => {
     follow = !follow;
     // Pressed on, it moves to the child that waits: a page that is shown gives way.
