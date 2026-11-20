@@ -24,7 +24,7 @@ const DEFAULT_STATE: &str = ".local/state/mysis-agents/yomiyasu";
 /// The keys of a value that locate something (a root, a path), and the user's own reply pasted back: not text written for the user.
 const LOCATION_KEYS: [&str; 6] = ["roots", "root", "ref", "path", "source", "previous_reply"];
 /// Card identifiers: the page must not change them, and the reply matches on them, so they cannot be polished.
-const IDENTIFIER_KEYS: [&str; 3] = ["number", "clarified_numbers", "cards"];
+const IDENTIFIER_KEYS: [&str; 2] = ["number", "clarified_numbers"];
 /// The facts whose value the contract fixes or copies verbatim from a finding. The label of every fact is fixed.
 const FIXED_FACTS: [&str; 7] = [
     "検出元",
@@ -308,22 +308,21 @@ fn mermaid_labels(src: &str) -> String {
         .join("\n")
 }
 
-/// The strings of the input JSON of a page that are text written for the user, in key order. What quotes or locates something is left out: the locations, the card identifiers, a `literal` block, the quoted lines of a `diff`, the `sample` of an option, a fixed fact, and an option copied from the findings tool of a `review-decision` card.
+/// The strings of the input JSON of a page that are text written for the user, in key order. What quotes or locates something is left out: the locations, the card identifiers, a `literal` block, the quoted lines of a `diff`, the `sample` of an option, and a fixed fact.
 pub fn page_texts(value: &Value) -> Vec<String> {
     let mut texts = Vec::new();
-    collect(value, false, &mut texts);
+    collect(value, &mut texts);
     texts
 }
 
-fn collect(value: &Value, review_decision: bool, out: &mut Vec<String>) {
+fn collect(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::String(text) => out.push(text.clone()),
-        Value::Array(items) => items.iter().for_each(|v| collect(v, review_decision, out)),
+        Value::Array(items) => items.iter().for_each(|v| collect(v, out)),
         Value::Object(map) => {
             let text_of = |key: &str| map.get(key).and_then(Value::as_str).unwrap_or("");
             let has = |key: &str| map.get(key).is_some_and(|v| !v.is_null());
             let (kind, label) = (text_of("type"), text_of("label"));
-            let review_decision = review_decision || text_of("kind") == "review-decision";
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort();
             for key in keys {
@@ -336,9 +335,7 @@ fn collect(value: &Value, review_decision: bool, out: &mut Vec<String>) {
                     || k == "sample"
                     // A fact's label.
                     || (k == "label" && has("value"))
-                    || (k == "value" && FIXED_FACTS.contains(&label))
-                    // An option copied from the findings tool.
-                    || (review_decision && (k == "label" || k == "fix") && has("key"));
+                    || (k == "value" && FIXED_FACTS.contains(&label));
                 if quoted {
                     continue;
                 }
@@ -348,7 +345,7 @@ fn collect(value: &Value, review_decision: bool, out: &mut Vec<String>) {
                     }
                     continue;
                 }
-                collect(&map[k], review_decision, out);
+                collect(&map[k], out);
             }
         }
         _ => {}
@@ -624,13 +621,13 @@ mod tests {
         let page = json!({
             "title": "題名", "roots": {"d": "/ルート"}, "previous_reply": "貼った返信",
             "q": [{
-                "kind": "review-decision", "title": "論点",
+                "kind": "nr", "title": "論点",
                 "facts": [
                     {"label": "検出元", "value": "出所"},
                     {"label": "指摘内容", "value": "指摘"},
                     {"label": "重要度", "value": "高"}
                 ],
-                "options": [{"key": "A", "label": "選択肢", "fix": "修正", "detail": "詳細"}],
+                "options": [{"key": "A", "label": "選択肢", "detail": "詳細"}],
                 "blocks": [
                     {"type": "literal", "text": "原文"},
                     {"type": "paragraph", "text": "段落"},
@@ -650,6 +647,7 @@ mod tests {
             .collect();
         let mut want = lines(&[
             "論点",
+            "選択肢",
             "指摘",
             "詳細",
             "要約",
@@ -685,12 +683,12 @@ mod tests {
     #[test]
     fn page_texts_leave_out_the_card_identifiers_and_keep_the_titles() {
         let page = json!({
-            "context_label": "文脈", "clarified_numbers": ["論点1"], "cards": ["CR-3"],
+            "context_label": "文脈", "clarified_numbers": ["論点1"],
             "q": [{"kind": "question", "number": "論点4", "title": "題"}],
-            "u": {"kind": "unmet-criterion", "number": "未達2", "cards": ["CR-4", "カード5"], "title": "条件"}
+            "u": {"kind": "must-fix", "number": "未達2", "title": "条件"}
         });
         let got = page_texts(&page).join(" ");
-        for id in ["論点1", "CR-3", "論点4", "未達2", "CR-4", "カード5"] {
+        for id in ["論点1", "論点4", "未達2"] {
             assert!(!got.contains(id), "{id} is an identifier: {got}");
         }
         for text in ["文脈", "題", "条件"] {

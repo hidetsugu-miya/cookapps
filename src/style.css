@@ -1147,10 +1147,6 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 0; }
 .fp-title { flex: 0 1 auto; margin: 0; font-size: calc(17px * var(--fs)); white-space: normal; overflow: visible; }
 .fp-from { color: var(--muted); font-size: calc(13px * var(--fs)); }
-.fp-pr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.fp-pr-url { min-width: 0; }
-.fp-pr-open { flex: none; height: 26px; font-size: calc(13px * var(--fs)); }
-.fp-pr .fp-error { flex-basis: 100%; margin: 0; }
 .fp-section { display: flex; flex-direction: column; gap: 10px; }
 .fp-sec { margin: 0; padding: 4px 10px; border-left: 4px solid var(--accent); background: var(--soft); font-size: calc(14px * var(--fs)); }
 .fp-h { margin: 6px 0 0; font-size: calc(13.5px * var(--fs)); font-weight: 700; }
@@ -1169,15 +1165,15 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-side { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--chip-line); border-radius: 8px; }
 .fp-side-caption { color: var(--muted); font-size: calc(13px * var(--fs)); font-weight: 700; }
 .fp-section details > summary { cursor: pointer; font-weight: 700; }
-.fp-change, .fp-ref, .fp-detail, .fp-verify-pass { display: flex; flex-direction: column; }
-.fp-change, .fp-ref, .fp-verify-pass { padding: 6px 10px; border: 1px solid var(--muted); border-radius: 12px; }
-.fp-change[open] > :not(summary), .fp-ref[open] > :not(summary), .fp-verify-pass[open] > :not(summary) { margin-top: 8px; }
+.fp-change, .fp-ref, .fp-detail { display: flex; flex-direction: column; }
+.fp-change, .fp-ref { padding: 6px 10px; border: 1px solid var(--muted); border-radius: 12px; }
+.fp-change[open] > :not(summary), .fp-ref[open] > :not(summary) { margin-top: 8px; }
 .fp-detail > summary { color: var(--accent-text); font-size: calc(13px * var(--fs)); }
 /* A row that opens in place has the toggle 「開く ▼」 at its right end; it is the only thing of the page with that shape. */
-.fp-change > summary, .fp-ref > summary, .fp-verify-pass > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; list-style: none; }
-.fp-change > summary::-webkit-details-marker, .fp-ref > summary::-webkit-details-marker, .fp-verify-pass > summary::-webkit-details-marker { display: none; }
-.fp-change > summary::after, .fp-ref > summary::after, .fp-verify-pass > summary::after { content: "開く ▼"; flex: none; padding: 0 8px; border: 1px solid var(--muted); border-radius: 4px; color: var(--ink-soft); font-size: calc(12px * var(--fs)); font-weight: 400; }
-.fp-change[open] > summary::after, .fp-ref[open] > summary::after, .fp-verify-pass[open] > summary::after { content: "閉じる ▲"; }
+.fp-change > summary, .fp-ref > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; list-style: none; }
+.fp-change > summary::-webkit-details-marker, .fp-ref > summary::-webkit-details-marker { display: none; }
+.fp-change > summary::after, .fp-ref > summary::after { content: "開く ▼"; flex: none; padding: 0 8px; border: 1px solid var(--muted); border-radius: 4px; color: var(--ink-soft); font-size: calc(12px * var(--fs)); font-weight: 400; }
+.fp-change[open] > summary::after, .fp-ref[open] > summary::after { content: "閉じる ▲"; }
 .fp-ref > summary > .fp-h { margin: 0; }
 /* What a fold shows in the drawer has a quiet button in the text, like 「拡大する」. */
 .fp-fold-btn { align-self: flex-start; margin-top: 4px; padding: 2px 10px; border: 1px solid var(--muted); border-radius: 8px; background: transparent; color: var(--accent-text); font: inherit; font-size: calc(13px * var(--fs)); cursor: pointer; }
@@ -1243,19 +1239,12 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-number { flex: none; padding: 0 8px; border-radius: 10px; background: var(--soft); color: var(--accent-text); font-size: calc(12.5px * var(--fs)); font-weight: 700; }
 .fp-card-title { margin: 0; font-size: calc(14.5px * var(--fs)); }
 .fp-asks { flex: none; padding: 0 8px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent-text); font-size: calc(12px * var(--fs)); font-weight: 700; }
-.fp-cause { font-weight: 700; }
 .fp-meter { display: flex; align-items: baseline; gap: 8px; }
 .fp-meter-cells { letter-spacing: 2px; color: var(--accent-text); }
 .fp-sample { display: flex; flex-direction: column; gap: 4px; }
 .fp-sample-frame { align-self: flex-start; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; }
 .fp-sample-note { font-size: calc(13px * var(--fs)); }
 .fp-unmet { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 3px solid var(--danger); }
-.fp-result { flex: none; padding: 0 8px; border: 1px solid var(--danger); border-radius: 10px; color: var(--danger); font-size: calc(12px * var(--fs)); font-weight: 700; }
-.fp-result[data-result="not-run"] { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
-.fp-verify-pass { margin-top: 8px; }
-.fp-verify-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.fp-verify-col { min-width: 0; }
-@media (max-width: 720px) { .fp-verify-images { grid-template-columns: minmax(0, 1fr); } }
 .fp-fact { margin-top: 4px; }
 .fp-md { min-width: 0; overflow-x: auto; }
 .fp-md :where(p, ul, ol, pre, blockquote, table) { margin: 0 0 8px; }
@@ -1334,7 +1323,7 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-card[data-answered] { border-left: 4px solid var(--accent); }
 /* 「次の未回答へ」 gives the card the focus, and the ring shows where it went. */
 .fp-card:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
-.fp-md a, .fp-pr a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }
+.fp-md a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }
 /* The right pane, "流れ", is 260px wide, with the leader's card on top and the children's cards under it, a line at their left joining them to it. Its compact view (`data-compact="true"`) is 78px wide, as the sidebar is: see below. */
 :root { --codex-bg: #e6edfb; --codex-fg: #1d3f8a; --codex-hot: #2554b4; }
 #formation-flow { flex: none; width: 260px; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }

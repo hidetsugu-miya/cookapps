@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, verificationCard, waitForCalls, CARDS, CARD } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -2753,66 +2753,6 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf("#formation-page .fp-reference .fp-quality .fp-p")).toEqual(["実施回数: 2 回", "MustFix 修正: 1 回", "解消した必ず直す指摘: 3 件"]);
   });
 
-  it("draws a code review with its changes open, the unmet criterion with no answer, and the pull request", async () => {
-    await openPage(
-      decisionPage({
-        pageKind: "code-review",
-        subject: "code",
-        what: "ロックを足しました",
-        changes: [{ heading: "api の変更", blocks: [{ type: "paragraph", text: "失敗の回数を数えます" }] }],
-        unmetCriteria: [decisionCard("UC-1", { kind: "unmet-criterion", title: "条件 1", cards: ["RMF-1"] })],
-        residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" })],
-        pr: { url: "https://example.com/pr/1", note: null },
-      }),
-    );
-    expect(await folded("#formation-page .fp-change")).toBe(true);
-    await expect($("#formation-page .fp-change .fp-p")).toHaveText("失敗の回数を数えます");
-    expect(await textsOf('#formation-page [data-card="RMF-1"] .fp-choice-label')).toEqual(["修正して再レビューする推奨", "現状で完了する"]);
-    expect(await count('#formation-page [data-card="UC-1"] input')).toBe(0);
-    // The pull request is not in 「参考」: it is under the title.
-    expect(await count("#formation-page .fp-reference")).toBe(0);
-  });
-
-  it("shows the pull request of a code review under the title, and 「開く」 opens its URL in the default browser", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", notices: ["集約の検査は通りました"], pr: { url: "https://github.com/o/r/pull/7", note: null } }));
-    expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["https://github.com/o/r/pull/7"]);
-    expect(await textsOf("#formation-page .fp-pr button")).toEqual(["開く"]);
-    // Right after the header and before 「何が変わるか」.
-    expect(await browser.execute(() => document.querySelector(".fp-top")?.nextElementSibling?.className)).toBe("fp-pr");
-    // 「参考」 holds the notices and not the pull request.
-    await $("#formation-page .fp-notices > summary").click();
-    expect(await textsOf("#formation-page .fp-reference .fp-p")).toEqual(["集約の検査は通りました"]);
-    expect(await count("#formation-page .fp-reference .fp-ev-path")).toBe(0);
-    const open = await mock("orca_open_url", null);
-    await $("#formation-page .fp-pr button").click();
-    expect(await waitForCalls(open)).toEqual([{ url: "https://github.com/o/r/pull/7" }]);
-    await expect($("#formation-page .fp-pr .fp-error")).not.toBeDisplayed();
-  });
-
-  it("shows the reason in the place of the pull request when there is none", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: { url: null, note: "ベースにない変更がありません" } }));
-    expect(await textsOf("#formation-page .fp-pr .fp-p")).toEqual(["ベースにない変更がありません"]);
-    expect(await count("#formation-page .fp-pr button")).toBe(0);
-  });
-
-  it("gives a URL that is not https no button", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: { url: "http://example.com/pr/1", note: null } }));
-    expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["http://example.com/pr/1"]);
-    expect(await count("#formation-page .fp-pr button")).toBe(0);
-  });
-
-  it("draws no pull request on a code review that has none", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: null }));
-    expect(await count("#formation-page .fp-pr")).toBe(0);
-  });
-
-  it("shows the reason when the pull request cannot be opened", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: { url: "https://github.com/o/r/pull/7", note: null } }));
-    await mock("orca_open_url", rejects("ブラウザを開けません"));
-    await $("#formation-page .fp-pr button").click();
-    await expect($("#formation-page .fp-pr .fp-error")).toHaveText("ブラウザを開けません");
-  });
-
   it("draws the blocks, the facts and the evidence of a card behind 詳しく見る", async () => {
     const card = decisionCard("Q1", {
       background: "今の上限は 5 回",
@@ -3105,7 +3045,6 @@ describe("orchestration mode: the decision page of a child", () => {
     ],
     options: [
       decisionOption("A", "選べるようにする", "選ぶと会計待ちになる", {
-        fix: "ステータスに会計待ちを足す",
         sample: { text: "会計待ち", fontSize: 18, fontWeight: 700, color: "#2f5bd3" },
         image: { root: "deliverables", path: "ui/after.png", caption: "直したあと" },
         diagram: "flowchart LR\n  x[選ぶ] --> y[会計待ち]",
@@ -3175,7 +3114,7 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(drawn.lines.length).toBeGreaterThan(1);
   });
 
-  it("opens 「この選択肢の詳細」 with the detail, 直し方, the sample in its style, the image, the diagram and the conditions the option fails, in that order", async () => {
+  it("opens 「この選択肢の詳細」 with the detail, the sample in its style, the image, the diagram and the conditions the option fails, in that order", async () => {
     await openPage(decisionPage({ questions: [ASKING] }));
     const row = `${CARD_Q} [data-recommended="true"]`;
     const details = `${row} .fp-detail`;
@@ -3185,9 +3124,8 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await callsOf("formation_page_image")).toHaveLength(1);
     await $(`${details} > summary`).click();
     expect(await folded(details)).toBe(true);
-    expect(await browser.execute((s) => [...document.querySelector(s)!.children].slice(1).map((e) => e.className.split(" ")[0] || e.tagName.toLowerCase()), details)).toEqual(["fp-p", "fp-h", "fp-p", "fp-sample", "fp-image", "fp-diagram"]);
-    expect(await textsOf(`${details} .fp-h`)).toEqual(["直し方"]);
-    expect(await textsOf(`${details} .fp-p`)).toEqual(["選ぶと会計待ちになる", "ステータスに会計待ちを足す"]);
+    expect(await browser.execute((s) => [...document.querySelector(s)!.children].slice(1).map((e) => e.className.split(" ")[0] || e.tagName.toLowerCase()), details)).toEqual(["fp-p", "fp-sample", "fp-image", "fp-diagram"]);
+    expect(await textsOf(`${details} .fp-p`)).toEqual(["選ぶと会計待ちになる"]);
     const sample = await browser.execute((s) => {
       const frame = document.querySelector(`${s} .fp-sample-frame`) as HTMLElement;
       const style = getComputedStyle(frame);
@@ -3212,7 +3150,7 @@ describe("orchestration mode: the decision page of a child", () => {
 
   it("draws the conditions against the options as a table and the occurrence of the matter in 詳しく見る", async () => {
     const card = decisionCard("ND-1", {
-      kind: "review-decision",
+      kind: "nr",
       title: "待たせるか？",
       scene: "ロックが取れないとき",
       options: [decisionOption("A", "待たせる"), decisionOption("B", "すぐ失敗にする", null, { unmet: [{ id: "KO-01", reason: "失敗が増えます" }] })],
@@ -3221,7 +3159,7 @@ describe("orchestration mode: the decision page of a child", () => {
       recommendationReason: "r",
       occurrence: { conditions: ["同じ予約を二人が同時に開く"], likelihood: "occasional", basis: "実測: 手元で 3 回に 1 回起きた", impact: "片方の変更が消える", detectability: "気づかない" },
     });
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [card, { ...card, number: "ND-2", occurrence: { ...card.occurrence!, conditions: ["一つめ", "二つめ"], likelihood: "rare" } }] }));
+    await openPage(decisionPage({ pageKind: "approval", subject: "design", what: "変更です", needsUserDecision: [card, { ...card, number: "ND-2", occurrence: { ...card.occurrence!, conditions: ["一つめ", "二つめ"], likelihood: "rare" } }] }));
     // 詳細 holds the occurrence, and the table of the conditions is the tab 根拠 beside it.
     const more = PANEL;
     await $('#formation-page [data-card="ND-1"] > .fp-fold-btn').click();
@@ -3241,89 +3179,6 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf(`${second} .fp-h`)).toEqual(["発生条件（すべて重なったときだけ起きる）", "発生頻度", "影響", "検知"]);
     expect(await textsOf(`${second} ol.fp-list li`)).toEqual(["一つめ", "二つめ"]);
     expect(await textsOf(`${second} .fp-meter-cells`)).toEqual(["■□□"]);
-  });
-
-  it("shows an unmet release condition on the card that causes it, and in its own group only when no card of the page does", async () => {
-    const ask = decisionCard("ND-1", { kind: "review-decision", title: "待たせるか？", scene: "場面", options: [decisionOption("A", "待たせる")], recommendation: "A", recommendationReason: "r" });
-    const caused = decisionCard("UC-1", { kind: "unmet-criterion", title: "ロックを失わない", summary: "待たせないと失われます", cards: ["ND-1"] });
-    const alone = decisionCard("UC-2", { kind: "unmet-criterion", title: "全件が通る", summary: "一件落ちます", cards: [] });
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [ask], unmetCriteria: [caused, alone] }));
-    expect(await textsOf('#formation-page [data-card="ND-1"] > .fp-h')).toEqual(["具体的な場面", "反するリリース条件", "あなたの回答"]);
-    expect(await textsOf('#formation-page [data-card="ND-1"] .fp-cause')).toEqual(["ロックを失わない"]);
-    expect(await count('#formation-page [data-card="UC-1"]')).toBe(0);
-    expect(await count('#formation-page [data-card="UC-2"]')).toBe(1);
-  });
-
-  it("draws 「画面の AI 検証」 after the cards that need a decision: the failed and not-run cards open with their counts, the passed ones in a closed fold, and no answer", async () => {
-    const image = (root: string, path: string, caption: string) => ({ root, path, caption });
-    const ask = decisionCard("ND-1", { kind: "review-decision", title: "待たせるか？", scene: "場面", options: [decisionOption("A", "待たせる")], recommendation: "A", recommendationReason: "r" });
-    const failed = verificationCard("SV-1", "一覧", {
-      result: "fail",
-      stateSetup: "予約が 3 件ある",
-      steps: ["一覧を開く", "削除を押す"],
-      expected: "確認が出る",
-      basis: "確認が出ない",
-      referenceImage: image("deliverables", "ui-references/list.png", "見本"),
-      capturedImage: image("captures", "list.png", "撮影"),
-    });
-    const notRun = verificationCard("SV-2", "空の一覧", { result: "not-run", basis: "判定していません", missingReason: "ゴールの検証をしないで再開しました", referenceImage: image("screenshots", "empty.png", "空の見本") });
-    const passes = [
-      verificationCard("SV-3", "ヘッダー", { referenceImage: image("deliverables", "ui-references/head.png", "見本"), capturedImage: image("captures", "head.png", "撮影") }),
-      verificationCard("SV-4", "フッター", { capturedImage: image("captures", "foot.png", "撮影") }),
-    ];
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [ask], screenVerifications: [failed, notRun, ...passes] }));
-    const group = "#formation-page .fp-verifications";
-    expect(await textsOf("#formation-page .fp-group > .fp-sec")).toEqual(["判断が必要 1 件", "画面の AI 検証"]);
-    expect(await textsOf(`${group} .fp-verify-counts`)).toEqual(["不合格 1 件・未実施 1 件・合格 2 件"]);
-    // The failed and the not-run cards stand open at the top, each with its result tag; the passed ones wait in one closed fold and have no tag.
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} > .fp-card`)].map((e) => (e as HTMLElement).dataset.card), group)).toEqual(["SV-1", "SV-2"]);
-    expect(await textsOf(`${group} > .fp-card > .fp-card-head > .fp-result`)).toEqual(["不合格", "未実施"]);
-    expect(await textsOf(`${group} > .fp-verify-pass > summary`)).toEqual(["合格 2 件の内容を見る"]);
-    expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
-    expect(await count(`${group} > .fp-verify-pass .fp-result`)).toBe(0);
-    expect(await count(`${group} .fp-answer`)).toBe(0);
-    expect(await textsOf(`${group} > .fp-card:first-of-type > .fp-p`)).toEqual(["一覧を見た"]);
-    // No image is read before a fold is opened.
-    expect(await callsOf("formation_page_image")).toHaveLength(0);
-    const first = PANEL;
-    await $(`${group} [data-card="SV-1"] > .fp-fold-btn`).click();
-    expect(await drawerTitle()).toEqual(["SV-1 一覧 — 詳細"]);
-    expect(await textsOf(`${first} > .fp-h`)).toEqual(["確認したこと", "状態の作り方", "操作", "操作のあとに出るもの", "結果と根拠"]);
-    expect(await textsOf(`${first} > .fp-p`)).toEqual(["一覧の観点", "予約が 3 件ある", "確認が出る", "不合格 確認が出ない"]);
-    expect(await textsOf(`${first} ol.fp-list li`)).toEqual(["一覧を開く", "削除を押す"]);
-    expect(await textsOf(`${first} .fp-verify-col > .fp-h`)).toEqual(["参照画像", "撮影画像"]);
-    expect(await waitForCalls("formation_page_image", 2)).toEqual(expect.arrayContaining([
-      { name: "formation", child: "req-login", root: "deliverables", path: "ui-references/list.png" },
-      { name: "formation", child: "req-login", root: "captures", path: "list.png" },
-    ]));
-    await browser.waitUntil(async () => (await count(`${first} .fp-verify-col img`)) === 2, { timeoutMsg: "the two images were not drawn" });
-    // The two columns stand side by side.
-    const rects = await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-verify-col`)].map((e) => e.getBoundingClientRect()).map((r) => ({ left: Math.round(r.left), top: Math.round(r.top) })), first);
-    expect(rects[0].top).toBe(rects[1].top);
-    expect(rects[1].left).toBeGreaterThan(rects[0].left);
-    // A card that was not run says why in the place of the capture.
-    const second = PANEL;
-    await $(`${group} [data-card="SV-2"] > .fp-fold-btn`).click();
-    expect(await textsOf(`${second} > .fp-h`)).toEqual(["確認したこと", "結果と根拠"]);
-    expect(await textsOf(`${second} .fp-verify-col > .fp-h`)).toEqual(["参照画像", "撮影画像"]);
-    expect(await textsOf(`${second} .fp-missing`)).toEqual(["未取得: ゴールの検証をしないで再開しました"]);
-    expect(await waitForCalls("formation_page_image", 3)).toContainEqual({ name: "formation", child: "req-login", root: "screenshots", path: "empty.png" });
-    // The fold of the passed cards opens to cards that carry the images they have and no result tag.
-    await $(`${group} > .fp-verify-pass > summary`).click();
-    const pass = PANEL;
-    await $(`${group} [data-card="SV-4"] > .fp-fold-btn`).click();
-    expect(await textsOf(`${pass} .fp-verify-col > .fp-h`)).toEqual(["撮影画像"]);
-    expect(await textsOf(`${pass} > .fp-p`)).toEqual(["フッターの観点", "フッターの根拠"]);
-    expect(await waitForCalls("formation_page_image", 4)).toContainEqual({ name: "formation", child: "req-login", root: "captures", path: "foot.png" });
-  });
-
-  it("heads a group of passed cards alone with a note that no answer is needed, and draws it for a page that has only that group", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", screenVerifications: [verificationCard("SV-1", "一覧"), verificationCard("SV-2", "詳細")] }));
-    const group = "#formation-page .fp-verifications";
-    expect(await textsOf(`${group} .fp-verify-counts`)).toEqual(["すべて合格しました。回答は要りません。"]);
-    expect(await count(`${group} > .fp-card`)).toBe(0);
-    expect(await textsOf(`${group} > .fp-verify-pass > summary`)).toEqual(["合格 2 件の内容を見る"]);
-    expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
   });
 
   it("gives a fact its 「中身を見る」: a node as the deliverable draws it, Markdown formatted, a file as text and an image as an image, and no raw HTML", async () => {
@@ -3452,7 +3307,6 @@ describe("orchestration mode: the decision page of a child", () => {
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
       adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
-      unmetCriteria: [],
       qualityLoop: { rounds: 2, fixCycles: 1, mustFixResolved: 3 },
     });
     await openPage(approval);
@@ -3478,7 +3332,7 @@ describe("orchestration mode: the decision page of a child", () => {
   });
 
   it("sends a page with no card that asks, with no answer", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", qualityLoop: null }));
+    await openPage(decisionPage({ pageKind: "approval", subject: "design", what: "変更です", qualityLoop: null }));
     await $(`${VERDICT} input[value="approve"]`).click();
     await $(SEND).click();
     expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [], verdict: "approve", revision: "" }]);
@@ -3552,11 +3406,6 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf(`${VERDICT} .fp-choice-label`)).toEqual(["要件定義を承認する", "要件定義の修正を依頼する"]);
   });
 
-  it("words the verdict of a code review by the change", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です" }));
-    expect(await textsOf(`${VERDICT} .fp-choice-label`)).toEqual(["この変更を承認する", "修正を依頼する"]);
-  });
-
   it("does not let the approval be chosen while a card has its fix chosen, says why, and turns an approval chosen before into the request", async () => {
     await openPage(approvalPage());
     const fix = $('#formation-page [data-card="MF-1"] input[value="fix"]');
@@ -3579,22 +3428,22 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect(verdictRadio("approve")).toBeEnabled();
   });
 
-  it("holds the approval back for the fix of a code review's card too, and names every card with a fix", async () => {
+  it("names every card with a fix chosen, and holds the approval back until each has another choice", async () => {
     await openPage(
       decisionPage({
-        pageKind: "code-review",
-        subject: "code",
+        pageKind: "approval",
+        subject: "design",
         what: "変更です",
-        residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" }), decisionCard("RMF-2", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "遅い" })],
+        residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "落ちる" }), decisionCard("MF-2", { kind: "must-fix", recommendation: "fix", recommendationReason: "遅い" })],
       }),
     );
-    await $('#formation-page [data-card="RMF-1"] input[value="fix"]').click();
-    await $('#formation-page [data-card="RMF-2"] input[value="fix"]').click();
+    await $('#formation-page [data-card="MF-1"] input[value="fix"]').click();
+    await $('#formation-page [data-card="MF-2"] input[value="fix"]').click();
     await expect(verdictRadio("approve")).toBeDisabled();
-    expect(await rawTextsOf(`${VERDICT} .fp-verdict-reason`)).toEqual(["修正を選んだカード（RMF-1、RMF-2）があるので、承認は選べません"]);
-    await $('#formation-page [data-card="RMF-1"] input[value="accept"]').click();
+    expect(await rawTextsOf(`${VERDICT} .fp-verdict-reason`)).toEqual(["修正を選んだカード（MF-1、MF-2）があるので、承認は選べません"]);
+    await $('#formation-page [data-card="MF-1"] input[value="skip"]').click();
     await expect(verdictRadio("approve")).toBeDisabled();
-    await $('#formation-page [data-card="RMF-2"] input[value="accept"]').click();
+    await $('#formation-page [data-card="MF-2"] input[value="skip"]').click();
     await expect(verdictRadio("approve")).toBeEnabled();
   });
 
@@ -3646,19 +3495,6 @@ describe("orchestration mode: the decision page of a child", () => {
     // Taking an answer back puts the card in the line again.
     await $('#formation-page [data-card="SP-1"] .fp-cancel').click();
     expect(await rawTextsOf(line)).toEqual(["答えていないカードは、この案で送ります: SP-1 承認"]);
-  });
-
-  it("says that an unanswered fix card of a code review is sent as completing it as it is", async () => {
-    await openPage(
-      decisionPage({
-        pageKind: "code-review",
-        subject: "code",
-        what: "変更です",
-        residualMustFix: [decisionCard("RMF-1", { kind: "review-must-fix", recommendation: "fix", recommendationReason: "落ちる" })],
-        needsUserDecision: [decisionCard("RD-1", { kind: "review-decision", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
-      }),
-    );
-    expect(await rawTextsOf(`${VERDICT} .fp-unanswered`)).toEqual(["答えていないカードは、この案で送ります: RMF-1 現状で完了する"]);
   });
 
   it("sends once however often it is pressed, and closes the tab and puts the card back when the reply went through", async () => {
@@ -3865,11 +3701,6 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(units[0]).toContain("本承認が最後の承認です");
   });
 
-  it("shows no sentence on a code review's verdict", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です" }));
-    expect(await count("#formation-page .fp-unit")).toBe(0);
-  });
-
   it("puts the matters of an approval in 参考: the decisions that wait for the business side, the withdrawn questions, what was noticed and the quality loop", async () => {
     await openPage(
       approvalPage({
@@ -3904,31 +3735,11 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await count('#formation-page .fp-settled[data-provisional="true"]')).toBe(0);
   });
 
-  it("puts the departures from the contract, the notices and the noticed matters of a code review in 参考, with the pull request still under the title", async () => {
-    await openPage(
-      decisionPage({
-        pageKind: "code-review",
-        subject: "code",
-        what: "変更です",
-        policyDeviations: [{ type: "paragraph", text: "契約と違い、検査を足しました" }],
-        notices: ["集約の検査は通りました", "カバレッジは 91%"],
-        noticed: [{ title: "FV-bound-1", text: "上限を 5 から 4 にしました", evidence: [] }],
-        pr: { url: "https://github.com/o/r/pull/7", note: null },
-      }),
-    );
-    await openReferences();
-    expect(await textsOf("#formation-page .fp-reference .fp-ref > summary > h3")).toEqual(["実装方針からの変更", "お知らせ", "目標外の事柄"]);
-    expect(await textsOf("#formation-page .fp-deviations .fp-p")).toEqual(["契約と違い、検査を足しました"]);
-    expect(await textsOf("#formation-page .fp-notices .fp-p")).toEqual(["集約の検査は通りました", "カバレッジは 91%"]);
-    expect(await textsOf("#formation-page .fp-noticed .fp-p")).toEqual(["上限を 5 から 4 にしました"]);
-    expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["https://github.com/o/r/pull/7"]);
-  });
-
   it("draws the evidence of a noticed matter under 根拠を見る", async () => {
     await openPage(
       decisionPage({
-        pageKind: "code-review",
-        subject: "code",
+        pageKind: "approval",
+        subject: "design",
         what: "変更です",
         noticed: [{ title: "OG-1", text: "範囲外の変更です", evidence: [{ type: "node", root: "deliverables", ref: "design.json#/designs/DESIGN-01", note: "元の記録", text: "{}" }] }],
       }),
@@ -4094,7 +3905,7 @@ describe("orchestration mode: the decision page of a child", () => {
   });
 
   it("draws no count, progress or 「次の未回答へ」 on a page with no answer form", async () => {
-    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です" }));
+    await openPage(decisionPage({ pageKind: "approval", subject: "design", what: "変更です" }));
     expect(await count("#formation-page .fp-bar-bottom .fp-count, #formation-page .fp-bar-bottom .fp-progress, #formation-page .fp-bar-bottom .fp-next")).toBe(0);
     expect(await textsOf("#formation-page .fp-bar-bottom button")).toEqual(["TOP へ戻る", "リーダーに送る"]);
   });

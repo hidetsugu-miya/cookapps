@@ -178,11 +178,6 @@ const answers = {
     withdrawnNeedsUserDecision: [],
     noticed: [],
     qualityLoop: null,
-    unmetCriteria: [],
-    screenVerifications: [],
-    policyDeviations: [],
-    notices: [],
-    pr: null,
   },
   // A-41 (#923): the reply that the answers of a page make was put into the leader's terminal.
   formation_page_answer: null,

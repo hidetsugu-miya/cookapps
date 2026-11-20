@@ -5,10 +5,6 @@ import type { Unmet } from "./Unmet";
 
 export type CardOption = { key: string, label: string, detail: string | null, 
 /**
- * The one fix the option's answer hands to the implementation; only on `review-decision`.
- */
-fix: string | null, 
-/**
  * The conditions of the card that the option fails.
  */
 unmet: Array<Unmet>, 
