@@ -58,6 +58,7 @@ pub const RULES: Rules = Rules {
         "slack-thread",
         "slack-channel",
         "mail-draft",
+        "preview-open",
     ],
     changes: &["todo", "calendar", "calendar-shown", "skills"],
     wait: Duration::from_secs(5),
@@ -647,9 +648,16 @@ mod tests {
                 "todo-draft",
                 "slack-thread",
                 "slack-channel",
-                "mail-draft"
+                "mail-draft",
+                "preview-open"
             ]
         );
+        // The preview that Claude Code asks for (A-45, #984): a write of the worktree and the file.
+        assert!(check(
+            &write("preview-open", &[("path", "/w"), ("relative", "a.html")]),
+            &RULES
+        )
+        .is_ok());
         // The candidates of free time (C-6, #1063): a read and a write, no post.
         assert!(check(&read("calendar-slots"), &RULES).is_ok());
         assert!(check(&write("calendar-slots", &[("slot1", "a/b")]), &RULES).is_ok());

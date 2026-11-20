@@ -61,7 +61,7 @@ const IGNORE_CHUNK: usize = 2000;
 /// The most bytes of a file the editor opens or saves. Orca reads 512 KiB at most, and a larger frame closes the WebSocket of a paired server (it takes 1 MiB), so a text is kept well under both.
 pub(crate) const MAX_TEXT: usize = 384 * 1024;
 /// The longest relative path, in bytes (the limit of a path on the file systems Orca runs on).
-const MAX_PATH: usize = 4096;
+pub(crate) const MAX_PATH: usize = 4096;
 /// The bytes one `files.readChunk` asks for (the size Orca's own client reads at a time; Orca refuses more than 512 KiB).
 const CHUNK: usize = 384 * 1024;
 /// The longest name of a file on the file systems of this PC, in bytes.
