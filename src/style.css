@@ -1211,6 +1211,12 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-sample-frame { align-self: flex-start; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow-wrap: anywhere; }
 .fp-sample-note { font-size: calc(13px * var(--fs)); }
 .fp-unmet { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 3px solid var(--danger); }
+.fp-result { flex: none; padding: 0 8px; border: 1px solid var(--danger); border-radius: 10px; color: var(--danger); font-size: calc(12px * var(--fs)); font-weight: 700; }
+.fp-result[data-result="not-run"] { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+.fp-verify-pass { margin-top: 8px; }
+.fp-verify-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.fp-verify-col { min-width: 0; }
+@media (max-width: 720px) { .fp-verify-images { grid-template-columns: minmax(0, 1fr); } }
 .fp-fact { margin-top: 4px; }
 .fp-md { min-width: 0; overflow-x: auto; }
 .fp-md :where(p, ul, ol, pre, blockquote, table) { margin: 0 0 8px; }

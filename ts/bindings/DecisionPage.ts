@@ -32,4 +32,8 @@ needsUserDecision: Array<Card>,
 /**
  * `must-fix` cards on `approval`, `review-must-fix` cards on `code-review`.
  */
-residualMustFix: Array<Card>, structuralProposals: Array<Card>, adr: Card | null, risks: Risks | null, settledDecisions: Array<SettledDecision>, qualityLoop: QualityLoop | null, unmetCriteria: Array<Card>, pr: PagePr | null, };
+residualMustFix: Array<Card>, structuralProposals: Array<Card>, adr: Card | null, risks: Risks | null, settledDecisions: Array<SettledDecision>, qualityLoop: QualityLoop | null, unmetCriteria: Array<Card>, 
+/**
+ * `screen-verification` cards on `code-review`: no answer, in the order the unit holds them.
+ */
+screenVerifications: Array<Card>, pr: PagePr | null, };

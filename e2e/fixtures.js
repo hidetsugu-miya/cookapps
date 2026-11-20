@@ -169,6 +169,7 @@ const answers = {
     settledDecisions: [],
     qualityLoop: null,
     unmetCriteria: [],
+    screenVerifications: [],
     pr: null,
   },
   // A-41 (#923): the reply that the answers of a page make was put into the leader's terminal.

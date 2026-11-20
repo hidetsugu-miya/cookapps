@@ -7,6 +7,7 @@ import type { Evidence } from "./Evidence";
 import type { Fact } from "./Fact";
 import type { ImageRef } from "./ImageRef";
 import type { Occurrence } from "./Occurrence";
+import type { ScreenVerification } from "./ScreenVerification";
 
 export type Card = { kind: CardKind, number: string, title: string, summary: string, options: Array<CardOption>, recommendation: string | null, recommendationReason: string | null, background: string | null, facts: Array<Fact>, blocks: Array<Block>, evidence: Array<Evidence>, 
 /**
@@ -32,4 +33,8 @@ conditions: Array<Condition>,
 /**
  * The trade-offs of a fixed choice, by its key.
  */
-choiceDetails: { [key in string]: string }, };
+choiceDetails: { [key in string]: string }, 
+/**
+ * What a `screen-verification` card shows; only on that kind.
+ */
+verification: ScreenVerification | null, };

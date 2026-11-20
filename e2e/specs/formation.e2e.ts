@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, verificationCard, waitForCalls, CARDS, CARD } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -3013,6 +3013,77 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf('#formation-page [data-card="ND-1"] .fp-cause')).toEqual(["ロックを失わない"]);
     expect(await count('#formation-page [data-card="UC-1"]')).toBe(0);
     expect(await count('#formation-page [data-card="UC-2"]')).toBe(1);
+  });
+
+  it("draws 「画面の AI 検証」 after the cards that need a decision: the failed and not-run cards open with their counts, the passed ones in a closed fold, and no answer", async () => {
+    const image = (root: string, path: string, caption: string) => ({ root, path, caption });
+    const ask = decisionCard("ND-1", { kind: "review-decision", title: "待たせるか？", scene: "場面", options: [decisionOption("A", "待たせる")], recommendation: "A", recommendationReason: "r" });
+    const failed = verificationCard("SV-1", "一覧", {
+      result: "fail",
+      stateSetup: "予約が 3 件ある",
+      steps: ["一覧を開く", "削除を押す"],
+      expected: "確認が出る",
+      basis: "確認が出ない",
+      referenceImage: image("deliverables", "ui-references/list.png", "見本"),
+      capturedImage: image("captures", "list.png", "撮影"),
+    });
+    const notRun = verificationCard("SV-2", "空の一覧", { result: "not-run", basis: "判定していません", missingReason: "ゴールの検証をしないで再開しました", referenceImage: image("screenshots", "empty.png", "空の見本") });
+    const passes = [
+      verificationCard("SV-3", "ヘッダー", { referenceImage: image("deliverables", "ui-references/head.png", "見本"), capturedImage: image("captures", "head.png", "撮影") }),
+      verificationCard("SV-4", "フッター", { capturedImage: image("captures", "foot.png", "撮影") }),
+    ];
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", needsUserDecision: [ask], screenVerifications: [failed, notRun, ...passes] }));
+    const group = "#formation-page .fp-verifications";
+    expect(await textsOf("#formation-page .fp-group > .fp-sec")).toEqual(["判断が必要 1 件", "画面の AI 検証"]);
+    expect(await textsOf(`${group} .fp-verify-counts`)).toEqual(["不合格 1 件・未実施 1 件・合格 2 件"]);
+    // The failed and the not-run cards stand open at the top, each with its result tag; the passed ones wait in one closed fold and have no tag.
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} > .fp-card`)].map((e) => (e as HTMLElement).dataset.card), group)).toEqual(["SV-1", "SV-2"]);
+    expect(await textsOf(`${group} > .fp-card > .fp-card-head > .fp-result`)).toEqual(["不合格", "未実施"]);
+    expect(await textsOf(`${group} > .fp-verify-pass > summary`)).toEqual(["合格 2 件の内容を見る"]);
+    expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
+    expect(await count(`${group} > .fp-verify-pass .fp-result`)).toBe(0);
+    expect(await count(`${group} .fp-answer`)).toBe(0);
+    expect(await textsOf(`${group} > .fp-card:first-of-type > .fp-p`)).toEqual(["一覧を見た"]);
+    // No image is read before a fold is opened.
+    expect(await callsOf("formation_page_image")).toHaveLength(0);
+    const first = `${group} [data-card="SV-1"] > .fp-more`;
+    await $(`${first} > summary`).click();
+    expect(await textsOf(`${first} > .fp-h`)).toEqual(["確認したこと", "状態の作り方", "操作", "操作のあとに出るもの", "結果と根拠"]);
+    expect(await textsOf(`${first} > .fp-p`)).toEqual(["一覧の観点", "予約が 3 件ある", "確認が出る", "不合格 確認が出ない"]);
+    expect(await textsOf(`${first} ol.fp-list li`)).toEqual(["一覧を開く", "削除を押す"]);
+    expect(await textsOf(`${first} .fp-verify-col > .fp-h`)).toEqual(["参照画像", "撮影画像"]);
+    expect(await waitForCalls("formation_page_image", 2)).toEqual(expect.arrayContaining([
+      { name: "formation", child: "req-login", root: "deliverables", path: "ui-references/list.png" },
+      { name: "formation", child: "req-login", root: "captures", path: "list.png" },
+    ]));
+    await browser.waitUntil(async () => (await count(`${first} .fp-verify-col img`)) === 2, { timeoutMsg: "the two images were not drawn" });
+    // The two columns stand side by side.
+    const rects = await browser.execute((s) => [...document.querySelectorAll(`${s} .fp-verify-col`)].map((e) => e.getBoundingClientRect()).map((r) => ({ left: Math.round(r.left), top: Math.round(r.top) })), first);
+    expect(rects[0].top).toBe(rects[1].top);
+    expect(rects[1].left).toBeGreaterThan(rects[0].left);
+    // A card that was not run says why in the place of the capture.
+    const second = `${group} [data-card="SV-2"] > .fp-more`;
+    await $(`${second} > summary`).click();
+    expect(await textsOf(`${second} > .fp-h`)).toEqual(["確認したこと", "結果と根拠"]);
+    expect(await textsOf(`${second} .fp-verify-col > .fp-h`)).toEqual(["参照画像", "撮影画像"]);
+    expect(await textsOf(`${second} .fp-missing`)).toEqual(["未取得: ゴールの検証をしないで再開しました"]);
+    expect(await waitForCalls("formation_page_image", 3)).toContainEqual({ name: "formation", child: "req-login", root: "screenshots", path: "empty.png" });
+    // The fold of the passed cards opens to cards that carry the images they have and no result tag.
+    await $(`${group} > .fp-verify-pass > summary`).click();
+    const pass = `${group} [data-card="SV-4"] > .fp-more`;
+    await $(`${pass} > summary`).click();
+    expect(await textsOf(`${pass} .fp-verify-col > .fp-h`)).toEqual(["撮影画像"]);
+    expect(await textsOf(`${pass} > .fp-p`)).toEqual(["フッターの観点", "フッターの根拠"]);
+    expect(await waitForCalls("formation_page_image", 4)).toContainEqual({ name: "formation", child: "req-login", root: "captures", path: "foot.png" });
+  });
+
+  it("heads a group of passed cards alone with a note that no answer is needed, and draws it for a page that has only that group", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", screenVerifications: [verificationCard("SV-1", "一覧"), verificationCard("SV-2", "詳細")] }));
+    const group = "#formation-page .fp-verifications";
+    expect(await textsOf(`${group} .fp-verify-counts`)).toEqual(["すべて合格しました。回答は要りません。"]);
+    expect(await count(`${group} > .fp-card`)).toBe(0);
+    expect(await textsOf(`${group} > .fp-verify-pass > summary`)).toEqual(["合格 2 件の内容を見る"]);
+    expect(await folded(`${group} > .fp-verify-pass`)).toBe(false);
   });
 
   it("gives a fact its 「中身を見る」: a node as a tree, Markdown formatted, a file as text and an image as an image, and no raw HTML", async () => {

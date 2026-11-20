@@ -10,6 +10,7 @@ import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
 import type { Sample } from "./bindings/Sample";
 import type { ScopeGroup } from "./bindings/ScopeGroup";
+import type { ScreenVerification } from "./bindings/ScreenVerification";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
 import { drawBlocks, drawEvidence, drawFactContent, drawImage, drawTable, fold, useImages } from "./formation-page-blocks.js";
@@ -49,6 +50,7 @@ const FIXED: Record<CardKind, Choice[]> = {
     { key: "accept", label: "現状で完了する" },
   ],
   "unmet-criterion": [],
+  "screen-verification": [],
 };
 // The kinds whose free text sits in the row of `その他`; the others have a field of their own under the choices.
 const LETTERED = new Set<CardKind>(["question", "nr", "review-decision"]);
@@ -322,13 +324,82 @@ function groups(page: DecisionPage): HTMLElement[] {
             ["満たしていないリリース条件", unmet],
             ["判断が必要", page.needsUserDecision],
           ];
-  return list
+  const drawn = list
     .filter(([, cardsOf]) => cardsOf.length > 0)
     .map(([heading, cardsOf]) => {
       const node = section(`${heading} ${cardsOf.length} 件`, "fp-group");
       node.append(...cardsOf.map((card) => drawCard(card, page.unmetCriteria.filter((u) => u.cards.includes(card.number)))));
       return node;
     });
+  if (page.screenVerifications.length > 0) drawn.push(verifications(page.screenVerifications));
+  return drawn;
+}
+
+// 「画面の AI 検証」: the cards that take no answer. The failed and not-run ones are open at the top, headed by the counts; the passed ones are in one fold, closed at first. When every card passed, the group holds that fold and a note that no answer is needed.
+function verifications(cardsOf: Card[]): HTMLElement {
+  const resultOf = (card: Card) => card.verification?.result ?? "pass";
+  const failed = cardsOf.filter((c) => resultOf(c) === "fail");
+  const notRun = cardsOf.filter((c) => resultOf(c) === "not-run");
+  const passed = cardsOf.filter((c) => resultOf(c) === "pass");
+  const open = cardsOf.filter((c) => resultOf(c) !== "pass");
+  const node = section("画面の AI 検証", "fp-group fp-verifications");
+  node.append(tag("p", "fp-p fp-verify-counts", open.length === 0 ? "すべて合格しました。回答は要りません。" : `不合格 ${failed.length} 件・未実施 ${notRun.length} 件・合格 ${passed.length} 件`));
+  node.append(...open.map(drawVerification));
+  if (passed.length > 0) {
+    const passFold = fold(`合格 ${passed.length} 件の内容を見る`, "fp-more fp-verify-pass");
+    passFold.append(...passed.map(drawVerification));
+    node.append(passFold);
+  }
+  return node;
+}
+
+const RESULT_WORDS: Record<ScreenVerification["result"], string> = { pass: "合格", fail: "不合格", "not-run": "未実施" };
+
+// A `screen-verification` card: the number, the title and, unless it passed, the result tag; the summary; and 「詳しく見る」 with what was checked, how the state was made, the operations and what must appear after them, the result with its basis, and the two images side by side.
+function drawVerification(card: Card): HTMLElement {
+  const node = tag("article", "fp-card");
+  node.dataset.card = card.number;
+  node.dataset.kind = card.kind;
+  const v = card.verification;
+  const head = tag("header", "fp-card-head");
+  head.append(tag("span", "fp-number", card.number));
+  if (v !== null && v.result !== "pass") head.append(resultTag(v.result));
+  head.append(tag("h4", "fp-card-title", card.title));
+  node.append(head, tag("p", "fp-p", card.summary));
+  if (v === null) return node;
+  const parts: HTMLElement[] = [tag("h4", "fp-h", "確認したこと"), tag("p", "fp-p", v.viewpoint)];
+  if (v.stateSetup !== null) parts.push(tag("h4", "fp-h", "状態の作り方"), tag("p", "fp-p", v.stateSetup));
+  if (v.steps.length > 0) {
+    const steps = tag("ol", "fp-list");
+    for (const text of v.steps) steps.append(tag("li", "", text));
+    parts.push(tag("h4", "fp-h", "操作"), steps);
+    if (v.expected !== null) parts.push(tag("h4", "fp-h", "操作のあとに出るもの"), tag("p", "fp-p", v.expected));
+  }
+  const basis = tag("p", "fp-p");
+  if (v.result !== "pass") basis.append(resultTag(v.result), " ");
+  basis.append(v.basis);
+  parts.push(tag("h4", "fp-h", "結果と根拠"), basis);
+  const images = tag("div", "fp-verify-images");
+  if (v.referenceImage !== null) images.append(imageColumn("参照画像", drawImage(v.referenceImage, true)));
+  if (v.capturedImage !== null) images.append(imageColumn("撮影画像", drawImage(v.capturedImage, true)));
+  else if (v.missingReason !== null) images.append(imageColumn("撮影画像", tag("p", "fp-muted fp-missing", `未取得: ${v.missingReason}`)));
+  if (images.childElementCount > 0) parts.push(images);
+  const more = fold("詳しく見る", "fp-more");
+  more.append(...parts);
+  node.append(more);
+  return node;
+}
+
+function resultTag(result: ScreenVerification["result"]): HTMLElement {
+  const node = tag("span", "fp-result", RESULT_WORDS[result]);
+  node.dataset.result = result;
+  return node;
+}
+
+function imageColumn(heading: string, body: HTMLElement): HTMLElement {
+  const column = tag("div", "fp-verify-col");
+  column.append(tag("h4", "fp-h", heading), body);
+  return column;
 }
 
 // A card. One that asks (`question`, `nr`, `review-decision`) opens its title with the tag 「聞きたいこと」 and shows no summary: 「具体的な場面」, the image of the screen, the first diagram as wide as the card, the unmet release conditions it causes and 「あなたの回答」, then 「詳しく見る」. Any other card shows its summary, its background and the unmet conditions, then its answer and 「詳しく見る」.

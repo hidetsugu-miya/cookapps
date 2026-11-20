@@ -808,11 +808,12 @@ export const decisionPage = (extra: Partial<DecisionPage> = {}): DecisionPage =>
   settledDecisions: [],
   qualityLoop: null,
   unmetCriteria: [],
+  screenVerifications: [],
   pr: null,
   ...extra,
 });
 
-// A card of a decision page: a `question` with no option, which `extra` fills in.
+// A card of a decision page: a `question` with no option, which `extra` fills in. A `screen-verification` card has `verification` (`verificationCard`).
 export const decisionCard = (number: string, extra: Partial<Card> = {}): Card => ({
   kind: "question",
   number,
@@ -831,6 +832,7 @@ export const decisionCard = (number: string, extra: Partial<Card> = {}): Card =>
   occurrence: null,
   conditions: [],
   choiceDetails: {},
+  verification: null,
   ...extra,
 });
 
@@ -1046,3 +1048,12 @@ export const fire = (kind: "paste" | "dragover" | "drop", selector: string, file
 
 // What `claude_summarize_handoff` answers (A-9): the points of the summary of the content.
 export const handoffSummary = (points: string[]): HandoffSummary => ({ points });
+
+// A `screen-verification` card of a decision page (#1155): a passed one with no image, which `extra` fills in (the result, the state setup, the steps and the images).
+export const verificationCard = (number: string, title: string, extra: Partial<NonNullable<Card["verification"]>> = {}): Card =>
+  decisionCard(number, {
+    kind: "screen-verification",
+    title,
+    summary: `${title}を見た`,
+    verification: { viewpoint: `${title}の観点`, stateSetup: null, result: "pass", basis: `${title}の根拠`, referenceImage: null, capturedImage: null, missingReason: null, steps: [], expected: null, ...extra },
+  });

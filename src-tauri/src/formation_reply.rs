@@ -57,7 +57,7 @@ fn fixed(kind: CardKind) -> &'static [(&'static str, &'static str)] {
             ("fix", "修正して再レビューする"),
             ("accept", "現状で完了する"),
         ],
-        CardKind::UnmetCriterion => &[],
+        CardKind::UnmetCriterion | CardKind::ScreenVerification => &[],
     }
 }
 
@@ -463,6 +463,7 @@ mod tests {
             occurrence: None,
             conditions: Vec::new(),
             choice_details: Default::default(),
+            verification: None,
         }
     }
 
@@ -486,6 +487,7 @@ mod tests {
             settled_decisions: Vec::new(),
             quality_loop: None,
             unmet_criteria: Vec::new(),
+            screen_verifications: Vec::new(),
             pr: None,
         }
     }

@@ -87,6 +87,7 @@ pub enum CardKind {
     ReviewMustFix,
     ReviewDecision,
     UnmetCriterion,
+    ScreenVerification,
 }
 
 impl CardKind {
@@ -100,6 +101,7 @@ impl CardKind {
             Self::ReviewMustFix => "review-must-fix",
             Self::ReviewDecision => "review-decision",
             Self::UnmetCriterion => "unmet-criterion",
+            Self::ScreenVerification => "screen-verification",
         }
     }
 
@@ -118,7 +120,7 @@ impl CardKind {
             Self::StructuralProposal => &["approve", "reject", "hold"],
             Self::Adr => &["keep", "decline"],
             Self::ReviewMustFix => &["fix", "accept"],
-            Self::UnmetCriterion => &[],
+            Self::UnmetCriterion | Self::ScreenVerification => &[],
         }
     }
 
@@ -130,7 +132,7 @@ impl CardKind {
             Self::StructuralProposal => &["approve", "reject", "hold"],
             Self::Adr => &["keep", "decline"],
             Self::ReviewMustFix => &["fix", "accept"],
-            Self::UnmetCriterion => &[],
+            Self::UnmetCriterion | Self::ScreenVerification => &[],
         }
     }
 }
@@ -164,6 +166,8 @@ pub struct DecisionPage {
     pub settled_decisions: Vec<SettledDecision>,
     pub quality_loop: Option<QualityLoop>,
     pub unmet_criteria: Vec<Card>,
+    /// `screen-verification` cards on `code-review`: no answer, in the order the unit holds them.
+    pub screen_verifications: Vec<Card>,
     pub pr: Option<PagePr>,
 }
 
@@ -195,6 +199,42 @@ pub struct Card {
     pub conditions: Vec<Condition>,
     /// The trade-offs of a fixed choice, by its key.
     pub choice_details: BTreeMap<String, String>,
+    /// What a `screen-verification` card shows; only on that kind.
+    pub verification: Option<ScreenVerification>,
+}
+
+/// The result of the verification of one screen state or operation.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "kebab-case")]
+pub enum VerificationResult {
+    Pass,
+    Fail,
+    NotRun,
+}
+
+/// The verification of one screen state or operation against its viewpoint (A-41, #1155): the card takes no answer.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenVerification {
+    /// 「確認したこと」.
+    pub viewpoint: String,
+    /// 「状態の作り方」.
+    pub state_setup: Option<String>,
+    pub result: VerificationResult,
+    /// 「結果と根拠」.
+    pub basis: String,
+    pub reference_image: Option<ImageRef>,
+    pub captured_image: Option<ImageRef>,
+    /// Why it was not run; only on a `not-run` card.
+    pub missing_reason: Option<String>,
+    /// The operations in order, on an operation item.
+    pub steps: Vec<String>,
+    /// What must appear after the last step; only with `steps`.
+    pub expected: Option<String>,
 }
 
 /// When a matter arises and how much it matters.
@@ -1606,6 +1646,9 @@ impl<'a> Walk<'a> {
     }
 
     fn card(&mut self, value: &Value, path: &str, expected: CardKind) -> Option<Card> {
+        if expected == CardKind::ScreenVerification {
+            return self.screen_verification(value, path);
+        }
         let mut keys = vec![
             "kind",
             "number",
@@ -1680,7 +1723,157 @@ impl<'a> Walk<'a> {
             occurrence,
             conditions,
             choice_details,
+            verification: None,
         })
+    }
+
+    /// A `screen-verification` card: it presents one verification and its result, so it carries no fact, no recommendation and no answer. The reference image and the capture are `image` blocks of the page (`image_ref`); a card without `steps` carries at least one of them, and a `not-run` card has no capture and says why.
+    fn screen_verification(&mut self, value: &Value, path: &str) -> Option<Card> {
+        let map = self.keys(
+            value,
+            path,
+            &[
+                "kind",
+                "number",
+                "title",
+                "summary",
+                "viewpoint",
+                "state_setup",
+                "result",
+                "basis",
+                "reference_image",
+                "captured_image",
+                "missing_reason",
+                "steps",
+                "expected",
+            ],
+        )?;
+        if map.get("kind").and_then(Value::as_str) != Some(CardKind::ScreenVerification.name()) {
+            self.bad(
+                &format!("{path}.kind"),
+                format!(
+                    "この欄に置けるカードの kind は {} です",
+                    CardKind::ScreenVerification.name()
+                ),
+            );
+        }
+        let number = self.text(map, "number", path, true);
+        if let Some(number) = &number {
+            if !self.numbers.insert(number.clone()) {
+                self.bad(
+                    &format!("{path}.number"),
+                    format!("同じ番号のカードがもう一枚あります: {number}"),
+                );
+            }
+        }
+        let title = self.text(map, "title", path, true);
+        let summary = self.text(map, "summary", path, true);
+        let viewpoint = self.text(map, "viewpoint", path, true);
+        let state_setup = self.text(map, "state_setup", path, false);
+        let result = self.verification_result(map, path);
+        let basis = self.text(map, "basis", path, true);
+        let reference_image = self.verification_image(map, "reference_image", path);
+        let captured_image = self.verification_image(map, "captured_image", path);
+        let missing_reason = self.text(
+            map,
+            "missing_reason",
+            path,
+            result == Some(VerificationResult::NotRun),
+        );
+        if result.is_some_and(|r| r != VerificationResult::NotRun)
+            && map.get("missing_reason").is_some_and(|v| !v.is_null())
+        {
+            self.bad(
+                &format!("{path}.missing_reason"),
+                "実施した（pass か fail の）カードには付けられません",
+            );
+        }
+        if result == Some(VerificationResult::NotRun) && captured_image.is_some() {
+            self.bad(
+                &format!("{path}.captured_image"),
+                "未実施（not-run）のカードには撮影画像がありません",
+            );
+        }
+        let steps = self.strings(map, "steps", path, false);
+        if map
+            .get("steps")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        {
+            self.bad(&format!("{path}.steps"), "1 件以上にしてください");
+        }
+        let given_steps = map.get("steps").is_some_and(|v| !v.is_null());
+        let expected = self.text(map, "expected", path, given_steps);
+        if !given_steps && map.get("expected").is_some_and(|v| !v.is_null()) {
+            self.bad(&format!("{path}.expected"), "steps と一緒に使います");
+        }
+        if !given_steps && reference_image.is_none() && captured_image.is_none() {
+            self.bad(
+                path,
+                "steps のないカードには、reference_image か captured_image が要ります",
+            );
+        }
+        Some(Card {
+            kind: CardKind::ScreenVerification,
+            number: number?,
+            title: title?,
+            summary: summary?,
+            options: Vec::new(),
+            recommendation: None,
+            recommendation_reason: None,
+            background: None,
+            facts: Vec::new(),
+            blocks: Vec::new(),
+            evidence: Vec::new(),
+            cards: Vec::new(),
+            scene: None,
+            scene_image: None,
+            occurrence: None,
+            conditions: Vec::new(),
+            choice_details: BTreeMap::new(),
+            verification: Some(ScreenVerification {
+                viewpoint: viewpoint?,
+                state_setup,
+                result: result?,
+                basis: basis?,
+                reference_image,
+                captured_image,
+                missing_reason,
+                steps,
+                expected,
+            }),
+        })
+    }
+
+    fn verification_result(&mut self, map: &Object, path: &str) -> Option<VerificationResult> {
+        let at = format!("{path}.result");
+        match map.get("result") {
+            None | Some(Value::Null) => {
+                self.bad(&at, "必須です");
+                None
+            }
+            Some(Value::String(text)) => match text.as_str() {
+                "pass" => Some(VerificationResult::Pass),
+                "fail" => Some(VerificationResult::Fail),
+                "not-run" => Some(VerificationResult::NotRun),
+                _ => {
+                    self.bad(&at, "pass、fail、not-run のどれかにしてください");
+                    None
+                }
+            },
+            Some(_) => {
+                self.bad(&at, "文字列にしてください");
+                None
+            }
+        }
+    }
+
+    /// `reference_image` or `captured_image` of a `screen-verification` card: `{root, path, caption}`, checked as an `image` block.
+    fn verification_image(&mut self, map: &Object, key: &str, path: &str) -> Option<ImageRef> {
+        let value = map.get(key).filter(|v| !v.is_null())?;
+        let at = format!("{path}.{key}");
+        let image = self.keys(value, &at, &["root", "path", "caption"])?;
+        self.image_ref(image, &at)
     }
 
     /// Whether `map[key]` is given; on a kind that does not ask it is a violation, and it is not taken.
@@ -2000,7 +2193,7 @@ impl<'a> Walk<'a> {
         path: &str,
         kind: CardKind,
     ) -> (Option<String>, Option<String>) {
-        if kind == CardKind::UnmetCriterion {
+        if kind == CardKind::UnmetCriterion || kind == CardKind::ScreenVerification {
             for key in ["recommendation", "recommendation_reason"] {
                 if map.get(key).is_some_and(|v| !v.is_null()) {
                     self.bad(
@@ -2400,6 +2593,7 @@ impl<'a> Walk<'a> {
                 "residual_must_fix",
                 "unmet_criteria",
                 "needs_user_decision",
+                "screen_verifications",
                 "pr",
             ],
         });
@@ -2448,6 +2642,7 @@ impl<'a> Walk<'a> {
             settled_decisions: Vec::new(),
             quality_loop: None,
             unmet_criteria: Vec::new(),
+            screen_verifications: Vec::new(),
             pr: None,
         };
         match kind {
@@ -2482,6 +2677,12 @@ impl<'a> Walk<'a> {
                     self.cards(top, "unmet_criteria", CardKind::UnmetCriterion, false);
                 page.needs_user_decision =
                     self.cards(top, "needs_user_decision", CardKind::ReviewDecision, false);
+                page.screen_verifications = self.cards(
+                    top,
+                    "screen_verifications",
+                    CardKind::ScreenVerification,
+                    false,
+                );
                 page.pr = self.pr(top);
             }
         }
@@ -4864,6 +5065,204 @@ mod tests {
         );
     }
 
+    // -- screen-verification cards (#1155) --
+
+    /// A `code-review` page whose roots are the case root, the repository, the captures of the unit (`.feature-dev/captures/u1` of the docs worktree) and the folder of the reference screenshots.
+    fn verification_page(repo: &Repo, cards: Value) -> Value {
+        write_bytes(&repo.dir, ".feature-dev/captures/u1/a.png", PNG_1X1);
+        write_bytes(
+            &repo.dir,
+            ".feature-dev/current/ui-references/a.png",
+            PNG_1X1,
+        );
+        write_bytes(&repo.dir, "shots/ref.png", PNG_1X1);
+        json!({
+            "schema_version": 1,
+            "page_kind": "code-review",
+            "subject": "code",
+            "context_label": "コードレビュー",
+            "title": "変更の確認",
+            "what": "変えました",
+            "roots": {
+                "deliverables": repo.case_root(),
+                "repo": repo.root(),
+                "captures": repo.dir.join(".feature-dev/captures/u1").to_string_lossy(),
+                "screenshots": repo.dir.join("shots").to_string_lossy()
+            },
+            "screen_verifications": cards
+        })
+    }
+
+    fn passed_card(number: &str) -> Value {
+        json!({
+            "kind": "screen-verification", "number": number, "title": "一覧", "summary": "一覧を見た",
+            "viewpoint": "件数が出る", "state_setup": "3 件ある", "result": "pass", "basis": "3 件出た",
+            "reference_image": {"root": "deliverables", "path": "ui-references/a.png", "caption": "見本"},
+            "captured_image": {"root": "captures", "path": "a.png", "caption": "撮影"}
+        })
+    }
+
+    #[test]
+    fn a_screen_verification_card_is_accepted_with_its_images_and_takes_no_answer() {
+        let repo = repo("sv-accept");
+        let not_run = json!({
+            "kind": "screen-verification", "number": "SV-2", "title": "削除", "summary": "削除を押した",
+            "viewpoint": "確認が出る", "result": "not-run", "basis": "判定していません",
+            "missing_reason": "ゴールの検証をしないで再開しました",
+            "steps": ["削除を押す", "はいを押す"], "expected": "一覧から消える"
+        });
+        let failed = json!({
+            "kind": "screen-verification", "number": "SV-3", "title": "空", "summary": "空を見た",
+            "viewpoint": "空の表示", "result": "fail", "basis": "文字が出ない",
+            "reference_image": {"root": "screenshots", "path": "ref.png", "caption": "見本"}
+        });
+        let value = verification_page(&repo, json!([passed_card("SV-1"), not_run, failed]));
+        let page = build(&value, &repo.allowed()).unwrap();
+        assert_eq!(page.screen_verifications.len(), 3);
+        let card = &page.screen_verifications[0];
+        assert_eq!(card.kind, CardKind::ScreenVerification);
+        assert!(card.options.is_empty() && card.recommendation.is_none());
+        let v = card.verification.as_ref().unwrap();
+        assert_eq!(v.result, VerificationResult::Pass);
+        assert_eq!(v.captured_image.as_ref().unwrap().root, "captures");
+        assert_eq!(
+            v.reference_image.as_ref().unwrap().path,
+            "ui-references/a.png"
+        );
+        let v = page.screen_verifications[1].verification.as_ref().unwrap();
+        assert_eq!(v.result, VerificationResult::NotRun);
+        assert_eq!(v.steps, ["削除を押す", "はいを押す"]);
+        assert_eq!(v.expected.as_deref(), Some("一覧から消える"));
+        assert!(v.reference_image.is_none() && v.captured_image.is_none());
+        let json = serde_json::to_value(&page.screen_verifications[1]).unwrap();
+        assert_eq!(json["verification"]["result"], "not-run");
+        assert_eq!(
+            json["verification"]["missingReason"],
+            "ゴールの検証をしないで再開しました"
+        );
+        // The page that is read for its cards alone checks the shape and touches no image.
+        let mut gone = value.clone();
+        gone["screen_verifications"][0]["captured_image"]["path"] = json!("none.png");
+        assert!(build_input(&gone, &repo.allowed()).is_ok());
+        assert_eq!(
+            paths(&violations(&gone, &repo)),
+            ["$.screen_verifications[0].captured_image.path"]
+        );
+    }
+
+    #[test]
+    fn the_captures_folder_is_a_root_but_git_and_env_names_stay_refused() {
+        let repo = repo("sv-boundary");
+        write_bytes(&repo.dir, ".feature-dev/captures/u1/.env.png", PNG_1X1);
+        write_bytes(&repo.dir, ".feature-dev/captures/u1/.git/x.png", PNG_1X1);
+        let mut card = passed_card("SV-1");
+        card["captured_image"]["path"] = json!(".env.png");
+        let mut other = passed_card("SV-2");
+        other["captured_image"]["path"] = json!(".git/x.png");
+        let mut escape = passed_card("SV-3");
+        escape["captured_image"]["path"] = json!("../../current/ui-references/a.png");
+        let mut git_root = passed_card("SV-4");
+        git_root["captured_image"]["root"] = json!("gitroot");
+        let mut value = verification_page(&repo, json!([card, other, escape, git_root]));
+        value["roots"]["gitroot"] = json!(repo.dir.join(".git").to_string_lossy());
+        let found = violations(&value, &repo);
+        assert_eq!(
+            paths(&found),
+            [
+                "$.roots.gitroot",
+                "$.screen_verifications[0].captured_image.path",
+                "$.screen_verifications[1].captured_image.path",
+                "$.screen_verifications[2].captured_image.path",
+            ]
+        );
+        // A root outside the repositories is refused as it is for any card.
+        let outside = temp_dir("sv-outside");
+        let mut value = verification_page(&repo, json!([passed_card("SV-1")]));
+        value["roots"]["captures"] = json!(outside.to_string_lossy());
+        assert_eq!(paths(&violations(&value, &repo)), ["$.roots.captures"]);
+    }
+
+    #[test]
+    fn a_screen_verification_card_that_breaks_the_contract_is_refused() {
+        let repo = repo("sv-refuse");
+        let base = passed_card("SV-1");
+        let with = |change: &dyn Fn(&mut Value)| {
+            let mut card = base.clone();
+            change(&mut card);
+            card
+        };
+        let cards = json!([
+            with(&|c| c["recommendation"] = json!("fix")),
+            with(&|c| c["result"] = json!("maybe")),
+            with(&|c| {
+                c.as_object_mut().unwrap().remove("viewpoint");
+                c.as_object_mut().unwrap().remove("basis");
+            }),
+            with(&|c| c["missing_reason"] = json!("理由")),
+            with(&|c| c["result"] = json!("not-run")),
+            with(&|c| {
+                c["result"] = json!("not-run");
+                c["missing_reason"] = json!("理由");
+            }),
+            with(&|c| {
+                c.as_object_mut().unwrap().remove("reference_image");
+                c.as_object_mut().unwrap().remove("captured_image");
+            }),
+            with(&|c| c["steps"] = json!(["押す"])),
+            with(&|c| c["steps"] = json!([])),
+            with(&|c| c["expected"] = json!("出る")),
+            with(&|c| c["facts"] = json!([])),
+            with(&|c| c["captured_image"]["alt"] = json!("x"))
+        ]);
+        let mut cards = cards;
+        for (at, card) in cards.as_array_mut().unwrap().iter_mut().enumerate() {
+            card["number"] = json!(format!("SV-{at}"));
+        }
+        let value = verification_page(&repo, cards);
+        let found = violations(&value, &repo);
+        let expected = [
+            "$.screen_verifications[0].recommendation",
+            "$.screen_verifications[1].result",
+            "$.screen_verifications[2].viewpoint",
+            "$.screen_verifications[2].basis",
+            "$.screen_verifications[3].missing_reason",
+            "$.screen_verifications[4].missing_reason",
+            "$.screen_verifications[4].captured_image",
+            "$.screen_verifications[5].captured_image",
+            "$.screen_verifications[6]",
+            "$.screen_verifications[7].expected",
+            "$.screen_verifications[8].steps",
+            "$.screen_verifications[8].expected",
+            "$.screen_verifications[9].expected",
+            "$.screen_verifications[10].facts",
+            "$.screen_verifications[11].captured_image.alt",
+        ];
+        assert_eq!(paths(&found), expected, "{}", violations_text(&found));
+    }
+
+    #[test]
+    fn a_screen_verification_card_is_for_a_code_review_page_only() {
+        let repo = repo("sv-page-kind");
+        let mut value = open_questions(&repo);
+        value["screen_verifications"] = json!([passed_card("SV-1")]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.screen_verifications"]
+        );
+        let mut value = verification_page(&repo, json!([passed_card("SV-1"), passed_card("SV-1")]));
+        value["unmet_criteria"] = json!([{"kind": "screen-verification", "number": "SV-9", "title": "t", "summary": "s"}]);
+        let found = violations(&value, &repo);
+        assert_eq!(
+            paths(&found),
+            [
+                "$.unmet_criteria[0].kind",
+                "$.screen_verifications[1].number"
+            ],
+            "{}",
+            violations_text(&found)
+        );
+    }
+
     #[test]
     fn every_embedded_kind_has_a_name_that_the_contract_uses() {
         let set: std::collections::BTreeSet<&str> = [
@@ -4875,6 +5274,7 @@ mod tests {
             CardKind::ReviewMustFix,
             CardKind::ReviewDecision,
             CardKind::UnmetCriterion,
+            CardKind::ScreenVerification,
         ]
         .into_iter()
         .map(|kind| {
@@ -4883,6 +5283,6 @@ mod tests {
             kind.name()
         })
         .collect();
-        assert_eq!(set.len(), 8);
+        assert_eq!(set.len(), 9);
     }
 }
