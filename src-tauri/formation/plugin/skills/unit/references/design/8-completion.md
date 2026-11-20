@@ -37,6 +37,7 @@ Write the message in the repository's own convention (read its contribution docu
 Stage each path that exists and that this unit changed, one by one, and commit them together ([branch-and-pr](../shared/branch-and-pr.md)):
 
 - `.feature-dev/current/case.json`, `design.json`, `technical-notes.md`, `code-facts-base.json`, `creator-facts.md`;
+- `.feature-dev/current/prototypes` (the evidence of the comparisons of stage 2, when there are any);
 - `.feature-dev/current/records/design` (the pages that were answered, `ledger.json`, the reviews, the fix summaries, `settled-decisions.json`, `approved.json`);
 - the reopen records that are new or changed (`records/reopen-*.md`; find them with `git -C "{docs worktree}" status --porcelain -- .feature-dev/current/records`); the removal of `records/design-base.json` is already staged by stage 7.
 
