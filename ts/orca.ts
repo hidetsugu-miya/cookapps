@@ -97,6 +97,8 @@ let filesAt = Date.now();
 let listOpen = true;
 // The text of the search field (A-19): the list shows the projects whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
 let query = "";
+// Whether the projects that are not running are listed under the link that follows the running ones (A-8). The search lists them all whatever this is, and clearing it leaves this as it was; in memory only.
+let stoppedOpen = false;
 // Whether the search field (A-19) is open: it takes the place of the heading's row. It is closed again when its text is empty and the focus leaves it, or with Escape; while text is kept it stays open.
 let searchOpen = false;
 let cursor: string | null = null;
@@ -561,10 +563,34 @@ function nameNodes(name: string, re: RegExp | null): (string | HTMLElement)[] {
     .filter((part) => part !== "");
 }
 
-// The rows the list shows: all of them, or those whose name holds the search text. Only the name is searched (not the sessions under a project), so the sessions of an open project that the search leaves out go with its row.
+// A project that is not running (A-8): the gray dot (nothing works, waits or has stopped there), and no session and no terminal. The selected project is never one, so the row the work pane shows stays in the list.
+const isNotRunning = (p: OrcaProject, hidden: Map<string, number>) => p.status === "idle" && shownSessions(p, hidden) === 0 && p.key !== pickedProject();
+
+// The rows the list shows, the running ones first and then the ones that are not running: the whole list while a search text is typed (the rows whose name holds it), else the running ones, and the others only while the link is open.
 function visibleRows(re: RegExp | null, hidden = hiddenSessions()) {
   const rows = projectRows(hidden);
-  return re === null ? rows : rows.filter((r) => re.test(r.name));
+  const running = rows.filter((r) => !isNotRunning(r, hidden));
+  const stopped = rows.filter((r) => isNotRunning(r, hidden));
+  if (re !== null) return [...running, ...stopped].filter((r) => re.test(r.name));
+  return stoppedOpen ? [...running, ...stopped] : running;
+}
+
+// How many projects are not running, which the link counts (none while a search text is typed, which has no link).
+const stoppedCount = (hidden = hiddenSessions()) => (needle() === "" ? mix.projects.filter((p) => isNotRunning(p, hidden)).length : 0);
+
+// The link under the running projects (A-8): "› 起動していない N 件" while the others are closed, "起動していないものを隠す" while they are listed under it.
+function stoppedToggle(count: number) {
+  const button = tag("button", "orca-stopped-toggle");
+  button.type = "button";
+  button.dataset.key = "stopped-toggle";
+  button.setAttribute("aria-expanded", String(stoppedOpen));
+  button.innerHTML = CHEVRON_SVG;
+  button.append(stoppedOpen ? "起動していないものを隠す" : `起動していない ${count} 件`);
+  button.onclick = () => {
+    stoppedOpen = !stoppedOpen;
+    drawFeed();
+  };
+  return button;
 }
 
 // The keys of the rows the keys of the search field can reach, in the order of the list (none while nothing is typed), and the one they are on.
@@ -577,9 +603,11 @@ function cursorKey(rows = visibleRows(matcher())) {
   return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
 }
 
-// `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
-function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? listedTabs(r.key), r.key === on, re));
+// `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here. The link goes after the last running project, and the ones that are not running, when it is open, follow it.
+function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>, hidden: Map<string, number>): HTMLElement[] {
+  const node = (r: OrcaProject) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? listedTabs(r.key), r.key === on, re);
+  const count = stoppedCount(hidden);
+  const nodes = count === 0 ? rows.map(node) : [...rows.filter((r) => !isNotRunning(r, hidden)).map(node), stoppedToggle(count), ...rows.filter((r) => isNotRunning(r, hidden)).map(node)];
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
@@ -596,13 +624,13 @@ function drawFeed() {
   const re = matcher();
   const rows = visibleRows(re, hidden);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, pickedProject(), sessions, selectedTab()]);
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, pickedProject(), sessions, selectedTab(), stoppedOpen]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...projectNodes(re, rows, on, openTabs));
+  box.replaceChildren(...projectNodes(re, rows, on, openTabs, hidden));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }

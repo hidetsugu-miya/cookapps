@@ -1053,7 +1053,7 @@ button.status:hover { filter: brightness(.95); }
 /* The orchestration of the development screen (A-37): the tabs of the leader and the children with their terminal under them, and the right pane of cards, at the right of the list of the Orca screen. `#orca-session` and `#formation` take no box of their own: their panes are the children of `#orca`, and one of the two is hidden. */
 #orca-session, #formation { display: contents; }
 /* The formations at the top of the list (A-37): the heading, and a row with the name and the number of its children, in the shape of a project's row (the arrow at its left is the project's, `.orca-arrow`); the selected row has the ground of the selected project. */
-.orca-list-head { flex: none; margin: 0; padding: 10px 18px 4px; color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 700; letter-spacing: .04em; }
+.orca-list-head { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px 18px 4px; color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 700; letter-spacing: .04em; }
 #orca-formations { flex: none; display: flex; flex-direction: column; max-height: 40vh; min-height: 0; }
 #formation-list-error { flex: none; margin: 4px 8px 0; overflow-wrap: anywhere; }
 #formation-list-feed { min-height: 0; overflow-y: auto; padding: 0 8px; }
@@ -1262,7 +1262,8 @@ button.formation-card { cursor: pointer; }
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
 button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
 /* A-19: the magnifier at the right end of the heading 「プロジェクト」; pressed, the row of the heading (`#orca-projects-head`) is the search field, of the same height: the icon, the field and (while something is typed) the button that clears it. The row the keys are on has a line in the accent color; the matched letters are bold. */
-#orca-projects { flex: none; }
+#orca-projects { flex: none; margin-top: 6px; border-top: 1px solid var(--line); }
+.orca-list-head svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 #orca-projects-head { display: flex; align-items: center; height: 36px; }
 #orca-projects-head .orca-list-head { flex: 1; min-width: 0; padding: 0 0 0 18px; }
 #orca-search-open { flex: none; width: 24px; height: 24px; margin-right: 8px; color: var(--muted); }
@@ -1305,6 +1306,12 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-arrow[aria-expanded="true"] svg { transform: rotate(90deg); }
 .orca-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-sessions { margin-left: 28px; }
+/* A-8: the link under the running projects that opens and closes the projects that are not running. */
+.orca-stopped-toggle { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 32px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: var(--muted); text-align: left; cursor: pointer; }
+.orca-stopped-toggle:hover { background: var(--hover); }
+.orca-stopped-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-stopped-toggle svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.orca-stopped-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 .orca-session { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px 0 32px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
 .orca-session:hover { background: var(--hover); }
 .orca-session[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
