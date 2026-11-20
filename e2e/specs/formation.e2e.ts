@@ -2633,8 +2633,47 @@ describe("orchestration mode: the decision page of a child", () => {
     await expect($("#formation-page .fp-change .fp-p")).toHaveText("失敗の回数を数えます");
     expect(await textsOf('#formation-page [data-card="RMF-1"] .fp-choice-label')).toEqual(["修正して再レビューする推奨", "現状で完了する"]);
     expect(await count('#formation-page [data-card="UC-1"] input')).toBe(0);
+    // The pull request is not in 「参考」: it is under the title.
+    expect(await count("#formation-page .fp-reference")).toBe(0);
+  });
+
+  it("shows the pull request of a code review under the title, and 「開く」 opens its URL in the default browser", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", qualityLoop: { rounds: 2, mustFixResolved: 3 }, pr: { url: "https://github.com/o/r/pull/7", note: null } }));
+    expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["https://github.com/o/r/pull/7"]);
+    expect(await textsOf("#formation-page .fp-pr button")).toEqual(["開く"]);
+    // Right after the header and before 「何が変わるか」.
+    expect(await browser.execute(() => document.querySelector(".fp-top")?.nextElementSibling?.className)).toBe("fp-pr");
+    // 「参考」 holds the quality check and not the pull request.
     await $("#formation-page .fp-reference > summary").click();
-    expect(await textsOf("#formation-page .fp-reference .fp-ev-path")).toEqual(["https://example.com/pr/1"]);
+    expect(await count("#formation-page .fp-reference .fp-ev-path")).toBe(0);
+    const open = await mock("orca_open_url", null);
+    await $("#formation-page .fp-pr button").click();
+    expect(await waitForCalls(open)).toEqual([{ url: "https://github.com/o/r/pull/7" }]);
+    await expect($("#formation-page .fp-pr .fp-error")).not.toBeDisplayed();
+  });
+
+  it("shows the reason in the place of the pull request when there is none", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: { url: null, note: "ベースにない変更がありません" } }));
+    expect(await textsOf("#formation-page .fp-pr .fp-p")).toEqual(["ベースにない変更がありません"]);
+    expect(await count("#formation-page .fp-pr button")).toBe(0);
+  });
+
+  it("gives a URL that is not https no button", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: { url: "http://example.com/pr/1", note: null } }));
+    expect(await textsOf("#formation-page .fp-pr .fp-ev-path")).toEqual(["http://example.com/pr/1"]);
+    expect(await count("#formation-page .fp-pr button")).toBe(0);
+  });
+
+  it("draws no pull request on a code review that has none", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: null }));
+    expect(await count("#formation-page .fp-pr")).toBe(0);
+  });
+
+  it("shows the reason when the pull request cannot be opened", async () => {
+    await openPage(decisionPage({ pageKind: "code-review", subject: "code", what: "変更です", pr: { url: "https://github.com/o/r/pull/7", note: null } }));
+    await mock("orca_open_url", rejects("ブラウザを開けません"));
+    await $("#formation-page .fp-pr button").click();
+    await expect($("#formation-page .fp-pr .fp-error")).toHaveText("ブラウザを開けません");
   });
 
   it("draws the blocks, the facts and the evidence of a card behind 詳しく見る", async () => {
