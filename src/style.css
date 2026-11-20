@@ -1209,7 +1209,8 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-send-btn:disabled { opacity: .4; cursor: default; }
 .fp summary:focus-visible, .fp-choice-label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 760px) { .fp-before-after { grid-template-columns: minmax(0, 1fr); } }
-/* The right pane, "流れ", is 260px wide, with the leader's card on top and the children's cards under it, a line at their left joining them to it. */
+/* The right pane, "流れ", is 260px wide, with the leader's card on top and the children's cards under it, a line at their left joining them to it. Its compact view (`data-compact="true"`) is 78px wide, as the sidebar is: see below. */
+:root { --codex-bg: #e6edfb; --codex-fg: #1d3f8a; }
 #formation-flow { flex: none; width: 260px; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; border-left: 1px solid var(--line); background: var(--bar); }
 #formation-flow-head { gap: 10px; padding: 0 12px 0 16px; }
 #formation-flow-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
@@ -1217,7 +1218,9 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 #formation-flow-head h2 { flex: none; }
 #formation-flow-head .formation-done { margin-right: 0; }
 #formation-flow-head .formation-done[hidden] { display: none; }
-#formation-follow { flex: none; margin-left: auto; color: var(--muted); }
+#formation-flow-size { flex: none; margin-left: auto; color: var(--muted); }
+#formation-flow-size[aria-pressed="true"], #formation-flow-size[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
+#formation-follow { flex: none; color: var(--muted); }
 #formation-follow[aria-pressed="true"], #formation-follow[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
 #formation-flow-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box; padding: 14px 12px; }
 #formation-flow-error { margin: 0 0 10px; overflow-wrap: anywhere; }
@@ -1251,6 +1254,39 @@ button.formation-card { cursor: pointer; }
 .formation-card-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .formation-card[data-state="waiting"] .formation-card-msg { color: inherit; }
 @media (prefers-reduced-motion: reduce) { .formation-card[data-state="working"] .formation-dot { animation: none; } }
+/* The compact view of the flow pane (A-37): the leader as one orb, one arrow under it that carries dashes down to the children, and each child as one orb with its name under it. The frame of an orb has the color of the state of the card. */
+#formation-flow[data-compact="true"] { width: 78px; }
+#formation-flow[data-compact="true"] #formation-flow-head { flex-wrap: wrap; justify-content: center; align-content: center; gap: 4px; padding: 6px 4px; }
+#formation-flow[data-compact="true"] #formation-flow-head h2 { display: none; }
+#formation-flow[data-compact="true"] #formation-flow-size { order: 0; margin-left: 0; }
+#formation-flow[data-compact="true"] #formation-follow { order: 1; }
+#formation-flow[data-compact="true"] .formation-done { order: 2; padding: 0 8px; }
+#formation-flow[data-compact="true"] #formation-flow-body { padding: 14px 0; overflow-x: hidden; }
+#formation-flow[data-compact="true"] #formation-flow-error { margin: 0 6px 10px; font-size: calc(11px * var(--fs)); }
+#formation-flow-compact { display: flex; flex-direction: column; align-items: center; }
+#formation-flow-orbs { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+#formation-flow-orbs li { width: 100%; display: flex; justify-content: center; }
+#formation-flow-arrow { flex: none; width: 20px; height: 26px; margin: 4px 0 8px; color: var(--muted); }
+.formation-arrow-line { stroke-dasharray: 3 4; animation: formation-arrow-flow 0.8s linear infinite; }
+@keyframes formation-arrow-flow { to { stroke-dashoffset: -7; } }
+.formation-orb { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; }
+button.formation-orb { cursor: pointer; }
+.formation-orb-dot { position: relative; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex: none; width: 36px; height: 36px; border: 3px solid var(--line); border-radius: 50%; background: var(--surface); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); font-weight: 700; }
+.formation-orb-name { max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(10px * var(--fs)); }
+.formation-orb-leader .formation-orb-dot { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.formation-orb[data-state="working"] .formation-orb-dot { border-color: color-mix(in srgb, var(--agent-working) 55%, var(--line)); }
+.formation-orb[data-state="waiting"] .formation-orb-dot { border-color: var(--agent-question); background: color-mix(in srgb, var(--agent-question) 10%, var(--surface)); }
+.formation-orb[data-state="done"] .formation-orb-dot { border-color: color-mix(in srgb, var(--agent-done) 45%, var(--line)); }
+.formation-orb[data-state="planned"] .formation-orb-dot { border-style: dashed; border-color: var(--chip-line); background: transparent; color: var(--muted); }
+.formation-orb[data-state="planned"] .formation-orb-name { color: var(--muted); }
+.formation-orb[data-agent="codex"] .formation-orb-dot { background: var(--codex-bg); color: var(--codex-fg); }
+.formation-orb-cx { position: absolute; right: -9px; bottom: -5px; padding: 0 4px; border-radius: 7px; background: var(--codex-fg); color: var(--on-accent); font-family: var(--ff-base); font-size: calc(9px * var(--fs)); font-weight: 700; line-height: 13px; }
+.formation-orb[aria-busy="true"] { opacity: .5; }
+.formation-orb[aria-pressed="true"] .formation-orb-dot { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
+button.formation-orb:focus-visible .formation-orb-dot { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The tip of an orb: the content of the card, with the frame and the shadow of a floating window. */
+#formation-flow-tip { position: fixed; z-index: 10; width: 240px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .formation-arrow-line { animation: none; } }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 15% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }

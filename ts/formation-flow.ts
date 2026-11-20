@@ -2,6 +2,7 @@
 // The right pane, "流れ", is a column of cards: the leader's card, and under it the children's cards in the same order. A card is a tab's twin: pressing it selects that tab. The cards of the done children are left out until the chip 「完了 N」 of the heading is pressed (#1113), and so are their tabs, with the tab of a decision page of one (#1117).
 // A child that has a decision page waiting (`pendingPage`, A-41) has a tab of its own right after its tab, 「判断: {title}」, and its card says 判断待ち with 「開く」. The tab (or 「開く」) shows the page in place of a terminal; the page is read when it is first shown and again when its mark's time changes, and the tab closes when the mark is gone.
 // The children of the formation that the list has selected (formation-list.ts) are read every few seconds while it is selected, and the list is read on the same clock; no other formation's children are read. While no formation is selected, only the list is read, at the Orca list's period.
+// The pane has two views, 「標準」 (the cards above) and 「コンパクト」 (78px wide: the leader as one orb, one arrow under it, and each child as one orb with its name under it; the card's content comes in a tip while the pointer or the focus is on an orb), switched by the button `#formation-flow-size` of the heading. The one chosen is kept in the page's `localStorage`, so it stays when the app starts again.
 // 「自動で追う」 is off when a formation is opened, so the middle pane stays on the leader, where the owner types; pressed on, it moves the selection to the child that waits. The terminals have an owner of their own, so that the Orca screen's terminals and these do not take each other.
 import type { FormationChild } from "./bindings/FormationChild";
 import type { FormationCloseAnswer } from "./bindings/FormationCloseAnswer";
@@ -20,6 +21,8 @@ import { elapsed, shownMs, streamsEnvironment } from "./orca.js";
 import { hideTerminals, isShowing, type Placement, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
 const READ_MS = 3000;
+// Where the view of the pane is kept: "1" is the compact one, anything else the standard one.
+const COMPACT_KEY = "formation-flow-compact";
 // The name of the owner of the terminals: what `showTerminals` and `hideTerminals` are told.
 const OWNER = "formation-session";
 // The environment of this Mac in `FormationChild.environment`; the terminal source calls it null, as the Orca screen's.
@@ -65,6 +68,8 @@ let epoch = 0;
 // What the cards and the tabs show now; each is drawn again only when its key changes.
 let treeKey = "";
 let tabsKey = "";
+// Whether the compact view is shown (read from `localStorage` when the screen starts, `initFormationFlow`).
+let compact = false;
 // The selection whose card and tab were last brought into view (the selection that moved is shown, the one that stays is not scrolled to again).
 let scrolledTo: string | null | undefined;
 
@@ -153,6 +158,7 @@ export function switchFormation() {
   for (const handle of held) releaseTerminal(handle, OWNER);
   held.clear();
   hideTerminals(OWNER);
+  hideTip();
   drawRoot();
   draw();
   if (watching === "flow") void read();
@@ -392,7 +398,7 @@ const viewing = (name: string) => pageChild === null && selected === name;
 
 // The attribute selector of the control that has the focus, to give it the focus again after a redraw.
 function focusSelector(el: HTMLElement | null): string | undefined {
-  for (const key of ["child", "page", "open"]) {
+  for (const key of ["child", "page", "open", "orb"]) {
     const value = el?.dataset[key];
     if (value) return `[data-${key}="${CSS.escape(value)}"]`;
   }
@@ -403,16 +409,10 @@ const MARKS: Record<FormationState, string> = { working: "◐", waiting: "●", 
 // The effort a child is started with (the leader's is high, A-37).
 const EFFORT = "medium";
 
-function card(c: FormationChild, now: number): HTMLLIElement {
-  const li = tag("li");
+// What a card says of a child, in its two rows: the name (with the agent of a Codex one and the time) and the state (with the last words, or the title of its decision page). The tip of an orb of the compact view says the same.
+function cardRows(c: FormationChild, now: number) {
   const page = c.pendingPage;
-  const state = page === null ? c.state : "waiting";
-  li.dataset.state = state;
-  li.dataset.name = c.name;
   const planned = c.state === "planned";
-  const node = planned ? tag("div", "formation-card") : tag("button", "formation-card");
-  node.dataset.state = state;
-  if (page !== null) node.dataset.page = "true";
   const row = span("formation-card-row", "");
   const name = span("formation-card-name", c.name);
   row.append(name);
@@ -425,6 +425,20 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   line.append(label);
   const msg = page === null ? c.reply : page.title;
   if (!planned && msg) line.append(span("formation-card-msg", msg));
+  return { row, line, name };
+}
+
+function card(c: FormationChild, now: number): HTMLLIElement {
+  const li = tag("li");
+  const page = c.pendingPage;
+  const state = page === null ? c.state : "waiting";
+  li.dataset.state = state;
+  li.dataset.name = c.name;
+  const planned = c.state === "planned";
+  const node = planned ? tag("div", "formation-card") : tag("button", "formation-card");
+  node.dataset.state = state;
+  if (page !== null) node.dataset.page = "true";
+  const { row, line, name } = cardRows(c, now);
   node.append(row, line);
   // The menu and its confirmation are anchored on the name, which a redraw of the card does not touch while they are open.
   node.oncontextmenu = (e) => openCardMenu(c, name, e);
@@ -439,6 +453,75 @@ function card(c: FormationChild, now: number): HTMLLIElement {
   if (page !== null) li.append(openButton(c.name));
   if (c.state === "done") li.append(closeButton(c, name, "formation-card-close"));
   return li;
+}
+
+// The order of the orbs of the compact view; the one place that decides it.
+const compactOrder = (list: FormationChild[]): FormationChild[] => list;
+
+// The orb of a child in the compact view: a circle with the first letter of its name, framed in the color of its state (a Codex child's has the blue ground and the tag 「cx」), and its name under it. It selects the child as its card does, and the card's content is its tip.
+function orb(c: FormationChild): HTMLLIElement {
+  const li = tag("li");
+  const page = c.pendingPage;
+  const planned = c.state === "planned";
+  const node = planned ? tag("div", "formation-orb") : tag("button", "formation-orb");
+  node.dataset.state = page === null ? c.state : "waiting";
+  node.dataset.orb = c.name;
+  if (page !== null) node.dataset.page = "true";
+  const codex = c.agent === "codex";
+  if (codex) node.dataset.agent = c.agent;
+  node.setAttribute("aria-label", codex ? `${c.name} (${c.agent})` : c.name);
+  const dot = span("formation-orb-dot", [...c.name][0]?.toUpperCase() ?? "");
+  if (codex) dot.append(span("formation-orb-cx", "cx"));
+  const name = span("formation-orb-name", c.name);
+  node.append(dot, name);
+  node.oncontextmenu = (e) => openCardMenu(c, name, e);
+  node.onmouseenter = () => showChildTip(c, node);
+  node.onmouseleave = hideTip;
+  if (closing.has(closingKey(currentFormation() ?? "", c.name))) node.setAttribute("aria-busy", "true");
+  if (node instanceof HTMLButtonElement) {
+    node.type = "button";
+    node.setAttribute("aria-pressed", String(viewing(c.name)));
+    node.onclick = () => selectChild(c.name);
+    node.onfocus = () => showChildTip(c, node);
+    node.onblur = hideTip;
+  }
+  li.append(node);
+  return li;
+}
+
+// The tip of an orb: the card's two rows in a card, beside the orb. It is one element outside the scrolling body, so that the body does not cut it.
+function showTip(content: HTMLElement, anchor: Element) {
+  const tip = $("formation-flow-tip");
+  tip.replaceChildren(content);
+  tip.hidden = false;
+  const at = anchor.getBoundingClientRect();
+  const high = tip.offsetHeight;
+  tip.style.right = `${window.innerWidth - at.left + 8}px`;
+  tip.style.top = `${Math.max(8, Math.min(window.innerHeight - high - 8, at.top + at.height / 2 - high / 2))}px`;
+}
+
+function hideTip() {
+  const tip = $("formation-flow-tip");
+  tip.hidden = true;
+  tip.replaceChildren();
+}
+
+function showChildTip(c: FormationChild, anchor: Element) {
+  const shown = tag("div", "formation-card");
+  shown.dataset.state = c.pendingPage === null ? c.state : "waiting";
+  if (c.pendingPage !== null) shown.dataset.page = "true";
+  const { row, line } = cardRows(c, Date.now());
+  shown.append(row, line);
+  showTip(shown, anchor);
+}
+
+// The tip of the leader's orb: its card, with the name of the formation and the tag 「リーダー」.
+function showLeaderTip() {
+  const shown = tag("div", "formation-card");
+  const row = span("formation-card-row", "");
+  row.append(span("formation-card-name", currentFormation() ?? ""), span("formation-card-role", "リーダー"));
+  shown.append(row);
+  showTip(shown, $("formation-flow-leader"));
 }
 
 // 「開く」 of a card that has a decision page: it shows the page. It sits beside the card, not in it, because a button does not hold a button.
@@ -531,7 +614,10 @@ function drawDoneChip() {
   const chip = $("formation-flow-done");
   const done = children.filter((c) => c.state === "done").length;
   chip.hidden = done === 0;
-  chip.textContent = `完了 ${done}`;
+  // The compact view has the room of a short chip: the mark and the number, with the words as its name.
+  chip.textContent = compact ? `✓${done}` : `完了 ${done}`;
+  if (compact) chip.setAttribute("aria-label", `完了 ${done}`);
+  else chip.removeAttribute("aria-label");
   chip.setAttribute("aria-pressed", String(showDone()));
 }
 
@@ -544,33 +630,79 @@ function draw() {
   drawTabs();
   $("formation-follow").setAttribute("aria-pressed", String(follow));
   $("formation-flow-root").setAttribute("aria-pressed", String(selected === null && pageChild === null));
+  $("formation-flow-leader").setAttribute("aria-pressed", String(selected === null && pageChild === null));
+  $("formation-flow").dataset.compact = String(compact);
+  $("formation-flow-size").setAttribute("aria-pressed", String(compact));
+  $("formation-flow-root").hidden = compact;
+  $("formation-flow-list").hidden = compact;
+  $("formation-flow-compact").hidden = !compact;
   const said = failure ?? notice;
   $("formation-flow-error").hidden = said === null;
   $("formation-flow-error").textContent = said ?? "";
   drawDoneChip();
-  const key = JSON.stringify([selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null])]);
+  const key = JSON.stringify([compact, selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null])]);
   if (key === treeKey) return;
   treeKey = key;
   // The cards are drawn again in place: the scroll and the focus stay where they were.
   const body = $("formation-flow-body");
   const top = body.scrollTop;
   const list = $("formation-flow-list");
-  const focused = focusSelector(list.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null);
-  list.replaceChildren(...children.filter(isShown).map((c) => card(c, now)));
+  const orbs = $("formation-flow-orbs");
+  const box = compact ? orbs : list;
+  const focused = focusSelector(body.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null);
+  const shown = children.filter(isShown);
+  hideTip();
+  if (compact) {
+    list.replaceChildren();
+    orbs.replaceChildren(...compactOrder(shown).map(orb));
+  } else {
+    orbs.replaceChildren();
+    list.replaceChildren(...shown.map((c) => card(c, now)));
+  }
+  $("formation-flow-arrow").toggleAttribute("hidden", shown.length === 0);
   body.scrollTop = top;
-  if (focused) list.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
+  if (focused) box.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true });
   // A selection that moved (the follow moves it too) is brought into the view of the cards and the tabs; the focus stays where it was.
   const view = pageChild === null ? selected : `page:${pageChild}`;
   if (view !== scrolledTo) {
     scrolledTo = view;
-    list.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
+    box.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest" });
     $("formation-tabs").querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
 }
 
+// Whether the compact view was chosen last time; a storage that cannot be read gives the standard view.
+function readCompact(): boolean {
+  try {
+    return localStorage.getItem(COMPACT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveCompact() {
+  try {
+    localStorage.setItem(COMPACT_KEY, compact ? "1" : "0");
+  } catch {
+    // The view stays as chosen until the app ends.
+  }
+}
+
 export function initFormationFlow() {
+  compact = readCompact();
   $("formation-tab-leader-main").onclick = selectLeader;
   $("formation-flow-root").onclick = selectLeader;
+  const leader = $("formation-flow-leader");
+  leader.onclick = selectLeader;
+  leader.onmouseenter = showLeaderTip;
+  leader.onmouseleave = hideTip;
+  leader.onfocus = showLeaderTip;
+  leader.onblur = hideTip;
+  $("formation-flow-size").onclick = () => {
+    compact = !compact;
+    saveCompact();
+    draw();
+  };
   $("formation-flow-done").onclick = () => {
     const formation = currentFormation() ?? "";
     if (!doneShown.delete(formation)) doneShown.add(formation);
