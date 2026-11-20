@@ -167,12 +167,14 @@ describe("todo Claude pane", () => {
     await $("#todo-list li.task").click();
     await expect($("#todo-back")).toBeDisplayed();
     await $("#todo-back").click();
-    // The page of a draft has a Claude pane of its own (S-18, its own process `todo-draft`): this one and its icons go, and this process stays.
+    // The page of a draft has a Claude pane of its own (S-18, its own process `todo-draft`, which starts only when 相談する of that pane is pressed): this one and its icons go, and this process stays.
     await mock("todoist_summarize_slack", slackSummary);
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await $("#todo-draft").waitForExist();
     await expect($(pane)).not.toBeDisplayed();
+    await $("#draft-consult").waitForDisplayed();
+    await $("#draft-consult").click();
     await browser.waitUntil(async () => (await ids("claude_code_start")).includes("todo-draft"));
     await $("#todo-back").click();
     await expect($(pane)).toBeDisplayed();

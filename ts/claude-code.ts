@@ -18,7 +18,7 @@ export interface ClaudeCodeOptions {
   kind?: "formation";
   // Leaves Claude Code's own tools on (the database screen does; the others never).
   builtinTools?: boolean;
-  // How Claude Code asks for a tool (#1074): "manual" (the default) asks the owner for every tool that writes; "auto" runs them unasked, and only the calendar pane takes it; "auto-slack-compose" is the Slack compose pane's (#1144: Sonnet at the effort high, and Claude Code asks before the post). Rust refuses both with `builtinTools` and for the orchestrator.
+  // How Claude Code asks for a tool (#1074): "manual" (the default) asks the owner for every tool that writes; "auto" runs them unasked, and only the calendar pane takes it; "auto-slack-compose" is the Slack compose pane's (#1144: Sonnet at the effort high, and Claude Code asks before the post); "auto-todo-draft" is the pane of a Todo's draft (#1148: Sonnet at the effort high). Rust refuses all three with `builtinTools` and for the orchestrator.
   permissionMode?: ClaudeCodePermissionMode;
   // A saved skill that Claude Code is given with `--plugin-dir` (A-32).
   skill?: { name: string; screen: SkillScreen } | null;

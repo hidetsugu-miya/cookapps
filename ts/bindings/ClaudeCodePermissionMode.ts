@@ -3,6 +3,7 @@
 /**
  * How the pane's Claude Code asks for a tool (#1074): `manual` asks the owner for every tool that writes, `auto` runs the tools with no question, so it has the tools of the calendar only and none of Claude Code's own.
  * `auto-slack-compose` (#1144) is the Slack compose pane's `auto`: the tools of that screen only, the model Sonnet at the effort high, and a question before `slack_compose_post`.
- * The screen names one of the three, and any other text is refused when the argument is read.
+ * `auto-todo-draft` (#1148) is the pane of a Todo's draft's: the tools of that screen only (it has no tool that posts, so no question is set), and the model Sonnet at the effort high.
+ * The screen names one of the four, and any other text is refused when the argument is read.
  */
-export type ClaudeCodePermissionMode = "manual" | "auto" | "auto-slack-compose";
+export type ClaudeCodePermissionMode = "manual" | "auto" | "auto-slack-compose" | "auto-todo-draft";
