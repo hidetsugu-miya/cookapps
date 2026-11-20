@@ -13,7 +13,6 @@ const pressed = (selector: string) => browser.execute((s) => document.querySelec
 const ground = (selector: string) => browser.execute((s) => getComputedStyle(document.querySelector(s)!).backgroundColor, selector);
 const starts = async () => (await callsOf("claude_code_start")).length;
 // The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
-const pressRestart = () => browser.execute(() => document.getElementById("formation-restart")!.click());
 const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
 
 // A list with one project that has a session with no pane, so the project is a row of the list and pressing it shows the work pane of Orca with nothing to read.
@@ -186,69 +185,6 @@ describe("development screen: orchestration", () => {
     await $(ROW("formation")).click();
     await waitForStarts(2);
     expect(await callsOf("claude_code_close")).toEqual([]);
-  });
-
-  it("has the restart button at the right end of the orchestrator's header, with the icon only", async () => {
-    await openFormation();
-    const button = $("#formation-restart");
-    await expect(button).toHaveAttribute("aria-label", "リーダーを再起動");
-    expect(await button.getText()).toBe("");
-    expect(await browser.execute(() => document.querySelectorAll("#formation-restart svg").length)).toBe(1);
-    const place = await browser.execute(() => {
-      const head = document.getElementById("formation-head")!.getBoundingClientRect();
-      const button = document.getElementById("formation-restart")!.getBoundingClientRect();
-      const tabs = document.getElementById("formation-tabs")!.getBoundingClientRect();
-      return { fromRight: Math.round(head.right - button.right), afterTitle: button.left >= tabs.right, children: document.getElementById("formation-head")!.lastElementChild!.id };
-    });
-    expect(place.children).toBe("formation-restart");
-    expect(place.afterTitle).toBe(true);
-    expect(place.fromRight).toBeLessThan(40);
-  });
-
-  it("ends the running process and starts a new one with the keyboard when the restart button is pressed, and calls no Orca command", async () => {
-    await openFormation();
-    await waitForStarts(1);
-    await sendClaudeCode({ kind: "output", data: "old conversation" });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("old conversation"));
-    await pressRestart();
-    await waitForStarts(2);
-    expect(await waitForCalls("claude_code_close")).toEqual([{ id: "formation:formation", launch: 1 }]);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation", builtinTools: true, skill: null }, { id: "formation:formation", builtinTools: true, skill: null }]);
-    // The screen is new, and the terminal takes the keys.
-    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("old conversation");
-    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
-    await sendClaudeCode({ kind: "output", data: "new conversation" });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("new conversation"));
-    for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input", "formation_launch", "formation_close"]) expect(await callsOf(command)).toEqual([]);
-  });
-
-  it("leaves the restart button off until the new start has answered, so a second press starts nothing", async () => {
-    await openFormation();
-    await waitForStarts(1);
-    const start = await mock("claude_code_start", holds);
-    await pressRestart();
-    await waitForCalls(start);
-    await expect($("#formation-restart")).toBeDisabled();
-    await pressRestart();
-    await browser.pause(300);
-    expect(await starts()).toBe(1);
-    await release(start, 1);
-    await expect($("#formation-restart")).toBeEnabled();
-    await mock("claude_code_start", 1);
-    await pressRestart();
-    await waitForStarts(1);
-  });
-
-  it("starts a new process when the restart button is pressed after the process ended", async () => {
-    await openFormation();
-    await waitForStarts(1);
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Claude Code が終わりました"));
-    await pressRestart();
-    await waitForStarts(2);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation" }, { id: "formation:formation" }]);
-    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("Claude Code が終わりました");
-    expect(await browser.execute(() => document.activeElement?.classList.contains("xterm-helper-textarea") && !!document.activeElement.closest("#formation-term"))).toBe(true);
   });
 
   it("starts nothing for the orchestrator while no formation is selected", async () => {
@@ -668,7 +604,7 @@ describe("orchestration mode: the view of the flow", () => {
     expect(await styleOf(marks("done"), "color")).toBe(await resolved("--agent-done"));
     expect(await styleOf(marks("waiting"), "color")).toBe(await resolved("--agent-question"));
     expect(await styleOf(marks("working"), "color")).toBe(await resolved("--agent-working"));
-    // The tabs are in the header, level with the restart button at its right end, and the header is above the terminal.
+    // The tabs are in the header, and the header is above the terminal.
     const [head, tabs, term] = [await rectOf("#formation-head"), await rectOf("#formation-tabs"), await rectOf("#formation-teammate-term")];
     expect(tabs.top).toBeGreaterThanOrEqual(head.top);
     expect(tabs.bottom).toBeLessThanOrEqual(head.bottom + 1);
@@ -709,8 +645,6 @@ describe("orchestration mode: the view of the flow", () => {
     expect(term.right - term.left).toBeGreaterThan(200);
     // The terminal is under the tabs: nothing of it is in the right pane.
     expect(await browser.execute(() => document.getElementById("formation-flow")!.querySelectorAll(".orca-term-box").length)).toBe(0);
-    // The restart button restarts the leader, so it is off while a child's tab is the selected one.
-    await expect($("#formation-restart")).toBeDisabled();
   });
 
   it("selects the leader's tab with its tab and with its card, shows its terminal, and turns 自動で追う off", async () => {
@@ -722,7 +656,6 @@ describe("orchestration mode: the view of the flow", () => {
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
     expect(await pressed("#formation-flow-root")).toBe("true");
     expect(await pressed("#formation-follow")).toBe("false");
-    await expect($("#formation-restart")).toBeEnabled();
     // The card of a child brings its tab and its terminal back, and the leader's card does the leader's.
     await card("batch-update").click();
     await expect($("#formation-teammate-term")).toBeDisplayed();
@@ -1465,17 +1398,6 @@ describe("orchestration mode: the list of the formations", () => {
     await mock("formation_children", []);
     await waitForCalls("formation_children", 3);
     expect([...new Set((await callsOf("formation_children")).map((c) => (c as { name: string }).name))]).toEqual(["mail-summary"]);
-  });
-
-  it("restarts the orchestrator of the shown formation only", async () => {
-    await openList();
-    await waitForStarts(1);
-    await row("won-2485").click();
-    await waitForStarts(2);
-    await pressRestart();
-    await waitForStarts(3);
-    expect(await waitForCalls("claude_code_close")).toMatchObject([{ id: "formation:won-2485" }]);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation" }, { id: "formation:won-2485" }, { id: "formation:won-2485" }]);
   });
 
   it("drops the children of the last formation when another is pressed, and an answer of the last one that comes late", async () => {
@@ -2458,7 +2380,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
-  it("says in the pane why the terminal could not be made, and asks again on the restart button", async () => {
+  it("says in the pane why the terminal could not be made, and asks again when the formation is pressed again", async () => {
     const reason = "リーダーを起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
     await openList({ formation_list: remote(), ...SHOWN }, null);
     await mock("formation_orchestrator", rejects(reason));
@@ -2470,37 +2392,13 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await browser.pause(300);
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
     await mock("formation_orchestrator", terminal());
-    await pressRestart();
-    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: true }]);
-    await expect($("#formation-term-error")).not.toBeDisplayed();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-    expect(await starts()).toBe(0);
-    expect(await callsOf("claude_code_close")).toEqual([]);
-  });
-
-  it("leaves the restart button off while the first start of the terminal is on its way, so a press is not dropped", async () => {
-    await openList({ formation_list: remote(), ...SHOWN }, null);
-    const start = await mock("formation_orchestrator", holds);
-    await row("studio-work").click();
-    await waitForCalls(start);
-    await expect($("#formation-restart")).toBeDisabled();
-    await release(start, terminal());
-    await expect($("#formation-restart")).toBeEnabled();
-    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-  });
-
-  it("does not carry the off restart button of a start on its way over to a formation of this Mac", async () => {
-    await openList({ formation_list: remote(), ...SHOWN }, null);
-    const start = await mock("formation_orchestrator", holds);
-    await row("studio-work").click();
-    await waitForCalls(start);
-    await expect($("#formation-restart")).toBeDisabled();
     await row("formation").click();
     await waitForStarts(1);
-    await expect($("#formation-restart")).toBeEnabled();
-    await pressRestart();
-    await waitForStarts(2);
-    await release(start, terminal());
+    await row("studio-work").click();
+    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
+    await expect($("#formation-term-error")).not.toBeDisplayed();
+    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
+    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
   // #893: a formation made before the owner's consent for its PC asks for it when it is opened.
@@ -2537,7 +2435,6 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf(consent)).toEqual([]);
     expect(await callsOf("formation_orchestrator")).toEqual([]);
     await expect($("#formation-term-error")).not.toBeDisplayed();
-    await expect($("#formation-restart")).toBeEnabled();
   });
 
   it("asks nothing of a PC that has the consent, and nothing of a formation of this Mac", async () => {
@@ -2550,17 +2447,6 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf("formation_consents")).toHaveLength(1);
   });
 
-  it("restarts the terminal through Rust, and shows the new one in place of the old", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
-    await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-    await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
-    await mock("orca_terminal_read", ["$ claude", "> 新しいリーダー"]);
-    await pressRestart();
-    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: true }]);
-    await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダー"), { timeoutMsg: "the new terminal never showed" });
-    expect((await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
-    await expect($("#formation-restart")).toBeEnabled();
-  });
 });
 
 // A-41: the decision page of a child, in a tab of the middle pane.
