@@ -23,7 +23,7 @@ There is no command for it here. You change it with `jq` and a check, as this fi
   "implementations": [
     {"key": "shop-api-1", "repo": "shop-api", "kind": "前提改修", "status": "完了", "design_ids": ["DESIGN-05", "DESIGN-06"], "reopen": null, "child": {"branch": "feature/PROJ-123-01", "pull_request": 14, "merged": true}},
     {"key": "shop-api-2", "repo": "shop-api", "kind": "機能", "status": "未着手", "design_ids": ["DESIGN-08"], "reopen": null, "child": null},
-    {"key": "shop-front", "repo": "shop-front", "kind": "機能", "status": "受入待ち", "design_ids": ["DESIGN-07"], "reopen": "records/reopen-shop-front-20261102-150405.md", "child": {"branch": "feature/PROJ-123-02", "pull_request": null, "merged": false}}
+    {"key": "shop-front", "repo": "shop-front", "kind": "機能", "status": "進行中", "design_ids": ["DESIGN-07"], "reopen": "records/reopen-shop-front-20261102-150405.md", "child": {"branch": "feature/PROJ-123-02", "pull_request": null, "merged": false}}
   ]
 }
 ```
@@ -43,18 +43,14 @@ The keys `release`, `release_prs`, `merged_pull_requests` and `released` are not
 
 ## Statuses
 
-A stage (requirement, design, specification) is `未着手`, `進行中` or `完了`.
-An implementation is `未着手`, `進行中`, `受入待ち` or `完了`. `受入待ち` means that its review has converged and that it waits for the owner's acceptance.
+A stage (requirement, design, specification) and an implementation are each `未着手`, `進行中` or `完了`.
+An implementation is `進行中` from its start to its merge, and `完了` once its child is merged.
 
 | Change | When |
 | --- | --- |
 | `未着手` to `進行中` | You start the unit. |
 | `進行中` to `完了` | The unit's completion criteria are met, as its procedure says. Setting `完了` clears the unit's `reopen`. |
-| `進行中` to `受入待ち` (implementations only) | The implementation's review has converged, right before the owner is asked to accept it. |
-| `受入待ち` to `完了` (implementations only) | The owner accepted it and its child is merged. |
 | anything to `未着手` | Only by a reopen. |
-
-Nothing moves `受入待ち` back to `進行中`: a unit in `受入待ち` is resumed as it is.
 
 ## The order of the units
 
@@ -158,7 +154,7 @@ The unit must be an implementation. Do not record a different branch for an impl
   .implementations |= map(if (.key // .repo) == $u and .child != null then .child.pull_request = $n else . end)
   ```
 
-- The merge: no extra option. The implementation must be `受入待ち` or `完了` already.
+- The merge: no extra option. The implementation must be `進行中` or `完了` already.
 
   ```jq
   .implementations |= map(if (.key // .repo) == $u and .child != null then .child.merged = true else . end)
@@ -185,8 +181,23 @@ The leader names the unit in your first instruction, with the owner's words as t
    | if $u != "specification" and .stages.specification.status == "完了" then .stages.specification.status = "未着手" else . end
    ```
 
+7. For an implementation, take the mark of its converged review away ("The mark of a converged review" below).
+
 What it does: the other units keep their statuses. A reopened implementation keeps an unmerged child (the redo goes on there) and loses a merged one (the redo starts a new child). A `完了` specification goes back to `未着手`, because what it wrote no longer holds.
 The record and `case.json` are committed with the unit's next case-root commit ([branch-and-pr](branch-and-pr.md)).
+
+### The mark of a converged review
+
+The ledger of an implementation (`{case root}/records/{key}/ledger.md`) holds the line `Converged:` once its review has converged.
+An implementation that is redone must start again at Stage 1, so the line goes whenever the implementation is sent back: by the `reopen` recipe above, by the redo of a design that reaches it ([7-implementations](../design/7-implementations.md)), and by the implementation itself when it sends an upper unit back ([consulting](consulting.md), "Send the case back").
+Otherwise its next child finds the line, takes the implementation stages as done, and merges code that does not follow the new request ([README of the implementation](../implement/README.md), "Where to start").
+It does nothing, and exits with 1, when there is no ledger: that is no failure. Run it with `{key}` filled in:
+
+```sh
+f="{case root}/records/{key}/ledger.md"; [ -f "$f" ] && { grep -v '^Converged:' "$f" > "$f.new"; mv "$f.new" "$f"; }
+```
+
+The ledger is committed with the unit's next case-root commit, as the record is.
 
 ### The implementations
 
@@ -202,7 +213,7 @@ The elements of one repository stand next to each other, in rising stage. The ch
 - the keys that must be there (`base_branch`, `documents`, `repos`, `stages`, `implementations`, and the keys of each element), and the types of the values,
 - a valid branch name for `base_branch` and for each `child.branch`, which must differ from `base_branch` and from every other child branch,
 - exactly one `repos` element with `docs` `true`, and unique repository names without a path separator,
-- the three allowed status sets above, and `child.merged` `true` only for an implementation that is `受入待ち` or `完了`,
+- the allowed statuses above, and `child.merged` `true` only for an implementation that is `進行中` or `完了`,
 - `implementations[].repo` is a repository of `repos`, but not `requirement`, `design` or `specification`; each `key` is unique, is not one of those three words, and is the repository's name or starts with it and a hyphen; `design_ids` are distinct `DESIGN-NN`,
 - `stages.specification.repo` is `null` or a repository of `repos`,
 - every `reopen` is `null` or a relative path that stays inside the case root.
@@ -237,7 +248,7 @@ def impl_check($i; $names; $base):
     (if has("repo") and ((.repo | inl($names)) | not) then "implementations[\($i)].repo is not a repos name" else empty end),
     (if has("repo") and (.repo | inl(reserved)) then "implementations[\($i)].repo must not be requirement, design or specification" else empty end),
     (if has("kind") and ((.kind | inl(["機能", "前提改修"])) | not) then "implementations[\($i)].kind must be 機能 or 前提改修" else empty end),
-    (if has("status") and ((.status | inl(["未着手", "進行中", "受入待ち", "完了"])) | not) then "implementations[\($i)].status must be 未着手, 進行中, 受入待ち or 完了" else empty end),
+    (if has("status") and ((.status | inl(["未着手", "進行中", "完了"])) | not) then "implementations[\($i)].status must be 未着手, 進行中 or 完了" else empty end),
     (if has("design_ids") and ((.design_ids | type) != "array" or (.design_ids | any(type != "string" or (test("^DESIGN-[0-9]+$") | not))) or ((.design_ids | length) != (.design_ids | unique | length))) then "implementations[\($i)].design_ids must be an array of distinct DESIGN-NN" else empty end),
     (if has("reopen") and .reopen != null and (.reopen | badrel) then "implementations[\($i)].reopen must be null or a relative path inside the case root" else empty end),
     (if has("key") and (.key | type != "string" or inl(reserved)) then "implementations[\($i)].key must be a string other than requirement, design and specification"
@@ -248,7 +259,7 @@ def impl_check($i; $names; $base):
              (if (.child | has("branch")) and ((.child.branch | badbranch) or .child.branch == $base) then "implementations[\($i)].child.branch must be a valid branch name other than base_branch" else empty end),
              (if (.child | has("pull_request")) and .child.pull_request != null and (.child.pull_request | posint | not) then "implementations[\($i)].child.pull_request must be null or a positive integer" else empty end),
              (if (.child | has("merged")) and ((.child.merged | type) != "boolean") then "implementations[\($i)].child.merged must be true or false" else empty end),
-             (if .child.merged == true and ((.status | inl(["受入待ち", "完了"])) | not) then "implementations[\($i)].child.merged is true only for 受入待ち or 完了" else empty end)
+             (if .child.merged == true and ((.status | inl(["進行中", "完了"])) | not) then "implementations[\($i)].child.merged is true only for 進行中 or 完了" else empty end)
         end)
      else empty end)
   end;

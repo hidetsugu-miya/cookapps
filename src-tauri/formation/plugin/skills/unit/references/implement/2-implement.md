@@ -44,7 +44,7 @@ The report's first line is `completion:`. Branch on its value.
 
 An entry under `Out-of-goal changes` is a change that no criterion asks for.
 Revert it with a launch of `work_kind: fix` when it does not serve the criteria.
-When it must stay (a change the criteria cannot be met without), keep it in a list with its reason: Stage 6 shows it to the owner.
+When it must stay (a change the criteria cannot be met without), keep it in a list with its reason: Stage 5 puts it in the body of the pull request.
 
 ## Verification the agent does
 

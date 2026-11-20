@@ -69,4 +69,4 @@ Keep these in your context for the whole unit. None of them is a file, except as
   - `records/requirement/`: the decision pages (stages 3 and 6), the review records (stage 5) and the business hold ([business-hold](business-hold.md)).
 - A reviewer, an explorer or a polisher writes none of these files. You write what they return.
 - Abbreviations in the body of a deliverable and in a page: write `REQ`, `DESIGN`, `UD`, `NR`, `MF` and `RC` only in the id form (`REQ-03`, `UD-02`) or as a column heading of a table of ids. Do not write `UD`, `MF`, `NR` or `RC` alone in a sentence: write what it is (the user decision, the must-fix finding, and so on).
-- You never ask the owner in a plain message. A question to the owner is a decision page. A question to the leader about the case itself, such as a missing ticket text, is a `QUESTION`.
+- You never ask the owner in a plain message. A question to the owner is a decision page. A question to the leader about the case itself, such as a missing ticket text, is a `QUESTION` ([consulting](../shared/consulting.md)): you are the top of the chain, so the leader answers it or asks the owner.

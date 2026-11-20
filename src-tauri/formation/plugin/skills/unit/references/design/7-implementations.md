@@ -103,7 +103,7 @@ def assign($P; $E):
           | select(($st.taken | index($i)) == null and $e.repo == $s.repo and ($e.design_ids | sortids) == $s.design_ids)
           | $i] | first) as $r
       | ([$free[] | . as $i | $E[$i] as $e
-          | select($e.repo == $s.repo and ($e.status | IN("受入待ち", "完了")) and ($e.design_ids | length) > 0
+          | select($e.repo == $s.repo and $e.status == "完了" and ($e.design_ids | length) > 0
               and ($s.design_ids | all(. as $x | $e.design_ids | index($x) != null))
               and ([$P[] | select(.repo == $s.repo and (.design_ids | any(. as $x | $e.design_ids | index($x) != null)))] | length) >= 2)
           | $i] | first) as $sp
@@ -129,9 +129,9 @@ def generate($d; $b; $c; $rec):
            then {key: $s.key, repo: $s.repo, kind: $s.kind, status: $e.status, design_ids: $s.design_ids, reopen: $e.reopen, child: null}
            else $e + {key: ($e | keyof)} end) as $old
           | (if $r.how == "split" then $s.design_ids else (($e.design_ids // []) + $s.design_ids) end) as $held
-          | if ($old.status | IN("受入待ち", "完了")) and ($held | any(. as $x | $ch | index($x) != null)) then
+          | if ($old.status | IN("進行中", "完了")) and ($held | any(. as $x | $ch | index($x) != null)) then
               {as: "reopened",
-               entry: ($old + {key: $s.key, kind: $s.kind, design_ids: $s.design_ids, status: "未着手", reopen: $rec,
+               entry: ($old + {key: $s.key, kind: $s.kind, design_ids: $s.design_ids, status: "未着手", reopen: ($old.reopen // $rec),
                                child: (if $old.child != null and $old.child.merged == true then null else ($old.child // null) end)})}
             else
               {as: (if $r.how == "split" or ($old.design_ids | sortids) != $s.design_ids or $old.kind != $s.kind or $old.key != $s.key then "updated" else "unchanged" end),
@@ -141,7 +141,7 @@ def generate($d; $b; $c; $rec):
   | ([$a.free[] | select((. as $i | ($a.taken | index($i)) == null and ($a.donors | index($i)) == null))] | map($E[.])) as $left
   | ($left | map(
       if .status | IN("未着手", "進行中") then {as: "removed", entry: .}
-      else {as: "orphaned", entry: (. + {design_ids: [], status: "完了", reopen: (if .status == "受入待ち" then null else .reopen end)}), former: .status} end)) as $gone
+      else {as: "orphaned", entry: (. + {design_ids: []}), former: .status} end)) as $gone
   | ($a.donors | unique | map($E[.]) | map({as: "removed", entry: ., former: .status})) as $donated
   | (($gone + $donated) | map(select(.entry.child != null and .entry.child.merged == false)
         | {key: (.entry | keyof), repo: .entry.repo, branch: .entry.child.branch, pull_request: .entry.child.pull_request, former_status: (.former // .entry.status)})) as $unmerged
@@ -173,10 +173,10 @@ It rebuilds `implementations[]` from the stages of the approved design, and keep
 - **Releases.** A release changes the stages inside a repository only. This flow has one aggregate pull request for each repository and runs the units in the order of `implementations[]`, with the implementations of one repository next to each other ([case-json](../shared/case-json.md)). It cannot run one repository's later release before another repository's earlier one: the check "Staged releases" of [rules](rules.md) covers that.
 - **Matching the entries that exist.** An existing entry is the stage of its repository with the same key.
   - No such entry, but an entry of the repository that no stage keys holds exactly the DESIGN items of the stage (the number of stages changed): it is the same work under another key. It takes the stage's key and keeps its status.
-  - No such entry either, but an entry that no stage keys is `受入待ち` or `完了`, has DESIGN items in two or more stages of the repository, and every item of this stage is one it held (the finished work was divided): the stage takes its status and `reopen`, with its own `design_ids` and `kind`, and a `child` of `null`. The entry it came from is dropped (`removed`).
+  - No such entry either, but an entry that no stage keys is `完了`, has DESIGN items in two or more stages of the repository, and every item of this stage is one it held (the finished work was divided): the stage takes its status and `reopen`, with its own `design_ids` and `kind`, and a `child` of `null`. The entry it came from is dropped (`removed`).
   - Otherwise the stage is new: `未着手`, listed under `created`.
-- **Redone work.** When `records/design-base.json` exists (the design was reopened), the program names the DESIGN items that the redo reaches: the items added, removed or changed, the items of a shared material that changed, and the items of the same repository that depend on any of them. An implementation that is `受入待ち` or `完了` and held or now holds one of them goes back to `未着手`, with `reopen` set to the record of the design's reopen, so that its child reads the same revision request. An unmerged `child` stays (the redo goes on there), and a merged one is cleared (the redo starts a new child). An implementation that is `未着手` or `進行中` is not reset. Without the base, nothing is reopened.
-- **Entries no stage has any more.** One that is `未着手` or `進行中` is dropped (`removed`). One that is `受入待ち` or `完了` stays after the other implementations of its repository, with empty `design_ids`, because its code is already on the base branch (`orphaned`). One that waited for acceptance is set to `完了`: nothing is left to accept it against. An orphan holds no DESIGN item, so the `reopen` recipe of [case-json](../shared/case-json.md) refuses it: there is nothing to redo.
+- **Redone work.** When `records/design-base.json` exists (the design was reopened), the program names the DESIGN items that the redo reaches: the items added, removed or changed, the items of a shared material that changed, and the items of the same repository that depend on any of them. An implementation that is `完了` or `進行中` (one that asked a question of the design and was stopped when the owner approved the send-back, for instance) and held or now holds one of them goes back to `未着手`, with `reopen` set to the record of the design's reopen (the record it has already, when it holds one that no redo has handled yet), so that its child reads the revision request. An unmerged `child` stays (the redo goes on there), and a merged one is cleared (the redo starts a new child). An implementation that is `未着手` is not reset, because nothing of it exists yet. Without the base, nothing is reopened.
+- **Entries no stage has any more.** One that is `未着手` or `進行中` is dropped (`removed`). One that is `完了` stays after the other implementations of its repository, with empty `design_ids`, because its code is already on the base branch (`orphaned`). An orphan holds no DESIGN item, so the `reopen` recipe of [case-json](../shared/case-json.md) refuses it: there is nothing to redo.
 - **Children.** Every entry that is dropped or kept as an orphan, and whose child was not merged, is in `unmerged_children`, with the status it had before. Its branch exists and its code is not in the base branch. This stage merges, deletes and closes nothing.
 
 The report is one JSON object: `created`, `updated`, `unchanged`, `reopened`, `orphaned`, `removed`, and `unmerged_children`.
@@ -189,6 +189,14 @@ When `records/design-base.json` exists, the redo has used it. Remove it:
 ```sh
 git -C "{docs worktree}" rm -q -f --ignore-unmatch -- ".feature-dev/current/records/design-base.json"; rm -f "{case root}/records/design-base.json"
 ```
+
+Then take the mark of a converged review away from each implementation of `reopened` ([case-json](../shared/case-json.md), "The mark of a converged review"), so that its next child starts again at Stage 1 and does not merge the code made for the old design:
+
+```sh
+jq -r '.report.reopened[].key' "{scratch}/generated.json"
+```
+
+Run the command of that section for each key it prints.
 
 Keep the report for [8-completion](8-completion.md): `reopened`, `orphaned`, `removed` and `unmerged_children`.
 Then go on to [8-completion](8-completion.md).

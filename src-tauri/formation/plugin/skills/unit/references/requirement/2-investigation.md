@@ -71,6 +71,6 @@ Do not write the list into the notes or into any deliverable. Keep it in your co
 
 - The list holds at least one question: go to [stage 3](3-open-questions.md).
 - It is empty: go to [stage 4](4-writing.md).
-- A part of the range could not be scanned, so that you cannot say a perspective is complete: say which range, which perspective and why in your own words to the leader as a `QUESTION requirement:` with options A (go on with the part that was scanned, and name the risk) and B (wait for the owner to make the range reachable), recommend one, and wait for the answer. Do not write the requirement over an unscanned range without it.
+- A part of the range could not be scanned, so that you cannot say a perspective is complete: say which range, which perspective and why in your own words to the leader as a `QUESTION requirement {Q-id}:` with options A (go on with the part that was scanned, and name the risk) and B (wait for the owner to make the range reachable), recommend one, and wait for the answer. Do not write the requirement over an unscanned range without it.
 
 The questions on the list are the only things you ask the owner in stage 3. Once a question is on the list, do not try to settle it by investigating it again.

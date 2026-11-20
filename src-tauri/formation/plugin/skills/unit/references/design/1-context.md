@@ -35,9 +35,9 @@ Nothing here changes a file, except the reopen of the last section.
      ```
 
      Read each hit's node, and keep them as `undecided matters` for stage 2.
-   - An item of `design_scope` that is not written: do not guess it. Take the case back to the requirement ("Send the case back to the requirement" below), with the reason "the scope of the requirement lacks `{item}`", and stop.
+   - An item of `design_scope` that is not written: do not guess it. Ask the requirement ([consulting](../shared/consulting.md)): send `QUESTION design {Q-id}: the scope of the requirement lacks {item}`, with the options and your recommendation, and stop. An `answered` or an `owner` gives the item: go on with it as data, and write it down as a matter you noticed. An `ANSWER design {Q-id}: reopen requirement` sends the case back ("Send the case back to the requirement" below), with the reason "the scope of the requirement lacks `{item}`".
 6. Find the repositories.
-   - `repos[]` of `case.json` lists the repositories of the case, and the first instruction lists those of the formation. Every repository that the requirement puts in scope (`scope.in_scope`) needs a folder you can read, `{repo root}`. Your own folder is one. For another, use the folder the first instruction gives. When it gives none, look for a git repository of that name beside the docs worktree (`git -C "{path}" remote -v` names it), and when you find none, send `QUESTION design: where is the folder of {repository}?`.
+   - `repos[]` of `case.json` lists the repositories of the case, and the first instruction lists those of the formation. Every repository that the requirement puts in scope (`scope.in_scope`) needs a folder you can read, `{repo root}`. Your own folder is one. For another, use the folder the first instruction gives. When it gives none, look for a git repository of that name beside the docs worktree (`git -C "{path}" remote -v` names it), and when you find none, send `QUESTION design {Q-id}: where is the folder of {repository}? This is a matter of the environment.`
    - You only read these folders. Run read-only commands in them.
    - A repository that holds no implementation code and carries only documents such as specifications is not a repository of the design. Do not count it when you settle the target layer.
 7. Settle the target layer (対象レイヤ): `バックエンドのみ`, `フロントエンドのみ` or `フルスタック`.
@@ -49,7 +49,7 @@ Nothing here changes a file, except the reopen of the last section.
 
 ## Send the case back to the requirement
 
-Use it when the requirement is what has to change: a design-scope item is not written ("Steps", 5), or the owner's revision of stage 6 amounts to a requirement change. Never edit `requirement.json` in this unit.
+Use it when the requirement is what has to change, and the change is approved: the leader answered your question `reopen requirement` (a design-scope item is not written, "Steps", 5), or the owner's own revision of stage 3 or stage 6 amounts to a requirement change. Never edit `requirement.json` in this unit.
 
 1. When the unit holds work in progress (`design.json`, `technical-notes.md`, `code-facts-base.json`, `creator-facts.md`, `{records}/`), commit it first, as a commit of its own, each path by itself ([branch-and-pr](../shared/branch-and-pr.md), "Commit the case root"). Say in the message that it is the design work in progress at the reopen. When an ADR was written in stage 6, delete its file first and leave it out of the commit.
 2. Run the `reopen` recipe of [case-json](../shared/case-json.md) for the unit `requirement`, with the reason: the owner's words word for word, or the sentence above. It reopens the design too, and copies `design.json` to `records/design-base.json`.

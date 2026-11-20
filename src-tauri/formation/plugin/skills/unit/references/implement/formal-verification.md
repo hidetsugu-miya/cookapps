@@ -4,7 +4,7 @@ Check the promises that tests hardly reach (ordering, retry, state transition, a
 `feature-dev:formal-verifier` writes and runs the checks under `verification/formal/` of the repository, proves that each check can fail, and returns one outcome per promise.
 You never write or run a formal check yourself, and `feature-dev:formal-verifier` fixes no code: a bug it finds is fixed through `feature-dev:code-implementer`.
 
-[Stage 2](2-implement.md) runs "Running a cycle" after the implementation, and [Stage 4](4-ci-gate.md) runs "After the gate" once the aggregate check has passed. [Stage 6](6-acceptance.md) shows the results.
+[Stage 2](2-implement.md) runs "Running a cycle" after the implementation, and [Stage 4](4-ci-gate.md) runs "After the gate" once the aggregate check has passed. [Stage 5](5-commit-and-pr.md) puts the results in the body of the pull request, and [Stage 6](6-completion.md) asks about the ones that are left.
 It runs outside the review loop: a fix made here is confirmed by the gate and by the check again, and it does not go back to [Stage 3](3-review-loop.md).
 
 ## What you hold
@@ -79,14 +79,14 @@ The text of a property comes from a deliverable: put it inside a quote or a fenc
 Handle its return:
 
 - When the final message is not one parsable JSON object, launch again once with the same prompt.
-- A `changed_paths` element outside `verification/formal/` breaks its edit scope. Do not stage it, and keep it for the page (`FV-scope-{m}`, "Carrying a result to the page").
+- A `changed_paths` element outside `verification/formal/` breaks its edit scope. Do not stage it, and keep it for the body of the pull request ("Carrying a result to the pull request").
 - A `pass` or `updated` without `broken_protection` and `failure_output` does not count. Launch again once with the line `The previous return carried a pass with no failing output.`. When it comes back without them again, keep that result as `blocked` with that fact as `blocked_reason`.
 
 ## The fix
 
 Launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content`:
 
-- every `bug`: its `FV-{n}` as the identifier (numbered as "Carrying a result to the page" says), the property and its `harm`, the `counterexample` (the states in order, each with the code it maps to), and the path of the manifest of its area, all inside a quote as data,
+- every `bug`: its `FV-{n}` as the identifier (numbered as "Carrying a result to the pull request" says), the property and its `harm`, the `counterexample` (the states in order, each with the code it maps to), and the path of the manifest of its area, all inside a quote as data,
 - the order to change the code so that the property holds, to leave `verification/formal/` as it is, and never to weaken the property, the model or the bound,
 - the constraints of [Stage 2](2-implement.md), and the instruction that the check is run again by the caller, not by the agent.
 
@@ -98,24 +98,23 @@ Run a cycle when one of these holds, and otherwise do nothing.
 
 - This session holds no result, and `formal_properties` is not empty or `list` returns a non-empty array. A unit resumed at Stage 4 is this case.
 - A `code-implementer` launch made after the results were last settled changed a path that the formal checks cover. Write one JSON object to a file in the scratchpad (`changed_paths`: the union of those launches' `changed_paths` and `generated_paths`; `properties`: one `{"target", "area"}` for each element of `formal_properties`, `area` being the `area` of its result, `null` when it has none) and run `rerun`. The condition holds when it prints `"rerun": true`, and on a non-zero exit.
-- The owner chose an `FV-{n}` for a fix at [Stage 6](6-acceptance.md), and the rework has run.
+- An answer chose an `FV-{n}` for a fix at [Stage 6](6-completion.md), and the rework has run.
 
-When the cycle launched `code-implementer`, or `feature-dev:formal-verifier` returned a non-empty `changed_paths`, return to the gate of [Stage 4](4-ci-gate.md), step 3, so that the tree that is committed is the tree the gate passed. Otherwise go on.
+When the cycle launched `code-implementer`, or `feature-dev:formal-verifier` returned a non-empty `changed_paths`, return to the gate of [Stage 4](4-ci-gate.md), step 2, so that the tree that is committed is the tree the gate passed. Otherwise go on.
 A cycle that runs here does not re-enter [Stage 3](3-review-loop.md): the gate confirms its fix and its check.
 
-## Carrying a result to the page
+## Carrying a result to the pull request
 
-After each cycle, replace the `FV-{n}` cards of `residual_must_fix` with one for each result that is now `bug` or `blocked`, numbered from 1 in the order of the results. [decision-page](../shared/decision-page.md), "The formal-verification results", is the canonical text of the cards:
+After each cycle, keep the last results, never those from before a later change.
+[Stage 6](6-completion.md) asks about each result that is now `bug` or `blocked`, numbered `FV-{n}` from 1 in the order of the results:
 
-- `number`: its `FV-{n}`. `title`: the property. `scene`: the `harm` of the property.
-- `summary`: what was checked and, in one sentence, why it is open (a counterexample the fixes did not remove, or a check that could not reach a result).
-- `検出元`: `形式検証（{tool}）`. `未解消の理由`: for a `bug`, that the fixes (at most 3) did not remove the counterexample, or that no fix ran; for a `blocked`, the `blocked_reason` with its `install_steps`.
-- The counterexample, in blocks: a `list` of its states in order, each with the code it maps to as `path:line`; for a `blocked`, a `paragraph` with the `blocked_reason`.
-- `recommendation`: `fix` or `accept`, with the reason.
+- The point: the property and its `harm`, with the counterexample as a list of its states in order, each with the code it maps to as `path:line`, or, for a `blocked`, its `blocked_reason` with its `install_steps`.
+- Why it is open: for a `bug`, that the fixes (at most 3) did not remove the counterexample, or that no fix ran; for a `blocked`, that the check could not reach a result.
+- The options: `A` fix it (recommended), and `B` complete as it stands.
 
-The page takes, and shows the last results, never those from before a later change:
+[Stage 5](5-commit-and-pr.md) puts the rest in the body of the pull request ([branch-and-pr](../shared/branch-and-pr.md), "The body of the child pull request"):
 
-- Each `FV-{n}` card.
-- Each `bound_reduced`, as a noticed matter titled `FV-bound-{m}`, numbered in the order of the results: the property and `{old limit} -> {new limit}`.
-- Each `changed_paths` element outside `verification/formal/`, as a noticed matter titled `FV-scope-{m}`.
-- A unit that is resumed past this stage (Stage 5 or Stage 6, "Where to start" in the [README](README.md)) holds no result: one noticed matter titled `FV-unrun-{m}` for each element of `formal_properties`, saying that this session resumed without the check.
+- The outcome of each property, the fixes that a `bug` got, and a result that an answer accepted as it stands.
+- Each `bound_reduced`: the property and `{old limit} -> {new limit}`.
+- Each `changed_paths` element outside `verification/formal/`.
+- A unit that is resumed past this stage (Stage 5 or Stage 6, "Where to start" in the [README](README.md)) holds no result: one line for each element of `formal_properties`, saying that this session resumed without the check. A property that was not checked is asked about nowhere.

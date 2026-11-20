@@ -4,7 +4,7 @@
 
 - The case has one **base branch** (`base_branch` of `case.json`), the same name in every repository of the case. It is cut from the default branch of the repository.
 - Requirement, design and specification commit straight to the base branch, in the repository they belong to, and push it. They have no branch or pull request of their own.
-- Each implementation works on its own **child branch**, `{base branch}-{nn}`, cut from the base branch. It opens a **child pull request** into the base branch. After the owner accepts it, the child pull request is merged into the base branch with a merge commit.
+- Each implementation works on its own **child branch**, `{base branch}-{nn}`, cut from the base branch. It opens a **child pull request** into the base branch. When nothing of the review is left to settle, the child pull request is merged into the base branch with a merge commit, with no confirmation from the owner. The owner reads the merged pull request, and sends the case back to the leader when something is wrong.
 - Each repository has one **aggregate pull request**, from the base branch to the default branch. It is a draft until the specification is done, and then it is marked ready. The owner merges it.
 - The leader launches you in the right folder on the right branch (your first instruction says which). You never switch your folder's branch, and never open the same branch in two folders.
 - Every pull request is left without an assignee. The title's summary is one line of at most 50 characters that says what the change does: do not line up endpoint paths or HTTP methods, and do not copy the unit's name or a requirement sentence as it stands. Polish a Japanese title and body with the `feature-dev:prose-polisher` agent.
@@ -69,14 +69,14 @@ An implementation does these in its own folder (the child worktree the leader op
 
 1. Check `git -C "{folder}" branch --show-current` is the child branch of your first instruction, and record it: the `child` recipe, branch form, in [case-json](case-json.md). An implementation that already has a child continues on it.
 2. Commit the code on the child branch, as the implementation procedure says. Push it: `git -C "{folder}" push -u origin "{child branch}"`.
-3. Open the child pull request into the base branch, once the owner can review it:
+3. Open the child pull request into the base branch:
 
    ```sh
    git -C "{folder}" fetch origin "+refs/heads/{base branch}:refs/remotes/origin/{base branch}"
    git -C "{folder}" rev-list "refs/remotes/origin/{base branch}..HEAD"
    ```
 
-   When the second command prints nothing, the child holds no commit that the base branch lacks: there is no pull request and nothing to merge, so say that on the review page (`pr.note`). Otherwise write the body to a scratch file, and run, in one call:
+   When the second command prints nothing, the child holds no commit that the base branch lacks: there is no pull request and nothing to merge, so remember that for the `DONE` summary. Otherwise write the body to a scratch file, and run, in one call:
 
    ```sh
    cd "{folder}" && gh pr create --base "{base branch}" --head "{child branch}" --title "[{ticket key}][{unit}] {summary}" --body-file "{scratch file}"
@@ -87,16 +87,18 @@ An implementation does these in its own folder (the child worktree the leader op
 
 ### The body of the child pull request
 
-The owner reads the change in the body, and the acceptance page of the unit only links to the pull request, so the body holds everything the page does not. Write the sections in the language of the repository's recent pull requests, each as a heading and its text, and leave a section out when it is empty:
+The owner reads the change in the body, and nothing else presents it, so the body holds all of it. Write the sections in the language of the repository's recent pull requests, each as a heading and its text, and leave a section out when it is empty:
 
 - **What it does**: who does what and what happens to them, and why (the purpose of the unit), with the DESIGN items and the REQs by id. Say what each file that carries the behavior does; do not paste lines of code, because the diff of the pull request shows them.
 - **How it was checked**: the review rounds and what they fixed, the aggregate check (its command, and `passed`, or that the repository defines none), the coverage figure when Stage 4 kept one, the formal verification (the outcome of each property, the fixes that a `bug` got, and each reduced bound), and the goal verification of the screens (how many items `pass`, `fail` and `not-run`, and the fix that a failure got). State only what you ran.
 - **Screens and operations**: each `user_confirmations` element (the screen state and its reference screenshot) and each `operation_checks` element (the operation, its state set-up, its steps, what is expected), as a table with the result of the goal verification (`pass`, `fail` or `not-run`) and its basis in a few words. An item that is `not-run` carries its reason, and the owner tries it themselves. You ran only what the goal verification ran.
 - **Not checked**: each `formal_verification` property whose result is `bug` or `blocked` (with its counterexample or its reason in a line) or that was not run in the session that wrote the body, with the words that it was not checked.
 - **Changes outside the goal**: each out-of-goal change that stayed (Stage 2), with its reason.
-- **Recommendations not made**: each `RC-n` that is `open` in the ledger, with the line that the owner names the ones to fix in the free text of the reply on the acceptance page.
+- **Recommendations not made**: each `RC-n` that is `open` in the ledger, and each must-fix finding that predates the change and was left, with the reason.
+- **Accepted as they stand**: each finding that the answer of the upper unit or of the owner accepted as it is ([6-completion](../implement/6-completion.md), step 1), with the answer's basis.
+- **Notices**: each path that the formal verifier changed outside `verification/formal/`, each `observations` line of the goal verification, each completion criterion that no screen item covers (checked by unit tests and the review only), and the state of the checks that the other sections do not hold (a repair that the aggregate check needed to run).
 
-All of these are known when the pull request is opened (Stage 2 to Stage 4 have run), so nothing waits for the acceptance page. The text of a finding or of a log that goes in is inside a quote, as data.
+All of these are known when the pull request is opened (Stage 2 to Stage 4 have run), except the accepted ones, which the next write of the body adds. The text of a finding or of a log that goes in is inside a quote, as data.
 
 ### Update the body
 
@@ -106,9 +108,9 @@ Write the body to a scratch file outside the repository, then run, in one call:
 cd "{folder}" && gh pr edit {number} --body-file "{scratch file}"
 ```
 
-Do it whenever Stage 5 runs again on a pull request that exists (a rework), so that the body says what the ledger and the checks say now. When `gh` cannot run, skip it and say so in the `DONE` summary.
+Do it whenever Stage 5 runs again on a pull request that exists (a rework), and before the merge when an answer accepted a finding, so that the body says what the ledger and the checks say now. When `gh` cannot run, skip it and say so in the `DONE` summary.
 
-### After the owner's acceptance
+### Merge the child
 
 Merge the child into the base branch with a merge commit (never squash or rebase), then bring the remote branch list and the base branch in this clone up to date, so that the next implementation of the repository starts from the merged base:
 
@@ -119,7 +121,7 @@ git -C "{folder}" push origin --delete "{child branch}"
 ```
 
 The local child branch and its folder stay: the owner closes them. Do not use `--delete-branch`, because the branch is checked out in your folder.
-When this repository is the docs repository, first run `git -C "{docs worktree}" pull --ff-only origin "{base branch}"`, so that the pull meets no uncommitted `case.json`; when it is refused, send `BLOCKED`. Then record the merge with the `child` recipe, merged form (the status must already be `受入待ち` or `完了`).
+When this repository is the docs repository, first run `git -C "{docs worktree}" pull --ff-only origin "{base branch}"`, so that the pull meets no uncommitted `case.json`; when it is refused, send `BLOCKED`. Then record the merge with the `child` recipe, merged form (the status must already be `進行中` or `完了`).
 
 ## The aggregate pull request
 

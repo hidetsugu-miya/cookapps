@@ -1,6 +1,6 @@
 # Decision pages
 
-A decision page is how you ask the owner for a judgment or an approval: the open questions of a requirement or a design, the approval of a deliverable, and the acceptance of an implementation.
+A decision page is how you ask the owner for a judgment or an approval: the open questions of a requirement or a design, and the approval of a deliverable.
 The owner reads one page that carries what they need, answers on it, and the reply comes back to you as text.
 You write the page as one JSON file. The leader hands it to the app, and the app draws it. You do not draw it yourself, and you do not ask in plain messages what a page should ask.
 
@@ -15,7 +15,7 @@ The page settles nothing by itself: the owner's answer reaches you only as the r
 1. **Settle the items.** They are the questions or findings the procedure passes you. Do not change an item's number, options or recommendation, do not add one, and do not merge two. The one exception is a refused duplicate number (step 6). The recommended option of a question is the first, `A`.
 2. **Read the latest state.** Facts about a deliverable come from its state on disk now, read with `jq` ([deliverable-writing](deliverable-writing.md)). State nothing that the deliverables, the items and the cited files do not state.
 3. **Write the page JSON** to `{case root}/records/{unit}/page-{nn}.json`, with `nn` two digits, one more than the last page of the unit (`01` for the first). Make the folder if needed. The page is a record of the unit: it stays, and it is committed with the unit's other records ([branch-and-pr](branch-and-pr.md)). Pages are not committed before they are answered.
-4. **Polish the text.** Launch the `feature-dev:prose-polisher` agent with every Japanese text the page shows as `sections` (one section for each text, headed by its place in the page), `body_only` `true`, and as `materials` the deliverable files and the items the texts rest on. Write each returned draft into the page as it stands, line by line. The leader's page tool refuses a Japanese line that is not in the final draft of a recorded polishing run, so polish first, then write the page from the drafts, and do not edit a line by hand afterwards. Do not polish what the page copies or quotes: a path, a `root`, `ref`, a `source`, the lines of a `diff`, the `text` of an option's `sample` (the words the screen shows, as they are), `previous_reply`, the identifiers (`number`, `clarified_numbers`, `cards`), the label of every fact, the value of the facts the contract fixes (`分類`, `影響範囲`, `重要度`, `検出元`, `箇所`), and the `label` and `fix` of the options of a `review-decision` card, which are the reviewer's own words. The texts inside a Mermaid diagram are polished.
+4. **Polish the text.** Launch the `feature-dev:prose-polisher` agent with every Japanese text the page shows as `sections` (one section for each text, headed by its place in the page), `body_only` `true`, and as `materials` the deliverable files and the items the texts rest on. Write each returned draft into the page as it stands, line by line. The leader's page tool refuses a Japanese line that is not in the final draft of a recorded polishing run, so polish first, then write the page from the drafts, and do not edit a line by hand afterwards. Do not polish what the page copies or quotes: a path, a `root`, `ref`, a `source`, the lines of a `diff`, the `text` of an option's `sample` (the words the screen shows, as they are), `previous_reply`, the identifiers (`number`, `clarified_numbers`, `cards`), the label of every fact, the value of the facts the contract fixes (`分類`, `影響範囲`, `重要度`, `検出元`, `箇所`). The texts inside a Mermaid diagram are polished.
 5. **Send** `PAGE {absolute path}` to the leader, and stop.
 6. **When `PAGE-REFUSED {absolute path}` comes**, its lines are the violations. Fix the page. When a line was refused as unpolished, polish the Japanese of the page again, those lines included, in one run of yomiyasu (step 4). Then send `PAGE` again. When a violation names a `ref` that it cannot resolve, name that element by its index in the array (`requirement.json#/requirements/2`) instead of its `id`. A diagram that the check refuses for its syntax is fixed in its `mermaid` text, and an image that is not there, or is too large, is replaced by a file that is.
    When a violation is a number that two cards share (`同じ番号のカードがもう一枚あります`), two items of different rounds have met on one page (for example the `MF-1` still open from an earlier round and an `MF-1` of a later one). Add the mark of the round in which it was raised to the number of each later card, `{number}-r{round}` (`MF-1-r2`; `r2` when no round is known), so that every number on the page is unique. Change nothing else of the card, and do not merge the two cards. Then send `PAGE` again.
@@ -31,12 +31,12 @@ A `path` is relative to the folder of its `root`, with `/`. A `ref` is `{file}#{
 | Key | Content |
 | --- | --- |
 | `schema_version` | `1` |
-| `page_kind` | `open-questions`, `approval` or `code-review`. |
-| `subject` | `requirement` or `design` for `open-questions` and `approval`; `code` for `code-review`. |
+| `page_kind` | `open-questions` or `approval`. |
+| `subject` | `requirement` or `design`. |
 | `context_label` | Required. One line over the title naming the kind of confirmation and the ticket, for example `要件定義の承認依頼 ・ チケット PROJ-101`. |
 | `title` | Required. What the page is about, in one plain heading. |
-| `what` | Required on `approval` and `code-review`, absent on `open-questions`. One to three sentences: the point of what this requirement, design or change adds or changes, not a restatement of `title`. No internal identifiers and no counts. |
-| `roots` | Required. An object that maps a root name to an absolute folder, which must be inside a repository of the formation or one of its worktrees (the case root is). The case root is `deliverables`. Name a repository root after the repository, and add one for each repository an evidence item or an image cites. A screenshot or a capture of a `screen-verification` card that lies under none of those roots gets a root of its own, named `screenshots` or `captures`. The captures of the goal verification are in `{docs worktree}/.feature-dev/captures/{unit key}` (outside the case root, and never committed), which is the root `captures`. |
+| `what` | Required on `approval`, absent on `open-questions`. One to three sentences: the point of what this requirement, design or change adds or changes, not a restatement of `title`. No internal identifiers and no counts. |
+| `roots` | Required. An object that maps a root name to an absolute folder, which must be inside a repository of the formation or one of its worktrees (the case root is). The case root is `deliverables`. Name a repository root after the repository, and add one for each repository an evidence item or an image cites. A screenshot that lies under none of those roots gets a root of its own, named `screenshots`. |
 | `terms` | Optional. An array of `{word, description}`. The page shows `description` as a tooltip on `word` in the body text. List only the words the page uses whose meaning a reader outside the project cannot tell. |
 | `previous_reply` | Optional. The reply text of the owner to an earlier page of the same items, verbatim. It is never shown. The page starts from its answers (on a lettered card, a `補足` returns only with `その他`). |
 | `clarified_numbers` | Optional. An array of the `number`s of the cards whose items the owner asked to have explained more clearly. The page restores no answer into those cards, so that the request's own words never return as an answer. |
@@ -57,68 +57,47 @@ By page kind:
     - `settled_decisions`: an array of `{id, decision, reason, evidence, provisional}` for the `UD-NN` decisions the deliverable records. `id`, `decision` and `reason` are required. `evidence` is an array of evidence items. `provisional` is `true` (`requirement` only) for a decision that waits for the business side; the page lists those apart.
     - `withdrawn_needs_user_decision`: an array of `{number, title, withdrawal_reason}`, one for each decision item the review withdrew because the final deliverable already settles it.
     - `noticed`: an array of `{title, text, evidence}`, one for each matter you noticed outside the request and did not reflect. `title` and `text` are required, `evidence` is optional. The page shows them under 目標外の事柄 with the sentence that only what the owner names is fixed. It has no answer form.
-- `code-review`:
-  - `residual_must_fix` (`review-must-fix` cards), `unmet_criteria` (`unmet-criterion` cards) and `needs_user_decision` (`review-decision` cards).
-  - `screen_verifications`: `screen-verification` cards, one for each screen-verification result of the unit, in the order the unit holds them. They need no answer. The page opens the failed and not-run ones, and folds the passed ones.
-  - `policy_deviations`: blocks. Where the implementation departed from the contract of the unit, with the reason, and the facts found after the contract was written that the owner should know.
-  - `notices`: an array of one-line texts, the facts about this review that the owner should know (below, "The state of the checks").
-  - `noticed`: as on `approval`.
-  - `pr`: `{url, note}`. `url` is `null` with a `note` that says why when no pull request exists.
-  - Write no `changes` and no `git-diff` evidence on it: the change is read in the pull request, whose body holds what the page leaves out ([branch-and-pr](branch-and-pr.md), "The body of the child pull request"). The input still accepts `changes`, so that a page recorded earlier reads.
 
 A change section is `{heading, blocks}`: what changes, in one plain heading, and blocks that open with the scene the change shows up in (who does what and what happens to them).
 
 The page counts its cards, groups and answers itself, and adds the fixed sentences, the section headings, the rows `調べてから決めて` and `その他`, the tag 「聞きたいこと」 on a card that asks, and, on a requirement `open-questions` page, the check 「仮置き（ビジネス側の確認待ち）」 under the choices. The JSON carries none of them.
 
-### The state of the checks (`notices`)
-
-On `code-review`, `notices` holds one line for each of these that applies:
-
-- The aggregate check: its command and `passed`, or that the repository defines none. The coverage figure, when stage 4 kept one.
-- Each `environment_fixes` entry of the aggregate check: what the agent repaired so that it could run.
-- Any other fact about the review that the procedure hands you, such as the staging set being restored from the working tree.
-
-State only what you ran. A check that failed is not a notice: it is handled by the stage that ran it.
-
 ### Cards
 
 | Key | Content |
 | --- | --- |
-| `kind` | Required, and it must be the kind of the array the card is in. `question` (`open-questions`); `nr`, `must-fix`, `structural-proposal`, `adr` (`approval`); `review-must-fix`, `review-decision`, `unmet-criterion`, `screen-verification` (`code-review`). |
-| `number` | Required. The id of the item (`UD-NN`, `NR-N`, `MF-N`, `SI-N`, `AD-1`, a review finding id, `SV-N` for a screen-verification item, `FV-N` for a formal-verification result). A `question` with none is `論点{n}`, numbered in the order passed. It is shown on the card and echoed in the reply. |
-| `title` | The card's header. On `question`, `nr` and `review-decision`, it is the one question the card asks, a sentence that ends in `？`, in the words of what the owner decides. |
-| `summary` | Required. What is decided, in one or two sentences, with no recommendation. The page does not show it on `question`, `nr` and `review-decision`. |
-| `occurrence` | Required on `review-decision` and on `nr` with `subject` `design`, otherwise a violation. `{conditions, likelihood, basis, impact, detectability}`, all required (below). |
-| `scene` | The concrete scene the decision plays out in (below). Required on `question`, `nr` and `review-decision`, and on every other card whose outcome changes what someone experiences. |
-| `scene_image` | Optional, only on `question`, `nr` and `review-decision`. `{root, path, caption}`, validated like an `image` block: the screenshot or the UI reference image of the screen the scene is about, shown right under the scene. |
+| `kind` | Required, and it must be the kind of the array the card is in. `question` (`open-questions`); `nr`, `must-fix`, `structural-proposal`, `adr` (`approval`). |
+| `number` | Required. The id of the item (`UD-NN`, `NR-N`, `MF-N`, `SI-N`, `AD-1`). A `question` with none is `論点{n}`, numbered in the order passed. It is shown on the card and echoed in the reply. |
+| `title` | The card's header. On `question` and `nr`, it is the one question the card asks, a sentence that ends in `？`, in the words of what the owner decides. |
+| `summary` | Required. What is decided, in one or two sentences, with no recommendation. The page does not show it on `question` and `nr`. |
+| `occurrence` | Required on `nr` with `subject` `design`, otherwise a violation. `{conditions, likelihood, basis, impact, detectability}`, all required (below). |
+| `scene` | The concrete scene the decision plays out in (below). Required on `question` and `nr`, and on every other card whose outcome changes what someone experiences. |
+| `scene_image` | Optional, only on `question` and `nr`. `{root, path, caption}`, validated like an `image` block: the screenshot or the UI reference image of the screen the scene is about, shown right under the scene. |
 | `background` | Optional. The gap or premise the decision needs, in one or two plain sentences (below). |
 | `facts` | Optional. An array of `{label, value, ref, path, root}` with the labels of "Facts by kind", in that order. `ref` names the one deliverable node the value cites; `path` the one other file (never both); `root` (with either) defaults to `deliverables`. With either set, the page shows the content of that node or file in a fold under the value. |
 | `blocks` | Optional. Blocks shown after the facts. |
-| `options` | Required on `question`, `nr` and `review-decision`, absent elsewhere. An array of one or more `{key, label, detail, fix, unmet, image, sample, diagram}` (below). |
+| `options` | Required on `question` and `nr`, absent elsewhere. An array of one or more `{key, label, detail, unmet, image, sample, diagram}` (below). |
 | `conditions` | Optional; required when an option has `unmet`; only with `options`. An array of `{id, text}`: every condition the decision requires the options to meet, with the id the record gives it (`KO-03`). |
 | `choice_details` | Optional. An object that maps a fixed-choice key to its trade-offs. |
-| `recommendation` | Required on every kind but `unmet-criterion` and `screen-verification`, which refuse it. `A` on `question`, `nr` and `review-decision`, and a fixed-choice key on the other kinds. |
+| `recommendation` | Required. `A` on `question` and `nr`, and a fixed-choice key on the other kinds. |
 | `recommendation_reason` | Required with `recommendation`. Why, in words the card itself shows, so that it reads without opening anything. |
 | `evidence` | Optional. An array of evidence items. |
-| `cards` | Only on `unmet-criterion`, optional. An array of the `number`s of every finding that causes the unmet criterion, whether or not that finding has a card on the page. The page decides from it whether the card is shown. |
-| `viewpoint`, `state_setup`, `result`, `basis`, `reference_image`, `captured_image`, `missing_reason`, `steps`, `expected` | Only on `screen-verification` (below). |
 
 The recommendation of each kind comes from the item or the record it cites, or follows a fixed rule. You choose none of them:
 
-- `question`, `nr` and `review-decision`: `A`, the option the item recommends, and its reason. Put the recommended option first as `A`, and letter the rest `B`, `C` in the order passed. A fixed-choice key is never the recommendation on these kinds.
-- `must-fix`: the `fix` or `skip` recorded on the item, with its reason. `review-must-fix`: the `fix` or `accept` recorded, with its reason.
+- `question` and `nr`: `A`, the option the item recommends, and its reason. Put the recommended option first as `A`, and letter the rest `B`, `C` in the order passed. A fixed-choice key is never the recommendation on these kinds.
+- `must-fix`: the `fix` or `skip` recorded on the item, with its reason.
 - `structural-proposal`: `approve`, with a reason drawn from the proposal's 想定リスク and 改善方針. `adr`: `keep`, with a reason that names the criteria the ADR met.
 
-The fixed choices of the other kinds: `must-fix` has `fix` and `skip`; `structural-proposal` has `approve`, `reject` and `hold`; `adr` has `keep` and `decline`; `review-must-fix` has `fix` and `accept`. `unmet-criterion` and `screen-verification` have no answer.
-The page adds the fixed rows `調べてから決めて` (`investigate`) and `その他` (`other`) to a `question`, `ビジネス側に確認する` (`hold`, between them) when the page sets `hold`, `その他` to an `nr`, and `今回は対応しない` (`defer`) and `その他` to a `review-decision`.
+The fixed choices of the other kinds: `must-fix` has `fix` and `skip`; `structural-proposal` has `approve`, `reject` and `hold`; `adr` has `keep` and `decline`.
+The page adds the fixed rows `調べてから決めて` (`investigate`) and `その他` (`other`) to a `question`, `ビジネス側に確認する` (`hold`, between them) when the page sets `hold`, `その他` to an `nr`.
 
 #### Options
 
-An option is `{key, label, detail, fix, unmet, image, sample, diagram}`:
+An option is `{key, label, detail, unmet, image, sample, diagram}`:
 
 - `key` is `A`, `B`, `C` in order. `label` is the option's name, in the words of what the owner decides, not implementation words.
 - `detail` is optional: what happens when the option is chosen, then what it gives up or risks, both from the item. Leave it out when the item states neither.
-- `fix` is optional and only on `review-decision`: the one fix the option's answer hands to the implementation. An option without `fix` is the answer that keeps the current behavior, an option like any other.
 - `unmet` is optional: an array of `{id, reason}`, one for each condition of the card's `conditions` that the option fails, with what the option does against what the condition demands.
 - `image` is optional: `{root, path, caption}`, validated like an `image` block. A screenshot or a UI reference image that shows how this option looks, adopted or not.
 - `sample` is optional: `{text, font_size, font_weight, color}`. The text the page draws in this option's style. `text` is required, `font_size` an integer of px from 1 to 200, `font_weight` an integer from 100 to 900 in steps of 100, `color` is optional (`#rgb` or `#rrggbb`).
@@ -134,32 +113,7 @@ An option is `{key, label, detail, fix, unmet, image, sample, diagram}`:
 - `impact`: what happens to the user or the data when it arises.
 - `detectability`: how it would be noticed, or that nothing notices it.
 
-On a `review-decision` card, take them from the finding's trigger, impact and verification. On an `nr` of a design page, from the decision's trigger conditions, its likelihood and its `impact`.
-
-#### The `screen-verification` card
-
-It presents the verification of one screen state or one operation against its viewpoint, and the result with its basis. The owner reads it and answers nothing on it, so it carries no fact, no recommendation and no answer. `number` is the item's `SV-{n}`; `title` names the screen and its state, or the operation, in a few words; `summary` says in one sentence what was checked.
-
-- `viewpoint` (required): the item's viewpoint as given, word for word, except that a link to a screenshot is reduced to its link text.
-- `state_setup` (optional): the item's state setup, rewritten in plain words without changing the data, the response or the operation it names. Absent when the item has none.
-- `result` (required): `pass`, `fail` or `not-run`, as given.
-- `basis` (required): the basis as given, rewritten in plain words without changing what matched or differed.
-- `reference_image` (optional): `{root, path, caption}`, the item's reference screenshot. `captured_image` (optional): the capture; a `not-run` card has none.
-- `missing_reason` (required when `result` is `not-run`, otherwise absent): why it was not run, as given.
-- `steps` (optional, only on an operation item): an array of one or more texts, the operations in order. `expected` (required with `steps`, otherwise absent): what must appear after the last step.
-
-A card without `steps` carries `reference_image`, `captured_image`, or both.
-
-#### The formal-verification results
-
-A formal verification of an implementation ([formal-verification](../implement/formal-verification.md)) reaches the `code-review` page in four forms, and each is numbered with `FV`:
-
-- `FV-{n}`: a `review-must-fix` card in `residual_must_fix`, one for each result that is `bug` or `blocked`, numbered from 1 in the order of the results. `title` is the property, `scene` is its `harm`, and `summary` says what was checked and why it is open. Its facts are `検出元` (`形式検証（{tool}）`) and `未解消の理由` (for a `bug`, that the fixes did not remove the counterexample, or that no fix ran; for a `blocked`, the reason and the steps to install the tool). Its `blocks` hold the counterexample as a `list` of its states in order, each with the code it maps to as `path:line`, or, for a `blocked`, a `paragraph` with the reason. The recommendation is `fix` or `accept`, with its reason, as on any `review-must-fix` card.
-- `FV-bound-{m}`: a noticed matter for each check whose bound was lowered to follow the code. Its text gives the property and `{old limit} -> {new limit}`.
-- `FV-scope-{m}`: a noticed matter for each path that the verifier changed outside `verification/formal/`.
-- `FV-unrun-{m}`: a noticed matter for each property that was not checked, because the session resumed after the check should have run. Its text says so.
-
-The noticed matters have no answer. The owner's reply to an `FV-{n}` card is read like that of any `review-must-fix` card.
+On an `nr` of a design page, take them from the decision's trigger conditions, its likelihood and its `impact`.
 
 ### Facts by kind
 
@@ -169,14 +123,9 @@ Facts, with these labels, in this order:
 - `must-fix`: `箇所`, `検出元`, `指摘内容`, `author の反論` (`requirement` only), `未解消の理由`.
 - `structural-proposal`: `検出観点`, `エビデンス`, `想定リスク`, `改善方針`, `振る舞い保存方針`, `段階的移行の要否`, `重要度`.
 - `adr`: `題名`, `記録した決定`.
-- `review-must-fix`: `検出元`, `未解消の理由`, `既存の記録`.
-- `unmet-criterion`: `根拠値`, `充足しない理由`.
-- `review-decision`: `重要度`, `検出元`, `既存の記録`.
 
 `検出元` is the review that filed the finding: its round and its perspective, as the report of the reviewer names them (`第1回・correctness`), several joined with `、`. `重要度` is the severity as the report writes it. Copy both as they are. Leave `検出元` out when the finding has none.
-`既存の記録` appears only when the finding rests on an existing document (an ADR, a specification, a convention) or you read one to judge it. Name the document, and the range you confirmed in its original text, including whether it covers other places that share the cause.
-When a `箇所` or `既存の記録` value names one node of `requirement.json` or `design.json`, set that fact's `ref` to it; when it names one other file, set `path`, with `root` when the file is not under `deliverables`.
-An `unmet-criterion` card's 充足しない理由 names each `review-decision` item that causes the unmet criterion. It gives a level (`発生頻度`) only when the item has one, and never fills one in by guess.
+When a `箇所` value names one node of `requirement.json` or `design.json`, set that fact's `ref` to it; when it names one other file, set `path`, with `root` when the file is not under `deliverables`.
 
 ### Blocks
 
@@ -203,7 +152,7 @@ Each item is an object with a `type`:
 - `excerpt`: `root`, `path`, `start` (1 or more), `end` (default `start`, at most 400 lines after `start`), `highlight` (line numbers inside the range, default every line), `note`. Cite the smallest range that grounds a statement.
 - `diff`: `summary` (one line above the diff), `name` (what the lines are), `before` and `after` (arrays of short lines), `before_source` and `after_source` (sources), `note`.
 - `current`: `note` (required: where the after-state is decided, for example `変更後は基本設計で決めます`) and `excerpts` (an array of `excerpt` items).
-- `git-diff`: `summary`, `root` (a git repository), `path`, `base` (a revision), `head` (required: a revision, or `null` for the working tree), `note`. A diff with no change is refused. A `code-review` page carries none: the pull request shows the diff.
+- `git-diff`: `summary`, `root` (a git repository), `path`, `base` (a revision), `head` (required: a revision, or `null` for the working tree), `note`. A diff with no change is refused.
 - `node`: `root`, `ref`, `note`. A node of `requirement.json` or `design.json` (a file that ends in `.json`), as `{file}#{pointer}`, for example `requirement.json#/requirements/REQ-03` or `design.json#/designs/DESIGN-02`. Cite the deliverables with this, never with `excerpt`.
 
 A cited file or range that does not exist is refused. A page holds at most 200 evidence items.
@@ -223,7 +172,7 @@ These rules govern every text of the page except the ones the polishing step lea
 - Use literal words. No metaphor or idiom, and none of this workflow's inner words (skill, subagent, Phase, JSON field names). Say what happened, or what the owner decides.
 - Call one thing by one name across the page. When `terms` explains a word, use that word every time. Prefer the common Japanese word to a katakana or English loan word.
 - A title or heading states the point (`宛名をペットごとに付けるか`), not a category (`宛名について`).
-- On a card that asks (`question`, `nr`, `review-decision`), `title` is the one question the card asks, a sentence that ends in `？`: `自動電話での呼び出しも、今回作りますか？`. The page opens it with the tag 「聞きたいこと」. On `question` and `nr`, `title` and each option's `label` use the words of what the owner decides, not implementation words such as `回収` or `失効`: `ごくまれな障害で残った与信のために、仕組みを作りますか？`
+- On a card that asks (`question`, `nr`), `title` is the one question the card asks, a sentence that ends in `？`: `自動電話での呼び出しも、今回作りますか？`. The page opens it with the tag 「聞きたいこと」. On `question` and `nr`, `title` and each option's `label` use the words of what the owner decides, not implementation words such as `回収` or `失効`: `ごくまれな障害で残った与信のために、仕組みを作りますか？`
 - Use the verb, not a noun of the action (`確認する`, not `確認を実施する`).
 - Keep one marker of real uncertainty, and drop stacked hedges (`場合によっては〜の可能性も考えられる` becomes `〜の可能性がある`). Never drop an uncertainty the item states.
 - Name what a pointer word points at, and write amounts and dates: no `この部分`, `関連箇所`, `早めに`.
@@ -315,17 +264,16 @@ The reply is text that the page assembled from the owner's answers, in page orde
 補足: {free text}
 ```
 
-- The verdict line is only on `approval` and `code-review` pages:
+- The verdict line is only on `approval` pages:
 
   | Page | Approve | Revise |
   | --- | --- | --- |
   | `approval`, `requirement` | 要件定義を承認します | 要件定義の修正を依頼します |
   | `approval`, `design` | 基本設計を承認します | 基本設計の修正を依頼します |
-  | `code-review` | この変更を承認します | 修正を依頼します |
 
-  The owner chooses it in the box 「あなたの判定」 of the page, and the page cannot be sent without it. The page does not derive it from the answers, but it does not let the Approve line go with a revision choice (`fix` on `must-fix` and on `review-must-fix`), so a reply with a `fix` has the Revise line.
+  The owner chooses it in the box 「あなたの判定」 of the page, and the page cannot be sent without it. The page does not derive it from the answers, but it does not let the Approve line go with a revision choice (`fix` on `must-fix`), so a reply with a `fix` has the Revise line.
 - The block `修正してほしいこと` comes only right after the Revise line, and only when the owner wrote something in the box that opens with the Revise choice. It has no card number. Its text is the owner's own request for a revision, which is read in the same way as a request to fix that the owner wrote outside the layout (Verdict, below).
-- A card block has the card's `number` and `title` as they are. A number with a round mark (`MF-1-r2`, step 6) names the item `MF-1` of that round: read the answer for that item, not for the earlier card of the same number. Its answer line is `{key}. {label}` for a lettered option, or the reply text of a fixed choice: `調べてから決めて`, `ビジネス側に確認する`, `その他`, `指摘のとおり修正する`, `今回は対応しない`, `承認`, `却下`, `保留`, `残す`, `不要`, `修正して再レビューする`, `現状で完了する`. A card with free text only has no answer line. The `補足` line is the owner's free text, when there is any.
+- A card block has the card's `number` and `title` as they are. A number with a round mark (`MF-1-r2`, step 6) names the item `MF-1` of that round: read the answer for that item, not for the earlier card of the same number. Its answer line is `{key}. {label}` for a lettered option, or the reply text of a fixed choice: `調べてから決めて`, `ビジネス側に確認する`, `その他`, `指摘のとおり修正する`, `今回は対応しない`, `承認`, `却下`, `保留`, `残す`, `不要`. A card with free text only has no answer line. The `補足` line is the owner's free text, when there is any.
 - On a requirement `open-questions` page, an answer line ends with `（仮置き: ビジネス側に確認してから確定）` while the owner has checked 「仮置き（ビジネス側の確認待ち）」 of the card. Read the line without that ending as usual: the decision is provisional, put in place for now, and the business side has yet to confirm it. The answers `調べてから決めて` and `ビジネス側に確認する` never carry it.
 - A card with no block is unanswered.
 
@@ -336,9 +284,7 @@ Read each block by its card:
 - **must-fix**: `指摘のとおり修正する` is a revision request. `今回は対応しない` is compatible with approval, and you keep it as declined by the owner's decision.
 - **structural-proposal**: `承認`, `却下` or `保留`, with the `補足` as the reason for `却下` and `保留`. Unanswered means the recommended choice.
 - **adr**: `残す` keeps the record. `不要` means it is not needed. Unanswered keeps it.
-- **review-must-fix**: `修正して再レビューする` chooses a fix. `現状で完了する` agrees to complete as it is. Unanswered means `現状で完了する`, under an approve verdict.
-- **review-decision**: `{key}. {label}` names the option under that key. An option with a `fix` is adopted, and its `fix` is what the implementation is given. An option without `fix` keeps the current behavior. `今回は対応しない` defers it. `その他` takes the disposition its `補足` states; when the `補足` states none, ask the owner. Unanswered is undecided.
-- **unmet-criterion**, **screen-verification** and the part 目標外の事柄 (`noticed`): they have no answer. A noticed matter is fixed only when the owner names it in the reply.
+- The part 目標外の事柄 (`noticed`): it has no answer. A noticed matter is fixed only when the owner names it in the reply.
 - **Verdict**: the approve line approves the deliverable or the change. The revise line, or a request to fix it that the owner wrote outside the layout, is a revision request: its content is the revision choices and that text (the block `修正してほしいこと` is that text, and it may be the whole content when no card has a revision choice). A hold, a redesign or a send-back is read from that text. An approve line with no block and no other text is a blanket approval. A matter you noticed goes to the one who fixes only when the owner names it.
 - A `補足` with no answer line, on a kind not named above, is free text you read with the unit's own criterion.
 - A reply that does not follow the layout is read as free text in the same way.

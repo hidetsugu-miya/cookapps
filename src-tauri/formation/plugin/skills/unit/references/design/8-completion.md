@@ -59,13 +59,13 @@ When `gh` cannot run, skip this step and say so in your `DONE` summary.
 ### 6. Tell the leader
 
 Make sure everything of the unit is pushed: `git -C "{docs worktree}" status --porcelain -- .feature-dev` shows nothing of this unit, and `git -C "{docs worktree}" log origin/{base branch}..HEAD` shows nothing.
-Then send `DONE`, and stop:
+Then send `DONE`, and stay as a standby ([standby](../shared/standby.md)):
 
 ```text
 DONE design: {summary}
 ```
 
-Write the summary in Japanese, short, with what the leader and the owner need:
+Write the summary in English, short, with what the leader and the owner need:
 
 - What was designed: the number of DESIGN items, their repositories, and the layer.
 - The implementations of `case.json`, in the order the leader launches them: key, repository and kind of each. Say which ones went back to `未着手` because the redone design reached them (`reopened`), which stay as orphans because no DESIGN item holds them (`orphaned`), and which were dropped (`removed`).

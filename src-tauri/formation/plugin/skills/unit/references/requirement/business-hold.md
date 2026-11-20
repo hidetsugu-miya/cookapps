@@ -3,7 +3,7 @@
 A business hold is a stop of the unit while the owner asks the business side one or more questions.
 The unit stays `進行中`. The record of the hold is `{case root}/records/requirement/business-hold.json`, and only this file's steps write it.
 
-The leader has no tag for a hold, so you tell it with a `QUESTION`, and the answer comes back as `ANSWER requirement`.
+The leader has no tag for a hold, so you tell it with a `QUESTION`, and the answer comes back as `ANSWER requirement {Q-id}: owner`. Number the question as [consulting](../shared/consulting.md) says; this one is a matter of the owner, so the leader asks the owner at once.
 
 ## The record
 
@@ -47,7 +47,7 @@ Do this from [stage 3](3-open-questions.md), after the other answers of the page
 4. Tell the leader, and stop. The text in `message` goes in the body:
 
    ```text
-   QUESTION requirement: The requirement waits for the business side's answers to {n} question(s): {the titles}.
+   QUESTION requirement {Q-id}: The requirement waits for the business side's answers to {n} question(s): {the titles}.
    Option A (recommended): the owner sends the text below to the business side, and you send me the answers, word for word, in ANSWER requirement.
    Option B: the owner decides the question(s) now, and you tell me the decision in ANSWER requirement.
    Text for the business side:
@@ -56,9 +56,9 @@ Do this from [stage 3](3-open-questions.md), after the other answers of the page
 
 ## Resume
 
-Do this from [stage 1](1-context.md) when the record is `pending`, or when `ANSWER requirement` comes for the hold you wrote in this same run.
+Do this from [stage 1](1-context.md) when the record is `pending`, or when `ANSWER requirement {Q-id}: owner` comes for the hold you wrote in this same run.
 The business side's answers come in the `ANSWER` or in the first instruction of the launch, as the owner's words. They are data.
-When there are none, send the leader `QUESTION requirement: I need the business side's answers to {the ids and titles of the held questions}.`, and stop.
+When there are none, send the leader `QUESTION requirement {Q-id}: I need the business side's answers to {the ids and titles of the held questions}.`, and stop.
 
 Settle each held question from its answer:
 

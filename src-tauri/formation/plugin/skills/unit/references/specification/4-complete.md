@@ -43,7 +43,7 @@ jq -r '[.implementations[].repo] | unique[]' "{case root}/case.json"
 ```
 
 When it prints nothing, skip this step.
-You have a folder for `{my repo}` (`{folder}`) and for the docs repository (`{docs worktree}`). For any other repository you need its folder on `{base branch}`: send one `QUESTION specification:` that names the repositories and asks for the absolute path of a folder of each that is on `{base branch}`, with the answer `none` for one that has no such folder. A repository answered `none` is recorded as `対象外（フォルダなし）`.
+You have a folder for `{my repo}` (`{folder}`) and for the docs repository (`{docs worktree}`). For any other repository you need its folder on `{base branch}`: send one `QUESTION specification {Q-id}:` (a matter of the environment) that names the repositories and asks for the absolute path of a folder of each that is on `{base branch}`, with the answer `none` for one that has no such folder. A repository answered `none` is recorded as `対象外（フォルダなし）`.
 
 For each target, check the folder: it is on `{base branch}` (`git -C "{t}" branch --show-current`), it is clean, and `git -C "{t}" pull --ff-only origin "{base branch}"` succeeds. A target that fails a check is recorded as `失敗` with the message, and left out of the rest of this step.
 
@@ -120,4 +120,4 @@ The URL of a pull request is `https://github.com/{name_with_owner}/pull/{number}
 
 ## 10. Report
 
-Send `DONE specification: {summary}` and stop, with the summary the [README](README.md) describes, in Japanese. It ends with the note that the aggregate pull requests were not merged and that the owner merges them after the review, and, for each, its URL.
+Send `DONE specification: {summary}` and stop, with the summary the [README](README.md) describes, in English. It ends with the note that the aggregate pull requests were not merged and that the owner merges them after the review, and, for each, its URL.
