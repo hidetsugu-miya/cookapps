@@ -385,6 +385,72 @@ struct ImageParams {
     offset: usize,
 }
 
+/// Where an image of a page is: the formation, the child, the root and the path.
+type Place = (String, String, String, String);
+
+/// How many images that `image.read` has checked are held for their next chunks.
+const SERVED_MAX: usize = 4;
+
+/// The images that the first chunk (offset 0) of `image.read` checked and prepared, the newest first, so that the chunks that follow are cut from them and do not ask Orca, check the page and make the image again for each chunk.
+#[derive(Default)]
+struct HeldImages(Vec<(Place, Arc<formation_image::Prepared>)>);
+
+impl HeldImages {
+    fn get(&self, place: &Place) -> Option<Arc<formation_image::Prepared>> {
+        self.0
+            .iter()
+            .find(|(held, _)| held == place)
+            .map(|(_, image)| image.clone())
+    }
+
+    fn put(&mut self, place: Place, image: Arc<formation_image::Prepared>) {
+        self.0.retain(|(held, _)| *held != place);
+        self.0.insert(0, (place, image));
+        self.0.truncate(SERVED_MAX);
+    }
+}
+
+/// Whether a chunk's type and whole size are those of the first chunk, which `first` holds (it takes them when it is empty).
+fn same_image(first: &mut Option<(&'static str, u64)>, mime: &'static str, total: u64) -> bool {
+    *first.get_or_insert((mime, total)) == (mime, total)
+}
+
+static SERVED: Mutex<HeldImages> = Mutex::new(HeldImages(Vec::new()));
+
+/// The image of `image.read`: checked against the page and prepared at the first chunk (offset 0), and taken from what that left for the chunks after it. A chunk that finds nothing held (the daemon started in between, or other images pushed it out) is checked in full, as the first one is.
+fn served_image(
+    config: &Path,
+    params: &ImageParams,
+) -> Result<Arc<formation_image::Prepared>, String> {
+    let place = (
+        params.formation.clone(),
+        params.child.clone(),
+        params.root.clone(),
+        params.path.clone(),
+    );
+    if params.offset > 0 {
+        if let Some(image) = SERVED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&place)
+        {
+            return Ok(image);
+        }
+    }
+    let image = formation_page::image_here(
+        config,
+        &params.formation,
+        &params.child,
+        &params.root,
+        &params.path,
+    )?;
+    SERVED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .put(place, image.clone());
+    Ok(image)
+}
+
 #[derive(Deserialize)]
 struct AnswerParams {
     formation: String,
@@ -579,13 +645,7 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
             let Ok(params) = serde_json::from_value::<ImageParams>(request.params) else {
                 return bad_params();
             };
-            match formation_page::image_here(
-                config,
-                &params.formation,
-                &params.child,
-                &params.root,
-                &params.path,
-            ) {
+            match served_image(config, &params) {
                 Ok(image) => Reply::ok(json!({
                     "mime": image.mime,
                     "total": image.bytes.len(),
@@ -1178,6 +1238,8 @@ impl Client {
     ) -> Result<String, String> {
         let bad = || "サーバーの答えの形式が正しくありません".to_owned();
         let mut bytes: Vec<u8> = Vec::new();
+        // The type and the size the first chunk told: a file that is replaced while it is read gives other ones.
+        let mut first = None;
         loop {
             let result = self
                 .call(
@@ -1187,11 +1249,19 @@ impl Client {
                 .await?;
             let mime = result["mime"]
                 .as_str()
-                .filter(|mime| formation_image::MIMES.contains(mime))
+                .and_then(|mime| {
+                    formation_image::MIMES
+                        .iter()
+                        .copied()
+                        .find(|known| *known == mime)
+                })
                 .ok_or_else(bad)?;
             let total = result["total"].as_u64().ok_or_else(bad)?;
             if total > formation_image::IMAGE_LIMIT as u64 {
                 return Err(bad());
+            }
+            if !same_image(&mut first, mime, total) {
+                return Err("画像が読んでいる間に差し替わりました".to_owned());
             }
             let part = STANDARD
                 .decode(result["data"].as_str().ok_or_else(bad)?)
@@ -2290,6 +2360,40 @@ mod tests {
         with_offset["child"] = json!("../x");
         assert_eq!(image(with_offset).body["ok"], false);
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_chunks_of_an_image_are_served_from_the_one_that_the_first_prepared() {
+        let place = |n: &str| ("f".to_owned(), "c".to_owned(), "r".to_owned(), n.to_owned());
+        let image = |b: u8| {
+            Arc::new(formation_image::Prepared {
+                mime: "image/png",
+                bytes: vec![b],
+            })
+        };
+        let mut served = HeldImages::default();
+        assert!(served.get(&place("a")).is_none());
+        for n in 0..SERVED_MAX {
+            served.put(place(&n.to_string()), image(n as u8));
+        }
+        // The first chunk of an image read again takes the place of what was held.
+        served.put(place("0"), image(9));
+        assert_eq!(served.get(&place("0")).unwrap().bytes, [9]);
+        assert_eq!(served.0.len(), SERVED_MAX);
+        // One more image lets the oldest go.
+        served.put(place("new"), image(7));
+        assert!(served.get(&place("1")).is_none());
+        assert_eq!(served.get(&place("new")).unwrap().bytes, [7]);
+        assert_eq!(served.0.len(), SERVED_MAX);
+    }
+
+    #[test]
+    fn a_chunk_of_another_type_or_size_than_the_first_is_another_file() {
+        let mut first = None;
+        assert!(same_image(&mut first, "image/png", 100));
+        assert!(same_image(&mut first, "image/png", 100));
+        assert!(!same_image(&mut first, "image/png", 101));
+        assert!(!same_image(&mut first, "image/jpeg", 100));
     }
 
     #[test]

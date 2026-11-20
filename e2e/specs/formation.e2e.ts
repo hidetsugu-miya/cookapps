@@ -4026,15 +4026,17 @@ describe("orchestration mode: the decision page of a child", () => {
     await openPage(decisionPage({ questions: [QUESTION, QUESTION_2] }));
     const kept = () => browser.execute(() => Object.keys(localStorage).filter((k) => k.startsWith("fp-answers:")).length);
     expect(await kept()).toBe(0);
+    // The answers are written a moment after the last entry, not at each one.
+    const keptIs = (n: number) => browser.waitUntil(async () => (await kept()) === n, { timeoutMsg: `the kept answers were not ${n}` });
     await $(`${q("Q1")} input[value="B"]`).click();
-    expect(await kept()).toBe(1);
+    await keptIs(1);
     // Taking every answer back keeps nothing.
     await $(`${q("Q1")} .fp-cancel`).click();
-    expect(await kept()).toBe(0);
+    await keptIs(0);
     await $(`${q("Q1")} input[value="B"]`).click();
     await $(`${q("Q2")} input[value="other"]`).click();
     await $(`${q("Q2")} .fp-text`).setValue("来週の頭");
-    expect(await kept()).toBe(1);
+    await keptIs(1);
     // The mark of the page changes: it is drawn anew, and starts from what was kept.
     await mock("formation_children", [asking({ pendingPage: { title: "要件の未決事項", atMs: MARK_AT + 60_000 } })]);
     await browser.waitUntil(async () => (await count("#formation-page .fp-restored")) === 1, { timeoutMsg: "the answers were not put back" });
@@ -4058,6 +4060,15 @@ describe("orchestration mode: the decision page of a child", () => {
     ]);
     // Once sent, nothing of it is kept.
     await browser.waitUntil(async () => (await kept()) === 0, { timeoutMsg: "the answers were kept after the send" });
+  });
+
+  it("takes away what an earlier page of the same child kept when the page is drawn, and leaves what is another child's", async () => {
+    await browser.execute(() => {
+      localStorage.setItem("fp-answers:formation\nreq-login:deadbeef", "{}");
+      localStorage.setItem("fp-answers:formation\nother:deadbeef", "{}");
+    });
+    await openPage(decisionPage({ questions: [QUESTION] }));
+    expect(await browser.execute(() => Object.keys(localStorage).filter((k) => k.startsWith("fp-answers:")))).toEqual(["fp-answers:formation\nother:deadbeef"]);
   });
 
   it("keeps the verdict and its writing too", async () => {

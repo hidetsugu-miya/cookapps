@@ -46,7 +46,8 @@ export function drawBars(scroll: HTMLElement, root: HTMLElement, label: string, 
     return link;
   });
   if (links.length > 0) top.append(nav);
-  // The section being read is the last one whose top has reached the top of the page.
+  // The section being read is the last one whose top has reached the top of the page. It is worked out once a frame at most, and the links are written only when it changes.
+  let marked = -1;
   const mark = () => {
     // A page that is not in view has no place to read.
     if (scroll.getClientRects().length === 0) return;
@@ -55,14 +56,24 @@ export function drawBars(scroll: HTMLElement, root: HTMLElement, label: string, 
     sections.forEach((section, i) => {
       if (section.getBoundingClientRect().top <= line) at = i;
     });
+    if (at === marked) return;
+    marked = at;
     links.forEach((link, i) => {
       if (i === at) link.setAttribute("aria-current", "location");
       else link.removeAttribute("aria-current");
     });
   };
-  scroll.addEventListener("scroll", mark, { passive: true });
+  let frame = 0;
+  const later = () => {
+    if (frame !== 0) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      mark();
+    });
+  };
+  scroll.addEventListener("scroll", later, { passive: true });
   // The page is drawn out of sight, and takes its place when its tab is shown.
-  new ResizeObserver(mark).observe(scroll);
+  new ResizeObserver(later).observe(scroll);
 
   const bottom = tag("footer", "fp-bar fp-bar-bottom");
   const forms = [...root.querySelectorAll<HTMLElement>(".fp-card[data-form]")];

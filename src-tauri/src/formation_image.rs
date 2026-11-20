@@ -1,6 +1,6 @@
 //! The images of a decision page (A-41, #1153): an `image` block names `{root, path, caption}` and the file is read one at a time when the screen draws it, never put in the page's JSON (a page is 700 KiB, a frame of the server 1 MiB).
 //!
-//! A file over `IMAGE_LIMIT` is made smaller as the earlier feature-dev did: re-encoded as a JPEG of quality 85 at the widths 2400, 1600, 1200 and 800 pixels in turn, the first that fits being kept. One that fits none, and an SVG over the limit (it cannot be made smaller), is refused. The prepared image is kept for the next read (the server sends it in chunks of `CHUNK` bytes, one frame each).
+//! A file over `IMAGE_LIMIT` is made smaller as the earlier feature-dev did: re-encoded as a JPEG of quality 85 at the widths 2400, 1600, 1200 and 800 pixels in turn, the first that fits being kept. One that fits none, and an SVG over the limit (it cannot be made smaller), is refused. The prepared images are kept for the next read: the last `KEPT_MAX` of them (the server sends one in chunks of `CHUNK` bytes, one frame each, and reads of several images run at once).
 
 use std::{
     io::Cursor,
@@ -25,6 +25,10 @@ const WIDTHS: [u32; 4] = [2400, 1600, 1200, 800];
 const JPEG_QUALITY: u8 = 85;
 /// The side of an image that is decoded, at most (pixels).
 const SIDE_LIMIT: u32 = 20_000;
+/// The pixels of an image that is decoded, at most: width times height. The decoded picture takes 4 bytes a pixel, and the white-flattened copy 3 more.
+const PIXEL_LIMIT: u64 = 25_000_000;
+/// What the decoder may allocate, at most (bytes).
+const DECODE_ALLOC_LIMIT: u64 = 256 * 1024 * 1024;
 /// The bytes of an image that one reply of the server carries (the reply holds them as base64 in a frame of 1 MiB).
 pub const CHUNK: usize = 512 * 1024;
 /// The types the screen is given, as `data:` URIs.
@@ -79,12 +83,19 @@ pub fn prepare(bytes: Vec<u8>, mime: &'static str) -> Result<Prepared, String> {
         return Err(too_large(bytes.len()));
     }
     let size = bytes.len();
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| too_large(size))?;
+    let reader = || {
+        ImageReader::new(Cursor::new(bytes.as_slice()))
+            .with_guessed_format()
+            .map_err(|_| too_large(size))
+    };
+    // The size is read from the header first, so that a picture of too many pixels is never decoded.
+    let (width, height) = reader()?.into_dimensions().map_err(|_| too_large(size))?;
+    check_pixels(width, height)?;
+    let mut reader = reader()?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(SIDE_LIMIT);
     limits.max_image_height = Some(SIDE_LIMIT);
+    limits.max_alloc = Some(DECODE_ALLOC_LIMIT);
     reader.limits(limits);
     let picture = reader.decode().map_err(|_| too_large(size))?;
     match shrink(&picture) {
@@ -94,6 +105,20 @@ pub fn prepare(bytes: Vec<u8>, mime: &'static str) -> Result<Prepared, String> {
         }),
         None => Err(too_large(size)),
     }
+}
+
+/// Whether a picture of `width` by `height` pixels may be decoded: each side up to `SIDE_LIMIT` and the pixels up to `PIXEL_LIMIT`.
+fn check_pixels(width: u32, height: u32) -> Result<(), String> {
+    if width > SIDE_LIMIT
+        || height > SIDE_LIMIT
+        || u64::from(width) * u64::from(height) > PIXEL_LIMIT
+    {
+        return Err(format!(
+            "画像の画素数が多すぎます（{width}×{height}。{} 万画素までです）",
+            PIXEL_LIMIT / 10_000
+        ));
+    }
+    Ok(())
 }
 
 /// `picture` as a JPEG under `IMAGE_LIMIT`: at each of `WIDTHS` in turn (the picture's own width where it is narrower), the first that fits; `None` when none does.
@@ -147,7 +172,7 @@ pub fn data_uri(mime: &str, bytes: &[u8]) -> String {
     format!("data:{mime};base64,{}", STANDARD.encode(bytes))
 }
 
-/// The prepared image of a file read last: the next chunk of the same file is not made again.
+/// A prepared image and the file it was made from.
 struct Kept {
     real: PathBuf,
     size: u64,
@@ -155,7 +180,40 @@ struct Kept {
     image: Arc<Prepared>,
 }
 
-static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
+/// How many prepared images are kept: at most 4 of `IMAGE_LIMIT` each, so 12 MiB.
+const KEPT_MAX: usize = 4;
+const _: () = assert!(KEPT_MAX * IMAGE_LIMIT <= 12 * 1024 * 1024);
+
+/// The prepared images of the files read last, the newest first: the next chunk of a file, and an image that is read again, are not made again, and reads of several files at once do not push each other out.
+struct Cache(Vec<Kept>);
+
+impl Cache {
+    /// The image of the file `real` of that size and time of change, which becomes the newest.
+    fn get(
+        &mut self,
+        real: &Path,
+        size: u64,
+        modified: Option<SystemTime>,
+    ) -> Option<Arc<Prepared>> {
+        let at = self
+            .0
+            .iter()
+            .position(|k| k.real == real && k.size == size && k.modified == modified)?;
+        let kept = self.0.remove(at);
+        let image = kept.image.clone();
+        self.0.insert(0, kept);
+        Some(image)
+    }
+
+    /// Keeps `kept` as the newest, in place of any earlier image of the same file, and lets the oldest go beyond `KEPT_MAX`.
+    fn put(&mut self, kept: Kept) {
+        self.0.retain(|k| k.real != kept.real);
+        self.0.insert(0, kept);
+        self.0.truncate(KEPT_MAX);
+    }
+}
+
+static KEPT: Mutex<Cache> = Mutex::new(Cache(Vec::new()));
 
 /// The file `relative` of `root` (a real path) as the screen gets it. The path is checked as every path of a page is: clean, inside `root` whatever links lie on the way, no `.git` and no `.env`.
 pub fn file(root: &Path, relative: &str) -> Result<Arc<Prepared>, String> {
@@ -163,18 +221,22 @@ pub fn file(root: &Path, relative: &str) -> Result<Arc<Prepared>, String> {
     let real = locate(root, relative)?;
     let meta = std::fs::metadata(&real).map_err(|_| "ファイルを読めません")?;
     let (size, modified) = (meta.len(), meta.modified().ok());
-    if let Some(kept) = KEPT.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
-        if kept.real == real && kept.size == size && kept.modified == modified {
-            return Ok(kept.image.clone());
-        }
+    if let Some(image) = KEPT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&real, size, modified)
+    {
+        return Ok(image);
     }
     let image = Arc::new(prepare(read_bounded(&real, FILE_LIMIT)?, mime)?);
-    *KEPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Kept {
-        real,
-        size,
-        modified,
-        image: image.clone(),
-    });
+    KEPT.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .put(Kept {
+            real,
+            size,
+            modified,
+            image: image.clone(),
+        });
     Ok(image)
 }
 
@@ -313,6 +375,89 @@ mod tests {
         }
         assert_eq!(joined, image.bytes);
         assert!(chunk(&image, usize::MAX).is_empty());
+    }
+
+    fn kept(name: &str, size: u64) -> Kept {
+        Kept {
+            real: PathBuf::from(name),
+            size,
+            modified: None,
+            image: Arc::new(Prepared {
+                mime: MIMES[0],
+                bytes: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn the_cache_keeps_the_last_images_and_lets_the_oldest_go() {
+        let mut cache = Cache(Vec::new());
+        for n in 0..KEPT_MAX {
+            cache.put(kept(&format!("/{n}"), 1));
+        }
+        // Reading "/0" makes it the newest, so the next one in goes past "/1".
+        assert!(cache.get(Path::new("/0"), 1, None).is_some());
+        cache.put(kept("/new", 1));
+        assert!(cache.get(Path::new("/1"), 1, None).is_none());
+        for name in ["/0", "/2", "/3", "/new"] {
+            assert!(cache.get(Path::new(name), 1, None).is_some(), "{name}");
+        }
+        // A file that changed (another size or time) is not the image that was kept.
+        assert!(cache.get(Path::new("/0"), 2, None).is_none());
+        assert!(cache
+            .get(Path::new("/0"), 1, Some(SystemTime::UNIX_EPOCH))
+            .is_none());
+        // The new state of a file takes the place of the old one.
+        cache.put(kept("/0", 2));
+        assert_eq!(
+            cache.0.iter().filter(|k| k.real == Path::new("/0")).count(),
+            1
+        );
+        assert!(cache.get(Path::new("/0"), 1, None).is_none());
+        assert_eq!(cache.0.len(), KEPT_MAX);
+    }
+
+    #[test]
+    fn a_picture_of_too_many_pixels_is_refused_by_its_size_alone() {
+        assert!(check_pixels(5000, 5000).is_ok());
+        assert!(check_pixels(SIDE_LIMIT, 1250).is_ok());
+        assert!(check_pixels(5001, 5000).unwrap_err().contains("画素数"));
+        assert!(check_pixels(SIDE_LIMIT + 1, 1).is_err());
+        assert!(check_pixels(u32::MAX, u32::MAX).is_err());
+    }
+
+    /// The CRC-32 that a PNG chunk ends with.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    #[test]
+    fn a_large_file_is_checked_for_its_pixels_before_it_is_decoded() {
+        // A PNG whose header says 30000 by 30000 and that holds nothing else: the size is read, and the refusal is about the pixels, not about a picture that could not be decoded.
+        let mut header = b"IHDR".to_vec();
+        header.extend_from_slice(&30_000u32.to_be_bytes());
+        header.extend_from_slice(&30_000u32.to_be_bytes());
+        header.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+        png.extend_from_slice(&header);
+        png.extend_from_slice(&crc32(&header).to_be_bytes());
+        png.extend_from_slice(&[0, 0, 0, 0]);
+        png.extend_from_slice(b"IDAT");
+        png.extend_from_slice(&crc32(b"IDAT").to_be_bytes());
+        png.resize(IMAGE_LIMIT + 1, 0);
+        let error = prepare(png, MIMES[0]).unwrap_err();
+        assert!(error.contains("画素数"), "{error}");
     }
 
     #[test]

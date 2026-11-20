@@ -117,7 +117,7 @@ export function drawPage(page: DecisionPage, formation: string, child: string, a
     notice = noticeLine(root, "前の返信文から回答を復元しました。");
   }
   if (notice !== null) top.after(notice);
-  const keep = () => store.write(snapshot());
+  const keep = () => store.keep(snapshot);
   root.addEventListener("change", keep);
   root.addEventListener("input", keep);
   const scroll = tag("div", "fp-scroll");
@@ -127,7 +127,7 @@ export function drawPage(page: DecisionPage, formation: string, child: string, a
     if (open) verdict.node.scrollIntoView({ block: "start" });
     else shell.querySelector<HTMLElement>(".fp-send-btn")?.focus();
   };
-  const bars = drawBars(scroll, root, page.contextLabel, sender(root, send, verdict, () => store.write(null)), toReply);
+  const bars = drawBars(scroll, root, page.contextLabel, sender(root, send, verdict, () => store.forget()), toReply);
   shell.append(bars.top, scroll, bars.bottom, drawer.el);
   linkRefs(shell, drawer);
   return shell;
