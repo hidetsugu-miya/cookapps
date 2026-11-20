@@ -50,7 +50,7 @@ Commit what this unit wrote, in the docs worktree, each path by itself ([branch-
 
 Check once more that nothing of the unit is left uncommitted: `git -C "{docs worktree}" status --short -- ".feature-dev/current"` prints no line for the paths above.
 
-Send the leader one message, in Japanese, and stop:
+Send the leader one message, in English, and stay as a standby ([standby](../shared/standby.md)):
 
 ```text
 DONE requirement: {one or two lines on what the requirement defines, and how many requirements it has}
@@ -63,4 +63,4 @@ When these apply, add them to the first line's text, short:
 - the provisional user decisions that still wait for the business side,
 - the matters you noticed that the request did not present, one line each.
 
-The unit ends here. The leader launches the next unit's child.
+The unit ends here. The leader launches the next unit's child, and keeps you as a standby.

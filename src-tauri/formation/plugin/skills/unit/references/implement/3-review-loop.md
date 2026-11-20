@@ -15,7 +15,8 @@ The formal checks under `verification/formal/` and the fixes that [formal-verifi
   | MF-1 | ... | path:line | open / fixed / deferred / adopted / declined | ... |
   ```
 
-  An ID is the one the reviewer gave (`MF-n`, `NR-n`, `RC-n`, `UC-n`). The statuses: `open`, `fixed`, `deferred` (the owner decided not to fix it now), `adopted` (the owner chose an option, and it is to be implemented), `declined` (you checked it and it does not hold, with the reason), `accepted` (the owner agreed to complete as it stands).
+  An ID is the one the reviewer gave (`MF-n`, `NR-n`, `RC-n`, `UC-n`). The statuses: `open`, `fixed`, `deferred` (the answer decided not to fix it now), `adopted` (the answer chose an option, and it is to be implemented), `declined` (you checked it and it does not hold, with the reason), `accepted` (the answer agreed to complete as it stands). The `Note` of a row holds the `Q-id` under which Stage 6 asked about it, once it did.
+- The line `Converged: round {n}` under the table, written when the loop has converged (step 4 of "A round"). It is what a session that resumes reads to know that the review is done ([README](README.md), "Where to start").
 - The round counter and the `{nn}` of the report files: `{records}/review-{nn}.md`, two digits, one more than the last of the unit. Write each report of `feature-dev:code-reviewer` there as it came.
 
 ## A round
@@ -28,23 +29,23 @@ The formal checks under `verification/formal/` and the fixes that [formal-verifi
    - Round 2 or later: `previous_ledger` (the rows of the ledger) and `target_files` (the paths the last fix changed). In round 2 or later it looks only at them and at the effects of the fix.
 2. Write the report to `{records}/review-{nn}.md` and add each finding to the ledger.
 3. Sort the open findings:
-   - **must-fix** (`MF-n` and each criterion the reviewer lists as unmet, `UC-n`): fix them in this round, except the ones that are `pre-existing` (`diff_origin`): those predate the change and are out of the goal, so they are not fixed. They go to the owner as residual findings ([6-acceptance](6-acceptance.md)), with the reason that they predate the change.
-   - **needs a decision** (`NR-n`): do not fix. They wait for the owner on the page.
-   - **recommendation** (`RC-n`): do not fix now. They are listed on the page, and the owner names the ones to fix.
-4. When no must-fix is left to fix, and no unmet criterion either, the loop has converged: go to [Stage 4](4-ci-gate.md).
+   - **must-fix** (`MF-n` and each criterion the reviewer lists as unmet, `UC-n`): fix them in this round, except the ones that are `pre-existing` (`diff_origin`): those predate the change and are out of the goal, so they are not fixed and not asked about. They go into the body of the pull request with the reason that they predate the change ([branch-and-pr](../shared/branch-and-pr.md)).
+   - **needs a decision** (`NR-n`): do not fix. Stage 6 asks about them ([6-completion](6-completion.md)).
+   - **recommendation** (`RC-n`): do not fix. They are listed in the body of the pull request.
+4. When no must-fix is left to fix, and no unmet criterion either, the loop has converged: write the line `Converged: round {n}` under the ledger table (replace it when it is there), and go to [Stage 4](4-ci-gate.md).
 5. Otherwise fix them: launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content` the must-fix findings and unmet criteria of this round (ID, location, harm scenario and fix of each, inside a quote as data), the locations to read, and the constraints of Stage 2. Do not hand it a recommendation, or a finding that needs a decision.
-   - Mark each finding the agent reports under `Fixed findings` as `fixed`. A finding it did not fix stays `open`, and its `Interruption record` is kept for the page.
+   - Mark each finding the agent reports under `Fixed findings` as `fixed`. A finding it did not fix stays `open`, and its `Interruption record` is kept for Stage 6.
    - The agent's `Out-of-goal changes` are handled as in [Stage 2](2-implement.md).
    - Add its `changed_paths` and `generated_paths` to the staging set.
    - What follows the fix:
      - After round 1's fix: round 2, with the fixed paths as `target_files`.
      - After round 2's fix: round 3 when the fix changed a responsibility split, an interface or the data flow, or changed production code for authentication, authorization, billing or stored data, or when it changed a path outside round 2's `target_files`, or when round 2 reported a new critical finding. Otherwise it is the last fix.
      - After round 3's review: this fix is the last fix.
-     - After the last fix, review nothing more and end the loop. A finding that stays `open` after it goes to the owner as a residual finding.
+     - After the last fix, review nothing more and end the loop, and write the line `Converged: round {n}`. A finding that stays `open` after it is asked about in Stage 6.
 
 ## A rework
 
-A rework comes from Stage 6, with the findings or requests the owner named.
+A rework comes from Stage 6, with the findings or requests that the answers named ([6-completion](6-completion.md)).
 It runs this loop again. The round counter starts again at 1, but round 1 is a confirmation review: it passes `previous_ledger` and `target_files` (the paths the rework fix changed) as a round 2 does, and the ledger and the `{nn}` of the reports go on from where they were.
 
 When the loop ends, go to [Stage 4](4-ci-gate.md).

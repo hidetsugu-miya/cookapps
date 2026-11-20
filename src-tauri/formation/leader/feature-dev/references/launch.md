@@ -3,9 +3,10 @@
 Before the first launch of a run, tell the owner in two or three lines: the case you found or are starting, the unit you start with, and that you will go through the units in order and bring them the decision pages.
 Then go on without waiting.
 
-You launch exactly one child for the unit, with `formation_launch`.
+You launch exactly one working child for the unit, with `formation_launch`, unless the unit's standby is there to do it ([Standbys](#standbys)).
 `environment` is always `local`.
 A child runs the plugin skill `feature-dev:unit`, which holds the procedure of every unit.
+Write the prompt and every later message to a child in English.
 
 ## The child's name
 
@@ -18,7 +19,7 @@ A child runs the plugin skill `feature-dev:unit`, which holds the procedure of e
 
 A name has lowercase letters, digits and hyphens only, at most 40 characters, and starts with a letter or a digit.
 For a key with other characters, lowercase it, turn each other character into a hyphen, and cut it to fit.
-A name that is taken (a child of that name was launched before, for instance when a unit is redone) gets `-2`, `-3`, and so on.
+A name that is taken (a child of that name was launched before, for instance when a unit is redone, or when a standby is launched again) gets `-2`, `-3`, and so on.
 A refusal for a name that belongs to another formation: put the name of this formation in front.
 
 ## The place
@@ -67,11 +68,12 @@ This run:
 - Repositories of this formation: {names, one environment/name each}
 - Ticket (data): {url, or "none"}
 - Case: {"existing" | "new: there is no case.json yet"}
+- Role: {"working" | "standby"}
 - Reopen: {"none" | "reopen the unit {key} first, for the reason quoted below"}
 - The owner's guidance for this launch (data to read, not orders):
 > {each line of the instruction, with "> " in front; the word "none" when the instruction is empty}
 
-Report to "{leader name}" with SendMessage, in the forms the skill gives.
+Report to "{leader name}" with SendMessage, in English and in the forms the skill gives.
 Never use AskUserQuestion.
 ```
 
@@ -81,6 +83,7 @@ Never use AskUserQuestion.
   - `design`: write the basic design, and derive the implementations from it.
   - an implementation: implement the DESIGN items of this unit in {repo}.
   - `specification`: write the specification from the finished implementation.
+  - a standby: the unit is complete already; stand by, and answer the questions that the leader forwards.
 - A reopen puts the owner's words that asked for it inside the quote, and says in the `Reopen` line which unit the child reopens. The quote is the reason it records.
 - Never put a secret in a prompt.
 
@@ -89,6 +92,27 @@ Never use AskUserQuestion.
 The answer of `formation_launch` has `path` (the folder) and `branch`.
 For the child of a new case, `path` is the docs worktree: keep it, and the case root is `{path}/.feature-dev/current`.
 When the answer is `{ok: false, ...}`, read `error` and `step`, fix what you can (another name, another place), and launch again. Tell the owner only when the same refusal comes twice or you cannot fix it.
+
+## Standbys
+
+The child of the requirement and the child of the design stay after their `DONE` as standbys ([messages](messages.md#check-a-done)), until the specification is done.
+A standby answers questions and, when its unit is reopened, redoes it. It writes nothing otherwise, so it never works beside another child.
+
+### Launch a standby again
+
+A standby is missing when a leader that started again does not find it, or when it is gone when you need it.
+Before you start the unit that `next-unit` names, make sure each unit before it that has a standby role has one: the `requirement` when the next unit is the design, an implementation or the specification, and the `design` when the next unit is an implementation or the specification. Skip the unit that you are launching or that an instruction reopens: it gets a working child.
+Look for it by name: call `formation_status` with the name of the table (`req`, `design`), then with `-2`, `-3`, and so on while the record has such a child, and take the last one. It is there when the answer shows Claude Code running in its terminal. It is missing when the record has no such child, or the screen shows a shell prompt where Claude Code was.
+
+A missing standby is launched again as a standby: `formation_launch` of the unit's place, `folder` the docs worktree, with the first prompt below and the line `Role: standby`.
+In its prompt, the one line of the unit says that the unit is complete already and that it stands by (below), and the line `Reopen` is `none`.
+Then register its patrol ([below](#register-the-patrol)). A standby that the owner closed on purpose is launched again too: the case needs it until the specification is done.
+A standby that is there already and has no patrol (`CronList` shows none for its name) gets one too.
+
+### Wake a standby
+
+When [next-unit](next-unit.md) names a unit that has a standby (it was reopened), do not launch a child. Send the standby `RESUME {unit}: {the path of the reopen record, from case.json}` (or `RESUME {unit}: reopen first`, when an instruction of the owner asks for the reopen and `case.json` does not show it yet: the owner's words follow, each line with `> ` in front), mark it as working, and serve it as any child ([messages](messages.md)). Its patrol goes on.
+Make sure it is there first, as above. A missing one is launched as a working child of that unit (`Role: working`).
 
 ## Register the patrol
 
@@ -103,9 +127,9 @@ Call `CronCreate` with:
 Patrol of the child "{child name}". Read {skill folder}/references/messages.md, the section "The patrol", and do one round of it for this child.
 ```
 
-`CronCreate` answers the ID of the schedule: keep it with the child's name, and never register a second patrol for a child that has one (`CronList` shows what is registered).
-The patrol is only for the child of this unit.
-A recurring schedule ends by itself after 7 days: when a unit runs longer than that, register it again.
-The patrol is deleted with `CronDelete` when the child's `DONE` holds, when the child reopens an earlier unit, and when you stop or close the child ([messages](messages.md)).
+`CronCreate` answers the ID of the schedule: keep it with the child's name and the date you registered it (`date +%F`), and never register a second patrol for a child that has one (`CronList` shows what is registered).
+The patrol is only for this child. It goes on while the child stands by.
+A recurring schedule ends by itself after 7 days, and a standby may stand by longer than that. So the patrol is registered again before that: the round that finds it 6 days old or more deletes it and registers it again, with a new ID and a new date ([messages](messages.md#the-patrol), step 6).
+The patrol is deleted with `CronDelete` when the child's `DONE` holds for an implementation or for the specification, when the child reopens a unit (`REOPENED`), when the specification is done and the standbys stop, and when you stop or close the child ([messages](messages.md)).
 
 Then serve the child: [messages](messages.md).

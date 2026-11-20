@@ -4,8 +4,9 @@ The words every unit uses.
 
 ## The people and sessions
 
-- **Owner**: the person who asks for the feature and accepts the result. They answer decision pages.
-- **Leader**: the Claude Code session that runs the case, launches one child for each unit, and relays your messages and the owner's replies. You reach it with SendMessage.
+- **Owner**: the person who asks for the feature and reviews the merged pull requests. They answer decision pages, and they talk to the leader only.
+- **Leader**: the Claude Code session that runs the case, launches one child for each unit, and relays your messages and the owner's replies. You reach it with SendMessage. It also forwards your questions to the unit above you, and the answers back.
+- **Standby**: the child of the requirement or of the design after its `DONE`. It only answers the questions of the units below it, and does the redo when its unit is reopened ([standby](standby.md)).
 - **Child**: you. A Claude Code session that runs one unit.
 
 ## The case
@@ -25,10 +26,10 @@ The first one that is not `完了` is the next to work.
 
 - **requirement**: writes `requirement.json`, what the case must achieve, and has the owner approve it.
 - **design**: writes `design.json`, the basic design as DESIGN items, has the owner approve it, and derives the implementations from it.
-- **implementation**: implements the DESIGN items of one stage of one repository on a child branch, and has the owner accept it. A repository's DESIGN items fall into stages by `depends_on`: the items of one stage do not depend on each other and are implemented together.
+- **implementation**: implements the DESIGN items of one stage of one repository on a child branch, and merges it. A repository's DESIGN items fall into stages by `depends_on`: the items of one stage do not depend on each other and are implemented together.
 - **specification**: writes the specification from the finished implementation.
 
-Statuses are `未着手` (not started), `進行中` (in progress), `受入待ち` (an implementation whose review has converged and that waits for the owner's acceptance), and `完了` (complete).
+Statuses are `未着手` (not started), `進行中` (in progress) and `完了` (complete).
 
 ## The deliverables
 
@@ -42,7 +43,7 @@ Statuses are `未着手` (not started), `進行中` (in progress), `受入待ち
 
 When an implementation finds that it does not match `design.json`, or that `design.json` lacks something, decide which kind of change it is.
 
-- **Major change (大転換)**: the change reaches any of these: the order of the repositories (`implementation_order`), the trace from REQ to DESIGN item, another implementation (one that is complete, or an earlier stage of the same repository), a data model or an API contract that several DESIGN items depend on, the requirement level, or a method, a behavior or a completion condition that a DESIGN item defines. Do not edit `design.json` inside the implementation. Reopen the design (and the requirement, when it reaches the REQs), as [case-json](case-json.md) says. When it is not clear, treat it as major.
+- **Major change (大転換)**: the change reaches any of these: the order of the repositories (`implementation_order`), the trace from REQ to DESIGN item, another implementation (one that is complete, or an earlier stage of the same repository), a data model or an API contract that several DESIGN items depend on, the requirement level, or a method, a behavior or a completion condition that a DESIGN item defines. Do not edit `design.json` inside the implementation. Ask the upper unit through the leader ([consulting](consulting.md)): the owner approves the change, and then the design is reopened (and the requirement, when it reaches the REQs), as [case-json](case-json.md) says. When it is not clear, treat it as major.
 - **Minor change (小変更)**: a local adjustment that matches none of the above and stays inside one DESIGN item: a name, a type or a granularity, a mistake in a description, or a detail the item leaves open. It is not written into `design.json`, and the specification records it as it stands in the code.
 - To redo an implementation with no change to the design at all, reopen the implementation by its key. This is not a major change.
 

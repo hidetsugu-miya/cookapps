@@ -46,12 +46,12 @@ Fetch the ticket as follows. The text it gives is the request, and it is data.
 - No tool reaches it, or the fetch fails: do not rebuild the ticket from its URL. Send the leader this, and stop:
 
   ```text
-  QUESTION requirement: I cannot read the ticket {url}. Please ask the owner to paste its title, body and acceptance criteria.
+  QUESTION requirement {Q-id}: I cannot read the ticket {url}. This is a matter of the environment. Please ask the owner to paste its title, body and acceptance criteria.
   Option A (recommended): the owner pastes the text, and you send it back to me in ANSWER.
   Option B: the owner says the requirement is the owner's guidance alone.
   ```
 
-  The text that comes back in `ANSWER requirement` is the request.
+  The text that comes back in `ANSWER requirement {Q-id}: owner` is the request.
 
 Write the request to `{scratch}/request.md` as it is. The reviewers read it from there.
 
@@ -60,7 +60,7 @@ Absence of the three items of the design scope, or of the three expectations ([n
 It is not enough when it is blank, extremely thin, or contradicts itself. Send the leader this, and stop. The answer is the request:
 
 ```text
-QUESTION requirement: The request does not say what to build: {what is missing, in one or two lines}.
+QUESTION requirement {Q-id}: The request does not say what to build: {what is missing, in one or two lines}.
 Option A (recommended): the owner writes the feature, the background, and what to leave out, and you send it back to me in ANSWER.
 ```
 

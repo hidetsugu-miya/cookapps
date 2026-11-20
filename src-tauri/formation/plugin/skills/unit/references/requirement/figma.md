@@ -33,13 +33,13 @@ The agent returns one JSON object, then the sections `## screens`, `## layout` a
 `unavailable_reason: auth-expired` means the owner has not signed in to the Figma server in this session. Ask once for all the URLs of the unit, before you record anything. Send the leader this, and wait:
 
 ```text
-QUESTION {unit}: I cannot read the Figma design {url}: the Figma server is not signed in.
+QUESTION {unit} {Q-id}: I cannot read the Figma design {url}: the Figma server is not signed in. This is a matter of the environment.
 Option A (recommended): the owner opens this terminal, runs /mcp, signs in to plugin:feature-dev:figma, and sends me ANSWER.
 Option B: the owner says to go on without reading the design.
 ```
 
-- `ANSWER` for option A: launch the failed URLs once more. A second `auth-expired` is treated as option B.
-- `ANSWER` for option B: the design could not be read ("When a design could not be read").
+- `ANSWER` (`owner`) for option A: launch the failed URLs once more. A second `auth-expired` is treated as option B.
+- `ANSWER` (`owner`) for option B: the design could not be read ("When a design could not be read").
 
 `tool-unresolved` is treated like option B at once, without asking: the Figma server did not start in this session.
 

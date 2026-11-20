@@ -37,18 +37,18 @@ Never force push.
 
 Follow "The child branch and the child pull request" of [branch-and-pr](../shared/branch-and-pr.md), step 3:
 
-- Fetch the base branch and run the `rev-list` of that file. When it prints nothing, open no pull request: the child holds no commit that the base branch lacks. Remember that for the page (`pr.note`).
-- Otherwise write the title and the body: the title is `[{ticket key}][{key}] {summary}` as that file says (no assignee, a summary of at most 50 characters). The body is the one that "The body of the child pull request" of [branch-and-pr](../shared/branch-and-pr.md) defines: the owner reads the change there and not on the decision page of Stage 6, so every section is written now. Write them in the language of the repository's recent pull requests (`gh pr list --state all --limit 5`); polish a Japanese title and body with `feature-dev:prose-polisher` before they are written, and use its final draft as it is.
+- Fetch the base branch and run the `rev-list` of that file. When it prints nothing, open no pull request: the child holds no commit that the base branch lacks. Remember that for the `DONE` summary.
+- Otherwise write the title and the body: the title is `[{ticket key}][{key}] {summary}` as that file says (no assignee, a summary of at most 50 characters). The body is the one that "The body of the child pull request" of [branch-and-pr](../shared/branch-and-pr.md) defines: the owner reads the change there, so every section is written now. Write them in the language of the repository's recent pull requests (`gh pr list --state all --limit 5`); polish a Japanese title and body with `feature-dev:prose-polisher` before they are written, and use its final draft as it is.
 - Write the body to a scratch file outside the repository, then run `gh pr create` in one call as that file shows.
 - Record the pull request number with the `child` recipe, number form, of [case-json](../shared/case-json.md).
-- When `gh` cannot run, skip this step, remember it for the page (`pr.note`: no pull request, and why), and go on. Stage 7 needs `gh`.
+- When `gh` cannot run, skip this step, remember it for the `DONE` summary (no pull request, and why), and go on. Stage 6 needs `gh`.
 
 A pull request that exists already (`gh pr list --head "{child branch}" --state open --json number,url`) is the one to use: record its number, open no second, and write its body again as that file says ("Update the body"), because the review rounds, the check and the ledger have moved since the body was written (a rework of Stage 6 comes back here).
 
 ## 4. Commit the case root
 
 Commit what changed in the case root, in the docs worktree, as "Commit the case root" of [branch-and-pr](../shared/branch-and-pr.md) says: `case.json`, and `records/{key}` (the contract, the review reports, the ledger).
-Do the commit whether or not a pull request exists, so that `case.json` is recorded before the owner's review.
-The commit message names what is recorded: the wait for the owner's acceptance, the review records and the pull request number.
+Do the commit whether or not a pull request exists, so that `case.json` is recorded before the merge.
+The commit message names what is recorded: the review records and the pull request number.
 
-Then go to [Stage 6](6-acceptance.md).
+Then go to [Stage 6](6-completion.md).
