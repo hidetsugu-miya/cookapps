@@ -63,6 +63,8 @@ let onRemoved: (name: string) => void = () => {};
 let onChild: (name: string) => void = () => {};
 // The formations whose children are folded away (in memory only); a formation shows its children until its arrow is pressed.
 const folded = new Set<string>();
+// The formations whose done children are shown (in memory only); they are left out until the chip 「完了 N」 of the row is pressed (#1112).
+const doneShown = new Set<string>();
 // The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
 const deleting = new Set<string>();
 let deleteFailure: string | null = null;
@@ -219,34 +221,52 @@ export function openChild(formation: string, child: string) {
   draw();
 }
 
-function row(f: FormationEntry): HTMLButtonElement {
+// A line of the list: the row of a formation, a button, and at its right the chip of its done children and the number of its launched children, which are outside the button so that a button does not hold another (#1112).
+function row(f: FormationEntry, done: number): HTMLDivElement {
+  const line = tag("div", "formation-line");
   const node = tag("button", "formation-row");
   node.type = "button";
   node.dataset.formation = f.name;
   node.setAttribute("aria-pressed", String(f.name === current));
-  node.onclick = () => {
+  const select = () => {
     deleteFailure = null;
     deleteNotice = null;
     choose(f.name);
     draw();
   };
+  node.onclick = select;
   if (deleting.has(f.name)) node.setAttribute("aria-busy", "true");
   const name = span("formation-row-name", f.name);
   // The menu and its confirmation are anchored on the name, which the button's own state does not touch.
-  node.oncontextmenu = (e) => openRowMenu(f, name, e);
+  line.oncontextmenu = (e) => openRowMenu(f, name, e);
   node.append(tag("i", "formation-row-dot"), name);
   // The leader waits for input: the dot is filled and a label says so (`FormationEntry.waiting`, #915).
   if (f.waiting) {
     node.dataset.waiting = "true";
     node.append(span("formation-row-waiting", WAITING_LABEL));
   }
-  // The number of the launched children; none is drawn for a formation that has none.
+  line.append(node);
+  // The done children are left out of the list until this chip is pressed; none is drawn for a formation that has no done child.
+  if (done > 0) {
+    const chip = tag("button", "chip formation-done");
+    chip.type = "button";
+    chip.dataset.doneFor = f.name;
+    chip.setAttribute("aria-pressed", String(doneShown.has(f.name)));
+    chip.textContent = `完了 ${done}`;
+    chip.onclick = () => {
+      if (!doneShown.delete(f.name)) doneShown.add(f.name);
+      draw();
+    };
+    line.append(chip);
+  }
+  // The number of the launched children; none is drawn for a formation that has none. A press on it is a press on the row.
   if (f.children.length > 0) {
     const count = span("formation-row-count", String(f.children.length));
     count.setAttribute("aria-label", `起動しているチームメイト ${f.children.length} 人`);
-    node.append(count);
+    count.onclick = select;
+    line.append(count);
   }
-  return node;
+  return line;
 }
 
 // A child of a formation: its state, its name and, under it, the project and the branch of its worktree. Pressing it selects the formation and shows the child's tab.
@@ -267,7 +287,8 @@ function childRow(f: FormationEntry, c: FormationListChild): HTMLButtonElement {
 // A formation with its children: a formation that has some has the arrow at the left of its row (the one of a project, A-8), and its children under it while it is open.
 function item(f: FormationEntry): HTMLDivElement {
   const wrap = tag("div", "formation-item");
-  wrap.append(row(f));
+  const done = f.children.filter((c) => c.state === "done");
+  wrap.append(row(f, done.length));
   if (f.children.length === 0) return wrap;
   const open = !folded.has(f.name);
   const arrow = tag("button", "icon-btn orca-arrow");
@@ -283,7 +304,7 @@ function item(f: FormationEntry): HTMLDivElement {
   wrap.append(arrow);
   if (open) {
     const list = tag("div", "formation-children");
-    list.append(...f.children.map((c) => childRow(f, c)));
+    list.append(...f.children.filter((c) => c.state !== "done" || doneShown.has(f.name)).map((c) => childRow(f, c)));
     wrap.append(list);
   }
   return wrap;
@@ -296,11 +317,12 @@ function drawLeaderMark() {
   $("formation-tab-leader-mark").hidden = !waiting;
 }
 
-// The selector of the control of the list that has the focus, to give it the focus again after a redraw: a formation's row, a child's row or an arrow.
+// The selector of the control of the list that has the focus, to give it the focus again after a redraw: a formation's row, a child's row, an arrow or the chip of the done children.
 function focusedControl(feed: HTMLElement): string | undefined {
   const el = feed.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null;
-  const { formation, childOf, child, arrow } = el?.dataset ?? {};
+  const { formation, childOf, child, arrow, doneFor } = el?.dataset ?? {};
   if (arrow) return `[data-arrow="${CSS.escape(arrow)}"]`;
+  if (doneFor) return `[data-done-for="${CSS.escape(doneFor)}"]`;
   if (childOf && child) return `[data-child-of="${CSS.escape(childOf)}"][data-child="${CSS.escape(child)}"]`;
   if (formation) return `[data-formation="${CSS.escape(formation)}"]`;
   return undefined;
@@ -311,7 +333,7 @@ function draw() {
   const error = deleteFailure ?? failure ?? deleteNotice;
   $("formation-list-error").hidden = error === null;
   $("formation-list-error").textContent = error ?? "";
-  const key = JSON.stringify([current, [...deleting], [...folded], formations.map((f) => [f.name, f.projects, f.waiting, f.children.map((c) => [c.name, c.repo, c.branch, c.state])])]);
+  const key = JSON.stringify([current, [...deleting], [...folded], [...doneShown], formations.map((f) => [f.name, f.projects, f.waiting, f.children.map((c) => [c.name, c.repo, c.branch, c.state])])]);
   if (key === listKey) return;
   listKey = key;
   // The list is drawn again in place: the scroll and the focus stay where they were.

@@ -20,6 +20,9 @@ const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts
 const ORCA_LIST = () => orcaOverview([orcaRow("api", "main", "Write the docs", { handle: null, paneKey: null })]);
 const PROJECT = '#orca-feed .orca-project[data-key="proj_api"]';
 const ROW = (name: string) => `#formation-list-feed [data-formation="${name}"]`;
+// The line of a formation holds its row, a button, and the chip and the number beside it; it has the ground of the selected row (#1112).
+const LINES = "#formation-list-feed .formation-line";
+const LINE_OF = (name: string) => `${LINES}:has([data-formation="${name}"])`;
 
 // Opens the development screen and selects a formation. No formation is selected at the start, so the row of `select` (the one the default fixture has, `formation`) is pressed unless it is `null`.
 async function openFormation(select: string | null = "formation") {
@@ -87,7 +90,7 @@ describe("development screen: orchestration", () => {
     await expect($("#nav-orca")).toHaveAttribute("aria-current", "page");
     // The pale green ground (--soft) is the one of the selected row; a project's row has none.
     expect(await pressed(ROW("formation"))).toBe("true");
-    expect(await ground(ROW("formation"))).toBe("rgb(227, 244, 234)");
+    expect(await ground(LINE_OF("formation"))).toBe("rgb(227, 244, 234)");
     expect(await pressed(PROJECT)).toBe("false");
     expect(await ground(PROJECT)).toBe("rgba(0, 0, 0, 0)");
     const lefts = await browser.execute(() => ["orca-list", "formation-orchestrator", "formation-flow"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().left)));
@@ -3158,6 +3161,7 @@ describe("orchestration mode: the decision page of a child", () => {
 // A-37: the launched children under the row of their formation in the list.
 const CHILD = (name: string) => `#formation-list-feed .formation-child[data-child="${name}"]`;
 const childRows = () => textsOf("#formation-list-feed .formation-child");
+const DONE_CHIP = (name: string) => `#formation-list-feed .formation-done[data-done-for="${name}"]`;
 const withChildren = () =>
   formationList([
     formationEntry("formation"),
@@ -3168,14 +3172,15 @@ const withChildren = () =>
 describe("orchestration mode: the children under a formation in the list", () => {
   it("shows the number of launched teammates at the right of a formation's row, and none for a formation that has none", async () => {
     await openList({ formation_list: withChildren() }, null);
-    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["2", "1"]);
-    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .formation-row-count`)].map((e) => e.getAttribute("aria-label")), ROWS)).toEqual(["起動しているチームメイト 2 人", "起動しているチームメイト 1 人"]);
-    expect(await count(`${ROWS}[data-formation="formation"] .formation-row-count`)).toBe(0);
+    expect(await textsOf(`${LINES} .formation-row-count`)).toEqual(["2", "1"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(`${s} .formation-row-count`)].map((e) => e.getAttribute("aria-label")), LINES)).toEqual(["起動しているチームメイト 2 人", "起動しているチームメイト 1 人"]);
+    expect(await count(`${LINE_OF("formation")} .formation-row-count`)).toBe(0);
     // The count is at the right end of the row, after the name.
     const place = await browser.execute((s) => {
-      const r = document.querySelector(`${s}[data-formation="won-2485"]`)!.getBoundingClientRect();
-      const n = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-count`)!.getBoundingClientRect();
-      const name = document.querySelector(`${s}[data-formation="won-2485"] .formation-row-name`)!.getBoundingClientRect();
+      const line = document.querySelector(`${s}[data-formation="won-2485"]`)!.closest(".formation-line")!;
+      const r = line.getBoundingClientRect();
+      const n = line.querySelector(".formation-row-count")!.getBoundingClientRect();
+      const name = line.querySelector(".formation-row-name")!.getBoundingClientRect();
       return { right: r.right - n.right < 16, beside: name.right <= n.left };
     }, ROWS);
     expect(place).toEqual({ right: true, beside: true });
@@ -3183,6 +3188,8 @@ describe("orchestration mode: the children under a formation in the list", () =>
 
   it("draws a row for each launched child under its formation: the name, and under it the project and the branch of its worktree, with the icon of its state", async () => {
     await openList({ formation_list: withChildren() }, null);
+    // The done child of the third formation is left out until its chip is pressed.
+    await $(DONE_CHIP("mail-summary")).click();
     expect(await childRows()).toEqual(["auth-api" + "wonder-api ・ child-auth", "add-tests" + "wonder-front ・ child-test", "old-one" + "tsunagiai ・ old"]);
     expect(await textsOf(".formation-child .formation-child-name")).toEqual(["auth-api", "add-tests", "old-one"]);
     expect(await textsOf(".formation-child .formation-child-where")).toEqual(["wonder-api ・ child-auth", "wonder-front ・ child-test", "tsunagiai ・ old"]);
@@ -3205,20 +3212,20 @@ describe("orchestration mode: the children under a formation in the list", () =>
     await expect($(arrow)).toHaveAttribute("aria-expanded", "true");
     await $(arrow).click();
     await expect($(arrow)).toHaveAttribute("aria-expanded", "false");
-    expect(await childRows()).toEqual(["old-one" + "tsunagiai ・ old"]);
+    expect(await childRows()).toEqual([]);
     // The count stays while the children are folded, and the press of the arrow selects nothing.
-    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["2", "1"]);
+    expect(await textsOf(`${LINES} .formation-row-count`)).toEqual(["2", "1"]);
     expect(await pressedRows()).toEqual([]);
     await $(arrow).click();
     await expect($(arrow)).toHaveAttribute("aria-expanded", "true");
-    expect(await childRows()).toHaveLength(3);
+    expect(await childRows()).toHaveLength(2);
   });
 
   it("keeps a folded formation folded when the list is read again", async () => {
     await openList({ formation_list: withChildren() }, null);
     await $('#formation-list-feed .orca-arrow[data-arrow="won-2485"]').click();
-    await mock("formation_list", formationList([formationEntry("formation"), formationEntry("won-2485", { children: [listedChild("auth-api", "done", { repo: "wonder-api", branch: "child-auth" })] })]));
-    await browser.waitUntil(async () => (await textsOf(`${ROWS} .formation-row-count`)).join() === "1");
+    await mock("formation_list", formationList([formationEntry("formation"), formationEntry("won-2485", { children: [listedChild("auth-api", "working", { repo: "wonder-api", branch: "child-auth" })] })]));
+    await browser.waitUntil(async () => (await textsOf(`${LINES} .formation-row-count`)).join() === "1");
     expect(await count(".formation-child")).toBe(0);
   });
 
@@ -3240,6 +3247,7 @@ describe("orchestration mode: the children under a formation in the list", () =>
   it("shows the child's tab of another formation than the shown one, after its children are read", async () => {
     await openList({ formation_list: withChildren(), formation_children: [formationChild("old-one", "working")] });
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
+    await $(DONE_CHIP("mail-summary")).click();
     await $(CHILD("old-one")).click();
     expect(await pressedRows()).toEqual(["mail-summary"]);
     await expect($('#formation-tabs-mates [data-child="old-one"]')).toHaveAttribute("aria-selected", "true");
@@ -3247,6 +3255,7 @@ describe("orchestration mode: the children under a formation in the list", () =>
 
   it("selects the formation and leaves the leader's tab for a child that has no terminal", async () => {
     await openList({ formation_list: withChildren(), formation_children: [formationChild("old-one", "done", { handle: null })] }, null);
+    await $(DONE_CHIP("mail-summary")).click();
     await $(CHILD("old-one")).click();
     expect(await pressedRows()).toEqual(["mail-summary"]);
     await browser.waitUntil(async () => (await cardNames()).length === 1);
@@ -3257,10 +3266,75 @@ describe("orchestration mode: the children under a formation in the list", () =>
     const saved = formationList([formationEntry("remote-work", { environment: "dev-server", repos: [], children: [listedChild("r-child", "working", { repo: "wonder-api", branch: "r-branch", environment: "dev-server", path: "/srv/work/r-child" })] })]);
     await openList({ formation_list: saved, formation_orchestrator: { environment: "dev-server", handle: "term_orch" }, formation_consents: [formationConsent("dev-server")], formation_children: [formationChild("r-child", "working", { environment: "dev-server" })] }, null);
     expect(await childRows()).toEqual(["r-child" + "wonder-api ・ r-branch"]);
-    expect(await textsOf(`${ROWS} .formation-row-count`)).toEqual(["1"]);
+    expect(await textsOf(`${LINES} .formation-row-count`)).toEqual(["1"]);
     await $(CHILD("r-child")).click();
     expect(await pressedRows()).toEqual(["remote-work"]);
     await expect($('#formation-tabs-mates [data-child="r-child"]')).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("orchestration mode: the done children of a formation in the list", () => {
+  const chips = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#formation-list-feed .formation-done")].map((e) => [e.dataset.doneFor, e.textContent, e.getAttribute("aria-pressed")]));
+  const mixedList = () =>
+    formationList([
+      formationEntry("formation"),
+      formationEntry("won-2485", { children: [listedChild("auth-api", "working"), listedChild("add-tests", "done"), listedChild("old-one", "waiting"), listedChild("last-one", "done")], counts: { planned: 0, waiting: 1, working: 1, done: 2 } }),
+    ]);
+
+  it("leaves the done children out, puts the chip 完了 N before the number, and has none for a formation that has no done child", async () => {
+    await openList({ formation_list: withChildren() }, null);
+    expect(await chips()).toEqual([["mail-summary", "完了 1", "false"]]);
+    await openList({ formation_list: mixedList() }, null);
+    expect(await childRows()).toEqual(["auth-api" + "example-api ・ formation/auth-api", "old-one" + "example-api ・ formation/old-one"]);
+    expect(await chips()).toEqual([["won-2485", "完了 2", "false"]]);
+    // The number counts every launched child, the done ones too.
+    expect(await textsOf(`${LINES} .formation-row-count`)).toEqual(["4"]);
+    // The chip is in the line of its formation, beside the row and before the number, and is no part of the row's button.
+    const place = await browser.execute(() => {
+      const line = document.querySelector('#formation-list-feed .formation-row[data-formation="won-2485"]')!.closest(".formation-line")!;
+      const [row, chip, n] = [line.querySelector(".formation-row")!, line.querySelector(".formation-done")!, line.querySelector(".formation-row-count")!];
+      return { before: chip.getBoundingClientRect().right <= n.getBoundingClientRect().left, beside: row.getBoundingClientRect().right <= chip.getBoundingClientRect().left, outside: !row.contains(chip) && chip.closest("button") === chip };
+    });
+    expect(place).toEqual({ before: true, beside: true, outside: true });
+  });
+
+  it("shows the done children in the order of the record with a press on the chip, with the colors of a pressed chip, and leaves them out with another press", async () => {
+    await openList({ formation_list: mixedList() }, null);
+    const unpressed = await styleOf(DONE_CHIP("won-2485"), "backgroundColor");
+    await $(DONE_CHIP("won-2485")).click();
+    expect(await childRows()).toEqual(["auth-api" + "example-api ・ formation/auth-api", "add-tests" + "example-api ・ formation/add-tests", "old-one" + "example-api ・ formation/old-one", "last-one" + "example-api ・ formation/last-one"]);
+    expect(await chips()).toEqual([["won-2485", "完了 2", "true"]]);
+    expect(await styleOf(DONE_CHIP("won-2485"), "backgroundColor")).toBe(await resolved("--soft"));
+    expect(await styleOf(DONE_CHIP("won-2485"), "backgroundColor")).not.toBe(unpressed);
+    await $(DONE_CHIP("won-2485")).click();
+    expect(await childRows()).toHaveLength(2);
+    expect(await chips()).toEqual([["won-2485", "完了 2", "false"]]);
+  });
+
+  it("selects nothing with a press on the chip, and keeps the shown children when the list is read again", async () => {
+    await openList({ formation_list: mixedList() }, null);
+    await $(DONE_CHIP("won-2485")).click();
+    expect(await pressedRows()).toEqual([]);
+    await expect($("#formation")).not.toBeDisplayed();
+    await mock("formation_list", mixedList());
+    await mock("formation_list", formationList([formationEntry("formation"), formationEntry("won-2485", { children: [listedChild("auth-api", "working"), listedChild("add-tests", "done")] })]));
+    await browser.waitUntil(async () => (await childRows()).length === 2);
+    expect(await chips()).toEqual([["won-2485", "完了 1", "true"]]);
+    // A press on the number is a press on the row.
+    await $(`${LINE_OF("won-2485")} .formation-row-count`).click();
+    expect(await pressedRows()).toEqual(["won-2485"]);
+  });
+
+  it("keeps the chip and the number in the line when the name is long, and cuts the name with an ellipsis", async () => {
+    const long = "a-very-long-formation-name-that-does-not-fit-in-the-list-pane-at-all";
+    await openList({ formation_list: formationList([formationEntry(long, { children: [listedChild("auth-api", "working"), listedChild("add-tests", "done")] })]) }, null);
+    const fit = await browser.execute(() => {
+      const line = document.querySelector("#formation-list-feed .formation-line")!.getBoundingClientRect();
+      const name = document.querySelector<HTMLElement>("#formation-list-feed .formation-row-name")!;
+      const [chip, n] = [".formation-done", ".formation-row-count"].map((s) => document.querySelector(s)!.getBoundingClientRect());
+      return { cut: name.scrollWidth > name.clientWidth, ellipsis: getComputedStyle(name).textOverflow, inside: chip.right <= n.left && n.right <= line.right, nameBeforeChip: name.getBoundingClientRect().right <= chip.left };
+    });
+    expect(fit).toEqual({ cut: true, ellipsis: "ellipsis", inside: true, nameBeforeChip: true });
   });
 });
 
