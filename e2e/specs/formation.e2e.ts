@@ -1347,6 +1347,55 @@ describe("orchestration mode: the list of the formations", () => {
     await browser.waitUntil(async () => (await mark()).labels[1] === "入力待ち");
   });
 
+  it("draws 判断待ち on the row of a child that a decision page waits for, in the color of an approval that waits, and on the row of its formation, and takes both off when the page is answered", async () => {
+    const pageList = (awaiting: boolean) =>
+      formationList([
+        formationEntry("formation"),
+        formationEntry("won-2485", {
+          awaitingPage: awaiting,
+          children: [listedChild("auth-api", "working"), listedChild("req-login", "done", { awaitingPage: awaiting }), listedChild("old-stop", "done", { terminal: false, awaitingPage: awaiting })],
+          counts: { planned: 0, waiting: 0, working: 1, done: 2 },
+        }),
+      ]);
+    await openList({ formation_list: pageList(true) }, null);
+    const look = () =>
+      browser.execute(() => {
+        const text = (e: Element | null) => e?.textContent ?? null;
+        const row = document.querySelector('#formation-list-feed .formation-row[data-formation="won-2485"]') as HTMLElement;
+        const children = [...document.querySelectorAll<HTMLElement>(".formation-child")].map((e) => {
+          const icon = e.querySelector<HTMLElement>(".orca-ic")!;
+          return { name: e.dataset.child, state: e.dataset.state, status: icon.dataset.status, label: icon.getAttribute("aria-label"), tag: text(e.querySelector(".formation-row-waiting")), color: getComputedStyle(e.querySelector(".formation-row-waiting") ?? e).color };
+        });
+        return { row: { waiting: row.dataset.waiting ?? null, tag: text(row.querySelector(".formation-row-waiting")) }, children, done: text(document.querySelector(".formation-done-count")), others: text(document.querySelector('.formation-row[data-formation="formation"] .formation-row-waiting')) };
+      });
+    const shown = await look();
+    expect(shown.row).toEqual({ waiting: "true", tag: "判断待ち" });
+    expect(shown.others).toBeNull();
+    // A done child that a page waits for, with or without its terminal, is drawn as a waiting one and is not one of the done.
+    expect(shown.children.map(({ name, state, status, label, tag }) => [name, state, status, label, tag])).toEqual([
+      ["auth-api", "working", "working", "作業中", null],
+      ["req-login", "waiting", "question", "判断待ち", "判断待ち"],
+      ["old-stop", "waiting", "question", "判断待ち", "判断待ち"],
+    ]);
+    expect(shown.done).toBeNull();
+    // The label has the color of the label 入力待ち.
+    expect(shown.children[1].color).toBe(shown.children[2].color);
+    await mock("formation_list", pageList(false));
+    await browser.waitUntil(async () => (await look()).row.tag === null);
+    const answered = await look();
+    expect(answered.children.map(({ name, state, tag }) => [name, state, tag])).toEqual([
+      ["auth-api", "working", null],
+      ["req-login", "standby", null],
+    ]);
+    expect(answered.done).toBe("完了 2");
+  });
+
+  it("puts 入力待ち before 判断待ち on a row whose leader waits and that has a child that a page waits for", async () => {
+    await openList({ formation_list: formationList([formationEntry("formation", { waiting: true, awaitingPage: true, children: [listedChild("req-login", "done", { awaitingPage: true })] })]) }, null);
+    expect(await textsOf(`${ROWS} .formation-row-waiting`)).toEqual(["入力待ち"]);
+    expect(await textsOf(".formation-child .formation-row-waiting")).toEqual(["判断待ち"]);
+  });
+
   it("marks the leader's tab with the dot of a waiting teammate while the shown formation's leader waits, and not otherwise", async () => {
     const waitingList = (waiting: boolean) => formationList([formationEntry("formation", { waiting }), formationEntry("won-2485", { waiting: !waiting })]);
     await openList({ formation_list: waitingList(true) });

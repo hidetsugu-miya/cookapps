@@ -3573,17 +3573,23 @@ type PullEnv<'a> = dyn Fn(&str, &[String]) -> ListPull + Sync + 'a;
 /// What such a read answers: for each formation, the children of its record, or why they could not be read.
 type PulledRecords = Vec<Result<Vec<Child>, String>>;
 
-/// What the list takes from the read of one saved environment: the records, and for each formation the time of the mark of a question of its leader (#1105).
+/// What the list takes from the read of one saved environment: the records, for each formation the time of the mark of a question of its leader (#1105) and the decision pages that its PC records (A-41, #1151).
 struct ListPull {
     records: PulledRecords,
     asked: Vec<Option<u64>>,
+    pages: Vec<Vec<PageRecord>>,
 }
 
 impl From<PulledRecords> for ListPull {
-    /// Records with no mark of a question.
+    /// Records with no mark of a question and no page.
     fn from(records: PulledRecords) -> Self {
         let asked = records.iter().map(|_| None).collect();
-        Self { records, asked }
+        let pages = records.iter().map(|_| Vec::new()).collect();
+        Self {
+            records,
+            asked,
+            pages,
+        }
     }
 }
 
@@ -3725,14 +3731,22 @@ pub struct FormationListChild {
     pub pane_key: String,
     /// Whether the child has a terminal now (`FormationChild::handle` is not `None`). A done child without one is a child that was stopped (`formation_stop`) or that Orca lists no more: the list leaves it out and counts it in 「完了 N」; a done child with one is drawn as waiting for the next instruction.
     pub terminal: bool,
+    /// Whether a decision page of the child waits for the owner's reply (`formation_page::pending_pages`, A-41): the list draws it as 判断待ち, as the card of the flow does (#1151).
+    pub awaiting_page: bool,
 }
 
-/// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed.
-fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationListChild> {
+/// The launched children among `records`, with the rows `children_view_with` made of them (the same order): a planned child has no worktree and is not listed. `pages` are the decision pages recorded for the formation.
+fn listed_children(
+    records: &[Child],
+    rows: &[FormationChild],
+    pages: &[PageRecord],
+) -> Vec<FormationListChild> {
+    let pending = formation_page::pending_pages(records, pages);
     records
         .iter()
         .zip(rows)
-        .filter_map(|(child, row)| {
+        .zip(pending)
+        .filter_map(|((child, row), pending)| {
             let launch = child.launch.as_ref()?;
             Some(FormationListChild {
                 name: row.name.clone(),
@@ -3745,6 +3759,7 @@ fn listed_children(records: &[Child], rows: &[FormationChild]) -> Vec<FormationL
                 handle: launch.handle.clone(),
                 pane_key: launch.pane_key.clone(),
                 terminal: row.handle.is_some(),
+                awaiting_page: pending.is_some(),
             })
         })
         .collect()
@@ -3768,6 +3783,8 @@ pub struct FormationEntry {
     pub children: Vec<FormationListChild>,
     /// Whether the formation's leader waits for the owner's answer: it asked a question (the mark of `formation_ask_owner`) and its terminal's title says `✳` (`title_waits`, #915, #1105). `formation_list` fills it (`list_core` with the leaders); the list of `list_with` and the answer of `formation_create` have `false`.
     pub waiting: bool,
+    /// Whether a child of the formation has a decision page that waits for the owner's reply (`FormationListChild::awaiting_page`, #1151): the list marks the row as it does for `waiting`.
+    pub awaiting_page: bool,
 }
 
 /// The answer of `formation_list`.
@@ -3930,13 +3947,28 @@ fn list_core(
                 Verdict::NoMark | Verdict::Keep => false,
             }
         });
+        // The decision pages of a formation of this Mac are in its folder, those of a saved environment's on its PC (read with its record); one whose orchestrator never started there has none.
+        let pages = if environment == LOCAL {
+            formation_page::read_pages(config, &name)
+        } else {
+            groups
+                .get(&environment)
+                .and_then(|items| items.iter().position(|f| *f == name))
+                .and_then(|at| {
+                    let (_, pulled) = pulled.iter().find(|(e, _)| **e == environment)?;
+                    pulled.pages.get(at).cloned()
+                })
+                .unwrap_or_default()
+        };
+        let children = listed_children(children, own, &pages);
         formations.push(FormationEntry {
             name,
             environment,
             projects: meta.projects,
             created_at: meta.created_at,
             counts: counts_of(own),
-            children: listed_children(children, own),
+            awaiting_page: children.iter().any(|c| c.awaiting_page),
+            children,
             waiting,
         });
     }
@@ -4149,6 +4181,7 @@ fn create_with(
         counts: ChildCounts::default(),
         children: Vec::new(),
         waiting: false,
+        awaiting_page: false,
     })
 }
 
@@ -4557,6 +4590,7 @@ pub async fn formation_list(
             ListPull {
                 records: pulled.records,
                 asked: pulled.asked,
+                pages: pulled.pages,
             }
         };
         // A mark of a saved environment is taken away on its PC, over a connection of its own: it happens once for a question.
@@ -9155,7 +9189,7 @@ mod tests {
         let made = launched("m", "x");
         let records = [planned("p", "x"), kept, made];
         let rows = rows_of(&records, &ps_of(Vec::new()));
-        let listed = listed_children(&records, &rows);
+        let listed = listed_children(&records, &rows, &[]);
         // A planned child has no worktree: it is not listed.
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].name, "k");
@@ -9174,7 +9208,113 @@ mod tests {
         let alive = ps_of(vec![agent("tab-k:leaf", "done", None)]);
         let rows = rows_of(&records, &alive);
         assert_eq!(rows[1].state, FormationState::Done);
-        assert!(listed_children(&records, &rows)[0].terminal);
+        assert!(listed_children(&records, &rows, &[])[0].terminal);
+    }
+
+    fn page_of(child: &str, at: u64, answered_at: Option<u64>) -> PageRecord {
+        PageRecord {
+            child: child.into(),
+            path: "/p.json".into(),
+            title: format!("{child} のページ"),
+            page_kind: formation_page::PageKind::Approval,
+            subject: formation_page::Subject::Design,
+            at,
+            answered_at,
+        }
+    }
+
+    #[test]
+    fn a_listed_child_awaits_its_page_only_while_the_owner_has_not_answered_a_page_of_this_launch()
+    {
+        let records = [
+            launched("a", "x"),
+            launched("b", "x"),
+            launched("c", "x"),
+            launched("d", "x"),
+        ];
+        let rows = rows_of(&records, &ps_of(Vec::new()));
+        let launched_at = records[0].launch.as_ref().unwrap().launched_at;
+        let pages = [
+            page_of("a", launched_at + 1, None),
+            // Answered: it no longer waits.
+            page_of("b", launched_at + 1, Some(launched_at + 2)),
+            // Older than the launch: a child of the same name before it.
+            page_of("c", launched_at - 1, None),
+        ];
+        let listed = listed_children(&records, &rows, &pages);
+        assert_eq!(
+            listed
+                .iter()
+                .map(|c| (c.name.as_str(), c.awaiting_page))
+                .collect::<Vec<_>>(),
+            [("a", true), ("b", false), ("c", false), ("d", false)]
+        );
+    }
+
+    #[test]
+    fn the_list_marks_the_formation_and_the_child_that_a_page_waits_on_from_this_macs_record() {
+        let config = temp_dir("list-page-local");
+        formation_of_children(
+            &config,
+            "waits",
+            &[launched("a", "api"), launched("b", "api")],
+        );
+        formation_of_children(&config, "quiet", &[launched("c", "api")]);
+        let at = launched("a", "api").launch.unwrap().launched_at + 5;
+        std::fs::write(
+            dir(&config, "waits").join("pages.json"),
+            serde_json::to_string(&json!({"pages": [page_of("b", at, None)]})).unwrap(),
+        )
+        .unwrap();
+        let fake = FakeOrca::new(vec![(
+            "--environment=local",
+            Ok(ps_of(vec![
+                agent("tab-a:leaf", "working", None),
+                agent("tab-b:leaf", "done", None),
+                agent("tab-c:leaf", "working", None),
+            ])),
+        )]);
+        let list = list_with(&config, &|args, limit| fake.read(args, limit), &no_pull_env).unwrap();
+        let waits = list.formations.iter().find(|f| f.name == "waits").unwrap();
+        assert!(waits.awaiting_page);
+        assert_eq!(
+            waits
+                .children
+                .iter()
+                .map(|c| c.awaiting_page)
+                .collect::<Vec<_>>(),
+            [false, true]
+        );
+        let quiet = list.formations.iter().find(|f| f.name == "quiet").unwrap();
+        assert!(!quiet.awaiting_page);
+        assert!(!quiet.children[0].awaiting_page);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_marks_the_child_that_a_page_waits_on_from_the_pages_a_saved_environments_pc_answers(
+    ) {
+        let config = temp_dir("list-page-pc");
+        remote_formation(&config, "api-work");
+        let pc = Pc::with(vec![launched("a", "api"), launched("b", "api")]);
+        let at = launched("a", "api").launch.unwrap().launched_at + 5;
+        let list = list_with(&config, &|args, _| pc.read(args), &|environment, items| {
+            let mut pulled = pc.pull_env(environment, items);
+            pulled.pages = items.iter().map(|_| vec![page_of("a", at, None)]).collect();
+            pulled
+        })
+        .unwrap();
+        let entry = &list.formations[0];
+        assert!(entry.awaiting_page);
+        assert_eq!(
+            entry
+                .children
+                .iter()
+                .map(|c| c.awaiting_page)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
@@ -12989,6 +13129,7 @@ mod tests {
                 .iter()
                 .map(|name| (name != "quiet").then_some(5))
                 .collect(),
+            pages: items.iter().map(|_| Vec::new()).collect(),
         };
         let panes = Panes::new();
         let list = panes.list(&config, &read, &pull, &|_| None);
@@ -13030,6 +13171,7 @@ mod tests {
         let pull = |_: &str, items: &[String]| ListPull {
             records: items.iter().map(|_| Ok(Vec::new())).collect(),
             asked: items.iter().map(|_| Some(9)).collect(),
+            pages: items.iter().map(|_| Vec::new()).collect(),
         };
         let panes = Panes::new();
         assert!(panes.list(&config, &read, &pull, &|_| None).formations[0].waiting);
@@ -13057,6 +13199,7 @@ mod tests {
             &|_, items| ListPull {
                 records: items.iter().map(|_| Ok(Vec::new())).collect(),
                 asked: items.iter().map(|_| Some(5)).collect(),
+                pages: items.iter().map(|_| Vec::new()).collect(),
             },
             &|_| None,
         );

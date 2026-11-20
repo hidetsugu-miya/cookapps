@@ -22,4 +22,8 @@ children: Array<FormationListChild>,
 /**
  * Whether the formation's leader waits for the owner's answer: it asked a question (the mark of `formation_ask_owner`) and its terminal's title says `✳` (`title_waits`, #915, #1105). `formation_list` fills it (`list_core` with the leaders); the list of `list_with` and the answer of `formation_create` have `false`.
  */
-waiting: boolean, };
+waiting: boolean, 
+/**
+ * Whether a child of the formation has a decision page that waits for the owner's reply (`FormationListChild::awaiting_page`, #1151): the list marks the row as it does for `waiting`.
+ */
+awaitingPage: boolean, };

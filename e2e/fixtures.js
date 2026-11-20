@@ -148,7 +148,7 @@ const answers = {
   formation_delete: { deleted: true, kept: [], preserved: [] },
   formation_close_child: { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null },
   // A-37: one formation, `formation`, with no project and no child (no row is selected until one is pressed).
-  formation_list: { formations: [{ name: "formation", projects: [], environment: "local", createdAt: null, counts: { planned: 0, waiting: 0, working: 0, done: 0 }, children: [], waiting: false }], readError: null },
+  formation_list: { formations: [{ name: "formation", projects: [], environment: "local", createdAt: null, counts: { planned: 0, waiting: 0, working: 0, done: 0 }, children: [], waiting: false, awaitingPage: false }], readError: null },
   // A-41: the page that waits on a child (a spec that opens one gives its own with `decisionPage` of e2e/support.ts): an `open-questions` page with nothing on it.
   formation_page_read: {
     pageKind: "open-questions",
