@@ -43,8 +43,10 @@ export interface ChildRef {
   formation: string;
   child: string;
 }
-// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac, each with its child. The choices of a worktree leave them out (A-9, A-16), and the sessions in them are the children's rows of the projects (A-8).
+// The worktrees that tsunagiai made for the launched children, as `placeOf` of the list: `{environment}\n{path}`, with `local` for this Mac, each with its child. The choices of a worktree leave them out (A-9, A-16), and the list of the projects draws no row for the sessions in them (A-8).
 let childPlaces = new Map<string, ChildRef>();
+// The folders of every launched child of the record, those that tsunagiai made and those that were there, `{environment}\n{path}` as `placeOf`: the project rows count the worktrees that the formations hold with them (A-8). The same folder may hold several children.
+let childFolders = new Map<string, ChildRef>();
 // The terminals of the children that work in a folder that was there (`created` false): that folder is the owner's too, so only these sessions are children's, `{environment}\nhandle\n{handle}` and `{environment}\npane\n{paneKey}`.
 let childSessions = new Map<string, ChildRef>();
 // Whether a read of the list has ended, with an answer or a failure: before it, the Orca list does not know which sessions are a child's.
@@ -84,6 +86,9 @@ export const childOfSession = (item: { path: string; environment?: string | null
 // Whether a row or a terminal of the Orca list is a launched child's session (the work pane of a project leaves it out: the child's terminal is in the formation's screen).
 export const isChildSession = (item: { path: string; environment?: string | null; handle?: string | null; paneKey?: string | null }) => childOfSession(item) !== null;
 
+// Whether the worktree at `path` on the PC `environment` is a folder of a launched child of the record, made by tsunagiai or not, by the last read (A-8): the row of a project counts them.
+export const isChildFolder = (path: string, environment: string | null | undefined) => childFolders.has(placeKey(environment, path));
+
 const differs = (a: Map<string, ChildRef>, b: Map<string, ChildRef>) => a.size !== b.size || [...a].some(([k, v]) => b.get(k)?.formation !== v.formation || b.get(k)?.child !== v.child);
 
 // Holds the worktrees and the sessions of the children of `formations`; the screens that leave them out are drawn again when they changed.
@@ -91,9 +96,11 @@ function holdChildren() {
   const children = formations.flatMap((f) => f.children.map((c) => ({ c, ref: { formation: f.name, child: c.name } })));
   const next = new Map(children.filter(({ c }) => c.created).map(({ c, ref }): [string, ChildRef] => [placeKey(c.environment, c.path), ref]));
   const nextSessions = new Map(children.filter(({ c }) => !c.created).flatMap(({ c, ref }): [string, ChildRef][] => [[placeKey(c.environment, `handle\n${c.handle}`), ref], [placeKey(c.environment, `pane\n${c.paneKey}`), ref]]));
-  const changed = differs(next, childPlaces) || differs(nextSessions, childSessions);
+  const nextFolders = new Map(children.map(({ c, ref }): [string, ChildRef] => [placeKey(c.environment, c.path), ref]));
+  const changed = differs(next, childPlaces) || differs(nextSessions, childSessions) || differs(nextFolders, childFolders);
   childPlaces = next;
   childSessions = nextSessions;
+  childFolders = nextFolders;
   if (changed) redrawOrca();
 }
 
@@ -210,8 +217,8 @@ function choose(name: string | null) {
   onChange(name);
 }
 
-// Selects the formation and shows the tab of its child: a child's row of this list, and a child's session in the list of the projects (A-8).
-export function openChild(formation: string, child: string) {
+// Selects the formation and shows the tab of its child: a child's row of this list.
+function openChild(formation: string, child: string) {
   deleteFailure = null;
   deleteNotice = null;
   choose(formation);

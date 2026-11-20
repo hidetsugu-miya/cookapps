@@ -23,7 +23,7 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { type ChildRef, childOfSession, currentFormation, deselectFormation, isChildSession, isChildWorktree, openChild, readForChoice } from "./formation-list.js";
+import { currentFormation, deselectFormation, isChildFolder, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
 import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, FORMATION_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
@@ -242,8 +242,6 @@ interface Tab {
   // A file outside the worktree that a definition named (A-34): the tab has a lock, and the file is read only. `gem` marks one that is a Ruby file.
   outside?: boolean;
   gem?: boolean;
-  // A launched child's session (A-8, A-37): its formation and its name. It is in the list under its project only; the work pane has no tab for it, and pressing it shows the child's tab in the formation's screen.
-  child?: ChildRef;
 }
 
 // A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name; or the page of a database (it has the main worktree of its project, so the file pane keeps its worktree).
@@ -270,28 +268,11 @@ const liveHandles = () => new Set<string>([...mix.rows.flatMap((r) => (r.paneKey
 // Whether a worktree of the list is one made for a formation's child: the choices of a worktree leave it out (A-9, A-16, A-37).
 const inChildWorktree = (item: { path: string; environment?: string | null }) => isChildWorktree(item.path, placeOf(item));
 
-// The sessions of the project `key` that are the owner's: its tabs other than files and diffs. A formation's child has no tab (A-37), so `tabsOf` has none of its sessions.
+// The sessions of the project `key` that the list shows: its tabs other than files and diffs. A formation's child has no tab (A-37) and no row (A-8), so `tabsOf` has none of its sessions.
 const ownTabs = (key: string) => tabsOf(key).filter((t) => !isDocument(t));
 
-// The sessions of the project `key` that are a launched child's, as the list draws them (A-8): the same as the tab of a session, with its formation and its name in `child`, after the owner's. A row with no pane gives none, as for the owner's.
-function childTabsOf(key: string): Tab[] {
-  const tabs: Tab[] = [];
-  for (const r of mix.rows) {
-    const child = r.projectKey === key && r.paneKey !== null ? childOfSession(r) : null;
-    if (child === null || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r), child });
-  }
-  for (const t of mix.terminals) {
-    const child = t.projectKey === key ? childOfSession(t) : null;
-    if (child === null) continue;
-    const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t), child });
-  }
-  return tabs;
-}
-
-// The sessions the list shows under the project `key`: the owner's, and then a launched child's (A-8).
-const listedTabs = (key: string) => [...ownTabs(key), ...childTabsOf(key)];
+// How many worktrees of the project `key` are a launched child's folder (A-8): the list draws no row for them, and the project's row counts them beside the mark of a formation.
+const childFolderCount = (key: string) => mix.worktrees.filter((w) => w.projectKey === key && isChildFolder(w.path, placeOf(w))).length;
 
 // The tabs of the project `key`: its Claude sessions and its plain terminals, in the order they were first seen.
 function tabsOf(key: string): Tab[] {
@@ -453,16 +434,7 @@ function sessionNode(t: Tab, key: string) {
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
-  // A launched child's session (A-8): the mark of its formation at the left of the name, which only a child has. The formation's name is its description and no text of the row.
-  if (t.child !== undefined) {
-    row.dataset.formation = t.child.formation;
-    const mark = tag("span", "orca-session-formation");
-    mark.title = `フォーメーション ${t.child.formation}`;
-    mark.setAttribute("role", "img");
-    mark.setAttribute("aria-label", `フォーメーション ${t.child.formation}`);
-    mark.innerHTML = FORMATION_SVG;
-    row.append(statusIcon(t.status, t.label), mark);
-  } else row.append(statusIcon(t.status, t.label));
+  row.append(statusIcon(t.status, t.label));
   // The branch of the worktree the session works in, else the worktree's name (the `branch` of its tab); the title of the tab is the line of A-6.
   row.append(tag("span", "orca-session-title", t.branch ?? t.where));
   // The AI (the subagents) and the commands. A session runs at most one command (`shell`), so its number is 1.
@@ -470,18 +442,18 @@ function sessionNode(t: Tab, key: string) {
   if (t.subagents > 0) counts.append(countNode("orca-session-subagents", ROBOT_SVG, t.subagents, `サブエージェント ${t.subagents} 件が作業中`));
   if (t.shell !== null) counts.append(countNode("orca-session-shell", PLAY_SVG, 1, t.shell === "" ? "シェルを実行中" : `シェルを実行中: ${t.shell}`));
   if (counts.children.length) row.append(counts);
-  row.onclick = () => (t.child === undefined ? selectSession(key, t.id) : openChild(t.child.formation, t.child.child));
+  row.onclick = () => selectSession(key, t.id);
   row.oncontextmenu = (e) => {
     e.preventDefault();
-    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show. A child's terminal is in the formation's screen, not in a pane that the peek can take.
-    if (t.child !== undefined || key === pickedProject() || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
+    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
+    if (key === pickedProject() || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
     openPeek(key, t.id, `tab:${t.id}`);
     syncPeek();
   };
   return row;
 }
 
-// A project: its status icon and its name, and the chip of its saved environment at the right end. A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
+// A project: its status icon and its name, and at the right end the chip of its saved environment and the mark of the formations with the number of their worktrees. A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
 function projectNode(key: string, name: string, status: OrcaStatus, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
@@ -493,6 +465,9 @@ function projectNode(key: string, name: string, status: OrcaStatus, environment:
   label.append(...nameNodes(name, re));
   row.append(statusIcon(status), label);
   if (environment !== null) row.append(environmentChip(environment));
+  // The worktrees of the launched children of the formations, which the list draws no row for: the mark of a formation and their number, at the right end (none when there is none).
+  const children = childFolderCount(key);
+  if (children > 0) row.append(countNode("orca-project-formation", FORMATION_SVG, children, `フォーメーション ${children}`));
   row.onclick = () => selectProject(key);
   row.oncontextmenu = (e) => {
     e.preventDefault();
@@ -625,7 +600,7 @@ function cursorKey(rows = visibleRows(matcher())) {
 
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here. The link goes after the last running project, and the ones that are not running, when it is open, follow it.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const node = (r: OrcaProject) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? listedTabs(r.key), r.key === on, re);
+  const node = (r: OrcaProject) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), r.key === on, re);
   const count = stoppedCount();
   const nodes = count === 0 ? rows.map(node) : [...rows.filter((r) => !isNotRunning(r)).map(node), stoppedToggle(count), ...rows.filter(isNotRunning).map(node)];
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
@@ -635,10 +610,10 @@ function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, o
 function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
-  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, listedTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, t.child?.formation ?? null, worksOpen.has(t.id)])]);
+  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, ownTabs(k)]));
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
-  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p)];
+  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
