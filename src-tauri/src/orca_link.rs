@@ -36,7 +36,7 @@ const UNIX_TIMEOUT: Duration = Duration::from_secs(15);
 /// The size of one WebSocket message, and of one reply line of the unix socket.
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const ENVIRONMENTS_FILE: &str = "orca-environments.json";
-const RUNTIME_FILE: &str = "orca-runtime.json";
+pub(crate) const RUNTIME_FILE: &str = "orca-runtime.json";
 
 /// How long to wait before connecting again after the `attempt`th failure in a row (counting from 0).
 pub(crate) fn backoff(attempt: usize) -> Duration {
@@ -119,7 +119,7 @@ fn environment_pairing(doc: &Value, environment: &str) -> Result<Pairing, String
     }
 }
 
-fn read_json(path: &Path, missing: &str) -> Result<Value, String> {
+pub(crate) fn read_json(path: &Path, missing: &str) -> Result<Value, String> {
     let text = std::fs::read_to_string(path).map_err(|_| missing.to_owned())?;
     serde_json::from_str(&text).map_err(|_| format!("{} を読めません", path.display()))
 }

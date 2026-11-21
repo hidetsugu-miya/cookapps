@@ -2145,6 +2145,115 @@ const look = () =>
     };
   });
 
+// A-12: this machine's Orca streams its list and its terminals once the owner has paired the app with it; without a pairing, or while its stream cannot connect, the list is read by the clock and the terminals are mirrors.
+describe("orca: this machine's stream once it is paired (A-12)", () => {
+  const pairing = { orca_pairing_status: { paired: true } };
+  const channelCalls = (command: string) =>
+    browser.execute((c) => ((window as unknown as { __e2e_calls__: Record<string, { channel?: unknown }[]> }).__e2e_calls__[c] ?? []).map((call) => ({ ...call, channel: !!call.channel })), command);
+  // The Orca screen of this machine with its list streamed once; `fixtures` is added to the paired one.
+  async function openPaired(fixtures: Record<string, unknown> = {}) {
+    await openOrca(orcaOverview([], []), { ...pairing, ...fixtures });
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees(), [], null));
+    await waitForCount("#orca-feed .orca-project", 4);
+  }
+
+  it("opens the stream of this machine, draws each list it sends, and reads nothing by the clock", async () => {
+    await openOrca(orcaOverview([], []), { ...pairing, ...timers({ orcaClock: 1000 }) });
+    await waitForCalls("orca_stream_open");
+    expect(await channelCalls("orca_stream_open")).toEqual([{ environment: null, channel: true }]);
+    await sendStream(streamList(sample(), worktrees(), [], null));
+    await waitForCount("#orca-feed .orca-project", 4);
+    await sendStream(streamList([working("example-app")], worktrees(), [], null));
+    await waitForCount("#orca-feed .orca-project", 1);
+    const overview = await mock("orca_overview", orcaOverview([], []));
+    await browser.pause(1200);
+    expect(await callsOf(overview)).toEqual([]);
+  });
+
+  it("opens no stream without a pairing, and reads the list by the clock", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), timers({ orcaClock: 1000 }));
+    await waitForCalls("orca_pairing_status");
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await waitForCalls(overview);
+    expect(await callsOf("orca_stream_open")).toEqual([]);
+  });
+
+  it("streams the terminal of the selected tab and reads none of it through the CLI", async () => {
+    await openPaired();
+    await project("example-app").click();
+    const [call] = await waitForCalls("orca_stream_terminal");
+    expect(call).toMatchObject({ handle: "term_example-app" });
+    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    await sendTerm({ kind: "snapshot", data: "\x1b[31m$ claude\x1b[0m\r\n> Write the docs", cols: 80, rows: 24 });
+    await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("Write the docs"), { timeoutMsg: "the screen never showed" });
+    const input = await mock("orca_stream_input", null);
+    await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+    await browser.keys(["1", "Enter"]);
+    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1\r", { timeoutMsg: "the keys were not sent" });
+  });
+
+  it("shows a terminal that ended before it was subscribed as ended, with no failure and no mirror", async () => {
+    await openPaired(timers({ orcaMirror: 500 }));
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    await sendTerm({ kind: "ended", message: "" });
+    await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("ターミナルとのつながりが終わりました"), { timeoutMsg: "the end never showed" });
+    await browser.pause(700);
+    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    await expect($(CARD)).not.toExist();
+    await expect($("#orca-notice")).toHaveText("");
+    expect(await callsOf("orca_stream_open")).toHaveLength(1);
+  });
+
+  it("falls back to the clock and the mirror, with no failure said, while the stream is lost, and streams again with its next list", async () => {
+    await openPaired(timers({ orcaClock: 1000 }));
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    const read = await mock("orca_terminal_read", ["$ pwd", "/work/example-app"]);
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await sendStream({ kind: "status", live: false, message: "接続先につながっていません" });
+    await waitForCalls(overview);
+    await waitForCalls(read);
+    await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("/work/example-app"), { timeoutMsg: "the mirror never showed" });
+    await expect($("#orca-notice")).toHaveText("");
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+    await sendStream(streamList(sample(), worktrees(), [], null));
+    await waitForCalls("orca_stream_terminal", 2);
+  });
+
+  it("falls back the same way when the stream cannot be opened", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { ...pairing, orca_stream_open: rejects("このマシンの Orca とペアリングしていません"), ...timers({ orcaClock: 1000 }) });
+    await waitForCalls("orca_stream_open");
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await waitForCalls(overview);
+    await expect($("#orca-notice")).toHaveText("");
+    await project("example-app").click();
+    const read = await mock("orca_terminal_read", ["$ ls"]);
+    await waitForCalls(read);
+    expect(await callsOf("orca_stream_terminal")).toEqual([]);
+  });
+
+  it("starts the stream when a pairing is saved in the settings, and ends it when it is revoked", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()));
+    await waitForCalls("orca_pairing_status");
+    expect(await callsOf("orca_stream_open")).toEqual([]);
+    await $("#nav-settings").click();
+    await $("#settings-tab-orca").click();
+    await mock("orca_pairing_save", { paired: true });
+    await mock("orca_pairing_status", { paired: true });
+    await $("#orca-pairing-link").setValue("orca://pair?code=example");
+    await $("#orca-pairing-save").click();
+    await waitForCalls("orca_pairing_save");
+    await waitForCalls("orca_stream_open");
+    expect(await channelCalls("orca_stream_open")).toEqual([{ environment: null, channel: true }]);
+    await mock("orca_pairing_revoke", { paired: false });
+    await mock("orca_pairing_status", { paired: false });
+    await $('#orca-pairing-items [aria-label="ペアリングを取り消す"]').click();
+    await waitForCalls("orca_stream_close");
+  });
+});
+
 describe("orca: Ghostty's settings in the terminals (A-13)", () => {
   const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [{ index: 1, color: "#ff0000" }] };
   // Imported settings with a font, colors for both appearances (so the system's does not matter) and two keys.

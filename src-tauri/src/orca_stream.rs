@@ -1,4 +1,4 @@
-//! A-12: the Orca screen's stream from a saved environment (a paired server), over the end-to-end encrypted WebSocket of `orca_link`.
+//! A-12: the Orca screen's stream from a saved environment (a paired server), or from this machine's Orca once the owner has paired this app with it (`orca_pairing`), over the end-to-end encrypted WebSocket of `orca_link`.
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again when a worktree it did not list appears,
 //! every 10 seconds (the branch of a worktree can change with no change of the tabs) and right after the app switched a branch (`orca_switch_branch`), one read at a time;
 //! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
@@ -30,6 +30,7 @@ use crate::{
         OrcaWorktree,
     },
     orca_link::{backoff, connect_environment, reason_of, result_of, WsLink},
+    orca_pairing::{connect_local, is_paired, NO_PAIRING},
 };
 
 /// `worktree.ps` is asked for this many worktrees, as the CLI's read of A-6.
@@ -267,8 +268,8 @@ fn list_of(ps: &Value, tabs: &HashMap<String, Value>) -> OrcaStreamEvent {
     }
 }
 
-/// A list of the saved environment `environment` with every item placed in it (A-6): the stream builds the list from the environment alone, so the screen is told where each item is.
-fn placed_in(mut event: OrcaStreamEvent, environment: &str) -> OrcaStreamEvent {
+/// A list of the saved environment `environment` (`None`: this machine) with every item placed in it (A-6): the stream builds the list from one place alone, so the screen is told where each item is.
+fn placed_in(mut event: OrcaStreamEvent, environment: Option<&str>) -> OrcaStreamEvent {
     if let OrcaStreamEvent::List {
         rows,
         worktrees,
@@ -276,11 +277,10 @@ fn placed_in(mut event: OrcaStreamEvent, environment: &str) -> OrcaStreamEvent {
         terminals,
     } = &mut event
     {
-        let place = Some(environment);
-        place_in(rows, place);
-        place_in(worktrees, place);
-        place_in(projects, place);
-        place_in(terminals, place);
+        place_in(rows, environment);
+        place_in(worktrees, environment);
+        place_in(projects, environment);
+        place_in(terminals, environment);
     }
     event
 }
@@ -833,33 +833,47 @@ impl OrcaStream {
     }
 }
 
-/// Starts the stream of the saved environment `environment`, which sends the list through `channel` until the next open or close. A send that fails (the screen is gone) ends it.
+/// Gives each event of the list to the screen, placed in `place`; a send that fails (the screen is gone) ends the stream.
+fn sink_of(
+    channel: tauri::ipc::Channel<OrcaStreamEvent>,
+    closer: UnboundedSender<StreamCommand>,
+    place: Option<String>,
+) -> impl FnMut(OrcaStreamEvent) {
+    move |event| {
+        if channel.send(placed_in(event, place.as_deref())).is_err() {
+            let _ = closer.send(StreamCommand::Close);
+        }
+    }
+}
+
+/// Starts the stream of the saved environment `environment` (`None`: this machine's Orca, which needs the pairing of `orca_pairing`, else the answer is an error and nothing runs), which sends the list through `channel` until the next open or close.
 #[tauri::command]
 pub async fn orca_stream_open(
     state: tauri::State<'_, OrcaStream>,
-    environment: String,
+    environment: Option<String>,
     channel: tauri::ipc::Channel<OrcaStreamEvent>,
 ) -> Result<(), String> {
-    if environment.trim().is_empty() {
+    if environment.as_deref().is_some_and(|e| e.trim().is_empty()) {
         return Err("接続先が正しくありません".into());
+    }
+    if environment.is_none() && !is_paired().await? {
+        return Err(NO_PAIRING.into());
     }
     let mut active = state.0.lock().unwrap();
     if let Some(old) = active.take() {
         old.task.abort();
     }
     let (commands, receiver) = unbounded_channel();
-    let closer = commands.clone();
-    let place = environment.clone();
-    let task = tauri::async_runtime::spawn(run_loop(
-        move || connect_environment(environment.clone()),
-        receiver,
-        move |event| {
-            if channel.send(placed_in(event, &place)).is_err() {
-                let _ = closer.send(StreamCommand::Close);
-            }
-        },
-        new_client(),
-    ));
+    let sink = sink_of(channel, commands.clone(), environment.clone());
+    let task = match environment {
+        Some(environment) => tauri::async_runtime::spawn(run_loop(
+            move || connect_environment(environment.clone()),
+            receiver,
+            sink,
+            new_client(),
+        )),
+        None => tauri::async_runtime::spawn(run_loop(connect_local, receiver, sink, new_client())),
+    };
     *active = Some(Active { task, commands });
     Ok(())
 }
@@ -1026,7 +1040,7 @@ mod tests {
             worktrees,
             projects,
             terminals,
-        } = placed_in(list_of(&ps(), &tabs), "Lab")
+        } = placed_in(list_of(&ps(), &tabs), Some("Lab"))
         else {
             panic!()
         };
@@ -1041,7 +1055,14 @@ mod tests {
             live: true,
             message: String::new(),
         };
-        assert_eq!(placed_in(status.clone(), "Lab"), status);
+        assert_eq!(placed_in(status.clone(), Some("Lab")), status);
+        // This machine's list has no place: the items a stream placed before are put back to this machine's.
+        let OrcaStreamEvent::List { rows, .. } =
+            placed_in(placed_in(list_of(&ps(), &tabs), Some("Lab")), None)
+        else {
+            panic!()
+        };
+        assert!(rows.iter().all(|i| i.environment.is_none()));
     }
 
     #[test]

@@ -334,7 +334,7 @@ export class HandoffPane {
     if (!row && s.seen && this.overview?.state === "ready") return null;
     const handle = s.handle ?? row?.handle ?? null;
     if (handle === null) return null;
-    const kind = s.environment !== null && streamsEnvironment(s.environment) ? "stream" : "mirror";
+    const kind = streamsEnvironment(s.environment) ? "stream" : "mirror";
     return { kind, handle, path: s.path, environment: s.environment };
   }
 

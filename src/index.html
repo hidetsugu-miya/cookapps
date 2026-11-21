@@ -513,6 +513,21 @@
           <button id="jira-test" type="button" class="text-btn">接続を試す</button>
         </form>
       </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
+            <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>このマシンの Orca
+          </h2>
+          <button id="orca-pairing-help" class="icon-btn" data-hint aria-label="このマシンの Orca の説明" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="orca-pairing-items"></div>
+        <form id="orca-pairing-form" class="card-add">
+          <input id="orca-pairing-link" type="password" aria-label="ペアリングリンク" placeholder="ペアリングリンク" autocomplete="off" spellcheck="false">
+          <button id="orca-pairing-save" class="text-btn primary">保存</button>
+        </form>
+      </section>
       </div>
       <section id="settings-panel-font" class="card" role="tabpanel" aria-labelledby="settings-tab-font" hidden>
         <div class="card-head">

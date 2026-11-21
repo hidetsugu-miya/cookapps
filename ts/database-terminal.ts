@@ -198,7 +198,7 @@ async function tick() {
   if (terminal === null || !terminal.listed || host === null) return hideTerminals(OWNER);
   const placement: Placement = {
     id: terminal.handle,
-    source: { kind: terminal.environment !== null && streamsEnvironment(terminal.environment) ? "stream" : "mirror", handle: terminal.handle, path: terminal.path, environment: terminal.environment },
+    source: { kind: streamsEnvironment(terminal.environment) ? "stream" : "mirror", handle: terminal.handle, path: terminal.path, environment: terminal.environment },
     host,
   };
   if (!isShowing(placement, OWNER)) showTerminals([placement], terminal.handle, OWNER);

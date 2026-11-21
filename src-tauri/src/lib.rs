@@ -40,6 +40,7 @@ pub mod orca_handoff;
 pub mod orca_icon;
 pub mod orca_language;
 pub mod orca_link;
+pub mod orca_pairing;
 pub mod orca_panes;
 pub mod orca_preview;
 pub mod orca_stream;
@@ -413,6 +414,9 @@ pub fn run() {
             orca::orca_open_url,
             orca_attach::orca_attach_file,
             orca_browse::orca_browse_dir,
+            orca_pairing::orca_pairing_status,
+            orca_pairing::orca_pairing_save,
+            orca_pairing::orca_pairing_revoke,
             orca_stream::orca_stream_open,
             orca_stream::orca_stream_close,
             orca_stream::orca_stream_terminal,

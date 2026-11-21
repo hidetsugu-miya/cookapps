@@ -27,8 +27,8 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
   return { ...read, rows: placed(read.rows, at), worktrees: placed(read.worktrees, at), projects: placed(read.projects, at), terminals: placed(read.terminals, at) };
 };
 
-// `streamList` of `support.ts`, with every item put in the saved environment that streams it (`Studio`, as the specs stream it), as Rust does.
-export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], terminals: OrcaTerminal[] = [], environment = "Studio"): OrcaStreamEvent => {
+// `streamList` of `support.ts`, with every item put in the saved environment that streams it (`Studio`, as the specs stream it), as Rust does; `null` is this machine's Orca (A-12), whose items name no place.
+export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], terminals: OrcaTerminal[] = [], environment: string | null = "Studio"): OrcaStreamEvent => {
   const event = streamOf(rows, worktrees, terminals);
   if (event.kind !== "list") return event;
   return { ...event, rows: placed(event.rows, environment), worktrees: placed(event.worktrees, environment), projects: placed(event.projects, environment), terminals: placed(event.terminals, environment) };

@@ -84,6 +84,7 @@ import type { OrcaFileText } from "./bindings/OrcaFileText";
 import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import type { OrcaLocalBranch } from "./bindings/OrcaLocalBranch";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
+import type { OrcaPairing } from "./bindings/OrcaPairing";
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "./bindings/OrcaSaved";
 import type { OrcaScratchpad } from "./bindings/OrcaScratchpad";
@@ -360,8 +361,14 @@ export interface Commands {
   orca_terminal_input: { args: { handle: string; text: string; environment?: string }; result: null };
   // A-8, A-12: opens `url` in the default browser, for a link ⌘+clicked in a terminal. Only an http or https URL is opened; any other fails with the message.
   orca_open_url: { args: { url: string }; result: null };
-  // A-12: the stream of the saved environment `environment`: the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
-  orca_stream_open: { args: { environment: string; channel: unknown }; result: null };
+  // A-12: whether this machine's Orca is paired (the pairing is in the keychain, never returned). Asks Orca nothing.
+  orca_pairing_status: { args: undefined; result: OrcaPairing };
+  // A-12: keeps the pairing of a link that Orca made for "This computer" (the token is exchanged with Orca, which must run, and stored in the keychain); answers whether a pairing is kept.
+  orca_pairing_save: { args: { link: string }; result: OrcaPairing };
+  // A-12: deletes the pairing from the keychain.
+  orca_pairing_revoke: { args: undefined; result: OrcaPairing };
+  // A-12: the stream of the saved environment `environment` (null: this machine's Orca, which needs the pairing, else the call fails and nothing runs): the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
+  orca_stream_open: { args: { environment: string | null; channel: unknown }; result: null };
   orca_stream_close: { args: undefined; result: null };
   // A-12, A-17: shows the terminal `handle` of the stream (the terminals of the other panes stay shown): its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). The terminal fits the pane's size, `viewport`.
   orca_stream_terminal: { args: { handle: string; generation: number; viewport: OrcaViewport; channel: unknown }; result: null };

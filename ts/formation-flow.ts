@@ -215,7 +215,7 @@ function placementOf(child: FormationChild): Placement {
   // The terminal is read and typed into in the Orca of the child's environment.
   const environment = child.environment === LOCAL ? null : child.environment;
   // A saved environment that the Orca screen streams (A-12) streams the terminal, with its colors and the size of the pane; this Mac's Orca cannot stream, and a saved environment that is not streamed is mirrored, as the Orca screen's are.
-  const kind = environment !== null && streamsEnvironment(environment) ? "stream" : "mirror";
+  const kind = streamsEnvironment(environment) ? "stream" : "mirror";
   return { id: handle, source: { kind, handle, path: "", environment }, host: $("formation-teammate-term") };
 }
 
