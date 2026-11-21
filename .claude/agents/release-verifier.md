@@ -14,7 +14,7 @@ Even when the third round fails, do not ask the owner to decide. As `.claude/rul
 A reviewer's reply is material to check, not fact.
 Do not edit files.
 When the push range has a commit with a pass record, and only release work follows it up to HEAD (`release-only-diff.sh`), this agent is not needed (`pre-git.sh` checks it).
-The non-blocking findings that are left after a pass are not fixed (`.claude/rules/review.md`), so the caller lists the report-only findings of your reply in its completion report. This agent also does not check the range of a diff that fixes only the non-blocking findings of a merged version. `.claude/tools/range-check.sh` does that, and writes the record itself when it passes (`.claude/rules/review.md`).
+The non-blocking findings that are left after a pass are not fixed on the branch (`.claude/rules/review.md`), so the caller lists the report-only findings of your reply, with your sorting, in its completion report, and after the merge puts the ones sorted `issue` into one issue. This agent also does not check the range of a diff that fixes only the non-blocking findings of a merged version. `.claude/tools/range-check.sh` does that, and writes the record itself when it passes (`.claude/rules/review.md`).
 
 ## Checking the CI and E2E records
 
@@ -43,7 +43,11 @@ When it is 0, make one line of each output the line `CI:` and the line `E2E:` of
    - security Critical and High
    - performance High
    - code review High
-7. On a pass, write the record by giving the whole verdict on stdin.
+7. On a pass, sort each report-only finding, with a one-line reason (at the owner's instruction, 2026-11-21; #1211):
+   - `issue`: it disagrees with a requirement or with the owner's instruction, or it can become a bug
+   - `drop`: otherwise, such as taste, an optimization with no effect, or the form of a generated file
+   - `local`: every finding of security-reviewer, whatever it says. It is never sorted `issue`, because the repository is public: it stays in the caller's completion report only (decided by the agent, 2026-11-21, at the owner's leave; #1211)
+8. On a pass, write the record by giving the whole verdict on stdin.
 
 ```sh
 "$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/hooks/record-review.sh" <<'EOF'
@@ -62,5 +66,6 @@ CI: {check-ci.sh の出力の 1 行}
 E2E: {check-e2e.sh の出力の 1 行}
 - [S-1] {未解決|解決済み|誤検知} {一行の根拠}（重大度を直したときは {元} → {新} と理由）
 - ...
-止めない指摘（報告のみ）: {セキュリティの Medium・Low、パフォーマンスの Low、コードレビューの Low の一覧}
+止めない指摘（報告のみ）: {セキュリティの Medium・Low、パフォーマンスの Low、コードレビューの Low。1 件 1 行で、下の形}
+- [R-2] {issue|drop|local} {path:line} {一行の要旨}（{振り分けの一行の理由}）
 ```
