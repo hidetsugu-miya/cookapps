@@ -43,6 +43,9 @@ const CLAIM_REPEAT_MS = 1000;
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
 const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
+// The line a stream or a mirror writes once when its terminal ended, and what Orca's refusal of keys to such a terminal says (`terminal_not_writable`).
+const ENDED_LINE = "\r\n\x1b[2m（ターミナルは終了しました）\x1b[0m";
+const NOT_WRITABLE = "terminal_not_writable";
 // An OSC 52 request holds at most this many base64 characters, as in Orca's own terminal (128 KiB).
 const OSC52_LIMIT = 128 * 1024;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -63,7 +66,8 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 // Where a terminal comes from: the stream of a saved environment or of this machine's paired Orca, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
 // `pty` is what a pty is started with: whether Claude Code keeps its own tools, how it asks for a tool ("manual" asks for every tool that writes, "auto" is the calendar pane's, #1074), the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
-// `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, or a read that says the terminal is not listed, which also stops the mirror's reads. The last screen stays drawn.
+// `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, a read that says the terminal is not listed (which also stops the mirror's reads), or a send that Orca refuses as not writable. The last screen stays drawn.
+// `ended` is what the list says of a stream or a mirror (A-8): true makes the terminal end, with one line, its reads and its stream stopped and its keys dropped; false after true makes it start again; absent says nothing (a pty has its own).
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
@@ -71,6 +75,7 @@ export interface TermSource {
   environment: string | null;
   pty?: { builtinTools: boolean; permissionMode: ClaudeCodePermissionMode; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; onEnd?: () => void };
   onGone?: () => void;
+  ended?: boolean;
 }
 
 // A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
@@ -116,8 +121,9 @@ interface Instance {
   // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
   copy: string | null;
   copyQueued: boolean;
-  // A pty: the answer of its start (the keys and the size wait for it), which is the number of the start that `claude_code_close` takes, or null when it could not start, and whether its process has ended or could not start (the keys typed are dropped).
+  // A pty: the answer of its start (the keys and the size wait for it), which is the number of the start that `claude_code_close` takes, or null when it could not start.
   ready: Promise<number | null>;
+  // Whether its process has ended or could not start (a pty), or its terminal ended (a stream or a mirror: the list, the end of the stream or a refused send said so): the keys typed are dropped, and it reads nothing.
   ended: boolean;
 }
 
@@ -440,7 +446,18 @@ function fitSoon() {
 
 // ---- the keys ----
 
+// The terminal of a stream or a mirror ended: its reads and its stream stop, the keys not sent are dropped, and `line` is written once (none when its own line is drawn). It does nothing for a terminal that ended already, so the line is never written twice.
+function endTerminal(instance: Instance, line: string | null) {
+  if (instance.ended) return;
+  instance.ended = true;
+  instance.pending = "";
+  stop(instance);
+  if (line !== null) instance.term.write(line);
+}
+
 async function sendKeys(instance: Instance) {
+  // A terminal that ended takes no key: they are dropped, and no failure is made of them.
+  if (instance.ended) instance.pending = "";
   if (instance.sending || !instance.pending) return;
   const text = instance.pending.slice(0, SEND_LIMIT);
   instance.pending = instance.pending.slice(text.length);
@@ -453,8 +470,14 @@ async function sendKeys(instance: Instance) {
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
     instance.failing = false;
   } catch (e) {
-    if (!instance.failing) onError(e);
-    instance.failing = true;
+    if (instance.source.kind !== "pty" && String(e).includes(NOT_WRITABLE)) {
+      // Orca refuses keys to a terminal that ended: that is its end, and no failure.
+      endTerminal(instance, ENDED_LINE);
+      instance.source.onGone?.();
+    } else if (!instance.failing) {
+      onError(e);
+      instance.failing = true;
+    }
   }
   instance.sending = false;
   // What was typed meanwhile goes next, also when the terminal is no longer shown; a mirror still shown reads the frame that shows the effect soon.
@@ -512,6 +535,8 @@ async function readFrame(instance: Instance) {
   instance.reading = true;
   try {
     const lines = await invoke("orca_terminal_read", { handle: instance.source.handle, ...mirrorTarget(instance) });
+    // A read that was on its way when the terminal ended draws nothing: the line of its end stays the last.
+    if (instance.ended) return;
     const text = lines.join("\r\n");
     if (text !== instance.last) {
       instance.last = text;
@@ -529,8 +554,8 @@ async function readFrame(instance: Instance) {
 }
 
 function startMirror(instance: Instance) {
-  // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`).
-  if (instance.timer !== null || document.hidden) return;
+  // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`). A terminal that ended is read no more.
+  if (instance.timer !== null || document.hidden || instance.ended) return;
   readFrame(instance);
   instance.timer = window.setInterval(() => readFrame(instance), instance.source.environment === null ? periodMs("orcaMirror", MIRROR_MS) : MIRROR_ENV_MS);
 }
@@ -563,14 +588,15 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
     if (event.mode === "desktop-fit") fitAndClaim(instance, event);
     else term.resize(event.cols, event.rows);
   } else {
-    term.write(`\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
+    // The end of the stream is the end of the terminal: its own line is the one written, and the screen is told.
+    endTerminal(instance, `\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
     instance.source.onGone?.();
   }
 }
 
 // Subscribes the stream of a shown terminal, with its pane's size (which the subscription only registers: the size is taken by a claim, A-12).
 function startStream(instance: Instance) {
-  if (document.hidden || instance.channel !== null) return;
+  if (document.hidden || instance.channel !== null || instance.ended) return;
   const channel = new window.__TAURI__.core.Channel<OrcaTermEvent>();
   instance.channel = channel;
   channel.onmessage = (event) => {
@@ -702,6 +728,14 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
       instance.last = null;
     }
     if (!shown.has(id) || changed) fresh.push(instance);
+    // What the list says of a stream or a mirror: it ended (one line, and nothing is read or typed), or it lives again (it starts again).
+    if (source.kind !== "pty" && source.ended !== undefined && source.ended !== instance.ended) {
+      if (source.ended) endTerminal(instance, ENDED_LINE);
+      else {
+        instance.ended = false;
+        if (!fresh.includes(instance)) fresh.push(instance);
+      }
+    }
     shown.add(id);
     owners.set(id, owner);
     instance.owner = owner;

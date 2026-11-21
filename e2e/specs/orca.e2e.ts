@@ -1803,6 +1803,45 @@ describe("orca: projects", () => {
       await waitForCalls(input);
       await expect($(CARD)).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
     });
+
+    const iconOf = (id: string) => browser.execute((tab) => {
+      const icon = document.querySelector<HTMLElement>(`.orca-tabs [data-tab="${tab}"] .orca-ic`);
+      return icon === null ? null : [icon.dataset.status, icon.getAttribute("aria-label")];
+    }, id);
+    const endedList = () => orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], { terminals: [orcaTerminal("example-app", "zsh", { ended: true })] });
+
+    it("draws a terminal that Orca says ended as ended: a gray mark and 「終了」, one line, no read and no key", async () => {
+      await openOrca(endedList());
+      const read = await mock("orca_terminal_read", ["$"]);
+      const input = await mock("orca_terminal_input", null);
+      await project("example-app").click();
+      expect(await iconOf(zsh)).toEqual(["interrupted", "終了"]);
+      await tabOf(zsh).$(".orca-tab-btn").click();
+      await browser.waitUntil(async () => (await screenText()).includes("ターミナルは終了しました"), { timeoutMsg: "the line of the end never showed" });
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await browser.keys(["c", "d"]);
+      await browser.pause(1500);
+      expect(await callsOf(read)).toEqual([]);
+      expect(await callsOf(input)).toEqual([]);
+      expect(await count(CARD)).toBe(0);
+      expect((await screenText()).split("ターミナルは終了しました").length).toBe(2);
+    });
+
+    it("takes the refusal of its keys as its end, with no card", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_read", ["$"]);
+      const input = await mock("orca_terminal_input", rejects("Orca がエラーを返しました（terminal_not_writable）"));
+      await project("example-app").click();
+      await tabOf(zsh).$(".orca-tab-btn").click();
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await browser.keys(["l"]);
+      await waitForCalls(input);
+      await browser.waitUntil(async () => JSON.stringify(await iconOf(zsh)) === JSON.stringify(["interrupted", "終了"]), { timeoutMsg: "the tab never showed the end" });
+      expect(await count(CARD)).toBe(0);
+      await browser.keys(["m"]);
+      await browser.pause(500);
+      expect((await callsOf(input)).length).toBe(1);
+    });
   });
 });
 

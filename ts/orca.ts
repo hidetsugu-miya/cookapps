@@ -42,7 +42,7 @@ import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } 
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
 import { openScratchpad } from "./orca-scratchpad.js";
-import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
+import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
 import { logError, showFailure } from "./error-card.js";
@@ -240,6 +240,8 @@ interface Tab {
   shell: string | null;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
+  // A plain terminal that ended (A-8): the list says so, or its stream ended, or Orca refused its keys as not writable. It is drawn with a mark that is not green and the label 「終了」, and takes no key.
+  ended?: boolean;
   // The worktree it runs in (a file's: where the file is).
   path: string;
   // The worktree's name, "{repo} ・ {branch}", which the heading of the file pane shows.
@@ -268,6 +270,22 @@ function projectPlace(key: string): string | null {
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
 
+// The handles of the terminals that a stream's end or a refusal of keys (`terminal_not_writable`) found ended, which the list may not say yet: a terminal of them is an ended one until it leaves the list (`forgetGone`).
+const endedHandles = new Set<string>();
+
+// Whether the terminal of a tab ended, by the list or by what a stream or a send found.
+const isEnded = (t: Tab) => t.ended === true || (t.handle !== null && endedHandles.has(t.handle));
+
+// The terminal `handle` ended, as a stream or a send found: its tab is drawn as ended at once.
+function endHandle(handle: string) {
+  if (endedHandles.has(handle)) return;
+  endedHandles.add(handle);
+  draw();
+}
+
+// What the terminal of a tab with a handle is shown from: streamed or mirrored by where it is, and whether it ended. What finds its end tells the screen (`endHandle`).
+const sourceOf = (t: Tab & { handle: string }): TermSource => ({ kind: streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment, ended: isEnded(t), onGone: () => endHandle(t.handle) });
+
 // What a tab is known by in `seen`: its handle, else its id. The id changes with the kind of the terminal; the handle does not.
 const keyOfTab = (t: Tab) => t.handle ?? t.id;
 
@@ -293,7 +311,8 @@ function tabsOf(key: string): Tab[] {
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t) });
+    const ended = t.ended || endedHandles.has(t.handle);
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: ended ? "interrupted" : "done", label: ended ? "終了" : "起動中", ended, title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
@@ -774,7 +793,7 @@ function syncTerminal(tabs: Tab[] = projectKey === null ? [] : tabsOf(projectKey
   for (const pane of panesOf(layout?.root ?? null)) {
     const tab = tabOfId(tabs, pane.selected);
     const host = paneHosts.get(pane.id);
-    if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: streamsEnvironment(tab.environment) ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: tab.environment }, host });
+    if (tab?.handle && host) placements.push({ id: tab.handle, source: sourceOf({ ...tab, handle: tab.handle }), host });
   }
   if (placements.length === 0) return hideTerminals();
   showTerminals(placements, tabOfId(tabs, selectedTab() ?? "")?.handle ?? null);
@@ -1057,6 +1076,7 @@ function claimStarted() {
 function forgetGone() {
   const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
+  for (const handle of endedHandles) if (!live.has(handle)) endedHandles.delete(handle);
 }
 
 // Whether the language server of the worktree at `path` of `environment` is to stop (A-34): no tab of the worktree is open (a session, a terminal, a file, a difference or a definition of any project), or it has not the worktree any more in a list that was read well. A place that the screen does not list now (another saved environment than the one it shows) has no session or terminal tab open, so it needs no list: its server stops when no file or difference of the worktree is open.
@@ -1085,7 +1105,7 @@ function syncPeek() {
   const t = listShown() && at.project !== pickedProject() ? tabsOf(at.project).find((x) => x.id === at.tab) : undefined;
   if (t === undefined || t.handle === null) return closePeek();
   const name = mix.projects.find((p) => p.key === at.project)?.name ?? "";
-  drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: { kind: streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment } });
+  drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: sourceOf({ ...t, handle: t.handle }) });
 }
 
 function draw() {

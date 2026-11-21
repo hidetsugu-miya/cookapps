@@ -217,7 +217,7 @@ fn ms_of(value: &Value) -> f64 {
 
 /// The tabs as the two documents of the CLI that A-6 and A-8 read (`orca worktree ps` and `orca terminal list`), so that the same pure functions build the list.
 /// A worktree's agents are the agents of its terminal tabs (a tab's agent is its pane's own, so it is top-level), with a live pty while the tab has a terminal;
-/// its own status is left out (the stream does not refresh it), and its last activity is the latest of its own and its agents'. A terminal is each terminal tab that has a handle.
+/// its own status is left out (the stream does not refresh it), and its last activity is the latest of its own and its agents'. A terminal is each terminal tab that has a handle, with the `connected`, `writable` and `exitCause` the tab carries, so that `plain_terminals_of` marks it ended as it does for the CLI's list.
 /// A tab that launched Claude and has a terminal but no `agentStatus` is an idle agent of its pane (`{parentTabId}:{leafId}`), so its row does not come and go with the status.
 fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
     let mut terminals = Vec::new();
@@ -240,6 +240,7 @@ fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
                         "handle": handle, "tabId": tab["parentTabId"], "leafId": tab["leafId"],
                         "title": tab["title"], "worktreePath": worktree["path"],
                         "agentIdentity": agent_type, "orphaned": false,
+                        "connected": tab["connected"], "writable": tab["writable"], "exitCause": tab["exitCause"],
                     }));
                 }
                 if status.is_object() {
@@ -1326,6 +1327,36 @@ mod tests {
         let tabs = held(&snapshots(&[("r1::/w/a", vec![no_leaf])]));
         let (worktrees, _) = documents_of(&ps(), &tabs);
         assert_eq!(worktrees["worktrees"][0]["agents"], json!([]));
+    }
+
+    #[test]
+    fn a_terminal_tab_that_orca_says_ended_is_a_plain_terminal_that_ended() {
+        let mut gone = shell_tab("t1", "term_gone", "zsh");
+        gone["connected"] = json!(false);
+        gone["writable"] = json!(false);
+        let mut caused = shell_tab("t2", "term_caused", "zsh");
+        caused["exitCause"] = json!({"kind": "exited", "code": 0});
+        let live = shell_tab("t3", "term_live", "zsh");
+        let tabs = held(&snapshots(&[("r1::/w/a", vec![gone, caused, live])]));
+        let (_, documents) = documents_of(&ps(), &tabs);
+        assert_eq!(documents["terminals"][0]["connected"], false);
+        assert_eq!(documents["terminals"][1]["exitCause"]["kind"], "exited");
+        let OrcaStreamEvent::List { terminals, .. } = list_of(&ps(), &tabs) else {
+            panic!()
+        };
+        // A tab that carries none of the fields is live, as a terminal of the CLI's list is.
+        let ended: Vec<_> = terminals
+            .iter()
+            .map(|t| (t.handle.as_str(), t.ended))
+            .collect();
+        assert_eq!(
+            ended,
+            [
+                ("term_gone", true),
+                ("term_caused", true),
+                ("term_live", false)
+            ]
+        );
     }
 
     #[test]
