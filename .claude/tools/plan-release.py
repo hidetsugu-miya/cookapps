@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Orders the open issues of tsunagiai, and tells a run what to start and what waits for the release (.claude/skills/issue-plan/SKILL.md, "Rules"; .claude/skills/ship/SKILL.md, "Rules"; .claude/skills/release/SKILL.md for the release).
+"""Lists the open issues of tsunagiai in the basic order, and tells a run what it may start and what waits for the release (.claude/rules/issues.md, "Order the issues"; .claude/skills/implement/SKILL.md; .claude/skills/release/SKILL.md for the release).
 
 Usage:
   plan-release.py snapshot
-  plan-release.py apply <plan.json> [--dry-run]
   plan-release.py unsplit [--mine <issue numbers>]
   plan-release.py split <split.json>
   plan-release.py next [--mine <issue numbers>]
@@ -11,23 +10,21 @@ Usage:
   plan-release.py release
   plan-release.py close [--dry-run]
 
-`snapshot` prints the open issues the planner orders, and first closes as not planned the open issues of other authors (the pull requests are left alone), with a fixed comment and without reading their title or body (a failed close is told on stderr and does not stop it). `apply` leaves out of the plan the closed issues, the fixed ones and the parents (stderr says which), writes the
-`blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
-`start` lists the issues a run may begin, in the order of the plan.
+`snapshot` prints the open issues that `issue-ranker` ranks, in the basic order, and first closes as not planned the open issues of other authors (the pull requests are left alone), with a fixed comment and without reading their title or body (a failed close is told on stderr and does not stop it); it refuses an open issue of the owner that has no `point:*` label.
+`next` lists in `start` the issues a run may begin, in the basic order. Nothing saves an order: the owner names the issues of each run (.claude/skills/implement/SKILL.md).
 `claim` is how a session or a run tells the others that it took an issue: it makes `.claude/claims/{n}/owner` in the main checkout, holding the path of the worktree that works on it, and `next` leaves an issue whose owner worktree still exists out of `start` and lists it in `claimed`.
 `claim` refuses an issue whose owner is another worktree that still exists (stderr says `#{n} claimed by {path}`, exit 3, and it still claims the others); a claim whose worktree is gone is stale and is taken over; `use-worktree.sh --park` deletes the claims of its worktree.
 A parent is an issue with sub-issues (`sub_issues_summary.total` of the REST issue): the feature that its parts make. It is not ordered, not started and not counted as a change; its parts are.
 `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
-(open, not in hand, no sub-issue, no parent, and not labelled `whole`): `issue-plan` applies its step 3 to each before it orders.
+(open, not in hand, no sub-issue, no parent, and not labelled `whole`): `implement` applies `issue-plan` step 3 to each before it ranks the issues.
 `split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "parts": [{"title", "body", "labels", "points_reason"}]}; a `milestone` key is refused.
 It checks everything before it writes (the issue is open and the owner's, has no parent, has no sub-issue other than parts it made earlier, each part has exactly one `point:*` of 3 or less, the labels exist, creates the parts in order as sub-issues of the issue (`gh issue create --parent`), each with the reason of its points as a comment, and comments the numbers of the parts on the issue, which stays open as their parent;
 a failure stops it with the numbers made, and a second run keeps the parts that are already open sub-issues of the issue under the same title. With no parts it only puts the label `whole` on the issue (a big issue kept as one).
 `release` prints the changes that wait for the merge of the Release PR, the Release PR,
 the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the parents (a parent is a feature, not a version) whose sub-issues are all closed and released.
-Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
+Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the input or the state is refused (stderr says why).
 """
 import argparse
-import contextlib
 import fcntl
 import json
 import os
@@ -41,7 +38,6 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-PLAN_FILE = os.path.join(".claude", "plan.json")
 CLAIMS_DIR = os.path.join(".claude", "claims")
 RELEASE_BRANCH = "release/next"
 
@@ -100,8 +96,15 @@ def has(issue, label):
     return label in issue.labels
 
 
+DEPENDABOT_MARK = re.compile(r"<!-- dependabot #\d+ -->")
 QUICK_POINTS = ("point:1", "point:2", "point:3")
 ALL_POINTS = ("point:1", "point:2", "point:3", "point:5", "point:8")
+
+
+def dependabot(issue):
+    """An issue made for a Dependabot pull request (`dependabot-issues.sh`): the label `dependencies`, or the mark `<!-- dependabot #N -->` in its body.
+    It comes before every tier (.claude/rules/issues.md; at the owner's instruction, 2026-11-21; #1207)."""
+    return has(issue, "dependencies") or DEPENDABOT_MARK.search(issue.body) is not None
 
 
 def quick_bug(issue):
@@ -118,7 +121,7 @@ def importance(issue):
 
 
 def tier(issue):
-    """The tier of the order (.claude/skills/issue-plan/SKILL.md, "Rules"), 0 first: urgency high and importance high, urgency high only, importance high only, neither.
+    """The tier of the order (.claude/rules/issues.md, "Order the issues"), 0 first: urgency high and importance high, urgency high only, importance high only, neither.
     A label that is missing is low, and `importance:low` is the same as none."""
     return (0 if urgent(issue) else 2) + (0 if has(issue, "importance:high") else 1)
 
@@ -174,12 +177,12 @@ def parse_stream(text):
 # ---- pure: queue ----
 
 def base_key(i):
-    """The basis of the order (.claude/skills/issue-plan/SKILL.md, "Rules"): the tier, then the priority (`priority:1` first, none last), then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
-    return (tier(i), priority(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
+    """The basic order (.claude/rules/issues.md, "Order the issues"): a Dependabot issue first, then the tier, then the priority (`priority:1` first, none last), then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
+    return (not dependabot(i), tier(i), priority(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
 
 
 def base_order(free):
-    """The order the planner starts from: by `base_key`. An issue that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
+    """The basic order that `snapshot` and `next` print: by `base_key`. An issue that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
     ordered = sorted(free, key=base_key)
     rank = {i.number: k for k, i in enumerate(ordered)}
     by_number = {i.number: i for i in ordered}
@@ -223,208 +226,7 @@ def split_issues(issues, pr_closing):
     return waiting, in_progress, rest
 
 
-# ---- pure: validation of a plan ----
-
-
-def _int(x):
-    try:
-        return int(x)
-    except (TypeError, ValueError):
-        return None
-
-
-def parse_plan(plan):
-    """-> (problem, order, blocked_by), the numbers as ints. `problem` is a message when the shape is wrong, and the rest is then None.
-    Keys of an older plan that are not used any more (`groups`, `touches`) are ignored."""
-    bad = (None, None)
-    if not isinstance(plan, dict):
-        return ("plan: not a JSON object", *bad)
-    order = plan.get("order")
-    if not isinstance(order, list) or any(_int(n) is None for n in order):
-        return ("plan.order: must be a list of issue numbers", *bad)
-    blocked_by = plan.get("blocked_by", {})
-    if not isinstance(blocked_by, dict) or any(
-        _int(k) is None or not isinstance(v, list) or any(_int(b) is None for b in v) for k, v in blocked_by.items()
-    ):
-        return ("plan.blocked_by: must map an issue number to a list of issue numbers", *bad)
-    return (None, [_int(n) for n in order], {_int(k): [_int(b) for b in v] for k, v in blocked_by.items()})
-
-
-def validate_plan(plan, free, fixed, states, parents=frozenset()):
-    """-> list of problems. `states` maps an issue number to "open" or "closed". `parents`: the numbers of the open parents, which may stand as blockers like the fixed issues."""
-    problem, order, blocked_by = parse_plan(plan)
-    if problem:
-        return [problem]
-
-    problems = []
-    free_by = {i.number: i for i in free}
-    fixed_nums = {i.number for i in fixed}
-
-    for n, c in sorted(Counter(order).items()):
-        if c > 1:
-            problems.append(f"order: #{n} appears twice")
-    for n in sorted(set(free_by) - set(order)):
-        problems.append(f"order: #{n} is missing")
-    for n in sorted(set(order) - set(free_by)):
-        why = "is fixed (not planned by the planner)" if n in fixed_nums else "is not an open issue of the owner"
-        problems.append(f"order: #{n} {why}")
-
-    position = {n: k for k, n in enumerate(order)}
-
-    for n, blockers in sorted(blocked_by.items()):
-        if n not in free_by:
-            problems.append(f"blocked_by: #{n} is not an issue to plan")
-            continue
-        for b in blockers:
-            state = states.get(b)
-            if state is None:
-                problems.append(f"blocked_by: #{n} names #{b}, which is unknown")
-            elif state == "open" and b in free_by and position.get(b, -1) >= position.get(n, -1):
-                problems.append(f"blocked_by: #{b} blocks #{n} but is not placed earlier in order")
-            elif state == "open" and b not in free_by and b not in fixed_nums and b not in parents:
-                problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
-
-    # An issue comes before every issue of a lower tier (urgency, then importance), in a tier before every issue of a lower priority, and a bug of 1, 2 or 3 points comes before every other issue of its tier and priority.
-    # The issues that block it, or that block an earlier issue, may stand before it.
-    def front(member, allowed, message):
-        needed = set()
-        for k, n in enumerate(order):
-            if n not in free_by:
-                continue
-            todo = [n]
-            while todo:
-                for b in blocked_by.get(todo.pop(), []):
-                    if b not in needed and b in free_by:
-                        needed.add(b)
-                        todo.append(b)
-            if not member(free_by[n]):
-                continue
-            late = next((m for m in order[:k] if m in free_by and not allowed(free_by[m], free_by[n]) and m not in needed), None)
-            if late is not None:
-                problems.append(message(n, late))
-
-    for t in range(3):
-        front(
-            lambda i, t=t: tier(i) == t,
-            lambda m, n: tier(m) <= tier(n),
-            lambda n, late: f"order: #{n} ({tier_label(free_by[n])}) is placed after #{late} ({tier_label(free_by[late])})",
-        )
-    front(
-        lambda i: priority(i) < NO_PRIORITY,
-        lambda m, n: tier(m) != tier(n) or priority(m) <= priority(n),
-        lambda n, late: f"order: #{n} ({priority_label(free_by[n])}) is placed after #{late} ({priority_label(free_by[late])}) in the same tier",
-    )
-    front(
-        quick_bug,
-        lambda m, n: quick_bug(m) or tier(m) != tier(n) or priority(m) != priority(n),
-        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}, which is not one, in the same tier and priority",
-    )
-
-    # cycle. A parent closes only when all its parts are out, so a blocker that is a parent waits for each of its parts.
-    parts = {}
-    for i in free:
-        if i.parent in parents:
-            parts.setdefault(i.parent, []).append(i.number)
-    color = {}
-
-    def visit(n, path):
-        if color.get(n) == 2:
-            return None
-        if color.get(n) == 1:
-            return path[path.index(n) :] + [n]
-        color[n] = 1
-        for b in blocked_by.get(n, []) + parts.get(n, []):
-            found = visit(b, path + [n])
-            if found:
-                return found
-        color[n] = 2
-        return None
-
-    for n in sorted(blocked_by):
-        found = visit(n, [])
-        if found:
-            problems.append("blocked_by: cycle " + " -> ".join(f"#{x}" for x in found))
-            break
-    return problems
-
-
-def mentioned(plan):
-    """The issue numbers a well-formed plan names in order, the keys of blocked_by and the keys of reasons, once each, in that sequence.
-    The issues named as blockers are not counted: a blocker may be closed."""
-    problem, order, blocked_by = parse_plan(plan)
-    if problem:
-        return []
-    reasons = plan.get("reasons", {})
-    keys = [_int(k) for k in reasons] if isinstance(reasons, dict) else []
-    out = []
-    for n in order + list(blocked_by) + [k for k in keys if k is not None]:
-        if n not in out:
-            out.append(n)
-    return out
-
-
-def blockers(plan):
-    """The issue numbers a well-formed plan names as blockers in the lists of blocked_by, once each, sorted."""
-    problem, _, blocked_by = parse_plan(plan)
-    return [] if problem else sorted({b for v in blocked_by.values() for b in v})
-
-
-def prune_plan(plan, states, fixed_numbers, parent_numbers=frozenset()):
-    """-> (the plan without the fixed issues, the parents and the closed ones, [(number, "fixed" | "parent" | "closed")]).
-    They leave order, the keys of blocked_by and the keys of reasons.
-    Only a closed issue also leaves the blockers in the lists of blocked_by (a key left with no blocker goes too): a fixed issue or a parent is still open, and its dependency is real.
-    A number nobody knows stays, for the validation to refuse. A plan of the wrong shape is returned as it is."""
-    problem, order, blocked_by = parse_plan(plan)
-    if problem:
-        return plan, []
-
-    def why(n):
-        return "fixed" if n in fixed_numbers else "parent" if n in parent_numbers else "closed" if states.get(n) == "closed" else None
-
-    dropped = [(n, why(n)) for n in mentioned(plan) if why(n)]
-    gone = {n for n, _ in dropped}
-    pruned = dict(
-        plan,
-        order=[n for n in order if n not in gone],
-        blocked_by={str(k): left for k, v in blocked_by.items() if k not in gone and (left := [b for b in v if states.get(b) != "closed"])},
-    )
-    if isinstance(plan.get("reasons"), dict):
-        pruned["reasons"] = {k: v for k, v in plan["reasons"].items() if _int(k) not in gone}
-    return pruned, dropped
-
-
-def diff_relations(free_numbers, current, wanted):
-    """-> (add, remove) as (blocked, blocker) pairs, for the free issues only."""
-    add, remove = [], []
-    for n in sorted(free_numbers):
-        want = set(wanted.get(n, []))
-        have = set(current.get(n, []))
-        add += [(n, b) for b in sorted(want - have)]
-        remove += [(n, b) for b in sorted(have - want)]
-    return add, remove
-
-
-def result_lines(order, issues, reasons, parents=None):
-    """`parents`: every issue by number, to give the parent of a part its title."""
-    lines = []
-    for k, n in enumerate(order, 1):
-        line = f"{k}. #{n} {issues[n].title}"
-        if issues[n].parent:
-            found = (parents or {}).get(issues[n].parent)
-            line += f" [#{issues[n].parent} {found.title}]" if found else f" [#{issues[n].parent}]"
-        if reasons.get(str(n)):
-            line += f" - {reasons[str(n)]}"
-        lines.append(line)
-    return lines
-
-
 # ---- pure: next ----
-
-
-def plan_positions(plan):
-    """-> {issue number: position in order} of a saved plan; empty without a usable plan."""
-    problem, order, _ = parse_plan(plan)
-    return {} if problem else {n: k for k, n in enumerate(order)}
 
 
 def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
@@ -443,26 +245,20 @@ def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
     ]
 
 
-def build_next(issues, pr_closing, mine=frozenset(), plan=None, claimed=None):
+def build_next(issues, pr_closing, mine=frozenset(), claimed=None):
     """What a run does with the open issues. A run works in one worktree on one branch, so there is no parallel set: `start` is the queue.
     `mine`: the issues this run already has in hand; they are `in_progress` (continue them first).
     `claimed`: {issue number: the worktree that holds the claim}, only the claims whose worktree still exists (`read_claims`); another session works on those issues, so they are not in `start`, and `claimed` lists them.
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
-    `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
-    An issue with an open blocker is left out. A session may bundle issues of any points in one pull request (.claude/skills/ship/SKILL.md).
+    `start`: the other issues that can begin, in the basic order (`base_key`).
+    An issue with an open blocker is left out. A session may bundle issues of any points in one pull request (.claude/skills/implement/SKILL.md).
     `waiting` are the changes that wait for the release. A parent is in none of the lists: its parts are.
     """
-    position = plan_positions(plan)
     waiting = release_changes(issues)
     claimed = claimed or {}
 
     def brief(i):
         return {"number": i.number, "title": i.title, "labels": i.labels, "points": points(i)}
-
-    def start_key(i):
-        if i.number in position:
-            return (0, position[i.number], (), 0)
-        return (1, 0, base_key(i), i.number)
 
     out = {
         "start": [],
@@ -484,7 +280,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, claimed=None):
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
         else:
             startable.append(i)
-    startable.sort(key=start_key)
+    startable.sort(key=base_key)
     out["start"] = [brief(i) for i in startable]
     return out
 
@@ -703,8 +499,6 @@ class State:
     fixed: list
     free: list
     pr_closing: set
-    ids: dict  # issue number -> database id
-    states: dict  # issue number -> "open" | "closed"
     strangers: list  # (number, login) of the open issues of other authors: only these two are read of them
     tags: list  # the names of the tags
 
@@ -748,7 +542,7 @@ def read_tags_and_closed(repo):
 
 
 def load_state(blockers=True):
-    """`blockers` False leaves `blocked_by` empty: only `snapshot`, `apply` and `next` read it, and it costs one request for each open issue.
+    """`blockers` False leaves `blocked_by` empty: only `snapshot` and `next` read it, and it costs one request for each open issue.
     The requests that do not depend on each other are made at the same time."""
     view, prs = parallel(
         [
@@ -772,8 +566,6 @@ def load_state(blockers=True):
     strangers = [(r["number"], r["user"]["login"]) for r in raw if r["state"] == "open" and r["user"]["login"] != owner]
     issues = {r["number"]: to_issue(r, repo) for r in raw if r["user"]["login"] == owner}
 
-    ids = {n: i.id for n, i in issues.items()}
-    states = {n: i.state for n, i in issues.items()}
     # The list already says how many blockers an issue has, open or closed; an issue with none is not asked.
     unblocked = {r["number"] for r in raw if (r.get("issue_dependencies_summary") or {}).get("total_blocked_by") == 0}
     asked = [i for n, i in issues.items() if blockers and i.state == "open" and n not in unblocked]
@@ -782,8 +574,6 @@ def load_state(blockers=True):
         for b in bs:
             if not b["repository_url"].endswith("/" + repo):
                 continue
-            ids.setdefault(b["number"], b["id"])
-            states.setdefault(b["number"], b["state"])
             if b["state"] == "open":
                 i.blocked_by.append(b["number"])
 
@@ -800,8 +590,6 @@ def load_state(blockers=True):
         fixed=waiting + in_progress,
         free=base_order(rest),
         pr_closing=pr_closing,
-        ids=ids,
-        states=states,
         strangers=strangers,
         tags=names,
     )
@@ -822,6 +610,7 @@ def issue_json(i):
         "title": i.title,
         "body": i.body,
         "labels": i.labels,
+        "dependabot": dependabot(i),
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
         "priority": None if priority(i) == NO_PRIORITY else priority(i),
@@ -842,6 +631,7 @@ def cmd_snapshot(args):
             print(f"closed #{number} of {login} (not the owner)", file=sys.stderr)
         except GhError as e:
             print(f"could not close #{number} of {login} (not the owner): {e}", file=sys.stderr)
+    refuse_missing_points(state)
     print(
         json.dumps(
             {
@@ -855,11 +645,6 @@ def cmd_snapshot(args):
     )
 
 
-def plan_file(git_common_dir):
-    """The saved plan lives in the main checkout, which is the parent of the common git directory."""
-    return os.path.join(os.path.dirname(git_common_dir.rstrip("/")), PLAN_FILE)
-
-
 def git_common_dir():
     r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True)
     if r.returncode != 0:
@@ -867,15 +652,11 @@ def git_common_dir():
     return r.stdout.strip()
 
 
-def saved_plan_path():
-    return plan_file(git_common_dir())
-
-
 # ---- claims: which worktree works on which issue ----
 
 
 def claims_dir(git_common_dir):
-    """The claims live in the main checkout, beside the saved plan: `.claude/claims/{n}/owner` holds the path of the worktree that works on issue n."""
+    """The claims live in the main checkout: `.claude/claims/{n}/owner` holds the path of the worktree that works on issue n."""
     return os.path.join(os.path.dirname(git_common_dir.rstrip("/")), CLAIMS_DIR)
 
 
@@ -965,96 +746,11 @@ def cmd_claim(args):
     return 3 if refused else 0
 
 
-def save_plan(path, plan):
-    """Writes through a temporary file and a rename, so that a reader never sees half a plan.
-    The temporary file has a name of its own (in the same directory, so the rename stays on one volume): two sessions that apply at once do not write the same file."""
-    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=os.path.dirname(path))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(plan, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
-
-
-def read_plan(path):
-    """-> the saved plan, or None when there is none, or when it is broken (one line on stderr says so)."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            plan = json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as e:
-        print(f"{path}: {e}; the plan is ignored", file=sys.stderr)
-        return None
-    problem = parse_plan(plan)[0]
-    if problem:
-        print(f"{path}: {problem}; the plan is ignored", file=sys.stderr)
-        return None
-    return plan
-
-
-def closed_states(repo, numbers):
-    """-> {number: "closed"} for the numbers GitHub says are closed. The issues closed before the last release are not in the state, and a plan made earlier may still name them."""
-    def read(n):
-        try:
-            return api(f"repos/{repo}/issues/{n}")
-        except GhError:
-            return None
-
-    asked = sorted(numbers)
-    found = parallel([lambda n=n: read(n) for n in asked])
-    return {n: "closed" for n, raw in zip(asked, found) if isinstance(raw, dict) and raw.get("state") == "closed"}
-
-
-def cmd_apply(args):
-    try:
-        with open(args.plan, encoding="utf-8") as f:
-            plan = json.load(f)
-    except (OSError, ValueError) as e:
-        raise PlanError([f"{args.plan}: {e}"])
-    state = load_state()
-    refuse_missing_points(state)
-    states = dict(state.states)
-    states.update(closed_states(state.repo, [n for n in {*mentioned(plan), *blockers(plan)} if n not in states]))
-    parents = {n for n, i in state.issues.items() if is_parent(i)}
-    plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed}, parents)
-    for n, why in dropped:
-        print(f"dropped #{n} ({why})", file=sys.stderr)
-    problems = validate_plan(plan, state.free, state.fixed, state.states, parents)
-    if problems:
-        raise PlanError(problems)
-    wanted = {int(k): [int(b) for b in v] for k, v in plan.get("blocked_by", {}).items()}
-    order = [int(n) for n in plan["order"]]
-    by_number = {i.number: i for i in state.free}
-    add, remove = diff_relations([i.number for i in state.free], {i.number: i.blocked_by for i in state.free}, wanted)
-    if args.dry_run:
-        for n, b in add:
-            print(f"# #{n} blocked by #{b}: add", file=sys.stderr)
-        for n, b in remove:
-            print(f"# #{n} blocked by #{b}: remove", file=sys.stderr)
-    else:
-        for n, b in add:
-            api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by", "POST", {"issue_id": state.ids[b]})
-        for n, b in remove:
-            api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by/{state.ids[b]}", "DELETE")
-    print("\n".join(result_lines(order, by_number, plan.get("reasons", {}), state.issues)))
-    if not args.dry_run:
-        try:
-            save_plan(saved_plan_path(), plan)
-        except (OSError, GhError) as e:
-            print(f"the plan was applied but not saved: {e}", file=sys.stderr)
-
-
 def cmd_next(args):
     state = load_state()
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
-    plan = read_plan(saved_plan_path())
     claimed = read_claims(claims_dir(git_common_dir()), live_worktrees(worktree_list()))
-    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan, claimed=claimed), ensure_ascii=False, indent=2))
+    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, claimed=claimed), ensure_ascii=False, indent=2))
 
 
 def cmd_unsplit(args):
@@ -1184,10 +880,6 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("snapshot").set_defaults(fn=cmd_snapshot)
-    a = sub.add_parser("apply")
-    a.add_argument("plan")
-    a.add_argument("--dry-run", action="store_true")
-    a.set_defaults(fn=cmd_apply)
     n = sub.add_parser("next")
     n.add_argument("--mine", default="", help="issue numbers this run already has in hand, such as 140,141")
     n.set_defaults(fn=cmd_next)

@@ -164,15 +164,21 @@ class Ordering(unittest.TestCase):
         z = mk(3, ["point:3"])
         b1 = mk(4, ["bug", "point:2"], blocked=[2])
         b2 = mk(5, ["bug", "point:2"], blocked=[1, 3])
-        order = numbers(pr.base_order([z, y, x, b2, b1]))
-        self.assertEqual(order, [1, 2, 4, 3, 5])
-        problems = pr.validate_plan(
-            {"order": order, "blocked_by": {"2": [1], "4": [2], "5": [1, 3]}},
-            [z, y, x, b2, b1],
-            [],
-            {n: "open" for n in range(1, 6)},
-        )
-        self.assertEqual(problems, [])
+        self.assertEqual(numbers(pr.base_order([z, y, x, b2, b1])), [1, 2, 4, 3, 5])
+
+    def test_a_dependabot_issue_comes_before_every_tier(self):
+        plain = mk(1, ["point:1"])
+        top = mk(2, ["urgency:high", "importance:high", "priority:1", "bug", "point:1"])
+        by_label = mk(3, ["dependencies", "point:3"], created="2026-11-01T00:00:09Z")
+        by_mark = mk(4, ["point:2"])
+        by_mark.body = "<!-- dependabot #177 -->\n## 目的"
+        self.assertEqual([pr.dependabot(i) for i in (plain, top, by_label, by_mark)], [False, False, True, True])
+        self.assertEqual(numbers(pr.base_order([plain, top, by_label, by_mark])), [4, 3, 2, 1])
+
+    def test_a_mark_that_only_looks_like_the_dependabot_one_is_not_one(self):
+        i = mk(1, ["point:1"])
+        i.body = "dependabot #177 の話"
+        self.assertFalse(pr.dependabot(i))
 
     def test_split_queue(self):
         w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z")
@@ -202,184 +208,9 @@ class Ordering(unittest.TestCase):
         self.assertEqual(pr.issue_json(mk(1, ["priority:2", "point:1"]))["priority"], 2)
         self.assertIsNone(pr.issue_json(mk(2, ["point:1"]))["priority"])
 
-
-class Validation(unittest.TestCase):
-    def setUp(self):
-        self.free = [mk(32), mk(50), mk(42, ["point:8"]), mk(33)]
-        self.fixed = [mk(7)]
-        self.states = {7: "open", 32: "open", 50: "open", 42: "open", 33: "open", 9: "closed"}
-
-    def check(self, plan):
-        return pr.validate_plan(plan, self.free, self.fixed, self.states)
-
-    def test_valid(self):
-        plan = {"order": [42, 32, 50, 33], "blocked_by": {"33": [42, 7, 9]}, "reasons": {}}
-        self.assertEqual(self.check(plan), [])
-
-    def test_an_open_parent_may_be_a_blocker_only_when_it_is_named_as_a_parent(self):
-        states = {**self.states, 5: "open"}
-        plan = {"order": [42, 32, 50, 33], "blocked_by": {"33": [5]}}
-        self.assertTrue(any("#5, which is open but not planned" in p for p in pr.validate_plan(plan, self.free, self.fixed, states)))
-        self.assertEqual(pr.validate_plan(plan, self.free, self.fixed, states, {5}), [])
-
-    def test_a_part_may_not_wait_for_its_parent_nor_for_a_parent_whose_part_waits_for_it(self):
-        free = [mk(1, parent=5), mk(2, parent=5), mk(3)]
-        states = {1: "open", 2: "open", 3: "open", 5: "open"}
-        own = {"order": [1, 2, 3], "blocked_by": {"1": [5]}}
-        self.assertEqual(pr.validate_plan(own, free, [], states, {5}), ["blocked_by: cycle #1 -> #5 -> #1"])
-        through = {"order": [3, 1, 2], "blocked_by": {"3": [5], "2": [3]}}
-        self.assertEqual(pr.validate_plan(through, free, [], states, {5}), ["blocked_by: cycle #2 -> #3 -> #5 -> #2"])
-        fine = {"order": [3, 1, 2], "blocked_by": {"3": [5]}}
-        self.assertEqual(pr.validate_plan(fine, free, [], states, {5}), [])
-
-    def test_keys_of_an_older_plan_are_ignored(self):
-        plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "touches": {"32": ["ts/a.ts"]}}
-        self.assertEqual(self.check(plan), [])
-
-    def test_order_must_hold_each_free_issue_once(self):
-        problems = self.check({"order": [42, 32, 32, 7, 99], "blocked_by": {}})
-        text = "\n".join(problems)
-        for needle in ("#50", "#33", "twice", "#7", "#99"):
-            self.assertIn(needle, text)
-
-    def test_blocker_must_come_first(self):
-        problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"42": [33]}})
-        self.assertTrue(any("#33 blocks #42" in p for p in problems))
-
-    def test_quick_bug_must_come_before_other_issues(self):
-        free = [mk(1), mk(2, ["bug", "point:2"]), mk(3)]
-        states = {1: "open", 2: "open", 3: "open"}
-        problems = pr.validate_plan({"order": [1, 2, 3]}, free, [], states)
-        self.assertEqual(problems, ["order: #2 is a bug of 1, 2 or 3 points but is placed after #1, which is not one, in the same tier and priority"])
-        self.assertEqual(pr.validate_plan({"order": [2, 1, 3]}, free, [], states), [])
-
-    def test_bugs_of_1_2_and_3_points_must_come_first_but_not_those_of_5_and_8(self):
-        free = [mk(1), mk(2, ["bug", "point:5"]), mk(3, ["bug", "point:8"])]
-        states = {1: "open", 2: "open", 3: "open"}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3]}, free, [], states), [])
-
-    def test_quick_bug_may_follow_what_blocks_it(self):
-        free = [mk(1), mk(2, ["bug", "point:2"], blocked=[1])]
-        states = {1: "open", 2: "open"}
-        plan = {"order": [1, 2], "blocked_by": {"2": [1]}}
-        self.assertEqual(pr.validate_plan(plan, free, [], states), [])
-
-    def test_urgent_issue_must_come_before_other_issues_but_after_its_blockers(self):
-        free = [mk(1), mk(2, ["urgency:high"], blocked=[1]), mk(3)]
-        states = {1: "open", 2: "open", 3: "open"}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
-        problems = pr.validate_plan({"order": [3, 1, 2], "blocked_by": {"2": [1]}}, free, [], states)
-        self.assertEqual(
-            [p for p in problems if "placed after" in p],
-            ["order: #2 (urgency high, importance low) is placed after #3 (urgency low, importance low)"],
-        )
-
-    def test_quick_bug_may_follow_issues_of_a_higher_tier_only(self):
-        free = [mk(1, ["urgency:high"]), mk(2, ["importance:high"]), mk(3, ["bug", "point:2"]), mk(4)]
-        states = {n: "open" for n in range(1, 5)}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
-        problems = pr.validate_plan({"order": [1, 2, 4, 3]}, free, [], states)
-        self.assertEqual(problems, ["order: #3 is a bug of 1, 2 or 3 points but is placed after #4, which is not one, in the same tier and priority"])
-
-    def test_the_four_tiers_must_keep_their_order(self):
-        free = [mk(1, ["urgency:high", "importance:high"]), mk(2, ["urgency:high"]), mk(3, ["importance:high"]), mk(4)]
-        states = {n: "open" for n in range(1, 5)}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
-        problems = pr.validate_plan({"order": [1, 3, 2, 4]}, free, [], states)
-        self.assertEqual(problems, ["order: #2 (urgency high, importance low) is placed after #3 (urgency low, importance high)"])
-        problems = pr.validate_plan({"order": [4, 3, 2, 1]}, free, [], states)
-        self.assertEqual(len(problems), 3)  # one for each of the three higher tiers
-
-    def test_a_small_bug_of_a_low_tier_does_not_pass_an_issue_of_a_higher_tier(self):
-        free = [mk(1, ["importance:high", "point:8"]), mk(2, ["bug", "point:1"])]
-        states = {1: "open", 2: "open"}
-        self.assertEqual(pr.validate_plan({"order": [1, 2]}, free, [], states), [])
-        problems = pr.validate_plan({"order": [2, 1]}, free, [], states)
-        self.assertEqual(problems, ["order: #1 (urgency low, importance high) is placed after #2 (urgency low, importance low)"])
-
-    def test_a_blocker_may_stand_before_an_issue_of_a_higher_tier_than_its_own(self):
-        free = [mk(1), mk(2, ["urgency:high", "importance:high"], blocked=[1]), mk(3, ["importance:high"])]
-        states = {n: "open" for n in range(1, 4)}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
-        # the blocker is needed by an earlier issue, so it may also stand before a later issue of a middle tier
-        free = [mk(1), mk(2, ["urgency:high", "importance:high"], blocked=[1]), mk(3, ["urgency:high"])]
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
-
-    def test_the_priorities_must_keep_their_order_in_a_tier_and_none_is_last(self):
-        free = [mk(1, ["priority:1"]), mk(2, ["priority:2"]), mk(3, ["priority:3"]), mk(4)]
-        states = {n: "open" for n in range(1, 5)}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
-        problems = pr.validate_plan({"order": [1, 3, 2, 4]}, free, [], states)
-        self.assertEqual(problems, ["order: #2 (priority:2) is placed after #3 (priority:3) in the same tier"])
-        problems = pr.validate_plan({"order": [4, 3, 2, 1]}, free, [], states)
-        self.assertEqual(len(problems), 3)  # one for each of the three priorities
-        problems = pr.validate_plan({"order": [4, 1, 2, 3]}, free, [], states)
-        self.assertEqual(len(problems), 3)  # the one with no priority is before every issue that has one
-
-    def test_a_priority_does_not_carry_an_issue_past_a_higher_tier(self):
-        free = [mk(1, ["importance:high"]), mk(2, ["priority:1"])]
-        states = {1: "open", 2: "open"}
-        self.assertEqual(pr.validate_plan({"order": [1, 2]}, free, [], states), [])
-        problems = pr.validate_plan({"order": [2, 1]}, free, [], states)
-        self.assertEqual(problems, ["order: #1 (urgency low, importance high) is placed after #2 (urgency low, importance low)"])
-
-    def test_a_blocker_of_an_earlier_issue_may_stand_before_an_issue_of_a_higher_priority(self):
-        # #2 (priority:3) blocks #3 of a higher tier, so it may also stand before #1 (priority:1) of its own tier
-        free = [mk(1, ["priority:1"]), mk(2, ["priority:3"]), mk(3, ["importance:high"], blocked=[2])]
-        states = {n: "open" for n in range(1, 4)}
-        plan = {"order": [2, 3, 1], "blocked_by": {"3": [2]}}
-        self.assertEqual(pr.validate_plan(plan, free, [], states), [])
-
-    def test_a_blocker_of_a_lower_priority_may_stand_before_the_issue_it_blocks(self):
-        free = [mk(1, ["priority:3"]), mk(2, ["priority:1"], blocked=[1])]
-        states = {1: "open", 2: "open"}
-        plan = {"order": [1, 2], "blocked_by": {"2": [1]}}
-        self.assertEqual(pr.validate_plan(plan, free, [], states), [])
-
-    def test_a_quick_bug_goes_first_only_within_its_priority(self):
-        free = [mk(1, ["priority:1"]), mk(2, ["bug", "point:2", "priority:2"]), mk(3, ["priority:2"])]
-        states = {n: "open" for n in range(1, 4)}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3]}, free, [], states), [])
-        problems = pr.validate_plan({"order": [3, 2, 1]}, free, [], states)
-        self.assertEqual(
-            problems,
-            [
-                "order: #1 (priority:1) is placed after #3 (priority:2) in the same tier",
-                "order: #2 is a bug of 1, 2 or 3 points but is placed after #3, which is not one, in the same tier and priority",
-            ],
-        )
-
-    def test_cycle(self):
-        problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"32": [50], "50": [32]}})
-        self.assertTrue(any("cycle" in p for p in problems))
-
-    def test_unknown_blocker_and_fixed_blocked(self):
-        problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"32": [777], "7": [32]}})
-        text = "\n".join(problems)
-        self.assertIn("#777", text)
-        self.assertIn("#7 is not an issue to plan", text)
-
-    def test_malformed(self):
-        for plan in ([], {"order": "x"}, {"order": [1], "blocked_by": []}, {"order": [1], "blocked_by": {"1": 2}}):
-            self.assertEqual(len(self.check(plan)), 1, plan)
-
-
-class Relations(unittest.TestCase):
-    def test_diff_adds_and_removes_for_free_issues_only(self):
-        add, remove = pr.diff_relations([1, 2], {1: [5], 3: [6]}, {1: [7], 2: [5]})
-        self.assertEqual(add, [(1, 7), (2, 5)])
-        self.assertEqual(remove, [(1, 5)])
-
-    def test_no_change(self):
-        self.assertEqual(pr.diff_relations([1], {1: [2]}, {1: [2]}), ([], []))
-
-
-class Report(unittest.TestCase):
-    def test_lines(self):
-        issues = {1: mk(1, parent=7), 2: mk(2), 3: mk(3, parent=8)}
-        parents = {7: mk(7, sub=2)}
-        lines = pr.result_lines([2, 1, 3], issues, {"1": "same area as #2"}, parents)
-        self.assertEqual(lines, ["1. #2 issue 2", "2. #1 issue 1 [#7 issue 7] - same area as #2", "3. #3 issue 3 [#8]"])
+    def test_the_dependabot_mark_in_the_snapshot(self):
+        self.assertTrue(pr.issue_json(mk(1, ["dependencies", "point:2"]))["dependabot"])
+        self.assertFalse(pr.issue_json(mk(2, ["point:2"]))["dependabot"])
 
 
 def waiting(n, labels=(), closed="2026-11-06T10:00:00Z"):
@@ -387,7 +218,7 @@ def waiting(n, labels=(), closed="2026-11-06T10:00:00Z"):
 
 
 class Next(unittest.TestCase):
-    def test_the_queue_follows_the_saved_plan_and_the_issues_the_plan_lacks_come_last(self):
+    def test_the_queue_is_the_basic_order(self):
         issues = [
             mk(1, ["point:3"], created="2026-11-01T00:00:01Z"),
             mk(2, ["point:3"], created="2026-11-01T00:00:02Z"),
@@ -395,12 +226,14 @@ class Next(unittest.TestCase):
             mk(4, ["point:2", "bug"], created="2026-11-01T00:00:04Z"),
             mk(5, ["point:1"], created="2026-11-01T00:00:05Z"),
         ]
-        plan = {"order": [3, 1, 2]}
-        out = pr.build_next(issues, set(), frozenset(), plan)
-        self.assertEqual([i["number"] for i in out["start"]], [3, 1, 2, 4, 5])
-        self.assertEqual(out["start"][0]["points"], 3)
-        out = pr.build_next(issues, set(), frozenset(), None)
+        out = pr.build_next(issues, set(), frozenset())
         self.assertEqual([i["number"] for i in out["start"]], [4, 5, 1, 2, 3])
+        self.assertEqual(out["start"][2]["points"], 3)
+
+    def test_a_dependabot_issue_starts_first(self):
+        issues = [mk(1, ["urgency:high", "importance:high", "point:1"]), mk(2, ["dependencies", "point:3"])]
+        out = pr.build_next(issues, set(), frozenset())
+        self.assertEqual([i["number"] for i in out["start"]], [2, 1])
 
     def test_blocked_and_held_issues_are_reported_not_started(self):
         issues = [
@@ -409,7 +242,7 @@ class Next(unittest.TestCase):
             mk(3, ["point:2"], blocked=[1]),
             mk(4, ["point:2"]),
         ]
-        out = pr.build_next(issues, {4}, frozenset(), None)
+        out = pr.build_next(issues, {4}, frozenset())
         self.assertEqual([i["number"] for i in out["start"]], [1, 2])
         self.assertNotIn("needs_owner", out)
         self.assertEqual(out["blocked"], [{"number": 3, "title": "issue 3", "blocked_by": [1]}])
@@ -417,7 +250,7 @@ class Next(unittest.TestCase):
 
     def test_an_issue_in_hand_is_in_progress_and_is_not_held(self):
         issues = [mk(1, ["point:2"]), mk(2, ["point:2"])]
-        out = pr.build_next(issues, {1}, frozenset({1}), None)
+        out = pr.build_next(issues, {1}, frozenset({1}))
         self.assertEqual([i["number"] for i in out["in_progress"]], [1])
         self.assertEqual(out["held"], [])
         self.assertEqual([i["number"] for i in out["start"]], [2])
@@ -425,33 +258,33 @@ class Next(unittest.TestCase):
     def test_an_issue_another_worktree_holds_is_claimed_and_does_not_start(self):
         issues = [mk(1, ["point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
         claimed = {2: "/m/.claude/worktrees/feat-two"}
-        out = pr.build_next(issues, set(), frozenset(), None, claimed=claimed)
+        out = pr.build_next(issues, set(), frozenset(), claimed=claimed)
         self.assertEqual([i["number"] for i in out["start"]], [1, 3])
         self.assertEqual([(i["number"], i["owner"]) for i in out["claimed"]], [(2, "/m/.claude/worktrees/feat-two")])
-        self.assertEqual(pr.build_next(issues, set(), frozenset(), None)["claimed"], [])
+        self.assertEqual(pr.build_next(issues, set(), frozenset())["claimed"], [])
 
     def test_mine_comes_before_a_claim(self):
         issues = [mk(1, ["point:2"]), mk(2, ["point:2"])]
-        out = pr.build_next(issues, set(), frozenset({1}), None, claimed={1: "/w/a", 2: "/w/b"})
+        out = pr.build_next(issues, set(), frozenset({1}), claimed={1: "/w/a", 2: "/w/b"})
         self.assertEqual([i["number"] for i in out["in_progress"]], [1])
         self.assertEqual([i["number"] for i in out["claimed"]], [2])
         self.assertEqual(out["start"], [])
 
     def test_a_claim_of_a_closed_issue_is_no_entry(self):
-        out = pr.build_next([mk(1, ["point:2"])], set(), frozenset(), None, claimed={9: "/w/a"})
+        out = pr.build_next([mk(1, ["point:2"])], set(), frozenset(), claimed={9: "/w/a"})
         self.assertEqual(out["claimed"], [])
         self.assertEqual([i["number"] for i in out["start"]], [1])
 
     def test_a_point_8_issue_and_a_change_that_waits_do_not_hold_back_the_queue(self):
         issues = [mk(1, ["point:8"]), mk(2, ["point:3"], parent=900), mk(3, ["point:2"]), waiting(4, ["point:2"])]
-        out = pr.build_next(issues, set(), frozenset(), None)
+        out = pr.build_next(issues, set(), frozenset())
         self.assertEqual(sorted(i["number"] for i in out["start"]), [1, 2, 3])
         self.assertEqual([w["number"] for w in out["waiting"]], [4])
         self.assertNotIn("stop", out)
         self.assertNotIn("waits_for_release", out)
         self.assertNotIn("waits_for_session", out)
 
-    def test_the_issues_the_plan_lacks_come_last_by_tier_then_quick_bug_then_points(self):
+    def test_the_queue_is_by_tier_then_quick_bug_then_points(self):
         issues = [
             mk(1, ["point:1"]),
             mk(2, ["bug", "point:1"]),
@@ -459,35 +292,29 @@ class Next(unittest.TestCase):
             mk(4, ["urgency:high", "point:8"]),
             mk(5, ["point:3"]),
         ]
-        out = pr.build_next(issues, set(), frozenset(), None)
+        out = pr.build_next(issues, set(), frozenset())
         self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1, 5])
 
-    def test_the_issues_the_plan_lacks_come_by_priority_after_the_tier(self):
+    def test_the_queue_is_by_priority_after_the_tier(self):
         issues = [mk(1, ["bug", "point:1"]), mk(2, ["point:8", "priority:2"]), mk(3, ["point:8", "priority:1"]), mk(4, ["importance:high", "point:8"])]
-        out = pr.build_next(issues, set(), frozenset(), None)
+        out = pr.build_next(issues, set(), frozenset())
         self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1])
 
     def test_a_parent_is_in_no_list_and_its_parts_start(self):
         issues = [mk(1, ["point:5"], sub=2), mk(2, ["point:3"], parent=1), mk(3, ["point:3"], sub=1), mk(4, ["point:2"])]
-        out = pr.build_next(issues, {1}, frozenset({3}), {"order": [1, 2, 4]})
-        self.assertEqual([i["number"] for i in out["start"]], [2, 4])
+        out = pr.build_next(issues, {1}, frozenset({3}))
+        self.assertEqual([i["number"] for i in out["start"]], [4, 2])
         self.assertEqual((out["in_progress"], out["held"], out["blocked"]), ([], [], []))
 
     def test_a_closed_parent_is_no_change(self):
         issues = [mk(1, ["point:8"], sub=2, state="closed", closed="2026-11-06T10:00:00Z"), mk(2, ["point:2"])]
-        out = pr.build_next(issues, set(), frozenset(), None)
+        out = pr.build_next(issues, set(), frozenset())
         self.assertEqual(out["waiting"], [])
         self.assertEqual([i["number"] for i in out["start"]], [2])
 
     def test_nothing_open(self):
-        out = pr.build_next([], set(), frozenset(), None)
+        out = pr.build_next([], set(), frozenset())
         self.assertEqual((out["start"], out["in_progress"]), ([], []))
-
-    def test_a_broken_plan_is_taken_as_no_plan(self):
-        issues = [mk(1, ["point:3"]), mk(2, ["point:1"])]
-        out = pr.build_next(issues, set(), frozenset(), {"order": "x"})
-        self.assertEqual([i["number"] for i in out["start"]], [2, 1])
-
 
 class Unsplit(unittest.TestCase):
     def test_a_big_issue_with_no_sub_issue_no_parent_and_no_whole_is_unsplit(self):
@@ -509,94 +336,6 @@ class Unsplit(unittest.TestCase):
 
     def test_nothing_is_unsplit_once_every_big_issue_is_split(self):
         self.assertEqual(pr.unsplit([mk(1, ["point:2"]), mk(2, ["point:5", "whole"])]), [])
-
-
-class Prune(unittest.TestCase):
-    def test_closed_and_fixed_issues_leave_every_part_of_the_plan(self):
-        plan = {
-            "order": [1, 2, 3, 4],
-            "blocked_by": {"2": [1], "3": [2]},
-            "reasons": {"1": "a", "2": "b", "3": "c"},
-        }
-        pruned, dropped = pr.prune_plan(plan, {1: "closed", 3: "open"}, {2})
-        self.assertEqual(pruned["order"], [3, 4])
-        self.assertEqual(pruned["blocked_by"], {"3": [2]})  # a blocker that is fixed stays: only the keys of dropped issues go, and a closed blocker
-        self.assertEqual(pruned["reasons"], {"3": "c"})
-        self.assertEqual(dropped, [(1, "closed"), (2, "fixed")])
-
-    def test_a_dependency_on_a_closed_or_fixed_issue_goes_and_an_emptied_key_goes_with_it(self):
-        plan = {"order": [2, 3, 4], "blocked_by": {"3": [1, 4], "2": [1, 5], "4": [5]}}
-        pruned, _ = pr.prune_plan(plan, {1: "closed", 2: "open", 3: "open", 4: "open", 5: "open"}, {5})
-        self.assertEqual(pruned["blocked_by"], {"3": [4], "2": [5], "4": [5]})  # #5 is fixed and open: its dependency stays
-
-    def test_a_fixed_open_blocker_is_not_removed_from_github_by_the_pruning(self):
-        plan = {"order": [50], "blocked_by": {"50": [42]}}
-        pruned, _ = pr.prune_plan(plan, {50: "open", 42: "open"}, {42})
-        wanted = {int(k): v for k, v in pruned["blocked_by"].items()}
-        self.assertEqual(pr.diff_relations([50], {50: [42]}, wanted), ([], []))
-
-    def test_a_number_nobody_knows_stays_for_the_validation_to_refuse(self):
-        pruned, dropped = pr.prune_plan({"order": [1, 99]}, {1: "open"}, set())
-        self.assertEqual(pruned["order"], [1, 99])
-        self.assertEqual(dropped, [])
-
-    def test_fixed_wins_over_closed_and_each_number_is_reported_once(self):
-        plan = {"order": [1, 2], "blocked_by": {"1": [2]}, "reasons": {"1": "x"}}
-        _, dropped = pr.prune_plan(plan, {1: "closed", 2: "closed"}, {1})
-        self.assertEqual(dropped, [(1, "fixed"), (2, "closed")])
-
-    def test_a_parent_leaves_the_plan_and_is_reported_after_fixed_and_before_closed(self):
-        plan = {"order": [1, 2, 3, 4], "blocked_by": {"2": [1]}, "reasons": {"1": "a", "2": "b"}}
-        pruned, dropped = pr.prune_plan(plan, {1: "open", 2: "open", 3: "closed", 4: "open"}, {4}, {1, 3, 4})
-        self.assertEqual(pruned["order"], [2])
-        self.assertEqual(pruned["blocked_by"], {"2": [1]})  # a parent is open: a dependency on it is real
-        self.assertEqual(pruned["reasons"], {"2": "b"})
-        self.assertEqual(dropped, [(1, "parent"), (3, "parent"), (4, "fixed")])
-
-    def test_a_plan_that_depends_on_a_parent_passes_after_the_prune(self):
-        free = [mk(2)]
-        states = {1: "open", 2: "open"}
-        plan = {"order": [1, 2], "blocked_by": {"2": [1]}}
-        pruned, _ = pr.prune_plan(plan, states, set(), {1})
-        self.assertEqual(pr.validate_plan(pruned, free, [], states), ["blocked_by: #2 names #1, which is open but not planned"])
-        self.assertEqual(pr.validate_plan(pruned, free, [], states, {1}), [])
-
-    def test_a_plan_of_the_wrong_shape_is_returned_as_it_is(self):
-        self.assertEqual(pr.prune_plan({"order": "x"}, {}, set()), ({"order": "x"}, []))
-
-    def test_a_pruned_plan_passes_the_validation_that_the_full_one_fails(self):
-        free = [mk(2), mk(3)]
-        states = {2: "open", 3: "open", 1: "closed"}
-        plan = {"order": [1, 2, 3], "blocked_by": {"3": [1]}}
-        self.assertTrue(pr.validate_plan(plan, free, [], states))
-        pruned, _ = pr.prune_plan(plan, states, set())
-        self.assertEqual(pr.validate_plan(pruned, free, [], states), [])
-
-    def test_a_closed_issue_that_is_only_a_blocker_is_found_and_dropped(self):
-        plan = {"order": [2], "blocked_by": {"2": [9, 7, 9]}}
-        self.assertEqual(pr.blockers(plan), [7, 9])
-        self.assertEqual(pr.blockers({"order": "x"}), [])
-        self.assertEqual(pr.mentioned(plan), [2])  # a blocker is not mentioned, so cmd_apply asks GitHub about blockers() too
-        calls = []
-
-        def fake_api(path):
-            calls.append(path)
-            return {"state": "closed" if path.endswith("/9") else "open"}
-
-        real, pr.api = pr.api, fake_api
-        try:
-            states = pr.closed_states("o/r", [*pr.mentioned(plan), *pr.blockers(plan)])
-        finally:
-            pr.api = real
-        self.assertEqual(states, {9: "closed"})
-        pruned, dropped = pr.prune_plan(plan, {2: "open", 7: "open", **states}, set())
-        self.assertEqual(pruned["blocked_by"], {"2": [7]})
-        self.assertEqual(dropped, [])
-
-    def test_mentioned(self):
-        plan = {"order": [3, 1], "blocked_by": {"2": [9]}, "reasons": {"1": "a", "4": "b"}}
-        self.assertEqual(pr.mentioned(plan), [3, 1, 2, 4])
-        self.assertEqual(pr.mentioned({"order": "x"}), [])
 
 
 class Parallel(unittest.TestCase):
@@ -707,9 +446,6 @@ class LoadState(unittest.TestCase):
         self.assertEqual(state.strangers, [(5, "other")])  # only an open issue of another author, not 10, which is closed
         self.assertEqual(state.issues[1].blocked_by, [9])
         self.assertEqual(state.issues[3].blocked_by, [2])  # a closed blocker and one of another repository are not blockers
-        self.assertEqual(state.states[8], "closed")
-        self.assertEqual(state.ids[9], 9009)
-        self.assertNotIn(4, state.ids)
         self.assertEqual(state.pr_closing, {3})
         self.assertEqual(state.tags, ["v0.1.0", "v0.2.0"])
         self.assertEqual([c for c in calls if c[:2] == ["repo", "view"]], [["repo", "view", "--json", "nameWithOwner,owner"]])
@@ -879,7 +615,7 @@ class DoneParents(unittest.TestCase):
                 return {"1": [self.sub(10)]}[path.split("/issues/")[1].split("/")[0]]  # #2 has an open part in the state: its sub-issues are not read
             raise AssertionError(path)
 
-        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, sub=1), 2: mk(2, sub=1), 3: mk(3, parent=2), 4: mk(4, sub=1, state="closed")}, [], [], set(), {}, {}, [], [])
+        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, sub=1), 2: mk(2, sub=1), 3: mk(3, parent=2), 4: mk(4, sub=1, state="closed")}, [], [], set(), [], [])
         real = (pr.gh, pr.api, pr.load_state)
         pr.gh, pr.api, pr.load_state = fake_gh, fake_api, lambda blockers=True: state
         out = io.StringIO()
@@ -894,8 +630,9 @@ class DoneParents(unittest.TestCase):
 
 
 class Snapshot(unittest.TestCase):
-    def run_snapshot(self, strangers, fail_on=None):
+    def run_snapshot(self, strangers, fail_on=None, issue=None):
         calls = []
+        issue = issue or mk(1, ["point:2"])
 
         def fake_gh(*args):
             calls.append(list(args))
@@ -903,7 +640,7 @@ class Snapshot(unittest.TestCase):
                 raise pr.GhError(f"gh {' '.join(args[:3])}: boom")
             return "\n"
 
-        state = pr.State("o/r", "owner", "v0.1.0", {1: mk(1, ["point:2"])}, [], [mk(1, ["point:2"])], set(), {}, {}, strangers, [])
+        state = pr.State("o/r", "owner", "v0.1.0", {issue.number: issue}, [], [issue], set(), strangers, [])
         real = (pr.gh, pr.load_state)
         pr.gh, pr.load_state = fake_gh, lambda blockers=True: state
         out, err = io.StringIO(), io.StringIO()
@@ -941,79 +678,11 @@ class Snapshot(unittest.TestCase):
         self.assertIn("closed #13 of other (not the owner)", err)
         self.assertEqual([i["number"] for i in json.loads(out)["free"]], [1])
 
-
-class SavedPlan(unittest.TestCase):
-    def test_the_plan_lives_in_the_main_checkout(self):
-        self.assertEqual(pr.plan_file("/w/tsunagiai/.git"), "/w/tsunagiai/.claude/plan.json")
-        self.assertEqual(pr.plan_file("/w/tsunagiai/.git/"), "/w/tsunagiai/.claude/plan.json")
-
-    def test_save_and_read(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "plan.json")
-            self.assertIsNone(pr.read_plan(path))
-            plan = {"order": [1, 2], "blocked_by": {}}
-            pr.save_plan(path, plan)
-            self.assertEqual(pr.read_plan(path), plan)
-            self.assertEqual(os.listdir(d), ["plan.json"])
-            pr.save_plan(path, {"order": [3]})
-            self.assertEqual(pr.read_plan(path), {"order": [3]})
-
-    def test_two_saves_at_once_do_not_share_a_temporary_file(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "plan.json")
-            plans = [{"order": [n]} for n in range(8)]
-            barrier = threading.Barrier(len(plans))
-            errors = []
-
-            def save(plan):
-                barrier.wait()
-                try:
-                    pr.save_plan(path, plan)
-                except Exception as e:  # noqa: BLE001 - the test reports every failure
-                    errors.append(e)
-
-            threads = [threading.Thread(target=save, args=(p,)) for p in plans]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-            self.assertEqual(errors, [])
-            self.assertIn(pr.read_plan(path), plans)
-            self.assertEqual(os.listdir(d), ["plan.json"])
-
-    def test_the_temporary_file_is_not_the_fixed_name_and_goes_when_the_write_fails(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "plan.json")
-            seen = []
-            real = os.replace
-
-            def spy(src, dst):
-                seen.append(src)
-                real(src, dst)
-
-            with unittest.mock.patch.object(pr.os, "replace", spy):
-                pr.save_plan(path, {"order": [1]})
-                pr.save_plan(path, {"order": [2]})
-            self.assertEqual(len(seen), 2)
-            self.assertNotIn(path + ".tmp", seen)
-            self.assertNotEqual(seen[0], seen[1])
-            self.assertEqual(os.path.dirname(seen[0]), d)
-            with unittest.mock.patch.object(pr.os, "replace", side_effect=OSError("no")):
-                with self.assertRaises(OSError):
-                    pr.save_plan(path, {"order": [3]})
-            self.assertEqual(os.listdir(d), ["plan.json"])
-
-    def test_a_broken_plan_is_ignored_with_one_line(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "plan.json")
-            for text in ("{", '{"order": "x"}', "[1]"):
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(text)
-                err = io.StringIO()
-                with contextlib.redirect_stderr(err):
-                    self.assertIsNone(pr.read_plan(path), text)
-                self.assertEqual(len(err.getvalue().strip().splitlines()), 1, text)
-                self.assertIn("ignored", err.getvalue())
+    def test_an_open_issue_of_the_owner_without_points_is_refused_after_the_strangers_are_closed(self):
+        code, calls, out, err = self.run_snapshot([(12, "someone")], issue=mk(1, ["bug"]))
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual([c[2] for c in calls], ["12"])
+        self.assertIn("#1 has no point:* label", err)
 
 
 class Claims(unittest.TestCase):

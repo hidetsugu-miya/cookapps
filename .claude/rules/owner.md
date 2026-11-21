@@ -36,7 +36,6 @@ Bad:  add a library because the task is easier with it, without checking its act
 ### Keep E2E on this machine, on the real WKWebView
 
 The owner chose WebdriverIO, run on this machine with no window on screen, and without the keychain or the real settings folder (2026-10-31; `e2e.md` has how). If it stops working, switch to Playwright and tell the owner.
-The full run is made once, when the Release PR is prepared, not for each feature's pull request (at the owner's instruction, 2026-11-19; #1023; `e2e.md`).
 
 ```text
 Good: a run that cannot start -> find the cause, or move to Playwright and report it
