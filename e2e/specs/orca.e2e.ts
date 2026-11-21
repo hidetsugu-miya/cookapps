@@ -1821,7 +1821,8 @@ describe("orca: projects", () => {
       await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
       await browser.keys(["c", "d"]);
       await browser.pause(1500);
-      expect(await callsOf(read)).toEqual([]);
+      // The project's first tab is the session `sample()` has (its own handle), which is mirrored until the zsh tab is chosen: only the ended terminal's handle must never be read.
+      expect((await callsOf(read)).filter((c) => (c as { handle: string }).handle === "term_example-app_zsh")).toEqual([]);
       expect(await callsOf(input)).toEqual([]);
       expect(await count(CARD)).toBe(0);
       expect((await screenText()).split("ターミナルは終了しました").length).toBe(2);
