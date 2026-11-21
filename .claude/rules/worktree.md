@@ -19,7 +19,7 @@ Bad:  a shared worktree that the pieces of work switch between, so that one wait
 ### One session develops one piece at a time, never in parallel
 
 A single AI session develops one piece at a time: one worktree, one branch. It never fans out into parallel development of its own (a second piece started in another worktree or on another branch and driven from the same session at once), even when the pieces touch no common file (at the owner's instruction, 2026-11-19).
-Running the steps of one piece together is not this: the default flow starts `run-ci.sh` together with the reviewers (`review.md`). That is one piece, not parallel development.
+Running the steps of one piece together is not this: the default flow still runs `run-ci.sh` beside wdio and starts E2E together with the reviewers (`review.md`). That is one piece, not parallel development.
 The limit is on parallelism inside one session. Separate sessions are a different matter: each has a worktree of its own and runs in parallel with the others (#1006), and a session that meets another at work on shared files or rules coordinates with it (a message to the other session) rather than driving both itself.
 A session that wants a second piece started finishes or parks the first, or leaves it to another session.
 
@@ -31,7 +31,7 @@ Good: a session finds another session already working, and tells it before chang
 
 ### Add features and fix bugs on a branch of its own worktree
 
-Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. A branch that a `ship` run takes holds the commits of several issues. `improvement-proposal` works on `proposal/{date and time}`, which it does not push, and the Release PR is `release/next`.
+Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. A branch that an `implement` run takes holds the commits of several issues. `improvement-proposal` works on `proposal/{date and time}`, which it does not push, and the Release PR is `release/next`.
 Every branch reaches main through a pull request (`issues.md`).
 
 ### Take a worktree with `use-worktree.sh`, and give it back with `--park`
@@ -54,7 +54,7 @@ git worktree add -b feat/C-2 .claude/worktrees/feat-C-2 origin/main   # Bad: no 
 
 ### Claim an issue before you start it, so that two sessions do not start the same one
 
-An issue is started by the session that has claimed it: `plan-release.py claim --worktree {path of your worktree} {n}...`, run after the worktree is taken (`ship` step 4).
+An issue is started by the session that has claimed it: `plan-release.py claim --worktree {path of your worktree} {n}...`, run after the worktree is taken (`implement` step 3).
 A claim is the directory `.claude/claims/{n}/` of the main checkout, with the path of the owner's worktree in `owner`. It is made whole and renamed into place, and the claimants take turns under an exclusive `flock` of `.claude/claims/`, so only one session can make it, also when the claim is stale.
 `claim` refuses an issue that another worktree, which still exists, has claimed (stderr `#{n} claimed by {path}`, exit 3), and the session takes the next issue instead. A claim whose worktree is gone (its directory removed, which `git worktree list` marks `prunable`, included) is stale and is taken over.
 `plan-release.py next` leaves a claimed issue out of `start` and lists it in `claimed`, unless it is in `--mine` (the issues of this run). `use-worktree.sh --park` deletes the claims of its worktree, and nothing else does.
@@ -77,11 +77,11 @@ git -C "$main" merge --ff-only origin/main
 
 ### Take in main on the branch before merging it
 
-When main has moved since the branch started, run `git fetch origin main && git merge origin/main` in the worktree, then CI and the review there.
+When main has moved since the branch started, run `git fetch origin main && git merge origin/main` in the worktree, then E2E and the review there.
 The ruleset refuses a pull request whose branch does not contain main, so a combined failure is found before the merge.
 
 ```text
-Good: another branch was merged -> git merge origin/main in the worktree -> run-ci.sh and the reviewers together -> release-verifier -> push -> post-checks.sh -> merge
+Good: another branch was merged -> git merge origin/main in the worktree -> run-e2e.sh (its run-ci.sh beside wdio) and the reviewers together -> release-verifier -> push -> post-checks.sh -> merge
 Bad:  merge first, and find on main that the two branches break each other
 ```
 

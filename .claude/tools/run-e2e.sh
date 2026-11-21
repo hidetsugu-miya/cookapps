@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# E2E を回し、結果を main の checkout の .claude/e2e/{HEAD の SHA} に JSON で書く（.claude/rules/e2e.md、check-e2e.sh が読む。release/next の push は pre-git.sh が check-release-e2e.sh 経由で、post-checks.sh と合わせて確かめる。E2E は機能の PR では回さず、Release PR の準備で 1 回回す。#1023）。
+# E2E を回し、結果を main の checkout の .claude/e2e/{HEAD の SHA} に JSON で書く（.claude/rules/review.md、check-e2e.sh が読む。pre-git.sh と release-verifier は check-e2e.sh を呼ぶ）。
 # ビルドと E2E の出力は .claude/e2e/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。後から回数や失敗を検証するため。
 # e2e:build が終わったら、HEAD に合格した CI の記録（check-ci.sh）が無いときだけ、wdio の実行と同時に run-ci.sh を回す（記録は run-ci.sh が今までどおり書く。#420）。
 #   cargo が target/debug のロックを取るのは e2e:build までで、wdio は cargo を回さないので、取り合わない。CI の失敗でも終了コードは 0 にならない（E2E の記録の passed は E2E だけの結果）。
 # 使い方: run-e2e.sh [checkout のパス]（省略時はカレント）。終了コードは E2E の結果、E2E が通ったときは同時に回した CI の結果。
-#        run-e2e.sh --only {spec の名前} [checkout のパス]  e2e/specs/{名前}.e2e.ts を 1 つのアプリだけで流す。機能が足した・変えた spec と、落ちた spec を通るまで回すための入口（.claude/rules/e2e.md）。
-#          記録は書かず（作業ツリーが汚れていてもよい）、出力は only-{名前}.log に残す。記録の代わりにはならない（Release PR の準備では引数なしで 1 回回す）。
+#        run-e2e.sh --only {spec の名前} [checkout のパス]  e2e/specs/{名前}.e2e.ts を 1 つのアプリだけで流す。落ちた spec を直るまで回すための入口（.claude/rules/e2e.md）。
+#          記録は書かず（作業ツリーが汚れていてもよい）、出力は only-{名前}.log に残す。記録の代わりにはならないので、通ったら引数なしで 1 回回す。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
 # node_modules が無いか package-lock.json と食い違っていれば、先に ensure-deps.sh で npm ci する（ログに入る）。
 set -uo pipefail
