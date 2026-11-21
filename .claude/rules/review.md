@@ -169,7 +169,7 @@ At the owner's instruction (2026-10-29). Running a review for every small fix pr
 The check of the pass record (`pre-git.sh`) stays. The writers are release-verifier and `range-check.sh` alone, so that no other command can let a change through.
 
 ```text
-Good: issue #1305 「PR #1300 のレビューで残った Low」 holds a Low -> step 6 of implement fixes it on the new branch `fix/review-lows-1305`, and commits -> run-e2e.sh -> `range-check.sh origin/main tmp/review-lows.txt` -> pass record -> push
+Good: issue #1305 「PR #1300 のレビューで残った Low」 holds a Low -> step 6 of implement fixes it on the new branch `fix/review-lows-20261125-1030`, and commits -> run-e2e.sh -> `range-check.sh origin/main tmp/review-lows.txt` -> pass record -> push
 Bad:  fix the Low of a merged version and run the performance and code reviews again
 Bad:  fix the Low of a merged version and launch release-verifier to check the range
 Bad:  fix a Low of the branch that just passed, and run `range-check.sh {passed HEAD} {list file}` (leave it, and list it in the completion report)
