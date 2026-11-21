@@ -129,7 +129,7 @@ Bad:  a screen calls `window.__TAURI__.window.setSize` and the pull request does
 ### Check a UI change with E2E, and make no throwaway mock
 
 You cannot tell stacking order or event propagation by reading code.
-For a screen change, add or fix that screen's spec (`e2e/specs/`), and have a real WebView operate it with `.claude/tools/run-e2e.sh --only {spec name}` until it passes; the full `run-e2e.sh` runs once, when the Release PR is prepared (`e2e.md`).
+For a screen change, add or fix that screen's spec (`e2e/specs/`), and have a real WebView operate it with `.claude/tools/run-e2e.sh` (`e2e.md`).
 An HTML file opened in Chrome or a scratchpad mock behaves differently from the real WebView, and each one scatters another place that holds mocks, so make none.
 
 ```text

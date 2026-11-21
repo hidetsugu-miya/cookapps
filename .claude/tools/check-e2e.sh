@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# このチェックアウトの HEAD に、合格した E2E の記録があるかを確かめる（check-release-e2e.sh が使い、pre-git.sh と post-checks.sh は release/next のときだけ check-release-e2e.sh 経由で確かめる。#1023）。
+# このチェックアウトの HEAD に、合格した E2E の記録があるかを確かめる（pre-git.sh、post-checks.sh と release-verifier が使う）。
 # 記録は run-e2e.sh が main の checkout に書く。どのチェックアウトから呼んでもよく、呼んだ場所の HEAD を見る。
 # 合格なら「{短い SHA} {version} {通過数}/{総数} 件 通過」を出して exit 0。そうでなければ理由を標準エラーに出して exit 1。
 set -uo pipefail

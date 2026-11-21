@@ -135,13 +135,12 @@ scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo
 ```
 
 `.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E.
-A feature's pull request runs `run-ci.sh` and the review, and no `run-e2e.sh`; E2E runs once, when the Release PR (`release/next`) is prepared (at the owner's instruction, 2026-11-19; #1023).
-Before a push, `pre-git.sh` checks that the CI record exists for HEAD, unless only release work (`README.md`, `CHANGELOG.md`, `docs/`) follows a commit that has it, and, for `release/next` only, that the E2E record exists for HEAD or for a commit with only release work after it (`.claude/rules/testing.md`, `.claude/rules/review.md`, `.claude/rules/e2e.md`).
+Before a push, `pre-git.sh` checks that both records exist for HEAD, unless only release work (`README.md`, `CHANGELOG.md`, `docs/`) follows a commit that has them (`.claude/rules/testing.md`, `.claude/rules/review.md`).
 
 ## CI
 
 The release is `.github/workflows/release.yml`, and only a pushed tag `v*` and the merge of the Release PR (a closed pull request from `release/next` into main, merged by the session that prepared it, with the repository's owner's account) start it (at the owner's instruction, 2026-11-09; #303); the merge is tagged and released in the run that it starts, and the session that merged it watches that run through (`.claude/skills/release/SKILL.md`, Procedure B).
-Static, unit and E2E checks run on the developer's machine, not in GitHub Actions (`.claude/rules/testing.md`): the static and unit checks before each push, and E2E once for the Release PR (GitHub's runner took about 13 minutes for a run, and some specs failed only there; #1021, #1023). So a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
+Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions (`.claude/rules/testing.md`), so a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
 A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 
 | Job | Environment | What it does |

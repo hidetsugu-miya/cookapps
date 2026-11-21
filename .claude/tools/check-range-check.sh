@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # range-check.sh の自己確認: 一時ディレクトリの git リポジトリ（main の checkout と worktree）と、その中の一時の記録ディレクトリで、通す（exit 0 と合格記録）・止める（exit 1 と記録なし）・使い方の誤り（exit 2）を確かめる（#932）。
-# 本物の記録（.claude/reviews/、.claude/ci/）には触れない。この script 自身の checkout の range-check.sh と record-review.sh を検査する（pre-git.sh は、これらに触れる push でこれを走らせる）。
+# 本物の記録（.claude/reviews/、.claude/ci/、.claude/e2e/）には触れない。この script 自身の checkout の range-check.sh と record-review.sh を検査する（pre-git.sh は、これらに触れる push でこれを走らせる）。
 set -uo pipefail
 tools="$(cd "$(dirname "$0")" && pwd)"
 fail=0
@@ -17,7 +17,7 @@ git init -q "$main" || exit 2
 git -C "$main" checkout -q -b main
 mkdir -p "$main/src-tauri" "$main/.claude/tools" "$main/.claude/hooks" "$main/ts"
 printf '[package]\nname = "x"\nversion = "0.0.0"\n' > "$main/src-tauri/Cargo.toml"
-cp "$tools/range-check.sh" "$tools/check-ci.sh" "$main/.claude/tools/"
+cp "$tools/range-check.sh" "$tools/check-ci.sh" "$tools/check-e2e.sh" "$main/.claude/tools/"
 cp "$tools/../hooks/record-review.sh" "$main/.claude/hooks/"
 echo one > "$main/ts/a.ts"
 echo one > "$main/ts/b.ts"
@@ -26,9 +26,9 @@ git -C "$main" commit -q -m init
 git -C "$main" worktree add -q -b work "$tmp/work" main 2>/dev/null || exit 2
 work="$tmp/work"
 rc="$main/.claude/tools/range-check.sh"
-mkdir -p "$main/.claude/ci" "$main/.claude/reviews"
+mkdir -p "$main/.claude/ci" "$main/.claude/e2e" "$main/.claude/reviews"
 
-# commit <ファイル>...: 渡したファイルを書き換えてコミットし、新しい HEAD に CI の合格記録を書く（E2E の記録は書かない。range-check.sh は求めない、#1023）
+# commit <ファイル>...: 渡したファイルを書き換えてコミットし、新しい HEAD に CI と E2E の合格記録を書く
 commit() {
   local f sha
   for f in "$@"; do echo "$RANDOM" >> "$work/$f"; done
@@ -36,6 +36,7 @@ commit() {
   git -C "$work" commit -q -m "change $*"
   sha=$(git -C "$work" rev-parse HEAD)
   jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$sha"
+  jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$sha"
 }
 # pass_record <コミット>: そのコミットに合格記録を置く（release-verifier が書いたものの代わり）
 pass_record() { echo pass > "$main/.claude/reviews/$(git -C "$work" rev-parse "$1")"; }
@@ -78,15 +79,17 @@ run 1 "パスの後に拡張子が付いた別のパス" "$base" $'ts/a.ts.bak:3
 run 1 "ディレクトリだけでは一致しない" "$base" "ts/" "ts/a.ts"
 reset_to "$base"
 
-# 止める: CI の記録が無い、合格していない。E2E の記録は求めない（#1023）
+# 止める: CI か E2E の記録が無い、合格していない
 commit ts/a.ts
 head=$(git -C "$work" rev-parse HEAD)
-run 0 "E2E の記録がなくても通る" "$base" "ts/a.ts"
 mv "$main/.claude/ci/$head" "$tmp/ci.keep"
 run 1 "HEAD の CI の記録がない" "$base" "ts/a.ts" "CI の記録"
-jq -n --arg sha "$head" '{sha: $sha, clean: true, passed: false, version: "0.0.0"}' > "$main/.claude/ci/$head"
-run 1 "HEAD の CI の記録が不合格" "$base" "ts/a.ts" "CI の記録"
 mv "$tmp/ci.keep" "$main/.claude/ci/$head"
+mv "$main/.claude/e2e/$head" "$tmp/e2e.keep"
+run 1 "HEAD の E2E の記録がない" "$base" "ts/a.ts" "E2E の記録"
+jq -n --arg sha "$head" '{sha: $sha, clean: true, passed: false, version: "0.0.0", tests: {passed: 0, total: 1}}' > "$main/.claude/e2e/$head"
+run 1 "HEAD の E2E の記録が不合格" "$base" "ts/a.ts" "E2E の記録"
+mv "$tmp/e2e.keep" "$main/.claude/e2e/$head"
 run 0 "記録を戻すと通る" "$base" "ts/a.ts"
 
 # 止める: 合格したコミットの問題
