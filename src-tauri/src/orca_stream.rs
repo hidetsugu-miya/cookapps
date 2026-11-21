@@ -83,10 +83,25 @@ pub enum OrcaTermEvent {
     },
     /// Bytes the terminal printed since.
     Output { data: String },
-    /// Orca's size of the terminal changed.
-    Size { cols: u16, rows: u16 },
+    /// Orca's size of the terminal changed, and who holds it (`mode`): `desktop-fit` may say 0 for both sizes.
+    Size {
+        mode: OrcaFitMode,
+        cols: u16,
+        rows: u16,
+    },
     /// The terminal's stream ended (it exited, or Orca ended it), or could not start (`message` says why, in Japanese).
     Ended { message: String },
+}
+
+/// Who holds the size of a terminal (`fit-override-changed`): another desktop's window (`remote-desktop-fit`), a desktop that is fitted to its pane (`desktop-fit`) or a phone (`mobile-fit`).
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "kebab-case")]
+pub enum OrcaFitMode {
+    RemoteDesktopFit,
+    DesktopFit,
+    MobileFit,
 }
 
 /// The size of the pane in cells, for a terminal that fits it.
@@ -103,7 +118,7 @@ pub struct Watch {
     handle: String,
     /// The number the screen gave this showing; a close of an earlier showing of the same handle does not end this one.
     generation: u64,
-    /// The pane's size, which the terminal is fitted to.
+    /// The size the pane fits (FitAddon's proposal): the subscription registers it, and a send of keys claims it.
     viewport: OrcaViewport,
     /// Gives an event to the screen; `false` when the screen no longer takes them.
     sink: Box<dyn FnMut(OrcaTermEvent) -> bool + Send>,
@@ -115,10 +130,16 @@ pub enum StreamCommand {
     Terminal(Watch),
     /// Show the terminal `handle` no more: it is unsubscribed. It ends only the showing of its generation (the second field), so a close that comes after a later showing of the handle changes nothing.
     TerminalClose(String, u64),
-    /// The pane's size changed (the terminal `handle`, the first field, fits it).
+    /// Claim the size the pane fits for the terminal `handle` (the first field), so Orca sizes the terminal to the pane.
     Viewport(String, OrcaViewport),
     /// Keys typed into the terminal `handle` (the first field); they go while it is subscribed or at least in Orca's list, and the answer says whether Orca took them.
-    Input(String, String, oneshot::Sender<Result<(), String>>),
+    /// The third field is the size the pane fits as the keys are typed (the terminal shown only), which the send claims and the stream holds from then on.
+    Input(
+        String,
+        String,
+        Option<OrcaViewport>,
+        oneshot::Sender<Result<(), String>>,
+    ),
     /// Read `worktree.ps` again now: the app switched the branch of a worktree.
     Worktrees,
     Close,
@@ -325,10 +346,25 @@ fn term_event_of(result: &Value) -> Option<OrcaTermEvent> {
         "data" => result["chunk"].as_str().map(|data| OrcaTermEvent::Output {
             data: data.to_owned(),
         }),
-        "fit-override-changed" => Some(OrcaTermEvent::Size {
-            cols: size("cols")?,
-            rows: size("rows")?,
-        }),
+        "fit-override-changed" => {
+            let mode = match result["mode"].as_str()? {
+                "remote-desktop-fit" => OrcaFitMode::RemoteDesktopFit,
+                "desktop-fit" => OrcaFitMode::DesktopFit,
+                "mobile-fit" => OrcaFitMode::MobileFit,
+                _ => return None,
+            };
+            let (cols, rows) = (
+                result["cols"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())?,
+                result["rows"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())?,
+            );
+            // Orca's client takes 0 only from `desktop-fit` (it has no size of its own to give); the other modes need both sizes.
+            (mode == OrcaFitMode::DesktopFit || (cols > 0 && rows > 0))
+                .then_some(OrcaTermEvent::Size { mode, cols, rows })
+        }
         "end" => Some(OrcaTermEvent::Ended {
             message: String::new(),
         }),
@@ -348,10 +384,14 @@ fn client_of(client: &str) -> Value {
     json!({"id": client, "type": "desktop"})
 }
 
-/// `terminal.subscribe` as a desktop viewer named `client`; the terminal is sized to the pane while the subscription lasts, and Orca gives it back its own size after it.
+/// `terminal.subscribe` as a desktop viewer named `client`. `desktopViewportClaims` makes the subscription only register the pane's size: the size is taken by a claim (`terminal.updateViewport`, a send), and Orca gives the terminal back its own size after the subscription.
 fn subscribe_params(handle: &str, client: &str, viewport: OrcaViewport) -> Value {
     let v = clamp_viewport(viewport);
-    json!({"terminal": handle, "client": client_of(client), "viewport": {"cols": v.cols, "rows": v.rows}})
+    json!({
+        "terminal": handle, "client": client_of(client),
+        "viewport": {"cols": v.cols, "rows": v.rows},
+        "capabilities": {"desktopViewportClaims": 1},
+    })
 }
 
 /// `terminal.updateViewport`: the new size of the pane, claimed so that it is the size the terminal takes.
@@ -662,7 +702,10 @@ impl Connection {
                     }
                 }
             }
-            Some(StreamCommand::Input(handle, text, reply)) => {
+            Some(StreamCommand::Input(handle, text, fit, reply)) => {
+                if let (Some(fit), Some(watch)) = (fit, stream.watches.get_mut(&handle)) {
+                    watch.viewport = fit;
+                }
                 let viewport = stream.watches.get(&handle).map(|w| w.viewport);
                 match input_route(
                     self.terminals.contains_key(&handle),
@@ -794,7 +837,7 @@ async fn run_loop<F, Fut>(
                             watch.viewport = viewport;
                         }
                     }
-                    Some(StreamCommand::Input(_, _, reply)) => {
+                    Some(StreamCommand::Input(_, _, _, reply)) => {
                         let _ = reply.send(Err(NOT_CONNECTED.into()));
                     }
                     // The next connection reads `worktree.ps` when it opens.
@@ -939,7 +982,7 @@ pub async fn orca_stream_close(
     Ok(())
 }
 
-/// Shows the terminal `handle` of the stream of `environment` (`None`: this machine's), the place of the tab (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
+/// Shows the terminal `handle` of the stream of `environment` (`None`: this machine's), the place of the tab (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. `viewport` is the size the pane fits, which the subscription registers.
 #[tauri::command]
 pub async fn orca_stream_terminal(
     state: tauri::State<'_, OrcaStream>,
@@ -994,19 +1037,21 @@ pub async fn orca_stream_viewport(
 }
 
 /// Types `text` into the terminal `handle` of the stream of `environment`, as it is (no Enter is added), only while it is a terminal shown.
+/// `viewport` is the size the pane fits as the keys are typed (null for a terminal that is not shown): the send claims it.
 #[tauri::command]
 pub async fn orca_stream_input(
     state: tauri::State<'_, OrcaStream>,
     environment: Option<String>,
     handle: String,
     text: String,
+    viewport: Option<OrcaViewport>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     check_keys(&text)?;
     let (reply, answer) = oneshot::channel();
     state.send(
         environment.as_deref(),
-        StreamCommand::Input(handle, text, reply),
+        StreamCommand::Input(handle, text, viewport, reply),
     )?;
     answer
         .await
@@ -1434,12 +1479,6 @@ mod tests {
             })
         );
         assert_eq!(
-            term_event_of(
-                &json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": 80, "rows": 24})
-            ),
-            Some(OrcaTermEvent::Size { cols: 80, rows: 24 })
-        );
-        assert_eq!(
             term_event_of(&json!({"type": "end"})),
             Some(OrcaTermEvent::Ended {
                 message: String::new()
@@ -1447,8 +1486,6 @@ mod tests {
         );
         for none in [
             json!({"type": "data"}),
-            json!({"type": "fit-override-changed", "cols": 80}),
-            json!({"type": "fit-override-changed", "cols": 0, "rows": 24}),
             json!({"type": "other"}),
             Value::Null,
         ] {
@@ -1466,10 +1503,56 @@ mod tests {
     }
 
     #[test]
+    fn a_size_orca_sets_carries_its_mode() {
+        let size = |mode: &str, cols: u64, rows: u64| {
+            term_event_of(
+                &json!({"type": "fit-override-changed", "mode": mode, "cols": cols, "rows": rows}),
+            )
+        };
+        for (mode, fit) in [
+            ("remote-desktop-fit", OrcaFitMode::RemoteDesktopFit),
+            ("desktop-fit", OrcaFitMode::DesktopFit),
+            ("mobile-fit", OrcaFitMode::MobileFit),
+        ] {
+            assert_eq!(
+                size(mode, 80, 24),
+                Some(OrcaTermEvent::Size {
+                    mode: fit,
+                    cols: 80,
+                    rows: 24
+                }),
+                "{mode}"
+            );
+        }
+        // Only `desktop-fit` may say 0 (no size of Orca's own: the pane is fitted); the others need both sizes, as Orca's own client reads them.
+        assert_eq!(
+            size("desktop-fit", 0, 0),
+            Some(OrcaTermEvent::Size {
+                mode: OrcaFitMode::DesktopFit,
+                cols: 0,
+                rows: 0
+            })
+        );
+        assert_eq!(size("remote-desktop-fit", 0, 24), None);
+        assert_eq!(size("mobile-fit", 80, 0), None);
+        for none in [
+            json!({"type": "fit-override-changed", "cols": 80, "rows": 24}),
+            json!({"type": "fit-override-changed", "mode": "other-fit", "cols": 80, "rows": 24}),
+            json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": 80}),
+            json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": -1, "rows": 24}),
+            json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": 70_000, "rows": 24}),
+        ] {
+            assert_eq!(term_event_of(&none), None, "{none}");
+        }
+    }
+
+    #[test]
     fn the_params_name_the_viewer_and_a_size_orca_takes() {
+        // A subscription only registers the pane's size: `desktopViewportClaims` leaves taking it to the claims.
         assert_eq!(
             subscribe_params("term_1", "tsunagiai-1", OrcaViewport { cols: 80, rows: 24 }),
-            json!({"terminal": "term_1", "client": {"id": "tsunagiai-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24}})
+            json!({"terminal": "term_1", "client": {"id": "tsunagiai-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24},
+                   "capabilities": {"desktopViewportClaims": 1}})
         );
         assert_eq!(
             subscribe_params("term_1", "tsunagiai-1", OrcaViewport { cols: 5, rows: 900 })
@@ -1515,6 +1598,15 @@ mod tests {
             })
             .unwrap(),
             json!({"kind": "snapshot", "data": "a", "cols": null, "rows": 3})
+        );
+        assert_eq!(
+            serde_json::to_value(OrcaTermEvent::Size {
+                mode: OrcaFitMode::RemoteDesktopFit,
+                cols: 90,
+                rows: 30
+            })
+            .unwrap(),
+            json!({"kind": "size", "mode": "remote-desktop-fit", "cols": 90, "rows": 30})
         );
         let viewport: OrcaViewport =
             serde_json::from_value(json!({"cols": 80, "rows": 24})).unwrap();
@@ -1664,7 +1756,8 @@ mod tests {
         assert_eq!(subscribe["method"], "terminal.subscribe");
         assert_eq!(
             subscribe["params"],
-            json!({"terminal": "term_c", "client": {"id": "tsunagiai-test", "type": "desktop"}, "viewport": {"cols": 100, "rows": 30}})
+            json!({"terminal": "term_c", "client": {"id": "tsunagiai-test", "type": "desktop"}, "viewport": {"cols": 100, "rows": 30},
+                   "capabilities": {"desktopViewportClaims": 1}})
         );
         let sub_id = subscribe["id"].clone();
         streamed(
@@ -1715,7 +1808,12 @@ mod tests {
         for (accepted, ok) in [(true, true), (false, false)] {
             let (reply, answer) = oneshot::channel();
             commands
-                .send(StreamCommand::Input("term_c".into(), "ls\r".into(), reply))
+                .send(StreamCommand::Input(
+                    "term_c".into(),
+                    "ls\r".into(),
+                    None,
+                    reply,
+                ))
                 .ok()
                 .unwrap();
             let send = server.request().await;
@@ -1738,10 +1836,64 @@ mod tests {
             assert_eq!(answer.await.unwrap().is_ok(), ok);
         }
 
+        // Keys typed after the pane changed carry the size the pane fits now, which the stream holds from then on.
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "pwd\r".into(),
+                Some(OrcaViewport {
+                    cols: 110,
+                    rows: 35,
+                }),
+                reply,
+            ))
+            .ok()
+            .unwrap();
+        let send = server.request().await;
+        assert_eq!(
+            send["params"],
+            input_params(
+                "term_c",
+                "pwd\r",
+                "tsunagiai-test",
+                Some(OrcaViewport {
+                    cols: 110,
+                    rows: 35
+                })
+            )
+        );
+        assert_eq!(send["params"]["claimViewport"], true);
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "a".into(),
+                None,
+                reply,
+            ))
+            .ok()
+            .unwrap();
+        let send = server.request().await;
+        assert_eq!(send["params"]["viewport"], json!({"cols": 110, "rows": 35}));
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
+
         // Keys typed into a terminal that is not in the list are refused without a request (the next request is the read below).
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_none".into(), "\r".into(), reply))
+            .send(StreamCommand::Input(
+                "term_none".into(),
+                "\r".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_LISTED.to_owned()));
@@ -1768,10 +1920,15 @@ mod tests {
             unsubscribe_params("term_c", "tsunagiai-test", sub_id.as_str().unwrap())
         );
 
-        // Keys into a terminal shown no more, still in the list, are sent all the same, with no size (it has no pane).
+        // Keys into a terminal shown no more, still in the list, are sent all the same, with no size (it has no pane), whatever size they came with.
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "x".into(),
+                Some(OrcaViewport { cols: 50, rows: 20 }),
+                reply,
+            ))
             .ok()
             .unwrap();
         let send = server.request().await;
@@ -1991,7 +2148,12 @@ mod tests {
         );
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "x".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_CONNECTED.to_owned()));
@@ -2092,7 +2254,12 @@ mod tests {
         // Keys go to the terminal they were typed in, with its own size.
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_c".into(), "a".into(), reply))
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "a".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         let send = server.request().await;
@@ -2125,7 +2292,12 @@ mod tests {
         );
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_s".into(), "b".into(), reply))
+            .send(StreamCommand::Input(
+                "term_s".into(),
+                "b".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         let send = server.request().await;

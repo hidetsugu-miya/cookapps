@@ -25,6 +25,13 @@ const classOf = (selector: string) => browser.execute((s) => document.querySelec
 // Whether the sidebar icon of Orca is marked as working (the yellow icon that fades; the fade itself is not tested).
 const marked = () => browser.execute(() => document.getElementById("nav-orca")!.classList.contains("working"));
 const pressed = (repo: string) => sessionRow(repo).getAttribute("aria-pressed");
+// The size the pane fits, which the keys typed in a shown terminal carry (A-12, "Keys").
+const PANE = { cols: expect.any(Number), rows: expect.any(Number) };
+// The window of an E2E run is never the front one, so the document is made to say it has the focus: a change of the pane takes the size of its terminal only then (A-12, "Size").
+const focusWindow = () =>
+  browser.execute(() => {
+    document.hasFocus = () => true;
+  });
 // The text of the terminal shown (the terminals of the other tabs stay, hidden).
 const screenText = () => $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText();
 
@@ -1877,8 +1884,9 @@ describe("orca: a saved environment's stream", () => {
     await browser.waitUntil(async () => (await callsOf(input)).length === 2, { timeoutMsg: "the keys typed before the tab changed were not sent" });
     // All of them go to the terminal they were typed in, not to the one now shown.
     expect(await callsOf(input)).toEqual([
-      { environment: "Studio", handle: "term_example-app", text: "1" },
-      { environment: "Studio", handle: "term_example-app", text: "2\r" },
+      { environment: "Studio", handle: "term_example-app", text: "1", viewport: PANE },
+      // The terminal is not shown any more: its keys name no size.
+      { environment: "Studio", handle: "term_example-app", text: "2\r", viewport: null },
     ]);
     await release(input, null);
   });
@@ -2021,26 +2029,84 @@ describe("orca: a saved environment's stream", () => {
     expect(await copyEvent()).toEqual({ data: {}, taken: false });
   });
 
-  it("draws the size Orca sends, from the snapshot and from each size", async () => {
+  // The terminal of example-app shown and its pane's size (what it subscribed with), with the pane's rows drawn.
+  async function openSized() {
     await openStudio();
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
-    const paneRows = viewportOf(call).rows;
-    const rowsDrawn = () => browser.execute(() => document.querySelectorAll(".orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
-    // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it shrinks the size the snapshot draws.
+    // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it moves the size a snapshot draws.
     await browser.pause(300);
-    // The terminal fits the pane, and Orca's size is drawn all the same: another screen of Orca may have taken it.
-    await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: 80, rows: paneRows + 3 });
+    return viewportOf(call);
+  }
+  const rowsDrawn = () => browser.execute(() => document.querySelectorAll(".orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
+  const drawnRows = async (rows: number) => browser.waitUntil(async () => (await rowsDrawn()) === rows, { timeoutMsg: `the terminal never drew ${rows} rows` });
+
+  it("fits the pane after a snapshot, and claims the pane's size when Orca had another", async () => {
+    const pane = await openSized();
+    const claim = await mock("orca_stream_viewport", null);
+    await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: pane.cols + 7, rows: pane.rows + 3 });
     await browser.waitUntil(async () => (await screenText()).includes("from the snapshot"), { timeoutMsg: "the screen never showed" });
-    expect(await rowsDrawn()).toBe(paneRows + 3);
-    await sendTerm({ kind: "size", cols: 90, rows: paneRows + 5 });
-    await browser.waitUntil(async () => (await rowsDrawn()) === paneRows + 5, { timeoutMsg: "the size of Orca never drew" });
+    await drawnRows(pane.rows);
+    expect(await waitForCalls(claim)).toMatchObject([{ environment: "Studio", handle: "term_example-app", viewport: pane }]);
+    // A snapshot at the pane's size claims nothing.
+    await sendTerm({ kind: "snapshot", data: "same size", cols: pane.cols, rows: pane.rows });
+    await browser.waitUntil(async () => (await screenText()).includes("same size"), { timeoutMsg: "the screen never showed" });
+    await browser.pause(300);
+    expect(await callsOf(claim)).toHaveLength(1);
+  });
+
+  it("gives the terminal the size of another desktop's window, or of a phone, and does not fit it to the pane", async () => {
+    const pane = await openSized();
+    const claim = await mock("orca_stream_viewport", null);
+    await sendTerm({ kind: "size", mode: "remote-desktop-fit", cols: 90, rows: pane.rows + 5 });
+    await drawnRows(pane.rows + 5);
+    await sendTerm({ kind: "size", mode: "mobile-fit", cols: 40, rows: pane.rows + 2 });
+    await drawnRows(pane.rows + 2);
+    await browser.pause(300);
+    expect(await callsOf(claim)).toEqual([]);
+  });
+
+  it("fits the pane on desktop-fit, with sizes of 0 too, and claims the pane's size when Orca has another", async () => {
+    const pane = await openSized();
+    const claim = await mock("orca_stream_viewport", null);
+    await sendTerm({ kind: "size", mode: "remote-desktop-fit", cols: 90, rows: pane.rows + 5 });
+    await drawnRows(pane.rows + 5);
+    await sendTerm({ kind: "size", mode: "desktop-fit", cols: 0, rows: 0 });
+    await drawnRows(pane.rows);
+    expect(await waitForCalls(claim)).toMatchObject([{ environment: "Studio", handle: "term_example-app", viewport: pane }]);
+    // Orca has the pane's size now: nothing to claim (a size that is not the pane's is claimed once more, after a second).
+    await sendTerm({ kind: "size", mode: "desktop-fit", cols: pane.cols, rows: pane.rows });
+    await browser.pause(300);
+    expect(await callsOf(claim)).toHaveLength(1);
+  });
+
+  it("takes the size back when the pane changes while another desktop holds it, and never from a phone", async () => {
+    const pane = await openSized();
+    await focusWindow();
+    await sendTerm({ kind: "size", mode: "remote-desktop-fit", cols: 90, rows: pane.rows + 5 });
+    await drawnRows(pane.rows + 5);
+    const claim = await mock("orca_stream_viewport", null);
+    // The list narrows to 15%, so the terminal widens: the pane's size is claimed.
+    await dragDivider(0.15);
+    const [sent] = await waitForCalls(claim);
+    expect(viewportOf(sent).cols).toBeGreaterThan(pane.cols);
+    await drawnRows(viewportOf(sent).rows);
+    await browser.pause(300);
+    const claimed = (await callsOf(claim)).length;
+    // A phone holds it: the pane changes, and the terminal stays at the phone's size.
+    await sendTerm({ kind: "size", mode: "mobile-fit", cols: 40, rows: pane.rows + 2 });
+    await drawnRows(pane.rows + 2);
+    await dragDivider(0.3);
+    await browser.pause(400);
+    expect(await callsOf(claim)).toHaveLength(claimed);
+    expect(await rowsDrawn()).toBe(pane.rows + 2);
   });
 
   it("sends the new size when the pane changes", async () => {
     await openStudio();
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
+    await focusWindow();
     const viewport = await mock("orca_stream_viewport", null);
     // The list narrows to 15%, so the terminal widens.
     await dragDivider(0.15);
@@ -2641,7 +2707,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const input = await mock("orca_stream_input", null);
     await fire("paste", shown, [image()]);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-api", name: "shot.png", data: PNG, environment: "Studio" }]);
-    expect(await waitForCalls(input)).toEqual([{ environment: "Studio", handle: "term_example-api", text: `${dropped("example-api")} ` }]);
+    expect(await waitForCalls(input)).toEqual([{ environment: "Studio", handle: "term_example-api", text: `${dropped("example-api")} `, viewport: PANE }]);
   });
 
   it("types the path in the terminal streamed from a saved environment, to its handle", async () => {
@@ -2650,7 +2716,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const input = await mock("orca_stream_input", null);
     await fire("drop", area, [image()]);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: "Studio" }]);
-    expect(await waitForCalls(input)).toEqual([{ environment: "Studio", handle: "term_example-app_zsh", text: `${dropped("example-app")} ` }]);
+    expect(await waitForCalls(input)).toEqual([{ environment: "Studio", handle: "term_example-app_zsh", text: `${dropped("example-app")} `, viewport: PANE }]);
   });
 
   it("types the text of a file whose answer is not bracketed as it is, and pastes a bracketed one, in a terminal that asked for the bracketed paste", async () => {
@@ -3212,7 +3278,7 @@ describe("orca: split panes (A-17)", () => {
       await pressPane("p2");
       await browser.keys(["1"]);
       await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1", { timeoutMsg: "the keys were not sent" });
-      expect(await callsOf(input)).toEqual([{ environment: "Studio", handle: "term_example-app_zsh", text: "1" }]);
+      expect(await callsOf(input)).toEqual([{ environment: "Studio", handle: "term_example-app_zsh", text: "1", viewport: PANE }]);
     });
 
     it("ends the stream of a terminal that leaves its pane's view, and no other", async () => {
@@ -3239,6 +3305,7 @@ describe("orca: split panes (A-17)", () => {
     it("sends the new size of the pane whose width changed", async () => {
       await openStudioSplit();
       const calls = await waitForCalls("orca_stream_terminal", 2);
+      await focusWindow();
       const viewport = await mock("orca_stream_viewport", null);
       // The list narrows from 19% to 15%, so the panes widen.
       await dragDivider(0.15);
@@ -4089,7 +4156,8 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       await waitForCalls("orca_stream_terminal", 3);
       await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
       await browser.keys(["1"]);
-      expect(await waitForCalls(input)).toEqual([{ environment: null, handle: "term_mac-1", text: "1" }]);
+      expect(await waitForCalls(input)).toEqual([{ environment: null, handle: "term_mac-1", text: "1", viewport: PANE }]);
+      await focusWindow();
       const viewport = await mock("orca_stream_viewport", null);
       await dragDivider(0.15);
       const sent = await waitForCalls(viewport);
