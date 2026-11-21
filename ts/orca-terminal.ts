@@ -1,9 +1,9 @@
 // The terminals of the Orca screen (A-8, A-12, A-17): one xterm.js for each tab. The work pane is split into panes (A-17), and the tab selected in each pane is shown, in the host element of its pane; the others wait in `#orca-stash`.
 // Every tab is a terminal, a Claude session's or a plain one.
 // The pane that hands an item to Orca (A-9) shows the terminal of its session here too: this module is the one place that loads and draws xterm.js. Each screen that shows terminals is an owner (`showTerminals`), and it shows and hides only its own; a terminal that two owners want goes to the one that asked last.
-// A saved environment streams each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
+// A saved environment, and this machine's Orca once it is paired with the app (A-12), stream each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
 // the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
-// This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
+// This machine's Orca has no stream on its socket (it answers `method_not_supported`): without a pairing, or while the stream of the pairing cannot connect, its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // A terminal of a saved environment that the Orca screen does not stream (A-9 and the session of a child of A-37 show one) is a mirror too, read through Orca's CLI every 2 seconds.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are sent on when the terminal stops showing (another tab, screen or a hidden window), to the terminal they were typed in, and dropped when it goes. Nothing a terminal prints or is typed is kept or logged here.
@@ -56,7 +56,7 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 // What a link in the text is: it starts with http:// or https:// and ends before a space, a quote, a bracket, or a full-width punctuation mark or bracket (U+3000 to U+303F and U+FF00 to U+FFEF), so a URL in a Japanese sentence is cut where the sentence goes on.
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
-// Where a terminal comes from: the stream of a saved environment, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
+// Where a terminal comes from: the stream of a saved environment or of this machine's paired Orca, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
 // `pty` is what a pty is started with: whether Claude Code keeps its own tools, how it asks for a tool ("manual" asks for every tool that writes, "auto" is the calendar pane's, #1074), the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
 // `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, or a read that says the terminal is not listed, which also stops the mirror's reads. The last screen stays drawn.
@@ -487,7 +487,7 @@ function stopMirror(instance: Instance) {
   instance.timer = null;
 }
 
-// ---- the stream (a saved environment) ----
+// ---- the stream (a saved environment, or this machine's paired Orca) ----
 
 function drawEvent(instance: Instance, event: OrcaTermEvent) {
   const term = instance.term;

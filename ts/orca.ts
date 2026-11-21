@@ -2,7 +2,8 @@
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history, and the definition of a name of the editor (A-34, orca-definition.ts), one tab for a project, that opens in a pane under the pane of the editor, and so are a table and the SQL of a database from the database part of the file pane (A-43, orca-database-tabs.ts).
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
-// A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
+// A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca streams it too once the owner has paired the app with it (the card 「このマシンの Orca」 of the settings, `ts/orca-pairing-settings.ts`, which calls `pairingChanged`);
+// without a pairing, or while its stream cannot connect, this machine's list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and its terminals are mirrors,
 // and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments.
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
@@ -44,7 +45,7 @@ import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
-import { showFailure } from "./error-card.js";
+import { logError, showFailure } from "./error-card.js";
 import { copyText, setNavCount, show } from "./view.js";
 
 // The name of each status icon (its `aria-label`).
@@ -127,9 +128,14 @@ let busy = false;
 let started: { kind: StartKind; paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
 type StartKind = "claude" | "terminal";
 const START_WAIT_MS = 30_000;
-// The saved environment whose list is streamed (null: none is, and the list is read by the clock), and the channel of the stream: an event of another channel is not taken.
-let streamTarget: string | null = null;
+// The place whose list is streamed: the name of a saved environment, null for this machine's Orca (once it is paired), undefined when none is (the list is read by the clock). And the channel of the stream: an event of another channel is not taken.
+let streamTarget: string | null | undefined;
 let streamChannel: { onmessage: (event: OrcaStreamEvent) => void } | null = null;
+// Whether this machine's Orca is paired with the app (A-12), null before it was read; `pairingSeq` is the number of the latest read (0: none was asked for).
+let paired: boolean | null = null;
+let pairingSeq = 0;
+// The stream of this machine's list could not connect or lost its connection: the list is read by the clock and the terminals are mirrors, until the stream sends a list again.
+let localDown = false;
 // What the feed, the tabs and the notice show now; they are drawn again only when this changes.
 let feedKey = "";
 let noticeKey = "";
@@ -759,14 +765,14 @@ function drawWork(tabs: Tab[]) {
   drawStarted();
 }
 
-// Shows the terminal of the tab selected in each pane while the screen is shown: streamed from a saved environment, mirrored on this machine.
+// Shows the terminal of the tab selected in each pane while the screen is shown: streamed from a saved environment or from this machine's paired Orca, else mirrored.
 function syncTerminal(tabs: Tab[] = projectKey === null ? [] : tabsOf(projectKey)) {
   const layout = shown() ? currentLayout() : null;
   const placements: Placement[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
     const tab = tabOfId(tabs, pane.selected);
     const host = paneHosts.get(pane.id);
-    if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: tab.environment !== null && streamsEnvironment(tab.environment) ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: tab.environment }, host });
+    if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: streamsEnvironment(tab.environment) ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: tab.environment }, host });
   }
   if (placements.length === 0) return hideTerminals();
   showTerminals(placements, tabOfId(tabs, selectedTab() ?? "")?.handle ?? null);
@@ -1076,7 +1082,7 @@ function syncPeek() {
   const t = listShown() && at.project !== pickedProject() ? tabsOf(at.project).find((x) => x.id === at.tab) : undefined;
   if (t === undefined || t.handle === null) return closePeek();
   const name = mix.projects.find((p) => p.key === at.project)?.name ?? "";
-  drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: { kind: t.environment !== null && streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment } });
+  drawPeek({ status: t.status, label: t.label, project: name, title: t.latest ?? t.title, environment: t.environment, source: { kind: streamsEnvironment(t.environment) ? "stream" : "mirror", handle: t.handle, path: t.path, environment: t.environment } });
 }
 
 function draw() {
@@ -1103,20 +1109,49 @@ function draw() {
   syncDatabase(tabs);
 }
 
-// ---- the stream of a saved environment ----
+// ---- the stream of the list ----
 
-// Whether the list of the target held is streamed.
-const streaming = () => streamTarget !== null && streamTarget === view?.target;
+// Whether the list of the target held is streamed (this machine's, only while its stream is connected).
+const streaming = () => view !== null && streamTarget !== undefined && streamTarget === view.target && !(streamTarget === null && localDown);
 
-// Streams the list while the target is a saved environment that is listed (and the command is there), and ends the stream otherwise. The stream tries a lost connection again by itself.
+// Reads whether this machine's Orca is paired, and streams or stops streaming its list by it. The first read of the list asks for it, and the settings do after a pairing is saved or revoked (A-12).
+async function readPairing() {
+  const seq = ++pairingSeq;
+  let next = false;
+  try {
+    next = (await invoke("orca_pairing_status")).paired;
+  } catch (e) {
+    logError("orca", e);
+  }
+  if (seq !== pairingSeq) return;
+  paired = next;
+  // A pairing saved again: the stream connects anew, with the pairing now kept.
+  if (next && streamTarget === null) streamTarget = undefined;
+  syncStream();
+  draw();
+}
+
+// The pairing of this machine's Orca was saved or revoked in the settings.
+export function pairingChanged() {
+  void readPairing();
+}
+
+// Streams the list while the target is a saved environment that is listed, or this machine while its Orca is paired (and the command is there), and ends the stream otherwise. The stream tries a lost connection again by itself.
 function syncStream() {
-  const want = view !== null && view.state !== "missing" && view.target !== null && view.environments.includes(view.target) ? view.target : null;
+  let want: string | null | undefined;
+  if (view !== null && view.state !== "missing") {
+    if (view.target === null) {
+      if (paired === null && pairingSeq === 0) void readPairing();
+      if (paired) want = null;
+    } else if (view.environments.includes(view.target)) want = view.target;
+  }
   if (want === streamTarget) return;
   // A new stream ends the old one by itself: a close is a call of its own, which could reach Rust after the open and end the new stream.
-  if (streamTarget !== null && want === null) invoke("orca_stream_close").catch(() => {});
+  if (streamTarget !== undefined && want === undefined) invoke("orca_stream_close").catch(() => {});
   streamTarget = want;
   streamChannel = null;
-  if (want === null) return;
+  localDown = false;
+  if (want === undefined) return;
   const channel = new window.__TAURI__.core.Channel<OrcaStreamEvent>();
   streamChannel = channel;
   channel.onmessage = (event) => {
@@ -1128,12 +1163,19 @@ function syncStream() {
 }
 
 // A list of the stream is taken as a read that worked; a lost connection as one that failed (the rows stay, and the status says so until the list comes again).
+// This machine's stream that is lost is no failure: the list is read by the clock and the terminals are mirrors until it connects again, which its next list tells.
 function onStream(event: OrcaStreamEvent) {
   if (view === null) return;
+  const here = view.target === null;
   if (event.kind === "status") {
     if (event.live) return;
-    adopt({ ...view, state: "failed", message: event.message, known: false, local: null });
+    if (!here) adopt({ ...view, state: "failed", message: event.message, known: false, local: null });
+    else if (!localDown) {
+      localDown = true;
+      void load(clockScope(), true);
+    }
   } else {
+    localDown = false;
     adopt({ ...view, state: "ready", message: "", rows: event.rows, worktrees: event.worktrees, projects: event.projects, terminals: event.terminals, known: false, local: null });
   }
   draw();
@@ -1235,8 +1277,8 @@ function refresh() {
 // The last read, for a side pane to draw at once while it reads again.
 export const heldOrca = () => view;
 
-// Whether the stream of the list is that of the saved environment `environment`: only then can a pane of A-9 stream the terminal of a session on it (A-12).
-export const streamsEnvironment = (environment: string) => streaming() && view?.target === environment;
+// Whether the stream of the list is that of the saved environment `environment` (null: this machine's, while it streams): only then can a pane of A-9 stream the terminal of a session on it (A-12).
+export const streamsEnvironment = (environment: string | null) => streaming() && view?.target === environment;
 
 // Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. `force` starts the read although another is on its way (the first read of a pane and the read after a send); the poll of a shown session does not. The first read of the app asks for the target too.
 export async function refreshOrca(force: boolean) {

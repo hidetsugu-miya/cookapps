@@ -130,6 +130,10 @@ const answers = {
   },
   // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
   editor_settings: { autosaveMs: 1000, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 },
+  // A-12: this machine's Orca is not paired; a spec that streams its list answers `orca_pairing_status` with a pairing, and one that saves or revokes one mocks `orca_pairing_save` or `orca_pairing_revoke`.
+  orca_pairing_status: { paired: false },
+  orca_pairing_save: { paired: true },
+  orca_pairing_revoke: { paired: false },
   orca_stream_open: null,
   orca_stream_close: null,
   orca_stream_terminal: null,

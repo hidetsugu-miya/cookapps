@@ -1408,12 +1408,12 @@ describe("settings: the PCs with the server of the orchestration (the Orca tab)"
 });
 
 describe("settings: the 開発 tab (the tab `orca`) has no card of the target (A-6)", () => {
-  it("has the cards of the terminal colors, the editor, Ghostty's settings, the PCs with the server and the Jira connection, and none of the target", async () => {
+  it("has the cards of the terminal colors, the editor, Ghostty's settings, the PCs with the server, the Jira connection and this machine's Orca, and none of the target", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("orca");
     await expect($("#settings-panel-orca")).toBeDisplayed();
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続", "このマシンの Orca"]);
     expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
   });
 });
@@ -1450,7 +1450,7 @@ describe("settings: Jira connection (the 開発 tab, J-1)", () => {
 
   it("has a header row with the hint, the state row and a form with the three fields and the two buttons", async () => {
     await openJira({ jira_settings: saved });
-    expect(await count("#settings-panel-orca > .card:last-child .card-head .logo.orca")).toBe(1);
+    expect(await count("#settings-panel-orca > .card:has(#jira-form) .card-head .logo.orca")).toBe(1);
     await expect($("#jira-help")).toHaveAttribute("aria-label", "Jira 接続の説明");
     await expect($("#jira-items .item-name")).toHaveText("Jira");
     await expect($("#jira-items .status.ok")).toHaveText("保存済み");
@@ -1544,6 +1544,96 @@ describe("settings: Jira connection (the 開発 tab, J-1)", () => {
   });
 });
 
+// A-12: the card 「このマシンの Orca」 of the 開発 tab: the pairing link that Orca makes for "This computer".
+describe("settings: the pairing of this machine's Orca (the 開発 tab, A-12)", () => {
+  async function openPairing(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await waitForCalls("orca_pairing_status");
+  }
+  const LINK = "orca://pair?code=example";
+
+  it("reads whether a pairing is kept each time the tab is shown, and asks Orca nothing", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, orca_pairing_status: { paired: true } });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await waitForCalls("orca_pairing_status");
+    await expect($("#orca-pairing-items .status.ok")).toHaveText("ペアリング済み");
+    await $("#settings-tab-google").click();
+    await openTab("orca");
+    await waitForCalls("orca_pairing_status", 2);
+  });
+
+  it("has a header row with the hint, the state row and a password field with the save button", async () => {
+    await openPairing();
+    await expect($("#orca-pairing-help")).toHaveAttribute("aria-label", "このマシンの Orca の説明");
+    await expect($("#orca-pairing-items .item-name")).toHaveText("このマシンの Orca");
+    await expect($("#orca-pairing-items .status.off")).toHaveText("未設定");
+    expect(await count("#orca-pairing-items .text-btn")).toBe(0);
+    await expect($("#orca-pairing-link")).toHaveAttribute("type", "password");
+    await expect($("#orca-pairing-link")).toHaveAttribute("aria-label", "ペアリングリンク");
+    expect(await textsOf("#orca-pairing-form .text-btn")).toEqual(["保存"]);
+  });
+
+  it("calls orca_pairing_save with the link from 保存, empties the field at once and shows the pairing", async () => {
+    await openPairing();
+    const save = await mock("orca_pairing_save", holds);
+    await $("#orca-pairing-link").setValue(LINK);
+    await $("#orca-pairing-save").click();
+    expect(await waitForCalls(save)).toEqual([{ link: LINK }]);
+    await expect($("#orca-pairing-link")).toHaveValue("");
+    await expect($("#orca-pairing-save")).toBeDisabled();
+    await release(save, { paired: true });
+    await expect($("#orca-pairing-items .status.ok")).toHaveText("ペアリング済み");
+    await expect($("#orca-pairing-save")).toBeEnabled();
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("saves nothing for an empty field", async () => {
+    await openPairing();
+    const save = await mock("orca_pairing_save", { paired: true });
+    await $("#orca-pairing-link").setValue("  ");
+    await $("#orca-pairing-save").click();
+    await browser.pause(300);
+    expect(await callsOf(save)).toEqual([]);
+  });
+
+  it("shows the words of a refused link on a card and stays unset", async () => {
+    await openPairing();
+    const reason = "ペアリングリンクの形が正しくありません";
+    await mock("orca_pairing_save", rejects(reason));
+    await $("#orca-pairing-link").setValue("not a link");
+    await $("#orca-pairing-save").click();
+    await expect($(CARD)).toHaveText(reason);
+    await expect($("#orca-pairing-items .status.off")).toHaveText("未設定");
+    await expect($("#orca-pairing-link")).toHaveValue("");
+  });
+
+  it("revokes the pairing from 取り消す and goes back to 未設定", async () => {
+    await openPairing({ orca_pairing_status: { paired: true } });
+    const revoke = await mock("orca_pairing_revoke", { paired: false });
+    await $('#orca-pairing-items [aria-label="ペアリングを取り消す"]').click();
+    expect(await waitForCalls(revoke)).toEqual([null]);
+    await expect($("#orca-pairing-items .status.off")).toHaveText("未設定");
+    expect(await count("#orca-pairing-items .text-btn")).toBe(0);
+  });
+
+  it("writes the words to the log, with no card, when the pairing cannot be read", async () => {
+    await openPairing({ orca_pairing_status: rejects("キーチェーンを読めません") });
+    await waitForLog("キーチェーンを読めません");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("opens a hint that says the link is made for This computer, and that the token stays out of the screen", async () => {
+    await openPairing();
+    await $("#orca-pairing-help").click();
+    await expect($("#orca-pairing-help")).toHaveAttribute("aria-expanded", "true");
+    await expect($('[role="dialog"][aria-label="このマシンの Orca"]')).toHaveText(expect.stringContaining("This computer"));
+    await expect($('[role="dialog"][aria-label="このマシンの Orca"]')).toHaveText(expect.stringContaining("トークンは OS の資格情報の保管場所"));
+  });
+});
+
 describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
   // The app with `fixtures` added, and the settings screen open on the Orca tab.
   async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
@@ -1566,7 +1656,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
 
   it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "Jira 接続", "このマシンの Orca"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
     expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });
