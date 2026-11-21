@@ -8,10 +8,12 @@ The owner starts the implementation of an issue from Claude Code; nothing else s
 No scheduled job implements an issue (at the owner's instruction, 2026-11-21; #1179: the launchd job that ran `ship` at 00:30 is removed, and the only scheduled run left is the X post of `.claude/skills/x-post/SKILL.md`).
 An issue is made only after its spec is settled ("Make an issue only once its spec is decided, verified, planned and shown" below), so it is ready to implement.
 Naming the issues to `implement` is that instruction: it proposes the open issues, ranked, and implements the ones the owner names, one after another or together in a worktree of its own (at the owner's instruction, 2026-11-09; Discussion #293; the worktree of its own, 2026-11-19; #1006; the owner names the issues every time, and the run never picks them, 2026-11-21; #1207).
+The one exception: before the Release PR, the run itself takes up to five findings from the issues of the Lows that merged pull requests' reviews left, and fixes them (`review.md`, "Turn the Lows of a merged pull request into one issue…"; at the owner's instruction, 2026-11-21; #1211).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13
 Good: the owner says 「次を進めて」 -> the session proposes the ranked issues and waits for the owner to name them
+Good: an `implement` run has merged its pull request -> before the Release PR it fixes the findings of 「PR #1300 のレビューで残った Low」, which the owner did not name
 Bad:  a schedule picks the oldest open issue and implements it
 Bad:  the session takes the first issue of the ranked list without the owner naming it
 ```
@@ -135,7 +137,7 @@ An issue that carries a decision of the owner (a new feature, a change of spec o
 The gate has three scopes (decided by the agent, 2026-11-21, at the owner's leave; #1207):
 - An issue that carries a decision of the owner: the whole gate above.
 - An issue that the AI decides at the owner's leave (`improvement-proposal`, "Issue decided by the AI"): the verification, the plan and a prototype Artifact all the same, with the URL in the body, but the AI accepts the prototype in the owner's place and the section `AI が決めたこと` says why.
-- No gate and no prototype: an issue for a Dependabot pull request (`dependabot-issues.sh`), a bug whose correct behavior a requirement already states, and an issue that changes only `.claude/` or the tools (the harness). Its body records what was found and the plan only.
+- No gate and no prototype: an issue for a Dependabot pull request (`dependabot-issues.sh`), a bug whose correct behavior a requirement already states, an issue that changes only `.claude/` or the tools (the harness), and an issue of the Lows that a merged pull request's review left (`review.md`; at the owner's instruction, 2026-11-21; #1211). Its body records what was found and the plan only.
 
 Write in the body of the issue the background, what was investigated, the decision (with the options put to the owner), the plan and the URL of the prototype, as far as its scope asks, so that the reason for the choice can be found on GitHub later (`issue-plan`, step 2).
 The repository is public, so keep personal information out (`publishing.md`).
@@ -170,7 +172,7 @@ Push the branch after release-verifier passes, open the pull request, send the c
 The issue closes at the merge, and the Release PR shows what has not reached the app yet.
 An `implement` run puts all its issues in one pull request, with one `Closes #n` line for each.
 A ruleset on main requires the statuses `e2e` and `review`, and that the branch contains main, so a change tested on an old main cannot merge.
-Only the pass or failure goes to GitHub: review findings stay local, because they describe faults that are not fixed yet.
+Before the merge, only the pass or failure of the pull request goes to GitHub, and the review findings stay local. After the merge, the findings that release-verifier sorted `issue` go into one issue (`review.md`; at the owner's instruction, 2026-11-21; #1211). A security finding never goes to GitHub, because it may show a way to abuse the app (decided by the agent, 2026-11-21, at the owner's leave; #1211).
 
 ```sh
 gh pr create --title "Slack 一覧をウォッチ式にする" --body "Closes #13"

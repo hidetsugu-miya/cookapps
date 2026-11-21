@@ -18,7 +18,7 @@ hook_log_begin
 
 msgs=()
 if [ "$plan" -eq 1 ]; then
-  msgs+=("issue を作成しました。issue-plan スキルの手順 1〜4（作者の確認、書く・ラベル、分割、報告）を続けてください（まだ始めていなければ、ここから始めてください）。issue の並べ替えはしません。取りかかる issue はオーナーが implement で指定します。")
+  msgs+=("issue を作成しました。issue-plan スキルの手順 1〜4（作者の確認、書く・ラベル、分割、報告）を続けてください（まだ始めていなければ、ここから始めてください）。issue の並べ替えはしません。取りかかる issue はオーナーが implement で指定します（例外として、レビューで残った Low の issue は implement の手順 6 が取ります）。")
 fi
 if [ "$merge" -eq 1 ]; then
   main="$(git -C "${CLAUDE_PROJECT_DIR:?}" rev-parse --path-format=absolute --git-common-dir)/.."
@@ -26,7 +26,7 @@ if [ "$merge" -eq 1 ]; then
   rc=$?
   if [ "$rc" -eq 0 ]; then
     msgs+=("gh pr merge のあとに plan-release.py release を実行しました:"$'\n'"$out")
-    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます（release スキル（.claude/skills/release/SKILL.md）の手順 B）。リリースを待つ変更があれば、このセッションが Release PR を用意し、チェックを送ったらそのままマージして、リリースを見届けます（release スキルの手順 A と B。なければ作り、あれば本文を更新します。オーナーのマージは待ちません）。マージが拒まれたとき、release の run がランナーやネットワーク以外の原因で失敗したときは、オーナーに理由を伝えます。")
+    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます（release スキル（.claude/skills/release/SKILL.md）の手順 B）。リリースを待つ変更があれば、このセッションが Release PR を用意し（implement の実行中なら、手順 6（レビューで残った Low の修正）のあとで用意します）、チェックを送ったらそのままマージして、リリースを見届けます（release スキルの手順 A と B。なければ作り、あれば本文を更新します。オーナーのマージは待ちません）。マージが拒まれたとき、release の run がランナーやネットワーク以外の原因で失敗したときは、オーナーに理由を伝えます。")
   else
     msgs+=("gh pr merge のあとに plan-release.py release を実行しましたが、失敗しました（exit ${rc}）:"$'\n'"$out")
   fi
