@@ -172,7 +172,7 @@ Push the branch after release-verifier passes, open the pull request, send the c
 The issue closes at the merge, and the Release PR shows what has not reached the app yet.
 An `implement` run puts all its issues in one pull request, with one `Closes #n` line for each.
 A ruleset on main requires the statuses `e2e` and `review`, and that the branch contains main, so a change tested on an old main cannot merge.
-Only the pass or failure goes to GitHub with the pull request: review findings stay local until the merge, because they describe faults that are not fixed yet. After the merge, the findings that release-verifier sorted `issue` go into one issue (`review.md`; at the owner's instruction, 2026-11-21; #1211).
+Before the merge, only the pass or failure of the pull request goes to GitHub, and the review findings stay local. After the merge, the findings that release-verifier sorted `issue` go into one issue (`review.md`; at the owner's instruction, 2026-11-21; #1211). A security finding never goes to GitHub, because it may show a way to abuse the app (decided by the agent, 2026-11-21, at the owner's leave; #1211).
 
 ```sh
 gh pr create --title "Slack 一覧をウォッチ式にする" --body "Closes #13"

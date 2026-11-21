@@ -140,7 +140,7 @@ Bad:  pass -> push with the Low left, and ask the owner whether to fix it
 
 After the merge of a pull request whose review passed with non-blocking findings, the session that merged it makes one issue through `issue-plan` with the findings that release-verifier sorted `issue` (at the owner's instruction, 2026-11-21; #1211).
 Its title is 「PR #{n} のレビューで残った Low」, and its labels are `importance:low`, `point:2` (`point:3` when it holds more than three findings; never `point:5` or `point:8`, so that `issue-plan` step 3 never splits it), and `documentation` only when every finding is where `issue-plan` gives that label (documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/`).
-Its body holds each finding with its ID, `path:line` and gist, and the reviewer's original text as data, inside a quote.
+Its body holds each finding with its ID, `path:line` and gist, and the reviewer's original text as data, inside a quote. Each path is relative to the repository root, and the body passes `guard-public.sh text` before `gh issue create` (`publishing.md`); when it refuses, no issue is made and the refusal is reported.
 A non-blocking finding of security-reviewer (`local`) never goes into the issue, because the repository is public (`publishing.md`, `issues.md`): it stays in the completion report only (ID, `path:line` and gist), and is fixed only on the owner's word (decided by the agent, 2026-11-21, at the owner's leave; #1211).
 When no finding is sorted `issue`, no issue is made. The issue needs no spec gate (`issues.md`, "Make an issue only once…").
 Before each Release PR, `implement` fixes up to five findings of these issues, oldest issue first, on one branch with the range check below, so that they go out in the same version (`.claude/skills/implement/SKILL.md`, step 6). A finding whose fix needs a design decision is skipped and stays in its issue.
@@ -158,7 +158,7 @@ Bad:  implement takes five issues of three findings each (it counts findings, no
 
 A pull request that holds only fixes of non-blocking findings of an already merged version is not sent through the reviewers, and release-verifier is not launched.
 Its normal route is step 6 of `implement`, which takes the findings from the issues of the section above. A finding of the branch under review is not fixed this way ("Fix blocking findings inside the review…" above).
-Write the fixed findings in a file, one to a line, each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
+Write the fixed findings in a file outside the tracked tree, one to a line (`tmp/` of the worktree, which is gitignored, because `range-check.sh` needs a clean tree), each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
 A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
 Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh origin/main {list file}` by the main checkout's path, from the worktree (`worktree.md`).
 The passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main.
@@ -169,7 +169,7 @@ At the owner's instruction (2026-10-29). Running a review for every small fix pr
 The check of the pass record (`pre-git.sh`) stays. The writers are release-verifier and `range-check.sh` alone, so that no other command can let a change through.
 
 ```text
-Good: the issue 「PR #1300 のレビューで残った Low」 holds a Low -> step 6 of implement fixes it on a new branch, and commits -> run-e2e.sh -> `range-check.sh origin/main findings.txt` -> pass record -> push
+Good: issue #1305 「PR #1300 のレビューで残った Low」 holds a Low -> step 6 of implement fixes it on the new branch `fix/review-lows-1305`, and commits -> run-e2e.sh -> `range-check.sh origin/main tmp/review-lows.txt` -> pass record -> push
 Bad:  fix the Low of a merged version and run the performance and code reviews again
 Bad:  fix the Low of a merged version and launch release-verifier to check the range
 Bad:  fix a Low of the branch that just passed, and run `range-check.sh {passed HEAD} {list file}` (leave it, and list it in the completion report)

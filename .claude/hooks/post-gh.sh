@@ -18,7 +18,7 @@ hook_log_begin
 
 msgs=()
 if [ "$plan" -eq 1 ]; then
-  msgs+=("issue を作成しました。issue-plan スキルの手順 1〜4（作者の確認、書く・ラベル、分割、報告）を続けてください（まだ始めていなければ、ここから始めてください）。issue の並べ替えはしません。取りかかる issue はオーナーが implement で指定します。")
+  msgs+=("issue を作成しました。issue-plan スキルの手順 1〜4（作者の確認、書く・ラベル、分割、報告）を続けてください（まだ始めていなければ、ここから始めてください）。issue の並べ替えはしません。取りかかる issue はオーナーが implement で指定します（例外として、レビューで残った Low の issue は implement の手順 6 が取ります）。")
 fi
 if [ "$merge" -eq 1 ]; then
   main="$(git -C "${CLAUDE_PROJECT_DIR:?}" rev-parse --path-format=absolute --git-common-dir)/.."
