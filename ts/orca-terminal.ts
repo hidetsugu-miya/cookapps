@@ -1,8 +1,9 @@
 // The terminals of the Orca screen (A-8, A-12, A-17): one xterm.js for each tab. The work pane is split into panes (A-17), and the tab selected in each pane is shown, in the host element of its pane; the others wait in `#orca-stash`.
 // Every tab is a terminal, a Claude session's or a plain one.
 // The pane that hands an item to Orca (A-9) shows the terminal of its session here too: this module is the one place that loads and draws xterm.js. Each screen that shows terminals is an owner (`showTerminals`), and it shows and hides only its own; a terminal that two owners want goes to the one that asked last.
-// A saved environment, and this machine's Orca once it is paired with the app (A-12), stream each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
-// the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
+// A saved environment, and this machine's Orca once it is paired with the app (A-12), stream each terminal shown (`orca_stream_terminal`, to the stream of the place of its tab, as every call of the stream is): its screen first, then the bytes it prints. A terminal is sized as Orca's own client sizes it: the snapshot is drawn at Orca's size and then fitted to the pane, and the pane's size (FitAddon's proposal, always) is claimed when it differs;
+// `desktop-fit` fits the pane and claims it when Orca has another size, `remote-desktop-fit` and `mobile-fit` give the terminal Orca's size with no fit, and the subscription only registers the pane's size. The size is claimed again with the keys typed and with a change of the pane while the window has the focus (a change of the pane takes it back from `remote-desktop-fit`, never from `mobile-fit`).
+// Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
 // This machine's Orca has no stream on its socket (it answers `method_not_supported`): without a pairing, or while the stream of the pairing cannot connect, its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // A terminal of a saved environment that the Orca screen does not stream (A-9 and the session of a child of A-37 show one) is a mirror too, read through Orca's CLI every 2 seconds.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
@@ -18,6 +19,7 @@
 // The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
 import type { Appearance } from "./bindings/Appearance";
 import type { ClaudeCodeEvent } from "./bindings/ClaudeCodeEvent";
+import type { OrcaFitMode } from "./bindings/OrcaFitMode";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
 import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
@@ -35,10 +37,15 @@ const MIRROR_MS = 1000;
 // A saved environment's screen is read by a process of Orca's CLI each time, slower than this machine's socket.
 const MIRROR_ENV_MS = 2000;
 const FIT_DELAY_MS = 50;
+// A claim of the same size is not sent again within this time, as Orca's own client does (Orca answers a claim that changes nothing with no event, so this is only a guard against a loop).
+const CLAIM_REPEAT_MS = 1000;
 // A send of typed keys carries at most this many characters (Rust takes 100,000).
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
 const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
+// The line a stream or a mirror writes once when its terminal ended, and what Orca's refusal of keys to such a terminal says (`terminal_not_writable`).
+const ENDED_LINE = "\r\n\x1b[2m（ターミナルは終了しました）\x1b[0m";
+const NOT_WRITABLE = "terminal_not_writable";
 // An OSC 52 request holds at most this many base64 characters, as in Orca's own terminal (128 KiB).
 const OSC52_LIMIT = 128 * 1024;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -59,7 +66,8 @@ const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-
 // Where a terminal comes from: the stream of a saved environment or of this machine's paired Orca, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
 // `pty` is what a pty is started with: whether Claude Code keeps its own tools, how it asks for a tool ("manual" asks for every tool that writes, "auto" is the calendar pane's, #1074), the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
-// `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, or a read that says the terminal is not listed, which also stops the mirror's reads. The last screen stays drawn.
+// `onGone` is called when a stream or a mirror finds that the terminal left the list of its Orca (the terminal ended): the stream's end, a read that says the terminal is not listed (which also stops the mirror's reads), or a send that Orca refuses as not writable. The last screen stays drawn.
+// `ended` is what the list says of a stream or a mirror (A-8): true makes the terminal end, with one line, its reads and its stream stopped and its keys dropped; false after true makes it start again; absent says nothing (a pty has its own).
 export interface TermSource {
   kind: "stream" | "mirror" | "pty";
   handle: string;
@@ -67,6 +75,7 @@ export interface TermSource {
   environment: string | null;
   pty?: { builtinTools: boolean; permissionMode: ClaudeCodePermissionMode; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; onEnd?: () => void };
   onGone?: () => void;
+  ended?: boolean;
 }
 
 // A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
@@ -76,9 +85,14 @@ export interface Placement {
   host: HTMLElement;
 }
 
+interface PaneSize {
+  cols: number;
+  rows: number;
+}
+
 interface Instance {
   term: XTerm;
-  fit: { fit(): void };
+  fit: { fit(): void; proposeDimensions(): PaneSize | undefined };
   el: HTMLElement;
   source: TermSource;
   // The host element of its pane while it is shown, else null (its box waits in the stash).
@@ -89,6 +103,10 @@ interface Instance {
   channel: { onmessage: (event: never) => void } | null;
   // The number of the showing of its stream: Rust ends a showing only by a close of the same number, whatever order the calls arrive in.
   generation: number;
+  // A stream: who holds the size of the terminal in Orca (the mode of the last `size` event, null before one), the size the pane fitted at the last look, and the last size claimed with its time (A-12, "Size").
+  fitMode: OrcaFitMode | null;
+  pane: PaneSize | null;
+  claimed: (PaneSize & { at: number }) | null;
   // The mirror: its timer, the last frame drawn, and a read on its way.
   timer: number | null;
   last: string | null;
@@ -103,8 +121,9 @@ interface Instance {
   // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
   copy: string | null;
   copyQueued: boolean;
-  // A pty: the answer of its start (the keys and the size wait for it), which is the number of the start that `claude_code_close` takes, or null when it could not start, and whether its process has ended or could not start (the keys typed are dropped).
+  // A pty: the answer of its start (the keys and the size wait for it), which is the number of the start that `claude_code_close` takes, or null when it could not start.
   ready: Promise<number | null>;
+  // Whether its process has ended or could not start (a pty), or its terminal ended (a stream or a mirror: the list, the end of the stream or a refused send said so): the keys typed are dropped, and it reads nothing.
   ended: boolean;
 }
 
@@ -267,12 +286,13 @@ function copyLater(instance: Instance, text: string) {
 
 // Draws `data` as a screen drawn again: an OSC 52 request in it is not made.
 // xterm.js parses the writes in order and calls the callback of each right after its parse, so the count is up only while `data` itself is parsed, and the live output queued before it keeps its requests.
-function writeAgain(instance: Instance, data: string) {
+function writeAgain(instance: Instance, data: string, done?: () => void) {
   instance.term.write("", () => {
     instance.replaying++;
   });
   instance.term.write(data, () => {
     instance.replaying--;
+    done?.();
   });
 }
 
@@ -323,7 +343,7 @@ function newInstance(source: TermSource, owner: string): Instance {
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
   useWebgl(term);
-  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, failing: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
+  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, fitMode: null, pane: null, claimed: null, timer: null, last: null, reading: false, pending: "", sending: false, failing: false, replaying: 0, copy: null, copyQueued: false, ready: Promise.resolve(null), ended: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -359,19 +379,58 @@ function newInstance(source: TermSource, owner: string): Instance {
   return instance;
 }
 
-// Fits a shown terminal to its pane, and tells the stream the new size.
+// The size the pane fits now, as FitAddon proposes it, null while the pane has no size. Every subscription, claim and send of a stream carries this size and not the xterm's own, which Orca's size can hold elsewhere.
+function paneSize(instance: Instance): PaneSize | null {
+  if (!instance.host || instance.host.hidden) return null;
+  const size = instance.fit.proposeDimensions();
+  return size && size.cols > 0 && size.rows > 0 ? { cols: size.cols, rows: size.rows } : null;
+}
+
+// Takes `size` for the terminal of a stream (`terminal.updateViewport` with the claim): Orca then gives the terminal the size of this pane.
+function claimPane(instance: Instance, size: PaneSize) {
+  const last = instance.claimed;
+  const now = Date.now();
+  if (last && last.cols === size.cols && last.rows === size.rows && now - last.at < CLAIM_REPEAT_MS) return;
+  instance.claimed = { ...size, at: now };
+  invoke("orca_stream_viewport", { environment: instance.source.environment, handle: instance.source.handle, viewport: size }).catch(() => {});
+}
+
+// Fits a terminal of a stream to its pane and, when `was` (the size Orca has the terminal at) is another size, claims the pane's size: after a snapshot and after `desktop-fit`, as Orca's own client does.
+function fitAndClaim(instance: Instance, was: PaneSize | null) {
+  const size = paneSize(instance);
+  if (!size || instance.channel === null) return;
+  instance.pane = size;
+  instance.fit.fit();
+  if (was && (was.cols !== size.cols || was.rows !== size.rows)) claimPane(instance, size);
+}
+
+// A terminal of a stream follows its pane, except while Orca holds its size for a phone (`mobile-fit`) or another desktop's window (`remote-desktop-fit`): it then stays at Orca's size,
+// and only a change of the pane while this window has the focus takes the size back (`remote-desktop-fit`), at the pane's size, as Orca's own client does; `mobile-fit` is never taken.
+function fitStream(instance: Instance) {
+  const size = paneSize(instance);
+  if (!size) return;
+  const before = instance.pane;
+  instance.pane = size;
+  const claims = instance.channel !== null && (!before || before.cols !== size.cols || before.rows !== size.rows) && document.hasFocus();
+  if (instance.fitMode === "mobile-fit" || (instance.fitMode === "remote-desktop-fit" && !claims)) return;
+  instance.fit.fit();
+  if (claims) claimPane(instance, size);
+}
+
+// Fits a shown terminal to its pane, and tells the process or the stream the new size.
 function fitInstance(instance: Instance) {
   if (!instance.host || instance.host.hidden) return;
+  if (instance.source.kind === "stream") {
+    fitStream(instance);
+    return;
+  }
   const { cols, rows } = instance.term;
   instance.fit.fit();
-  if (instance.channel !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
+  if (instance.source.kind === "pty" && instance.channel !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
     const viewport = { cols: instance.term.cols, rows: instance.term.rows };
-    if (instance.source.kind === "stream") invoke("orca_stream_viewport", { handle: instance.source.handle, viewport }).catch(() => {});
-    else if (instance.source.kind === "pty") {
-      void instance.ready.then(() => {
-        if (!instance.ended) invoke("claude_code_resize", { id: instance.source.handle, viewport }).catch(() => {});
-      });
-    }
+    void instance.ready.then(() => {
+      if (!instance.ended) invoke("claude_code_resize", { id: instance.source.handle, viewport }).catch(() => {});
+    });
   }
 }
 
@@ -387,7 +446,18 @@ function fitSoon() {
 
 // ---- the keys ----
 
+// The terminal of a stream or a mirror ended: its reads and its stream stop, the keys not sent are dropped, and `line` is written once (none when its own line is drawn). It does nothing for a terminal that ended already, so the line is never written twice.
+function endTerminal(instance: Instance, line: string | null) {
+  if (instance.ended) return;
+  instance.ended = true;
+  instance.pending = "";
+  stop(instance);
+  if (line !== null) instance.term.write(line);
+}
+
 async function sendKeys(instance: Instance) {
+  // A terminal that ended takes no key: they are dropped, and no failure is made of them.
+  if (instance.ended) instance.pending = "";
   if (instance.sending || !instance.pending) return;
   const text = instance.pending.slice(0, SEND_LIMIT);
   instance.pending = instance.pending.slice(text.length);
@@ -396,12 +466,18 @@ async function sendKeys(instance: Instance) {
     if (instance.source.kind === "pty") {
       await instance.ready;
       if (!instance.ended) await invoke("claude_code_input", { id: instance.source.handle, text });
-    } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
+    } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { environment: instance.source.environment, handle: instance.source.handle, text, viewport: paneSize(instance) });
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
     instance.failing = false;
   } catch (e) {
-    if (!instance.failing) onError(e);
-    instance.failing = true;
+    if (instance.source.kind !== "pty" && String(e).includes(NOT_WRITABLE)) {
+      // Orca refuses keys to a terminal that ended: that is its end, and no failure.
+      endTerminal(instance, ENDED_LINE);
+      instance.source.onGone?.();
+    } else if (!instance.failing) {
+      onError(e);
+      instance.failing = true;
+    }
   }
   instance.sending = false;
   // What was typed meanwhile goes next, also when the terminal is no longer shown; a mirror still shown reads the frame that shows the effect soon.
@@ -459,6 +535,8 @@ async function readFrame(instance: Instance) {
   instance.reading = true;
   try {
     const lines = await invoke("orca_terminal_read", { handle: instance.source.handle, ...mirrorTarget(instance) });
+    // A read that was on its way when the terminal ended draws nothing: the line of its end stays the last.
+    if (instance.ended) return;
     const text = lines.join("\r\n");
     if (text !== instance.last) {
       instance.last = text;
@@ -476,8 +554,8 @@ async function readFrame(instance: Instance) {
 }
 
 function startMirror(instance: Instance) {
-  // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`).
-  if (instance.timer !== null || document.hidden) return;
+  // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`). A terminal that ended is read no more.
+  if (instance.timer !== null || document.hidden || instance.ended) return;
   readFrame(instance);
   instance.timer = window.setInterval(() => readFrame(instance), instance.source.environment === null ? periodMs("orcaMirror", MIRROR_MS) : MIRROR_ENV_MS);
 }
@@ -495,30 +573,42 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
     // The screen now replaces everything drawn before (a resubscription after a lost connection sends it again).
     term.reset();
     instance.copy = null;
-    if (event.cols && event.rows) term.resize(event.cols, event.rows);
-    writeAgain(instance, event.data);
+    const was = event.cols && event.rows ? { cols: event.cols, rows: event.rows } : null;
+    if (was) term.resize(was.cols, was.rows);
+    // Drawn at Orca's size; then the terminal is fitted to the pane, and its size claimed when the pane is another (unless the showing ended meanwhile).
+    const generation = instance.generation;
+    writeAgain(instance, event.data, () => {
+      if (instance.generation === generation) fitAndClaim(instance, was);
+    });
   } else if (event.kind === "output") {
     term.write(event.data);
   } else if (event.kind === "size") {
-    term.resize(event.cols, event.rows);
+    // `remote-desktop-fit` and `mobile-fit`: the terminal takes Orca's size and is not fitted again. `desktop-fit` (its sizes may be 0): the terminal is fitted to the pane, and the pane's size is claimed when Orca has another.
+    instance.fitMode = event.mode;
+    if (event.mode === "desktop-fit") fitAndClaim(instance, event);
+    else term.resize(event.cols, event.rows);
   } else {
-    term.write(`\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
+    // The end of the stream is the end of the terminal: its own line is the one written, and the screen is told.
+    endTerminal(instance, `\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
     instance.source.onGone?.();
   }
 }
 
-// Subscribes the stream of a shown terminal, with its pane's size.
+// Subscribes the stream of a shown terminal, with its pane's size (which the subscription only registers: the size is taken by a claim, A-12).
 function startStream(instance: Instance) {
-  if (document.hidden || instance.channel !== null) return;
+  if (document.hidden || instance.channel !== null || instance.ended) return;
   const channel = new window.__TAURI__.core.Channel<OrcaTermEvent>();
   instance.channel = channel;
   channel.onmessage = (event) => {
     if (instance.channel === channel) drawEvent(instance, event);
   };
+  instance.fitMode = null;
+  instance.claimed = null;
   instance.fit.fit();
-  const viewport = { cols: instance.term.cols, rows: instance.term.rows };
+  const viewport = paneSize(instance) ?? { cols: instance.term.cols, rows: instance.term.rows };
+  instance.pane = viewport;
   instance.generation = ++streamSeq;
-  invoke("orca_stream_terminal", { handle: instance.source.handle, generation: instance.generation, viewport, channel }).catch((e) => {
+  invoke("orca_stream_terminal", { environment: instance.source.environment, handle: instance.source.handle, generation: instance.generation, viewport, channel }).catch((e) => {
     if (instance.channel === channel) drawEvent(instance, { kind: "ended", message: String(e) });
   });
 }
@@ -527,7 +617,7 @@ function startStream(instance: Instance) {
 function stopStream(instance: Instance) {
   if (instance.channel === null) return;
   instance.channel = null;
-  invoke("orca_stream_terminal_close", { handle: instance.source.handle, generation: instance.generation }).catch(() => {});
+  invoke("orca_stream_terminal_close", { environment: instance.source.environment, handle: instance.source.handle, generation: instance.generation }).catch(() => {});
 }
 
 // ---- the pseudo terminal of Claude Code (A-36) ----
@@ -638,6 +728,14 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
       instance.last = null;
     }
     if (!shown.has(id) || changed) fresh.push(instance);
+    // What the list says of a stream or a mirror: it ended (one line, and nothing is read or typed), or it lives again (it starts again).
+    if (source.kind !== "pty" && source.ended !== undefined && source.ended !== instance.ended) {
+      if (source.ended) endTerminal(instance, ENDED_LINE);
+      else {
+        instance.ended = false;
+        if (!fresh.includes(instance)) fresh.push(instance);
+      }
+    }
     shown.add(id);
     owners.set(id, owner);
     instance.owner = owner;

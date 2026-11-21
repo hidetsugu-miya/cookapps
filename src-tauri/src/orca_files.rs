@@ -2424,7 +2424,7 @@ pub async fn orca_branch_used(
 }
 
 /// Switches the worktree at `path` to a local branch, or to a remote one (`kind` `remote`, `name` like `origin/feature/a`; Orca makes the local branch). `kind` `new` is refused. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call, whatever it answered. Orca's refusal comes back in its own words.
-/// On a saved environment the stream of the list (A-12) is told to read the worktrees again, whatever the call answered, because the list it sends says the branch.
+/// The stream of the list (A-12) of that place, a saved environment's or this machine's, is told to read the worktrees again, whatever the call answered, because the list it sends says the branch.
 #[tauri::command]
 pub async fn orca_switch_branch(
     stream: tauri::State<'_, crate::orca_stream::OrcaStream>,
@@ -2441,9 +2441,7 @@ pub async fn orca_switch_branch(
     };
     let switched = asked.await;
     forget_worktree_host(&path, environment.as_deref());
-    if environment.is_some() {
-        stream.reread_worktrees();
-    }
+    stream.reread_worktrees(environment.as_deref());
     switched
 }
 

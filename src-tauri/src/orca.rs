@@ -166,6 +166,8 @@ pub struct OrcaTerminal {
     pub project_key: String,
     /// The worktree's path, where an image dropped on the terminal is put (A-10).
     pub path: String,
+    /// Orca says the terminal ended (`ended_of`): the screen draws it as ended and types nothing into it.
+    pub ended: bool,
     /// Where it is: `None` for this machine, else the name of the saved environment.
     #[cfg_attr(test, ts(optional = nullable))]
     pub environment: Option<String>,
@@ -847,8 +849,15 @@ fn live_worktrees(ps: &Value) -> impl Iterator<Item = (&Value, String)> {
         .filter_map(|w| Some((w, project_key_of(w)?)))
 }
 
+/// Whether a terminal of `terminal list` (or the one the stream built in its shape) ended (A-8): Orca gives it an `exitCause`, or says it is neither `connected` nor `writable` (`buildTerminalSummary`, Orca 1.4.266).
+/// A field that is absent is not `false`, so a terminal of a list that has neither field is live.
+fn ended_of(terminal: &Value) -> bool {
+    !terminal["exitCause"].is_null()
+        || (terminal["connected"] == false && terminal["writable"] == false)
+}
+
 /// The plain terminals of `orca terminal list` (`terminals`, its `result`): every terminal that no Claude row of the same read holds (`rows`, from `rows_of` of the same two documents; a shell, or another agent), still attached to its tab,
-/// in a worktree of `ps` that is listed. The floating terminal has no worktree path and is left out.
+/// in a worktree of `ps` that is listed. The floating terminal has no worktree path and is left out. A terminal that ended stays in the list, as ended (`ended_of`), until its tab is closed.
 /// The kind is the one `rows_of` gives, never `agentIdentity`: Orca takes that from the process or the title before `worktree ps` has the agent, so a terminal would be in neither list for a moment.
 pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Vec<OrcaTerminal> {
     let worktrees: Vec<(&Value, String)> = live_worktrees(ps).collect();
@@ -874,6 +883,7 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Ve
                     .to_owned(),
                 project_key: key.clone(),
                 path: path.to_owned(),
+                ended: ended_of(t),
                 environment: None,
             })
         })
@@ -881,7 +891,7 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Ve
 }
 
 /// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories (the working ones first, then the rest, each newest activity first). The worktrees of an SSH host make no project.
-/// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals (a green dot), and as sessions its Claude rows and plain terminals.
+/// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals that have not ended (a green dot), and as sessions its Claude rows and all its plain terminals.
 pub fn projects_of(ps: &Value, rows: &[OrcaRow], plain: &[OrcaTerminal]) -> Vec<OrcaProject> {
     let mut projects: Vec<OrcaProject> = Vec::new();
     for (worktree, key) in live_worktrees(ps) {
@@ -908,12 +918,12 @@ pub fn projects_of(ps: &Value, rows: &[OrcaRow], plain: &[OrcaTerminal]) -> Vec<
     }
     for project in &mut projects {
         let rows = rows.iter().filter(|r| r.project_key == project.key).count();
-        let terminals = plain
+        let (ended, live): (Vec<&OrcaTerminal>, Vec<&OrcaTerminal>) = plain
             .iter()
             .filter(|t| t.project_key == project.key)
-            .count();
-        project.sessions = u32::try_from(rows + terminals).unwrap_or(u32::MAX);
-        if terminals > 0 {
+            .partition(|t| t.ended);
+        project.sessions = u32::try_from(rows + ended.len() + live.len()).unwrap_or(u32::MAX);
+        if !live.is_empty() {
             project.status = project.status.min(OrcaStatus::Done);
         }
     }
@@ -947,10 +957,15 @@ fn screen_of(result: &Value) -> Result<Vec<String>, String> {
     Ok(screen_lines_of(result))
 }
 
+/// Whether the CLI's output is the error `code`.
+fn is_error(out: &str, code: &str) -> bool {
+    serde_json::from_str::<Value>(out.trim())
+        .is_ok_and(|doc| doc["ok"] == false && doc["error"]["code"] == code)
+}
+
 /// Whether the CLI's output is the `terminal_handle_stale` error. Orca answers it for a terminal that runs as well as for one that is gone, so it is no proof of a closed terminal.
 fn is_stale(out: &str) -> bool {
-    serde_json::from_str::<Value>(out.trim())
-        .is_ok_and(|doc| doc["ok"] == false && doc["error"]["code"] == "terminal_handle_stale")
+    is_error(out, "terminal_handle_stale")
 }
 
 /// The session a launch started (A-6): the terminal `orca terminal create` made, its handle and its pane (`created_of`, `created_pane_key_of`), each `None` when the reply lacks it.
@@ -1312,12 +1327,20 @@ enum AfterTabClose {
     CloseAgain,
 }
 
-/// Reads the answer of `orca terminal close --tab`: `terminal_handle_stale` is closed again with no `--tab`, any other failure is its message.
+/// Reads the answer of `orca terminal close --tab`: `terminal_handle_stale` is closed again with no `--tab`, and so is `tab_not_found`, which Orca 1.4.266 answers when the tab of a terminal that ended is closed (the close with no `--tab` closes that tab, or its pane). Any other failure is its message.
 fn after_tab_close(out: &str) -> Result<AfterTabClose, String> {
-    if is_stale(out) {
+    if is_stale(out) || is_error(out, "tab_not_found") {
         return Ok(AfterTabClose::CloseAgain);
     }
     parse_output(out).map(|_| AfterTabClose::Done)
+}
+
+/// Reads the answer of the close with no `--tab`: `tab_not_found` says the tab is gone already, which is what the close wanted; any other failure is its message.
+fn after_plain_close(out: &str) -> Result<(), String> {
+    if is_error(out, "tab_not_found") {
+        return Ok(());
+    }
+    parse_output(out).map(|_| ())
 }
 
 /// The screen of the terminal as lines with no colors.
@@ -2215,7 +2238,7 @@ fn handoff(
     launch(path, Some(&text), environment)
 }
 
-/// Closes the tab of an Orca terminal; `ptyKilled` is not looked at. When the close of the tab answers `terminal_handle_stale` (which Orca also answers for a terminal that runs), the terminal is closed again with no `--tab`, once; any failure of that, `terminal_handle_stale` too, is an error, and the tab stays.
+/// Closes the tab of an Orca terminal; `ptyKilled` is not looked at. When the close of the tab answers `terminal_handle_stale` (which Orca also answers for a terminal that runs) or `tab_not_found` (which it answers for a terminal that ended), the terminal is closed again with no `--tab`, once; any failure of that, `terminal_handle_stale` too, is an error, and the tab stays, except `tab_not_found`: the tab is gone.
 fn close(handle: &str, environment: Option<&str>) -> Result<(), String> {
     check_handle(handle)?;
     check_listed(environment)?;
@@ -2224,7 +2247,7 @@ fn close(handle: &str, environment: Option<&str>) -> Result<(), String> {
         return Ok(());
     }
     let out = run(&close_plain_args(handle, environment), READ_TIMEOUT).map_err(message_of)?;
-    parse_output(&out).map(|_| ())
+    after_plain_close(&out)
 }
 
 /// The terminals (a handle in this machine's Orca, or in a saved environment) that were checked against the list of their target, so only the first read or input of a terminal reads the list. A terminal leaves when a read or a send of it fails.
@@ -5546,6 +5569,7 @@ mod tests {
                 branch: "main".into(),
                 project_key: "rb".into(),
                 path: "/work/b".into(),
+                ended: false,
                 environment: None,
             }
         );
@@ -5557,6 +5581,56 @@ mod tests {
         // With no row, the terminal that Orca calls Claude's is a plain one: the kind is the row's.
         let all = plain_terminals_of(&projects_doc(), &plain_doc(), &[]);
         assert!(all.iter().any(|t| t.handle == "term_claude"));
+    }
+
+    #[test]
+    fn a_terminal_orca_says_ended_is_listed_as_ended() {
+        let doc = json!({"terminals": [
+            {"handle": "term_live", "worktreePath": "/work/a", "connected": true, "writable": true},
+            {"handle": "term_bare", "worktreePath": "/work/a"},
+            {"handle": "term_gone", "worktreePath": "/work/a", "connected": false, "writable": false},
+            {"handle": "term_cause", "worktreePath": "/work/a", "connected": true, "writable": true, "exitCause": {"kind": "exited", "code": 0}},
+            {"handle": "term_no_input", "worktreePath": "/work/a", "connected": true, "writable": false},
+            {"handle": "term_lost", "worktreePath": "/work/a", "connected": false, "writable": true},
+            {"handle": "term_null_cause", "worktreePath": "/work/a", "exitCause": null},
+        ]});
+        let plain = plain_terminals_of(&projects_doc(), &doc, &[]);
+        let ended: Vec<_> = plain.iter().map(|t| (t.handle.as_str(), t.ended)).collect();
+        // Only both fields false, or a cause, is the end: a field that is absent or null says nothing.
+        assert_eq!(
+            ended,
+            [
+                ("term_live", false),
+                ("term_bare", false),
+                ("term_gone", true),
+                ("term_cause", true),
+                ("term_no_input", false),
+                ("term_lost", false),
+                ("term_null_cause", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ended_terminal_counts_as_a_session_but_not_as_a_green_dot() {
+        let ended = json!({"terminals": [
+            {"handle": "term_gone", "worktreePath": "/work/b", "connected": false, "writable": false},
+        ]});
+        let projects = project_lists(&projects_doc(), &ended);
+        // beta stays idle, with its one session: the ended terminal is a tab, and no activity.
+        assert_eq!(
+            (projects[1].sessions, projects[1].status),
+            (1, OrcaStatus::Idle)
+        );
+        let both = json!({"terminals": [
+            {"handle": "term_gone", "worktreePath": "/work/b", "connected": false, "writable": false},
+            {"handle": "term_sh", "worktreePath": "/work/b"},
+        ]});
+        let projects = project_lists(&projects_doc(), &both);
+        assert_eq!(
+            (projects[1].sessions, projects[1].status),
+            (2, OrcaStatus::Done)
+        );
     }
 
     /// Where the terminal `handle` shows in one read: how many Claude rows hold it, and how many plain terminals are it.
@@ -5794,6 +5868,51 @@ mod tests {
         // The second close has no excuse: a stale answer again is an error, and so is any other failure.
         assert_eq!(parse_output(stale), Err("gone".to_owned()));
         assert!(parse_output(r#"{"ok": true, "result": {"ptyKilled": true}}"#).is_ok());
+    }
+
+    #[test]
+    fn the_tab_close_of_an_ended_terminal_is_closed_again_with_no_tab() {
+        // Orca 1.4.266 answers `tab_not_found` to the close with `--tab` of a terminal that ended; the close with no `--tab` closes its tab (or its pane).
+        let missing = r#"{"ok": false, "error": {"code": "tab_not_found", "message": "no tab"}}"#;
+        assert_eq!(after_tab_close(missing), Ok(AfterTabClose::CloseAgain));
+        // The message is Orca's own text: only the code decides.
+        assert_eq!(
+            after_tab_close(
+                r#"{"ok": false, "error": {"code": "runtime_error", "message": "tab_not_found"}}"#
+            ),
+            Err("tab_not_found".to_owned())
+        );
+        assert!(is_error(missing, "tab_not_found"));
+        assert!(!is_error(missing, "terminal_handle_stale"));
+        assert!(!is_error("", "tab_not_found"));
+        assert!(!is_error("not json", "tab_not_found"));
+        assert!(!is_error(
+            r#"{"ok": true, "error": {"code": "tab_not_found"}}"#,
+            "tab_not_found"
+        ));
+    }
+
+    #[test]
+    fn the_close_with_no_tab_takes_a_missing_tab_as_closed_and_nothing_else_as_done() {
+        assert_eq!(
+            after_plain_close(r#"{"ok": true, "result": {"ptyKilled": false}}"#),
+            Ok(())
+        );
+        // The tab is gone already: that is what the close wanted.
+        assert_eq!(
+            after_plain_close(
+                r#"{"ok": false, "error": {"code": "tab_not_found", "message": "no tab"}}"#
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            after_plain_close(
+                r#"{"ok": false, "error": {"code": "terminal_handle_stale", "message": "gone"}}"#
+            ),
+            Err("gone".to_owned())
+        );
+        assert!(after_plain_close("").is_err());
+        assert!(after_plain_close("not json").is_err());
     }
 
     #[test]

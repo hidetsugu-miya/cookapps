@@ -905,7 +905,7 @@ describe("orchestration mode: the session of a child", () => {
     await waitForCalls("orca_stream_open");
   };
   const streamed = async (n = 1) => (await waitForCalls("orca_stream_terminal", n)) as { handle: string; generation: number; viewport: { cols: number; rows: number } }[];
-  const closed = async (n = 1) => (await waitForCalls("orca_stream_terminal_close", n)) as { handle: string; generation: number }[];
+  const closed = async (n = 1) => (await waitForCalls("orca_stream_terminal_close", n)) as { environment: string | null; handle: string; generation: number }[];
 
   it("streams the terminal of a child of the saved environment that the Orca screen streams, with the size of the pane and its colors, and reads nothing", async () => {
     await openStudio();
@@ -937,7 +937,7 @@ describe("orchestration mode: the session of a child", () => {
     await openStudio();
     const [first] = await streamed();
     await card("a-update").click();
-    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    expect(await closed()).toEqual([{ environment: "Studio", handle: "term_lab-update", generation: first.generation }]);
     // The child of this Mac is mirrored (its Orca does not stream), and no other stream is asked for.
     await mock("orca_terminal_read", ["$ npm test"]);
     await browser.waitUntil(async () => (await readHandles()).join() === "term_a-update");
@@ -957,7 +957,7 @@ describe("orchestration mode: the session of a child", () => {
     await openStudio();
     const [first] = await streamed();
     await $(PROJECT).click();
-    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    expect(await closed()).toEqual([{ environment: "Studio", handle: "term_lab-update", generation: first.generation }]);
     await $(ROW("formation")).click();
     // The tabs are forgotten each time a formation is opened: the card of the child opens its tab again.
     await browser.waitUntil(async () => (await cardNames()).length === 2);
@@ -966,8 +966,8 @@ describe("orchestration mode: the session of a child", () => {
     expect(second.handle).toBe("term_lab-update");
     await $("#nav-mail").click();
     expect(await closed(2)).toEqual([
-      { handle: "term_lab-update", generation: first.generation },
-      { handle: "term_lab-update", generation: second.generation },
+      { environment: "Studio", handle: "term_lab-update", generation: first.generation },
+      { environment: "Studio", handle: "term_lab-update", generation: second.generation },
     ]);
   });
 
@@ -975,7 +975,7 @@ describe("orchestration mode: the session of a child", () => {
     await openStudio();
     const [first] = await streamed();
     await mock("formation_children", [formationChild("a-update", "working")]);
-    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    expect(await closed()).toEqual([{ environment: "Studio", handle: "term_lab-update", generation: first.generation }]);
     // The selection is at the leader's tab: the next child is shown when its card is pressed.
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
     await mock("orca_terminal_read", ["$ next"]);
@@ -992,7 +992,7 @@ describe("orchestration mode: the session of a child", () => {
     const [first] = await streamed();
     await mock("formation_children", []);
     await row("won-2485").click();
-    expect(await closed()).toEqual([{ handle: "term_lab-update", generation: first.generation }]);
+    expect(await closed()).toEqual([{ environment: "Studio", handle: "term_lab-update", generation: first.generation }]);
   });
 
   it("keeps the keyboard in the leader's terminal when children start to work, and the press of a card gives it to the terminal of the child", async () => {

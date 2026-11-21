@@ -1,4 +1,5 @@
 //! A-12: the Orca screen's stream from a saved environment (a paired server), or from this machine's Orca once the owner has paired this app with it (`orca_pairing`), over the end-to-end encrypted WebSocket of `orca_link`.
+//! One stream runs for each place, this machine's Orca and the saved environment that is the target, and the commands of a terminal name the place of its tab.
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again when a worktree it did not list appears,
 //! every 10 seconds (the branch of a worktree can change with no change of the tabs) and right after the app switched a branch (`orca_switch_branch`), one read at a time;
 //! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
@@ -82,10 +83,25 @@ pub enum OrcaTermEvent {
     },
     /// Bytes the terminal printed since.
     Output { data: String },
-    /// Orca's size of the terminal changed.
-    Size { cols: u16, rows: u16 },
+    /// Orca's size of the terminal changed, and who holds it (`mode`): `desktop-fit` may say 0 for both sizes.
+    Size {
+        mode: OrcaFitMode,
+        cols: u16,
+        rows: u16,
+    },
     /// The terminal's stream ended (it exited, or Orca ended it), or could not start (`message` says why, in Japanese).
     Ended { message: String },
+}
+
+/// Who holds the size of a terminal (`fit-override-changed`): another desktop's window (`remote-desktop-fit`), a desktop that is fitted to its pane (`desktop-fit`) or a phone (`mobile-fit`).
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "kebab-case")]
+pub enum OrcaFitMode {
+    RemoteDesktopFit,
+    DesktopFit,
+    MobileFit,
 }
 
 /// The size of the pane in cells, for a terminal that fits it.
@@ -102,7 +118,7 @@ pub struct Watch {
     handle: String,
     /// The number the screen gave this showing; a close of an earlier showing of the same handle does not end this one.
     generation: u64,
-    /// The pane's size, which the terminal is fitted to.
+    /// The size the pane fits (FitAddon's proposal): the subscription registers it, and a send of keys claims it.
     viewport: OrcaViewport,
     /// Gives an event to the screen; `false` when the screen no longer takes them.
     sink: Box<dyn FnMut(OrcaTermEvent) -> bool + Send>,
@@ -114,10 +130,16 @@ pub enum StreamCommand {
     Terminal(Watch),
     /// Show the terminal `handle` no more: it is unsubscribed. It ends only the showing of its generation (the second field), so a close that comes after a later showing of the handle changes nothing.
     TerminalClose(String, u64),
-    /// The pane's size changed (the terminal `handle`, the first field, fits it).
+    /// Claim the size the pane fits for the terminal `handle` (the first field), so Orca sizes the terminal to the pane.
     Viewport(String, OrcaViewport),
     /// Keys typed into the terminal `handle` (the first field); they go while it is subscribed or at least in Orca's list, and the answer says whether Orca took them.
-    Input(String, String, oneshot::Sender<Result<(), String>>),
+    /// The third field is the size the pane fits as the keys are typed (the terminal shown only), which the send claims and the stream holds from then on.
+    Input(
+        String,
+        String,
+        Option<OrcaViewport>,
+        oneshot::Sender<Result<(), String>>,
+    ),
     /// Read `worktree.ps` again now: the app switched the branch of a worktree.
     Worktrees,
     Close,
@@ -195,7 +217,7 @@ fn ms_of(value: &Value) -> f64 {
 
 /// The tabs as the two documents of the CLI that A-6 and A-8 read (`orca worktree ps` and `orca terminal list`), so that the same pure functions build the list.
 /// A worktree's agents are the agents of its terminal tabs (a tab's agent is its pane's own, so it is top-level), with a live pty while the tab has a terminal;
-/// its own status is left out (the stream does not refresh it), and its last activity is the latest of its own and its agents'. A terminal is each terminal tab that has a handle.
+/// its own status is left out (the stream does not refresh it), and its last activity is the latest of its own and its agents'. A terminal is each terminal tab that has a handle, with the `connected`, `writable` and `exitCause` the tab carries, so that `plain_terminals_of` marks it ended as it does for the CLI's list.
 /// A tab that launched Claude and has a terminal but no `agentStatus` is an idle agent of its pane (`{parentTabId}:{leafId}`), so its row does not come and go with the status.
 fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
     let mut terminals = Vec::new();
@@ -218,6 +240,7 @@ fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
                         "handle": handle, "tabId": tab["parentTabId"], "leafId": tab["leafId"],
                         "title": tab["title"], "worktreePath": worktree["path"],
                         "agentIdentity": agent_type, "orphaned": false,
+                        "connected": tab["connected"], "writable": tab["writable"], "exitCause": tab["exitCause"],
                     }));
                 }
                 if status.is_object() {
@@ -324,10 +347,25 @@ fn term_event_of(result: &Value) -> Option<OrcaTermEvent> {
         "data" => result["chunk"].as_str().map(|data| OrcaTermEvent::Output {
             data: data.to_owned(),
         }),
-        "fit-override-changed" => Some(OrcaTermEvent::Size {
-            cols: size("cols")?,
-            rows: size("rows")?,
-        }),
+        "fit-override-changed" => {
+            let mode = match result["mode"].as_str()? {
+                "remote-desktop-fit" => OrcaFitMode::RemoteDesktopFit,
+                "desktop-fit" => OrcaFitMode::DesktopFit,
+                "mobile-fit" => OrcaFitMode::MobileFit,
+                _ => return None,
+            };
+            let (cols, rows) = (
+                result["cols"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())?,
+                result["rows"]
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())?,
+            );
+            // Orca's client takes 0 only from `desktop-fit` (it has no size of its own to give); the other modes need both sizes.
+            (mode == OrcaFitMode::DesktopFit || (cols > 0 && rows > 0))
+                .then_some(OrcaTermEvent::Size { mode, cols, rows })
+        }
         "end" => Some(OrcaTermEvent::Ended {
             message: String::new(),
         }),
@@ -347,10 +385,14 @@ fn client_of(client: &str) -> Value {
     json!({"id": client, "type": "desktop"})
 }
 
-/// `terminal.subscribe` as a desktop viewer named `client`; the terminal is sized to the pane while the subscription lasts, and Orca gives it back its own size after it.
+/// `terminal.subscribe` as a desktop viewer named `client`. `desktopViewportClaims` makes the subscription only register the pane's size: the size is taken by a claim (`terminal.updateViewport`, a send), and Orca gives the terminal back its own size after the subscription.
 fn subscribe_params(handle: &str, client: &str, viewport: OrcaViewport) -> Value {
     let v = clamp_viewport(viewport);
-    json!({"terminal": handle, "client": client_of(client), "viewport": {"cols": v.cols, "rows": v.rows}})
+    json!({
+        "terminal": handle, "client": client_of(client),
+        "viewport": {"cols": v.cols, "rows": v.rows},
+        "capabilities": {"desktopViewportClaims": 1},
+    })
 }
 
 /// `terminal.updateViewport`: the new size of the pane, claimed so that it is the size the terminal takes.
@@ -661,7 +703,10 @@ impl Connection {
                     }
                 }
             }
-            Some(StreamCommand::Input(handle, text, reply)) => {
+            Some(StreamCommand::Input(handle, text, fit, reply)) => {
+                if let (Some(fit), Some(watch)) = (fit, stream.watches.get_mut(&handle)) {
+                    watch.viewport = fit;
+                }
                 let viewport = stream.watches.get(&handle).map(|w| w.viewport);
                 match input_route(
                     self.terminals.contains_key(&handle),
@@ -793,7 +838,7 @@ async fn run_loop<F, Fut>(
                             watch.viewport = viewport;
                         }
                     }
-                    Some(StreamCommand::Input(_, _, reply)) => {
+                    Some(StreamCommand::Input(_, _, _, reply)) => {
                         let _ = reply.send(Err(NOT_CONNECTED.into()));
                     }
                     // The next connection reads `worktree.ps` when it opens.
@@ -811,25 +856,72 @@ struct Active {
     commands: UnboundedSender<StreamCommand>,
 }
 
-/// The one stream that runs: opening another ends it.
+/// The streams that run, one for each place (A-12, A-33): this machine's Orca (`local`) and the saved environment that is the target (`saved`, with its name).
+/// Opening a stream ends only the one that held its place, so a saved environment's stream and this machine's run side by side; every command names its place.
+struct Streams<T> {
+    local: Option<T>,
+    saved: Option<(String, T)>,
+}
+
+impl<T> Default for Streams<T> {
+    fn default() -> Self {
+        Streams {
+            local: None,
+            saved: None,
+        }
+    }
+}
+
+impl<T> Streams<T> {
+    /// The stream of `environment` (`None`: this machine); a saved environment other than the one streamed has none.
+    fn get(&self, environment: Option<&str>) -> Option<&T> {
+        match environment {
+            None => self.local.as_ref(),
+            Some(name) => self
+                .saved
+                .as_ref()
+                .filter(|(held, _)| held == name)
+                .map(|(_, stream)| stream),
+        }
+    }
+
+    /// Takes `stream` as the one of `environment` and gives back the one it replaces: another saved environment's stream is replaced by it, as only one saved environment is streamed.
+    fn put(&mut self, environment: Option<String>, stream: T) -> Option<T> {
+        match environment {
+            None => self.local.replace(stream),
+            Some(name) => self.saved.replace((name, stream)).map(|(_, old)| old),
+        }
+    }
+
+    /// Takes the stream of `environment` out; a close for a saved environment that is no longer the one streamed takes none.
+    fn take(&mut self, environment: Option<&str>) -> Option<T> {
+        match environment {
+            None => self.local.take(),
+            Some(name) if self.get(Some(name)).is_some() => self.saved.take().map(|(_, s)| s),
+            Some(_) => None,
+        }
+    }
+}
+
+/// The streams that run, one for each place.
 #[derive(Default)]
-pub struct OrcaStream(std::sync::Mutex<Option<Active>>);
+pub struct OrcaStream(std::sync::Mutex<Streams<Active>>);
 
 impl OrcaStream {
-    fn send(&self, command: StreamCommand) -> Result<(), String> {
+    fn send(&self, environment: Option<&str>, command: StreamCommand) -> Result<(), String> {
         self.0
             .lock()
             .unwrap()
-            .as_ref()
+            .get(environment)
             .ok_or(NOT_CONNECTED)?
             .commands
             .send(command)
             .map_err(|_| NOT_CONNECTED.to_owned())
     }
 
-    /// Has the stream that runs, if any, read `worktree.ps` again now (the app switched the branch of a worktree, and the list says the branch).
-    pub(crate) fn reread_worktrees(&self) {
-        let _ = self.send(StreamCommand::Worktrees);
+    /// Has the stream of `environment` (`None`: this machine), if it runs, read `worktree.ps` again now (the app switched the branch of a worktree, and the list says the branch).
+    pub(crate) fn reread_worktrees(&self, environment: Option<&str>) {
+        let _ = self.send(environment, StreamCommand::Worktrees);
     }
 }
 
@@ -846,7 +938,8 @@ fn sink_of(
     }
 }
 
-/// Starts the stream of the saved environment `environment` (`None`: this machine's Orca, which needs the pairing of `orca_pairing`, else the answer is an error and nothing runs), which sends the list through `channel` until the next open or close.
+/// Starts the stream of the saved environment `environment` (`None`: this machine's Orca, which needs the pairing of `orca_pairing`, else the answer is an error and nothing runs), which sends the list through `channel` until the next open or close of its place.
+/// It ends the stream that held its place (another saved environment's, or this machine's own) and no other: the two places stream at once.
 #[tauri::command]
 pub async fn orca_stream_open(
     state: tauri::State<'_, OrcaStream>,
@@ -859,12 +952,10 @@ pub async fn orca_stream_open(
     if environment.is_none() && !is_paired().await? {
         return Err(NO_PAIRING.into());
     }
-    let mut active = state.0.lock().unwrap();
-    if let Some(old) = active.take() {
-        old.task.abort();
-    }
+    let mut streams = state.0.lock().unwrap();
     let (commands, receiver) = unbounded_channel();
     let sink = sink_of(channel, commands.clone(), environment.clone());
+    let place = environment.clone();
     let task = match environment {
         Some(environment) => tauri::async_runtime::spawn(run_loop(
             move || connect_environment(environment.clone()),
@@ -874,72 +965,95 @@ pub async fn orca_stream_open(
         )),
         None => tauri::async_runtime::spawn(run_loop(connect_local, receiver, sink, new_client())),
     };
-    *active = Some(Active { task, commands });
+    if let Some(old) = streams.put(place, Active { task, commands }) {
+        old.task.abort();
+    }
     Ok(())
 }
 
-/// Ends the stream that runs, if any (its subscriptions end with its connection).
+/// Ends the stream of `environment` (`None`: this machine's Orca), if it runs (its subscriptions end with its connection); the stream of the other place stays.
 #[tauri::command]
-pub async fn orca_stream_close(state: tauri::State<'_, OrcaStream>) -> Result<(), String> {
-    if let Some(active) = state.0.lock().unwrap().take() {
+pub async fn orca_stream_close(
+    state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    if let Some(active) = state.0.lock().unwrap().take(environment.as_deref()) {
         let _ = active.commands.send(StreamCommand::Close);
     }
     Ok(())
 }
 
-/// Shows the terminal `handle` (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
+/// Shows the terminal `handle` of the stream of `environment` (`None`: this machine's), the place of the tab (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. `viewport` is the size the pane fits, which the subscription registers.
 #[tauri::command]
 pub async fn orca_stream_terminal(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     generation: u64,
     viewport: OrcaViewport,
     channel: tauri::ipc::Channel<OrcaTermEvent>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
-    state.send(StreamCommand::Terminal(Watch {
-        handle,
-        generation,
-        viewport,
-        sink: Box::new(move |event| channel.send(event).is_ok()),
-    }))
+    state.send(
+        environment.as_deref(),
+        StreamCommand::Terminal(Watch {
+            handle,
+            generation,
+            viewport,
+            sink: Box::new(move |event| channel.send(event).is_ok()),
+        }),
+    )
 }
 
-/// Shows the terminal `handle` no more: it is unsubscribed, and Orca gives it back its own size.
+/// Shows the terminal `handle` of the stream of `environment` no more: it is unsubscribed, and Orca gives it back its own size.
 #[tauri::command]
 pub async fn orca_stream_terminal_close(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     generation: u64,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     // With no stream there is nothing to let go.
-    let _ = state.send(StreamCommand::TerminalClose(handle, generation));
+    let _ = state.send(
+        environment.as_deref(),
+        StreamCommand::TerminalClose(handle, generation),
+    );
     Ok(())
 }
 
-/// The new size of the pane of the terminal `handle`.
+/// The new size of the pane of the terminal `handle` of the stream of `environment`.
 #[tauri::command]
 pub async fn orca_stream_viewport(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     viewport: OrcaViewport,
 ) -> Result<(), String> {
     check_handle(&handle)?;
-    state.send(StreamCommand::Viewport(handle, viewport))
+    state.send(
+        environment.as_deref(),
+        StreamCommand::Viewport(handle, viewport),
+    )
 }
 
-/// Types `text` into the terminal `handle`, as it is (no Enter is added), only while it is a terminal shown.
+/// Types `text` into the terminal `handle` of the stream of `environment`, as it is (no Enter is added), only while it is a terminal shown.
+/// `viewport` is the size the pane fits as the keys are typed (null for a terminal that is not shown): the send claims it.
 #[tauri::command]
 pub async fn orca_stream_input(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     text: String,
+    viewport: Option<OrcaViewport>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     check_keys(&text)?;
     let (reply, answer) = oneshot::channel();
-    state.send(StreamCommand::Input(handle, text, reply))?;
+    state.send(
+        environment.as_deref(),
+        StreamCommand::Input(handle, text, viewport, reply),
+    )?;
     answer
         .await
         .unwrap_or_else(|_| Err("接続が切れたため、入力を送れたか分かりません".into()))
@@ -1216,6 +1330,36 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_tab_that_orca_says_ended_is_a_plain_terminal_that_ended() {
+        let mut gone = shell_tab("t1", "term_gone", "zsh");
+        gone["connected"] = json!(false);
+        gone["writable"] = json!(false);
+        let mut caused = shell_tab("t2", "term_caused", "zsh");
+        caused["exitCause"] = json!({"kind": "exited", "code": 0});
+        let live = shell_tab("t3", "term_live", "zsh");
+        let tabs = held(&snapshots(&[("r1::/w/a", vec![gone, caused, live])]));
+        let (_, documents) = documents_of(&ps(), &tabs);
+        assert_eq!(documents["terminals"][0]["connected"], false);
+        assert_eq!(documents["terminals"][1]["exitCause"]["kind"], "exited");
+        let OrcaStreamEvent::List { terminals, .. } = list_of(&ps(), &tabs) else {
+            panic!()
+        };
+        // A tab that carries none of the fields is live, as a terminal of the CLI's list is.
+        let ended: Vec<_> = terminals
+            .iter()
+            .map(|t| (t.handle.as_str(), t.ended))
+            .collect();
+        assert_eq!(
+            ended,
+            [
+                ("term_gone", true),
+                ("term_caused", true),
+                ("term_live", false)
+            ]
+        );
+    }
+
+    #[test]
     fn a_terminal_tab_is_in_exactly_one_kind_whatever_its_status_and_launch() {
         // The kind comes from the row that holds the handle, so a tab whose `agentStatus` or `launchAgent` says Claude but that makes no row is still a plain terminal.
         let with = |status: Value, launch: Value, leaf: Value| {
@@ -1366,12 +1510,6 @@ mod tests {
             })
         );
         assert_eq!(
-            term_event_of(
-                &json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": 80, "rows": 24})
-            ),
-            Some(OrcaTermEvent::Size { cols: 80, rows: 24 })
-        );
-        assert_eq!(
             term_event_of(&json!({"type": "end"})),
             Some(OrcaTermEvent::Ended {
                 message: String::new()
@@ -1379,8 +1517,6 @@ mod tests {
         );
         for none in [
             json!({"type": "data"}),
-            json!({"type": "fit-override-changed", "cols": 80}),
-            json!({"type": "fit-override-changed", "cols": 0, "rows": 24}),
             json!({"type": "other"}),
             Value::Null,
         ] {
@@ -1398,10 +1534,56 @@ mod tests {
     }
 
     #[test]
+    fn a_size_orca_sets_carries_its_mode() {
+        let size = |mode: &str, cols: u64, rows: u64| {
+            term_event_of(
+                &json!({"type": "fit-override-changed", "mode": mode, "cols": cols, "rows": rows}),
+            )
+        };
+        for (mode, fit) in [
+            ("remote-desktop-fit", OrcaFitMode::RemoteDesktopFit),
+            ("desktop-fit", OrcaFitMode::DesktopFit),
+            ("mobile-fit", OrcaFitMode::MobileFit),
+        ] {
+            assert_eq!(
+                size(mode, 80, 24),
+                Some(OrcaTermEvent::Size {
+                    mode: fit,
+                    cols: 80,
+                    rows: 24
+                }),
+                "{mode}"
+            );
+        }
+        // Only `desktop-fit` may say 0 (no size of Orca's own: the pane is fitted); the others need both sizes, as Orca's own client reads them.
+        assert_eq!(
+            size("desktop-fit", 0, 0),
+            Some(OrcaTermEvent::Size {
+                mode: OrcaFitMode::DesktopFit,
+                cols: 0,
+                rows: 0
+            })
+        );
+        assert_eq!(size("remote-desktop-fit", 0, 24), None);
+        assert_eq!(size("mobile-fit", 80, 0), None);
+        for none in [
+            json!({"type": "fit-override-changed", "cols": 80, "rows": 24}),
+            json!({"type": "fit-override-changed", "mode": "other-fit", "cols": 80, "rows": 24}),
+            json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": 80}),
+            json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": -1, "rows": 24}),
+            json!({"type": "fit-override-changed", "mode": "desktop-fit", "cols": 70_000, "rows": 24}),
+        ] {
+            assert_eq!(term_event_of(&none), None, "{none}");
+        }
+    }
+
+    #[test]
     fn the_params_name_the_viewer_and_a_size_orca_takes() {
+        // A subscription only registers the pane's size: `desktopViewportClaims` leaves taking it to the claims.
         assert_eq!(
             subscribe_params("term_1", "tsunagiai-1", OrcaViewport { cols: 80, rows: 24 }),
-            json!({"terminal": "term_1", "client": {"id": "tsunagiai-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24}})
+            json!({"terminal": "term_1", "client": {"id": "tsunagiai-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24},
+                   "capabilities": {"desktopViewportClaims": 1}})
         );
         assert_eq!(
             subscribe_params("term_1", "tsunagiai-1", OrcaViewport { cols: 5, rows: 900 })
@@ -1447,6 +1629,15 @@ mod tests {
             })
             .unwrap(),
             json!({"kind": "snapshot", "data": "a", "cols": null, "rows": 3})
+        );
+        assert_eq!(
+            serde_json::to_value(OrcaTermEvent::Size {
+                mode: OrcaFitMode::RemoteDesktopFit,
+                cols: 90,
+                rows: 30
+            })
+            .unwrap(),
+            json!({"kind": "size", "mode": "remote-desktop-fit", "cols": 90, "rows": 30})
         );
         let viewport: OrcaViewport =
             serde_json::from_value(json!({"cols": 80, "rows": 24})).unwrap();
@@ -1596,7 +1787,8 @@ mod tests {
         assert_eq!(subscribe["method"], "terminal.subscribe");
         assert_eq!(
             subscribe["params"],
-            json!({"terminal": "term_c", "client": {"id": "tsunagiai-test", "type": "desktop"}, "viewport": {"cols": 100, "rows": 30}})
+            json!({"terminal": "term_c", "client": {"id": "tsunagiai-test", "type": "desktop"}, "viewport": {"cols": 100, "rows": 30},
+                   "capabilities": {"desktopViewportClaims": 1}})
         );
         let sub_id = subscribe["id"].clone();
         streamed(
@@ -1647,7 +1839,12 @@ mod tests {
         for (accepted, ok) in [(true, true), (false, false)] {
             let (reply, answer) = oneshot::channel();
             commands
-                .send(StreamCommand::Input("term_c".into(), "ls\r".into(), reply))
+                .send(StreamCommand::Input(
+                    "term_c".into(),
+                    "ls\r".into(),
+                    None,
+                    reply,
+                ))
                 .ok()
                 .unwrap();
             let send = server.request().await;
@@ -1670,10 +1867,64 @@ mod tests {
             assert_eq!(answer.await.unwrap().is_ok(), ok);
         }
 
+        // Keys typed after the pane changed carry the size the pane fits now, which the stream holds from then on.
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "pwd\r".into(),
+                Some(OrcaViewport {
+                    cols: 110,
+                    rows: 35,
+                }),
+                reply,
+            ))
+            .ok()
+            .unwrap();
+        let send = server.request().await;
+        assert_eq!(
+            send["params"],
+            input_params(
+                "term_c",
+                "pwd\r",
+                "tsunagiai-test",
+                Some(OrcaViewport {
+                    cols: 110,
+                    rows: 35
+                })
+            )
+        );
+        assert_eq!(send["params"]["claimViewport"], true);
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "a".into(),
+                None,
+                reply,
+            ))
+            .ok()
+            .unwrap();
+        let send = server.request().await;
+        assert_eq!(send["params"]["viewport"], json!({"cols": 110, "rows": 35}));
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
+
         // Keys typed into a terminal that is not in the list are refused without a request (the next request is the read below).
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_none".into(), "\r".into(), reply))
+            .send(StreamCommand::Input(
+                "term_none".into(),
+                "\r".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_LISTED.to_owned()));
@@ -1700,10 +1951,15 @@ mod tests {
             unsubscribe_params("term_c", "tsunagiai-test", sub_id.as_str().unwrap())
         );
 
-        // Keys into a terminal shown no more, still in the list, are sent all the same, with no size (it has no pane).
+        // Keys into a terminal shown no more, still in the list, are sent all the same, with no size (it has no pane), whatever size they came with.
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "x".into(),
+                Some(OrcaViewport { cols: 50, rows: 20 }),
+                reply,
+            ))
             .ok()
             .unwrap();
         let send = server.request().await;
@@ -1923,7 +2179,12 @@ mod tests {
         );
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "x".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_CONNECTED.to_owned()));
@@ -2024,7 +2285,12 @@ mod tests {
         // Keys go to the terminal they were typed in, with its own size.
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_c".into(), "a".into(), reply))
+            .send(StreamCommand::Input(
+                "term_c".into(),
+                "a".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         let send = server.request().await;
@@ -2057,7 +2323,12 @@ mod tests {
         );
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_s".into(), "b".into(), reply))
+            .send(StreamCommand::Input(
+                "term_s".into(),
+                "b".into(),
+                None,
+                reply,
+            ))
             .ok()
             .unwrap();
         let send = server.request().await;
@@ -2078,5 +2349,48 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn this_machine_and_a_saved_environment_each_hold_a_stream() {
+        let mut streams = Streams::<&str>::default();
+        assert_eq!(streams.put(None, "here"), None);
+        assert_eq!(streams.put(Some("Studio".into()), "studio"), None);
+        // Each place has its own stream, and a command finds the one of its place.
+        assert_eq!(streams.get(None), Some(&"here"));
+        assert_eq!(streams.get(Some("Studio")), Some(&"studio"));
+        // A place nothing was opened for has no stream, so its commands say it is not connected.
+        assert_eq!(streams.get(Some("Other")), None);
+    }
+
+    #[test]
+    fn opening_a_stream_ends_only_the_one_of_its_place() {
+        let mut streams = Streams::<&str>::default();
+        streams.put(None, "here");
+        streams.put(Some("Studio".into()), "studio");
+        // Another saved environment takes the place of the saved one and leaves this machine's.
+        assert_eq!(streams.put(Some("Lab".into()), "lab"), Some("studio"));
+        assert_eq!(streams.get(Some("Studio")), None);
+        assert_eq!(streams.get(Some("Lab")), Some(&"lab"));
+        assert_eq!(streams.get(None), Some(&"here"));
+        // This machine's stream opened anew takes the place of its own alone.
+        assert_eq!(streams.put(None, "here2"), Some("here"));
+        assert_eq!(streams.get(Some("Lab")), Some(&"lab"));
+    }
+
+    #[test]
+    fn closing_a_stream_ends_only_the_one_of_its_place() {
+        let mut streams = Streams::<&str>::default();
+        streams.put(None, "here");
+        streams.put(Some("Studio".into()), "studio");
+        // A revoked pairing ends this machine's stream and leaves the saved environment's.
+        assert_eq!(streams.take(None), Some("here"));
+        assert_eq!(streams.get(Some("Studio")), Some(&"studio"));
+        assert_eq!(streams.take(None), None);
+        // A close for a saved environment that is no longer the one streamed (it came late) ends nothing.
+        assert_eq!(streams.take(Some("Other")), None);
+        assert_eq!(streams.get(Some("Studio")), Some(&"studio"));
+        assert_eq!(streams.take(Some("Studio")), Some("studio"));
+        assert_eq!(streams.get(Some("Studio")), None);
     }
 }
