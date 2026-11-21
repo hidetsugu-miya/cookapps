@@ -367,17 +367,18 @@ export interface Commands {
   orca_pairing_save: { args: { link: string }; result: OrcaPairing };
   // A-12: deletes the pairing from the keychain.
   orca_pairing_revoke: { args: undefined; result: OrcaPairing };
-  // A-12: the stream of the saved environment `environment` (null: this machine's Orca, which needs the pairing, else the call fails and nothing runs): the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
+  // A-12: the stream of the saved environment `environment` (null: this machine's Orca, which needs the pairing, else the call fails and nothing runs): the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened for its place; one runs for this machine and one for a saved environment, side by side (A-33).
   orca_stream_open: { args: { environment: string | null; channel: unknown }; result: null };
-  orca_stream_close: { args: undefined; result: null };
-  // A-12, A-17: shows the terminal `handle` of the stream (the terminals of the other panes stay shown): its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). The terminal fits the pane's size, `viewport`.
-  orca_stream_terminal: { args: { handle: string; generation: number; viewport: OrcaViewport; channel: unknown }; result: null };
+  // A-12: ends the stream of `environment` (null: this machine's), and no other.
+  orca_stream_close: { args: { environment: string | null }; result: null };
+  // A-12, A-17: shows the terminal `handle` of the stream of `environment`, the place of its tab (the terminals of the other panes stay shown): its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). `viewport` is the size the pane fits (the subscription only registers it).
+  orca_stream_terminal: { args: { environment: string | null; handle: string; generation: number; viewport: OrcaViewport; channel: unknown }; result: null };
   // A-12, A-17: shows the terminal `handle` no more; Orca gives it back its own size.
-  orca_stream_terminal_close: { args: { handle: string; generation: number }; result: null };
-  // A-12, A-17: the new size of the pane of the terminal `handle`.
-  orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
-  // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
-  orca_stream_input: { args: { handle: string; text: string }; result: null };
+  orca_stream_terminal_close: { args: { environment: string | null; handle: string; generation: number }; result: null };
+  // A-12, A-17: claims the size the pane of the terminal `handle` fits (`viewport`), so Orca sizes the terminal to it.
+  orca_stream_viewport: { args: { environment: string | null; handle: string; viewport: OrcaViewport }; result: null };
+  // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it. `viewport` is the size the pane fits as the keys are typed (null for a terminal that is not shown), which the send claims.
+  orca_stream_input: { args: { environment: string | null; handle: string; text: string; viewport: OrcaViewport | null }; result: null };
   // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `permissionMode` is "manual" (it asks the owner for every tool that writes), "auto" (the calendar pane, #1074), "auto-slack-compose" (the Slack compose pane, #1144: Sonnet at the effort high, and it asks the owner before a post) or "auto-todo-draft" (the pane of a Todo's draft, #1148: Sonnet at the effort high); Rust refuses all three with `builtinTools` and for the orchestrator, `skill` is a saved skill it is given, `prompt` is its first instruction (1 to 20,000 characters, null for none; passed as `claude [prompt]`, and the orchestrator takes none from here). The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
   claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; permissionMode: ClaudeCodePermissionMode; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; channel: unknown }; result: number };
   // A-36: types `text` into the pane `id` as it is (no Enter is added).

@@ -9,6 +9,10 @@ export type OrcaTerminal = { handle: string, title: string, branch: string, proj
  */
 path: string, 
 /**
+ * Orca says the terminal ended (`ended_of`): the screen draws it as ended and types nothing into it.
+ */
+ended: boolean, 
+/**
  * Where it is: `None` for this machine, else the name of the saved environment.
  */
 environment?: string | null, };

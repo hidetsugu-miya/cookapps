@@ -3,7 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { askScreen, boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -25,6 +25,13 @@ const classOf = (selector: string) => browser.execute((s) => document.querySelec
 // Whether the sidebar icon of Orca is marked as working (the yellow icon that fades; the fade itself is not tested).
 const marked = () => browser.execute(() => document.getElementById("nav-orca")!.classList.contains("working"));
 const pressed = (repo: string) => sessionRow(repo).getAttribute("aria-pressed");
+// The size the pane fits, which the keys typed in a shown terminal carry (A-12, "Keys").
+const PANE = { cols: expect.any(Number), rows: expect.any(Number) };
+// The window of an E2E run is never the front one, so the document is made to say it has the focus: a change of the pane takes the size of its terminal only then (A-12, "Size").
+const focusWindow = () =>
+  browser.execute(() => {
+    document.hasFocus = () => true;
+  });
 // The text of the terminal shown (the terminals of the other tabs stay, hidden).
 const screenText = () => $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText();
 
@@ -1796,6 +1803,45 @@ describe("orca: projects", () => {
       await waitForCalls(input);
       await expect($(CARD)).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
     });
+
+    const iconOf = (id: string) => browser.execute((tab) => {
+      const icon = document.querySelector<HTMLElement>(`.orca-tabs [data-tab="${tab}"] .orca-ic`);
+      return icon === null ? null : [icon.dataset.status, icon.getAttribute("aria-label")];
+    }, id);
+    const endedList = () => orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], { terminals: [orcaTerminal("example-app", "zsh", { ended: true })] });
+
+    it("draws a terminal that Orca says ended as ended: a gray mark and 「終了」, one line, no read and no key", async () => {
+      await openOrca(endedList());
+      const read = await mock("orca_terminal_read", ["$"]);
+      const input = await mock("orca_terminal_input", null);
+      await project("example-app").click();
+      expect(await iconOf(zsh)).toEqual(["interrupted", "終了"]);
+      await tabOf(zsh).$(".orca-tab-btn").click();
+      await browser.waitUntil(async () => (await screenText()).includes("ターミナルは終了しました"), { timeoutMsg: "the line of the end never showed" });
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await browser.keys(["c", "d"]);
+      await browser.pause(1500);
+      expect(await callsOf(read)).toEqual([]);
+      expect(await callsOf(input)).toEqual([]);
+      expect(await count(CARD)).toBe(0);
+      expect((await screenText()).split("ターミナルは終了しました").length).toBe(2);
+    });
+
+    it("takes the refusal of its keys as its end, with no card", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_read", ["$"]);
+      const input = await mock("orca_terminal_input", rejects("Orca がエラーを返しました（terminal_not_writable）"));
+      await project("example-app").click();
+      await tabOf(zsh).$(".orca-tab-btn").click();
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await browser.keys(["l"]);
+      await waitForCalls(input);
+      await browser.waitUntil(async () => JSON.stringify(await iconOf(zsh)) === JSON.stringify(["interrupted", "終了"]), { timeoutMsg: "the tab never showed the end" });
+      expect(await count(CARD)).toBe(0);
+      await browser.keys(["m"]);
+      await browser.pause(500);
+      expect((await callsOf(input)).length).toBe(1);
+    });
   });
 });
 
@@ -1877,8 +1923,9 @@ describe("orca: a saved environment's stream", () => {
     await browser.waitUntil(async () => (await callsOf(input)).length === 2, { timeoutMsg: "the keys typed before the tab changed were not sent" });
     // All of them go to the terminal they were typed in, not to the one now shown.
     expect(await callsOf(input)).toEqual([
-      { handle: "term_example-app", text: "1" },
-      { handle: "term_example-app", text: "2\r" },
+      { environment: "Studio", handle: "term_example-app", text: "1", viewport: PANE },
+      // The terminal is not shown any more: its keys name no size.
+      { environment: "Studio", handle: "term_example-app", text: "2\r", viewport: null },
     ]);
     await release(input, null);
   });
@@ -2021,26 +2068,84 @@ describe("orca: a saved environment's stream", () => {
     expect(await copyEvent()).toEqual({ data: {}, taken: false });
   });
 
-  it("draws the size Orca sends, from the snapshot and from each size", async () => {
+  // The terminal of example-app shown and its pane's size (what it subscribed with), with the pane's rows drawn.
+  async function openSized() {
     await openStudio();
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
-    const paneRows = viewportOf(call).rows;
-    const rowsDrawn = () => browser.execute(() => document.querySelectorAll(".orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
-    // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it shrinks the size the snapshot draws.
+    // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it moves the size a snapshot draws.
     await browser.pause(300);
-    // The terminal fits the pane, and Orca's size is drawn all the same: another screen of Orca may have taken it.
-    await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: 80, rows: paneRows + 3 });
+    return viewportOf(call);
+  }
+  const rowsDrawn = () => browser.execute(() => document.querySelectorAll(".orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
+  const drawnRows = async (rows: number) => browser.waitUntil(async () => (await rowsDrawn()) === rows, { timeoutMsg: `the terminal never drew ${rows} rows` });
+
+  it("fits the pane after a snapshot, and claims the pane's size when Orca had another", async () => {
+    const pane = await openSized();
+    const claim = await mock("orca_stream_viewport", null);
+    await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: pane.cols + 7, rows: pane.rows + 3 });
     await browser.waitUntil(async () => (await screenText()).includes("from the snapshot"), { timeoutMsg: "the screen never showed" });
-    expect(await rowsDrawn()).toBe(paneRows + 3);
-    await sendTerm({ kind: "size", cols: 90, rows: paneRows + 5 });
-    await browser.waitUntil(async () => (await rowsDrawn()) === paneRows + 5, { timeoutMsg: "the size of Orca never drew" });
+    await drawnRows(pane.rows);
+    expect(await waitForCalls(claim)).toMatchObject([{ environment: "Studio", handle: "term_example-app", viewport: pane }]);
+    // A snapshot at the pane's size claims nothing.
+    await sendTerm({ kind: "snapshot", data: "same size", cols: pane.cols, rows: pane.rows });
+    await browser.waitUntil(async () => (await screenText()).includes("same size"), { timeoutMsg: "the screen never showed" });
+    await browser.pause(300);
+    expect(await callsOf(claim)).toHaveLength(1);
+  });
+
+  it("gives the terminal the size of another desktop's window, or of a phone, and does not fit it to the pane", async () => {
+    const pane = await openSized();
+    const claim = await mock("orca_stream_viewport", null);
+    await sendTerm({ kind: "size", mode: "remote-desktop-fit", cols: 90, rows: pane.rows + 5 });
+    await drawnRows(pane.rows + 5);
+    await sendTerm({ kind: "size", mode: "mobile-fit", cols: 40, rows: pane.rows + 2 });
+    await drawnRows(pane.rows + 2);
+    await browser.pause(300);
+    expect(await callsOf(claim)).toEqual([]);
+  });
+
+  it("fits the pane on desktop-fit, with sizes of 0 too, and claims the pane's size when Orca has another", async () => {
+    const pane = await openSized();
+    const claim = await mock("orca_stream_viewport", null);
+    await sendTerm({ kind: "size", mode: "remote-desktop-fit", cols: 90, rows: pane.rows + 5 });
+    await drawnRows(pane.rows + 5);
+    await sendTerm({ kind: "size", mode: "desktop-fit", cols: 0, rows: 0 });
+    await drawnRows(pane.rows);
+    expect(await waitForCalls(claim)).toMatchObject([{ environment: "Studio", handle: "term_example-app", viewport: pane }]);
+    // Orca has the pane's size now: nothing to claim (a size that is not the pane's is claimed once more, after a second).
+    await sendTerm({ kind: "size", mode: "desktop-fit", cols: pane.cols, rows: pane.rows });
+    await browser.pause(300);
+    expect(await callsOf(claim)).toHaveLength(1);
+  });
+
+  it("takes the size back when the pane changes while another desktop holds it, and never from a phone", async () => {
+    const pane = await openSized();
+    await focusWindow();
+    await sendTerm({ kind: "size", mode: "remote-desktop-fit", cols: 90, rows: pane.rows + 5 });
+    await drawnRows(pane.rows + 5);
+    const claim = await mock("orca_stream_viewport", null);
+    // The list narrows to 15%, so the terminal widens: the pane's size is claimed.
+    await dragDivider(0.15);
+    const [sent] = await waitForCalls(claim);
+    expect(viewportOf(sent).cols).toBeGreaterThan(pane.cols);
+    await drawnRows(viewportOf(sent).rows);
+    await browser.pause(300);
+    const claimed = (await callsOf(claim)).length;
+    // A phone holds it: the pane changes, and the terminal stays at the phone's size.
+    await sendTerm({ kind: "size", mode: "mobile-fit", cols: 40, rows: pane.rows + 2 });
+    await drawnRows(pane.rows + 2);
+    await dragDivider(0.3);
+    await browser.pause(400);
+    expect(await callsOf(claim)).toHaveLength(claimed);
+    expect(await rowsDrawn()).toBe(pane.rows + 2);
   });
 
   it("sends the new size when the pane changes", async () => {
     await openStudio();
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
+    await focusWindow();
     const viewport = await mock("orca_stream_viewport", null);
     // The list narrows to 15%, so the terminal widens.
     await dragDivider(0.15);
@@ -2058,11 +2163,11 @@ describe("orca: a saved environment's stream", () => {
     // Another tab: its terminal is subscribed, and the one left is closed by its handle (a close names its terminal, so it ends no other stream).
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
-    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
+    expect(await waitForCalls(close)).toEqual([{ environment: "Studio", handle: "term_example-app", generation: expect.any(Number) }]);
     // Another screen.
     await $("#nav-mail").click();
     await waitForCalls(close, 2);
-    expect((await callsOf(close))[1]).toEqual({ handle: "term_example-app_zsh", generation: expect.any(Number) });
+    expect((await callsOf(close))[1]).toEqual({ environment: "Studio", handle: "term_example-app_zsh", generation: expect.any(Number) });
     // Back on the screen the stream starts again, and a hidden window ends it. Showing the screen reads the list once with the CLI, which holds what the stream sent.
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { ...studioOnly, terminals: [orcaTerminal("example-app", "zsh")] }));
     await $("#nav-orca").click();
@@ -2082,7 +2187,7 @@ describe("orca: a saved environment's stream", () => {
     // The Claude row of the tab shown goes and the project keeps a shell: the tab and its terminal are dropped, with a close of its stream, and the shell is subscribed.
     await sendStream(streamList(sample().slice(1), worktrees(), [orcaTerminal("example-app", "zsh")]));
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
-    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
+    expect(await waitForCalls(close)).toEqual([{ environment: "Studio", handle: "term_example-app", generation: expect.any(Number) }]);
   });
 
   it("ends the stream of the terminal when the tab shown leaves the list and no tab is left to show", async () => {
@@ -2091,7 +2196,7 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     await sendStream(streamList(sample().slice(1), worktrees()));
-    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
+    expect(await waitForCalls(close)).toEqual([{ environment: "Studio", handle: "term_example-app", generation: expect.any(Number) }]);
   });
 
   it("closes a session in Orca and leaves the tab to the next list, with no read", async () => {
@@ -2641,7 +2746,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const input = await mock("orca_stream_input", null);
     await fire("paste", shown, [image()]);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-api", name: "shot.png", data: PNG, environment: "Studio" }]);
-    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-api", text: `${dropped("example-api")} ` }]);
+    expect(await waitForCalls(input)).toEqual([{ environment: "Studio", handle: "term_example-api", text: `${dropped("example-api")} `, viewport: PANE }]);
   });
 
   it("types the path in the terminal streamed from a saved environment, to its handle", async () => {
@@ -2650,7 +2755,7 @@ describe("orca: files on a terminal (A-10)", () => {
     const input = await mock("orca_stream_input", null);
     await fire("drop", area, [image()]);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: "Studio" }]);
-    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app_zsh", text: `${dropped("example-app")} ` }]);
+    expect(await waitForCalls(input)).toEqual([{ environment: "Studio", handle: "term_example-app_zsh", text: `${dropped("example-app")} `, viewport: PANE }]);
   });
 
   it("types the text of a file whose answer is not bracketed as it is, and pastes a bracketed one, in a terminal that asked for the bracketed paste", async () => {
@@ -3212,7 +3317,7 @@ describe("orca: split panes (A-17)", () => {
       await pressPane("p2");
       await browser.keys(["1"]);
       await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1", { timeoutMsg: "the keys were not sent" });
-      expect(await callsOf(input)).toEqual([{ handle: "term_example-app_zsh", text: "1" }]);
+      expect(await callsOf(input)).toEqual([{ environment: "Studio", handle: "term_example-app_zsh", text: "1", viewport: PANE }]);
     });
 
     it("ends the stream of a terminal that leaves its pane's view, and no other", async () => {
@@ -3222,9 +3327,9 @@ describe("orca: split panes (A-17)", () => {
       await mock("orca_panes", focusedOn("p1", bash));
       // Another tab in the left pane: its terminal is subscribed and the one it replaces is closed by its handle; the right pane's stream stays.
       await tabOf(bash).$(".orca-tab-btn").click();
-      expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
+      expect(await waitForCalls(close)).toEqual([{ environment: "Studio", handle: "term_example-app", generation: expect.any(Number) }]);
       await browser.pause(500);
-      expect(await callsOf(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
+      expect(await callsOf(close)).toEqual([{ environment: "Studio", handle: "term_example-app", generation: expect.any(Number) }]);
     });
 
     it("puts a new tab in one pane with all the tabs when a later call for the layout fails, and shows the message", async () => {
@@ -3239,6 +3344,7 @@ describe("orca: split panes (A-17)", () => {
     it("sends the new size of the pane whose width changed", async () => {
       await openStudioSplit();
       const calls = await waitForCalls("orca_stream_terminal", 2);
+      await focusWindow();
       const viewport = await mock("orca_stream_viewport", null);
       // The list narrows from 19% to 15%, so the panes widen.
       await dragDivider(0.15);
@@ -4035,6 +4141,117 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     // A list of the stream is Studio's read well: no line is left.
     await sendStream(streamList(studioRows(), studioTrees()));
     await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 0, { timeoutMsg: "the line of Studio never went" });
+  });
+
+  // A-12, A-33: this machine's Orca is paired, so it has a stream of its own beside the target's.
+  describe("while this machine is paired too", () => {
+    const pairing = { orca_pairing_status: { paired: true } };
+    const channelCalls = (command: string) =>
+      browser.execute((c) => ((window as unknown as { __e2e_calls__: Record<string, { environment: string | null; channel?: unknown }[]> }).__e2e_calls__[c] ?? []).map((call) => ({ ...call, channel: !!call.channel })), command);
+    // The number of the call of `orca_stream_open` that is the stream of `environment` (null: this machine's), so that an event goes to the stream of its place.
+    async function streamOf(environment: string | null) {
+      await waitForCalls("orca_stream_open", 2);
+      return (await channelCalls("orca_stream_open")).findIndex((call) => call.environment === environment);
+    }
+    // The screen with Studio as the target and this machine paired, and the list of each place streamed once.
+    async function openBoth(fixtures: Record<string, unknown> = {}) {
+      await openOrca(mixed(), { ...pairing, ...fixtures });
+      await sendStream(streamList(studioRows(), studioTrees()), await streamOf("Studio"));
+      await sendStream(streamList(macRows(), macTrees(), [], null), await streamOf(null));
+      await waitForCount("#orca-feed .orca-project", 4);
+    }
+    // The lines of the log that say the loss of the stream of this machine.
+    const lost = async () => (await logged()).filter((l) => l.level === "error" && l.source === "orca" && l.message.startsWith("このマシンの Orca のストリームが落ちました")).map((l) => l.message);
+
+    it("opens the stream of Studio and the stream of this machine, side by side", async () => {
+      await openOrca(mixed(), pairing);
+      await waitForCalls("orca_stream_open", 2);
+      expect(await channelCalls("orca_stream_open")).toEqual(expect.arrayContaining([{ environment: "Studio", channel: true }, { environment: null, channel: true }]));
+      expect(await callsOf("orca_stream_open")).toHaveLength(2);
+    });
+
+    it("draws each list from the stream of its place, and reads this machine's by the clock no more", async () => {
+      await openOrca(mixed(), { ...pairing, ...timers({ orcaClock: 1000 }) });
+      await sendStream(streamList(studioRows(), studioTrees()), await streamOf("Studio"));
+      await sendStream(streamList([...macRows(), finished("mac-3")], [...macTrees(), orcaWorktree("mac-3", "main")], [], null), await streamOf(null));
+      await waitForCount("#orca-feed .orca-project", 5);
+      expect((await chips()).filter(([, chip]) => chip === null).map(([name]) => name).sort()).toEqual(["mac-1", "mac-2", "mac-3"]);
+      const destination = await mock("orca_destination", orcaOverview(macRows(), macTrees(), { known: false }));
+      const overview = await mock("orca_overview", mixed());
+      await browser.pause(1200);
+      expect(await callsOf(destination)).toEqual([]);
+      expect(await callsOf(overview)).toEqual([]);
+    });
+
+    it("streams the terminal of a tab of this machine from its stream and that of a tab of Studio from Studio's, with the keys and the size to the same one", async () => {
+      await openBoth();
+      await project("mac-1").click();
+      expect(await waitForCalls("orca_stream_terminal")).toMatchObject([{ environment: null, handle: "term_mac-1" }]);
+      await project("studio-1").click();
+      expect(await waitForCalls("orca_stream_terminal", 2)).toMatchObject([{ environment: null }, { environment: "Studio", handle: "term_studio-1" }]);
+      expect(await callsOf("orca_terminal_read")).toEqual([]);
+      const input = await mock("orca_stream_input", null);
+      await project("mac-1").click();
+      await waitForCalls("orca_stream_terminal", 3);
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await browser.keys(["1"]);
+      expect(await waitForCalls(input)).toEqual([{ environment: null, handle: "term_mac-1", text: "1", viewport: PANE }]);
+      await focusWindow();
+      const viewport = await mock("orca_stream_viewport", null);
+      await dragDivider(0.15);
+      const sent = await waitForCalls(viewport);
+      expect(sent.every((c) => (c as { environment: string | null; handle: string }).environment === null && (c as { handle: string }).handle === "term_mac-1")).toBe(true);
+    });
+
+    it("says the loss of this machine's stream in the log, reads its list by the clock and mirrors its terminals, leaves Studio's stream, and streams again with the next list", async () => {
+      await openBoth(timers({ orcaClock: 1000 }));
+      await project("mac-1").click();
+      await waitForCalls("orca_stream_terminal");
+      const destination = await mock("orca_destination", orcaOverview([...macRows(), finished("mac-3")], [...macTrees(), orcaWorktree("mac-3", "main")], { known: false }));
+      const read = await mock("orca_terminal_read", ["$ pwd", "/work/mac-1"]);
+      const overview = await mock("orca_overview", mixed());
+      await sendStream({ kind: "status", live: false, message: "接続先につながっていません" }, await streamOf(null));
+      await waitForCalls(destination);
+      await waitForCount("#orca-feed .orca-project", 5);
+      expect(await waitForCalls(read)).toMatchObject([{ handle: "term_mac-1" }]);
+      expect(await lost()).toEqual(["このマシンの Orca のストリームが落ちました: 接続先につながっていません"]);
+      // No notice and no card: the stream of this machine is no failure of the list, and Studio's list is not read by the clock.
+      await expect($("#orca-notice")).toHaveText("");
+      expect(await callsOf(overview)).toEqual([]);
+      expect(await callsOf("orca_stream_close")).toEqual([]);
+      await sendStream(streamList(macRows(), macTrees(), [], null), await streamOf(null));
+      await waitForCalls("orca_stream_terminal", 2);
+      expect(await callsOf("orca_stream_open")).toHaveLength(2);
+    });
+
+    it("does not say the loss of the stream of this machine twice for one drop", async () => {
+      await openBoth();
+      const here = await streamOf(null);
+      await sendStream({ kind: "status", live: false, message: "a" }, here);
+      await sendStream({ kind: "status", live: false, message: "b" }, here);
+      await browser.waitUntil(async () => (await lost()).length > 0, { timeoutMsg: "the loss was never logged" });
+      await browser.pause(300);
+      expect(await lost()).toEqual(["このマシンの Orca のストリームが落ちました: a"]);
+    });
+
+    it("ends only the stream of this machine when the pairing is revoked, mirrors its terminals again and leaves Studio's stream", async () => {
+      await openBoth();
+      await project("mac-1").click();
+      await waitForCalls("orca_stream_terminal");
+      await $("#nav-settings").click();
+      await $("#settings-tab-orca").click();
+      await mock("orca_pairing_revoke", { paired: false });
+      await mock("orca_pairing_status", { paired: false });
+      await $('#orca-pairing-items [aria-label="ペアリングを取り消す"]').click();
+      expect(await waitForCalls("orca_stream_close")).toEqual([{ environment: null }]);
+      const read = await mock("orca_terminal_read", ["$ ls"]);
+      await $("#nav-orca").click();
+      expect(await waitForCalls(read)).toMatchObject([{ handle: "term_mac-1" }]);
+      // Studio's list and its stream stay: its tab streams from Studio.
+      await project("studio-1").click();
+      expect(await waitForCalls("orca_stream_terminal", 2)).toMatchObject([{ environment: null }, { environment: "Studio", handle: "term_studio-1" }]);
+      expect(await callsOf("orca_stream_close")).toHaveLength(1);
+    });
   });
 
   it("drops this machine's projects when a read names it as the target", async () => {
