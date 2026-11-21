@@ -1,4 +1,5 @@
 //! A-12: the Orca screen's stream from a saved environment (a paired server), or from this machine's Orca once the owner has paired this app with it (`orca_pairing`), over the end-to-end encrypted WebSocket of `orca_link`.
+//! One stream runs for each place, this machine's Orca and the saved environment that is the target, and the commands of a terminal name the place of its tab.
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again when a worktree it did not list appears,
 //! every 10 seconds (the branch of a worktree can change with no change of the tabs) and right after the app switched a branch (`orca_switch_branch`), one read at a time;
 //! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
@@ -811,25 +812,72 @@ struct Active {
     commands: UnboundedSender<StreamCommand>,
 }
 
-/// The one stream that runs: opening another ends it.
+/// The streams that run, one for each place (A-12, A-33): this machine's Orca (`local`) and the saved environment that is the target (`saved`, with its name).
+/// Opening a stream ends only the one that held its place, so a saved environment's stream and this machine's run side by side; every command names its place.
+struct Streams<T> {
+    local: Option<T>,
+    saved: Option<(String, T)>,
+}
+
+impl<T> Default for Streams<T> {
+    fn default() -> Self {
+        Streams {
+            local: None,
+            saved: None,
+        }
+    }
+}
+
+impl<T> Streams<T> {
+    /// The stream of `environment` (`None`: this machine); a saved environment other than the one streamed has none.
+    fn get(&self, environment: Option<&str>) -> Option<&T> {
+        match environment {
+            None => self.local.as_ref(),
+            Some(name) => self
+                .saved
+                .as_ref()
+                .filter(|(held, _)| held == name)
+                .map(|(_, stream)| stream),
+        }
+    }
+
+    /// Takes `stream` as the one of `environment` and gives back the one it replaces: another saved environment's stream is replaced by it, as only one saved environment is streamed.
+    fn put(&mut self, environment: Option<String>, stream: T) -> Option<T> {
+        match environment {
+            None => self.local.replace(stream),
+            Some(name) => self.saved.replace((name, stream)).map(|(_, old)| old),
+        }
+    }
+
+    /// Takes the stream of `environment` out; a close for a saved environment that is no longer the one streamed takes none.
+    fn take(&mut self, environment: Option<&str>) -> Option<T> {
+        match environment {
+            None => self.local.take(),
+            Some(name) if self.get(Some(name)).is_some() => self.saved.take().map(|(_, s)| s),
+            Some(_) => None,
+        }
+    }
+}
+
+/// The streams that run, one for each place.
 #[derive(Default)]
-pub struct OrcaStream(std::sync::Mutex<Option<Active>>);
+pub struct OrcaStream(std::sync::Mutex<Streams<Active>>);
 
 impl OrcaStream {
-    fn send(&self, command: StreamCommand) -> Result<(), String> {
+    fn send(&self, environment: Option<&str>, command: StreamCommand) -> Result<(), String> {
         self.0
             .lock()
             .unwrap()
-            .as_ref()
+            .get(environment)
             .ok_or(NOT_CONNECTED)?
             .commands
             .send(command)
             .map_err(|_| NOT_CONNECTED.to_owned())
     }
 
-    /// Has the stream that runs, if any, read `worktree.ps` again now (the app switched the branch of a worktree, and the list says the branch).
-    pub(crate) fn reread_worktrees(&self) {
-        let _ = self.send(StreamCommand::Worktrees);
+    /// Has the stream of `environment` (`None`: this machine), if it runs, read `worktree.ps` again now (the app switched the branch of a worktree, and the list says the branch).
+    pub(crate) fn reread_worktrees(&self, environment: Option<&str>) {
+        let _ = self.send(environment, StreamCommand::Worktrees);
     }
 }
 
@@ -846,7 +894,8 @@ fn sink_of(
     }
 }
 
-/// Starts the stream of the saved environment `environment` (`None`: this machine's Orca, which needs the pairing of `orca_pairing`, else the answer is an error and nothing runs), which sends the list through `channel` until the next open or close.
+/// Starts the stream of the saved environment `environment` (`None`: this machine's Orca, which needs the pairing of `orca_pairing`, else the answer is an error and nothing runs), which sends the list through `channel` until the next open or close of its place.
+/// It ends the stream that held its place (another saved environment's, or this machine's own) and no other: the two places stream at once.
 #[tauri::command]
 pub async fn orca_stream_open(
     state: tauri::State<'_, OrcaStream>,
@@ -859,12 +908,10 @@ pub async fn orca_stream_open(
     if environment.is_none() && !is_paired().await? {
         return Err(NO_PAIRING.into());
     }
-    let mut active = state.0.lock().unwrap();
-    if let Some(old) = active.take() {
-        old.task.abort();
-    }
+    let mut streams = state.0.lock().unwrap();
     let (commands, receiver) = unbounded_channel();
     let sink = sink_of(channel, commands.clone(), environment.clone());
+    let place = environment.clone();
     let task = match environment {
         Some(environment) => tauri::async_runtime::spawn(run_loop(
             move || connect_environment(environment.clone()),
@@ -874,72 +921,93 @@ pub async fn orca_stream_open(
         )),
         None => tauri::async_runtime::spawn(run_loop(connect_local, receiver, sink, new_client())),
     };
-    *active = Some(Active { task, commands });
+    if let Some(old) = streams.put(place, Active { task, commands }) {
+        old.task.abort();
+    }
     Ok(())
 }
 
-/// Ends the stream that runs, if any (its subscriptions end with its connection).
+/// Ends the stream of `environment` (`None`: this machine's Orca), if it runs (its subscriptions end with its connection); the stream of the other place stays.
 #[tauri::command]
-pub async fn orca_stream_close(state: tauri::State<'_, OrcaStream>) -> Result<(), String> {
-    if let Some(active) = state.0.lock().unwrap().take() {
+pub async fn orca_stream_close(
+    state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    if let Some(active) = state.0.lock().unwrap().take(environment.as_deref()) {
         let _ = active.commands.send(StreamCommand::Close);
     }
     Ok(())
 }
 
-/// Shows the terminal `handle` (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
+/// Shows the terminal `handle` of the stream of `environment` (`None`: this machine's), the place of the tab (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
 #[tauri::command]
 pub async fn orca_stream_terminal(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     generation: u64,
     viewport: OrcaViewport,
     channel: tauri::ipc::Channel<OrcaTermEvent>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
-    state.send(StreamCommand::Terminal(Watch {
-        handle,
-        generation,
-        viewport,
-        sink: Box::new(move |event| channel.send(event).is_ok()),
-    }))
+    state.send(
+        environment.as_deref(),
+        StreamCommand::Terminal(Watch {
+            handle,
+            generation,
+            viewport,
+            sink: Box::new(move |event| channel.send(event).is_ok()),
+        }),
+    )
 }
 
-/// Shows the terminal `handle` no more: it is unsubscribed, and Orca gives it back its own size.
+/// Shows the terminal `handle` of the stream of `environment` no more: it is unsubscribed, and Orca gives it back its own size.
 #[tauri::command]
 pub async fn orca_stream_terminal_close(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     generation: u64,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     // With no stream there is nothing to let go.
-    let _ = state.send(StreamCommand::TerminalClose(handle, generation));
+    let _ = state.send(
+        environment.as_deref(),
+        StreamCommand::TerminalClose(handle, generation),
+    );
     Ok(())
 }
 
-/// The new size of the pane of the terminal `handle`.
+/// The new size of the pane of the terminal `handle` of the stream of `environment`.
 #[tauri::command]
 pub async fn orca_stream_viewport(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     viewport: OrcaViewport,
 ) -> Result<(), String> {
     check_handle(&handle)?;
-    state.send(StreamCommand::Viewport(handle, viewport))
+    state.send(
+        environment.as_deref(),
+        StreamCommand::Viewport(handle, viewport),
+    )
 }
 
-/// Types `text` into the terminal `handle`, as it is (no Enter is added), only while it is a terminal shown.
+/// Types `text` into the terminal `handle` of the stream of `environment`, as it is (no Enter is added), only while it is a terminal shown.
 #[tauri::command]
 pub async fn orca_stream_input(
     state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
     handle: String,
     text: String,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     check_keys(&text)?;
     let (reply, answer) = oneshot::channel();
-    state.send(StreamCommand::Input(handle, text, reply))?;
+    state.send(
+        environment.as_deref(),
+        StreamCommand::Input(handle, text, reply),
+    )?;
     answer
         .await
         .unwrap_or_else(|_| Err("接続が切れたため、入力を送れたか分かりません".into()))
@@ -2078,5 +2146,48 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn this_machine_and_a_saved_environment_each_hold_a_stream() {
+        let mut streams = Streams::<&str>::default();
+        assert_eq!(streams.put(None, "here"), None);
+        assert_eq!(streams.put(Some("Studio".into()), "studio"), None);
+        // Each place has its own stream, and a command finds the one of its place.
+        assert_eq!(streams.get(None), Some(&"here"));
+        assert_eq!(streams.get(Some("Studio")), Some(&"studio"));
+        // A place nothing was opened for has no stream, so its commands say it is not connected.
+        assert_eq!(streams.get(Some("Other")), None);
+    }
+
+    #[test]
+    fn opening_a_stream_ends_only_the_one_of_its_place() {
+        let mut streams = Streams::<&str>::default();
+        streams.put(None, "here");
+        streams.put(Some("Studio".into()), "studio");
+        // Another saved environment takes the place of the saved one and leaves this machine's.
+        assert_eq!(streams.put(Some("Lab".into()), "lab"), Some("studio"));
+        assert_eq!(streams.get(Some("Studio")), None);
+        assert_eq!(streams.get(Some("Lab")), Some(&"lab"));
+        assert_eq!(streams.get(None), Some(&"here"));
+        // This machine's stream opened anew takes the place of its own alone.
+        assert_eq!(streams.put(None, "here2"), Some("here"));
+        assert_eq!(streams.get(Some("Lab")), Some(&"lab"));
+    }
+
+    #[test]
+    fn closing_a_stream_ends_only_the_one_of_its_place() {
+        let mut streams = Streams::<&str>::default();
+        streams.put(None, "here");
+        streams.put(Some("Studio".into()), "studio");
+        // A revoked pairing ends this machine's stream and leaves the saved environment's.
+        assert_eq!(streams.take(None), Some("here"));
+        assert_eq!(streams.get(Some("Studio")), Some(&"studio"));
+        assert_eq!(streams.take(None), None);
+        // A close for a saved environment that is no longer the one streamed (it came late) ends nothing.
+        assert_eq!(streams.take(Some("Other")), None);
+        assert_eq!(streams.get(Some("Studio")), Some(&"studio"));
+        assert_eq!(streams.take(Some("Studio")), Some("studio"));
+        assert_eq!(streams.get(Some("Studio")), None);
     }
 }

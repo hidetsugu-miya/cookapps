@@ -1,7 +1,7 @@
 // The terminals of the Orca screen (A-8, A-12, A-17): one xterm.js for each tab. The work pane is split into panes (A-17), and the tab selected in each pane is shown, in the host element of its pane; the others wait in `#orca-stash`.
 // Every tab is a terminal, a Claude session's or a plain one.
 // The pane that hands an item to Orca (A-9) shows the terminal of its session here too: this module is the one place that loads and draws xterm.js. Each screen that shows terminals is an owner (`showTerminals`), and it shows and hides only its own; a terminal that two owners want goes to the one that asked last.
-// A saved environment, and this machine's Orca once it is paired with the app (A-12), stream each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
+// A saved environment, and this machine's Orca once it is paired with the app (A-12), stream each terminal shown (`orca_stream_terminal`, to the stream of the place of its tab, as every call of the stream is): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
 // the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
 // This machine's Orca has no stream on its socket (it answers `method_not_supported`): without a pairing, or while the stream of the pairing cannot connect, its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // A terminal of a saved environment that the Orca screen does not stream (A-9 and the session of a child of A-37 show one) is a mirror too, read through Orca's CLI every 2 seconds.
@@ -366,7 +366,7 @@ function fitInstance(instance: Instance) {
   instance.fit.fit();
   if (instance.channel !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
     const viewport = { cols: instance.term.cols, rows: instance.term.rows };
-    if (instance.source.kind === "stream") invoke("orca_stream_viewport", { handle: instance.source.handle, viewport }).catch(() => {});
+    if (instance.source.kind === "stream") invoke("orca_stream_viewport", { environment: instance.source.environment, handle: instance.source.handle, viewport }).catch(() => {});
     else if (instance.source.kind === "pty") {
       void instance.ready.then(() => {
         if (!instance.ended) invoke("claude_code_resize", { id: instance.source.handle, viewport }).catch(() => {});
@@ -396,7 +396,7 @@ async function sendKeys(instance: Instance) {
     if (instance.source.kind === "pty") {
       await instance.ready;
       if (!instance.ended) await invoke("claude_code_input", { id: instance.source.handle, text });
-    } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
+    } else if (instance.source.kind === "stream") await invoke("orca_stream_input", { environment: instance.source.environment, handle: instance.source.handle, text });
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
     instance.failing = false;
   } catch (e) {
@@ -518,7 +518,7 @@ function startStream(instance: Instance) {
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   instance.generation = ++streamSeq;
-  invoke("orca_stream_terminal", { handle: instance.source.handle, generation: instance.generation, viewport, channel }).catch((e) => {
+  invoke("orca_stream_terminal", { environment: instance.source.environment, handle: instance.source.handle, generation: instance.generation, viewport, channel }).catch((e) => {
     if (instance.channel === channel) drawEvent(instance, { kind: "ended", message: String(e) });
   });
 }
@@ -527,7 +527,7 @@ function startStream(instance: Instance) {
 function stopStream(instance: Instance) {
   if (instance.channel === null) return;
   instance.channel = null;
-  invoke("orca_stream_terminal_close", { handle: instance.source.handle, generation: instance.generation }).catch(() => {});
+  invoke("orca_stream_terminal_close", { environment: instance.source.environment, handle: instance.source.handle, generation: instance.generation }).catch(() => {});
 }
 
 // ---- the pseudo terminal of Claude Code (A-36) ----
